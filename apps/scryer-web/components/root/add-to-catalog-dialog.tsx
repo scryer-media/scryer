@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { useTranslate } from "@/lib/context/translate-context";
 import { defaultMonitorTypeForFacet } from "@/lib/facets/helpers";
 import { CatalogActionDialogSummary } from "@/components/root/catalog-action-dialog-summary";
+import { MonitorSelectionPicker } from "@/components/common/monitor-selection-picker";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { Facet } from "@/lib/types";
 import type {
@@ -21,6 +22,10 @@ import type {
   MetadataCatalogMonitorType,
 } from "@/lib/hooks/use-global-search";
 import type { LibraryRecord, RootFolderOption } from "@/lib/types/titles";
+import {
+  EMPTY_MONITOR_SELECTION,
+  isMonitorSelectionEmpty,
+} from "@/lib/utils/monitor-selection";
 import {
   canSubmitCatalogAdd,
   catalogAddDraftResetKey,
@@ -86,6 +91,10 @@ function buildDefaultDraft(
   };
 }
 
+function resultTvdbId(result: MetadataTvdbSearchItem): string {
+  return String(result.tvdbId ?? "").trim();
+}
+
 function defaultLibrary(libraries: LibraryRecord[]): LibraryRecord | null {
   return libraries.find((library) => library.isDefault) || libraries[0] || null;
 }
@@ -119,6 +128,8 @@ export function AddToCatalogDialog({
     ),
   );
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [monitorSelectionLoading, setMonitorSelectionLoading] =
+    React.useState(false);
   const draftResetKeyRef = React.useRef<string | null>(null);
   const nextDefaultLibrary = defaultLibrary(libraries);
   const nextDefaultLibraryId = nextDefaultLibrary?.id;
@@ -150,6 +161,7 @@ export function AddToCatalogDialog({
       ),
     );
     setIsSubmitting(false);
+    setMonitorSelectionLoading(false);
   }, [
     draftResetKey,
     facet,
@@ -243,7 +255,18 @@ export function AddToCatalogDialog({
           },
           { value: "ALL_EPISODES", label: t("search.monitorType.allEpisodes") },
           { value: "NONE", label: t("search.monitorType.none") },
+          { value: "ADVANCED", label: t("search.monitorType.advanced") },
         ];
+
+  // Season metadata is fetched only while ADVANCED is the live choice: the
+  // picker is mounted by this condition and nothing prefetches behind it.
+  const advancedSelected = facet !== "MOVIE" && draft.monitorType === "ADVANCED";
+  const advancedTvdbId = resultTvdbId(result);
+  const advancedBlocksSubmit =
+    advancedSelected &&
+    (!advancedTvdbId ||
+      monitorSelectionLoading ||
+      isMonitorSelectionEmpty(draft.monitorSelection));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -414,9 +437,17 @@ export function AddToCatalogDialog({
               </span>
               <Select
                 value={draft.monitorType}
-                onValueChange={(v) =>
-                  update({ monitorType: v as MetadataCatalogMonitorType })
-                }
+                onValueChange={(v) => {
+                  const monitorType = v as MetadataCatalogMonitorType;
+                  update({
+                    monitorType,
+                    // A stale selection must never ride along with another type.
+                    monitorSelection:
+                      monitorType === "ADVANCED"
+                        ? draft.monitorSelection
+                        : undefined,
+                  });
+                }}
                 disabled={isSubmitting}
               >
                 <SelectTrigger
@@ -436,6 +467,18 @@ export function AddToCatalogDialog({
             </label>
           )}
         </div>
+
+        {advancedSelected ? (
+          <MonitorSelectionPicker
+            facet={facet}
+            tvdbId={advancedTvdbId}
+            value={draft.monitorSelection ?? EMPTY_MONITOR_SELECTION}
+            onChange={(monitorSelection) => update({ monitorSelection })}
+            onLoadingChange={setMonitorSelectionLoading}
+            disabled={isSubmitting}
+            idPrefix="add-to-catalog"
+          />
+        ) : null}
 
         {catalogConfigLoading ? (
           <div
@@ -465,7 +508,8 @@ export function AddToCatalogDialog({
             disabled={
               isSubmitting ||
               !qualityProfileValue ||
-              !submitAllowed
+              !submitAllowed ||
+              advancedBlocksSubmit
             }
             className="h-12 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
           >

@@ -5,6 +5,7 @@ import { deleteTitlesPreviewQuery } from "@/lib/graphql/queries";
 import type { JobRun, TitleRecord } from "@/lib/types";
 import type { DeletePreview, DeleteTitlesPreview } from "@/lib/types/delete-preview";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { selectedTitleIdsKey } from "@/lib/utils/title-selection";
 import type { Translate } from "@/components/root/types";
 import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 
@@ -76,12 +77,28 @@ export function useBulkDelete({
     }
   }, [bulkDeleteFilesOnDisk]);
 
+  // Catalog refreshes rebuild the titles array without changing the selection,
+  // so the preview effect keys on the selected id set and reads the current
+  // records through a ref. Depending on the array itself would restart the
+  // preview — blanking the summary and remounting the typed-confirmation
+  // input — on every background scan tick.
+  const selectedTitlesKey = React.useMemo(
+    () => selectedTitleIdsKey(selectedTitles),
+    [selectedTitles],
+  );
+  const selectedTitlesRef = React.useRef(selectedTitles);
+  // Declared before the preview effect so the ref is already current when the
+  // preview effect below runs for a changed id set.
+  React.useEffect(() => {
+    selectedTitlesRef.current = selectedTitles;
+  }, [selectedTitles]);
+
   React.useEffect(() => {
     if (!bulkDeleteDialogOpen || !bulkDeleteFilesOnDisk) {
       return;
     }
 
-    const targets = [...selectedTitles];
+    const targets = [...selectedTitlesRef.current];
     if (targets.length === 0) {
       setBulkDeletePreviewLoading(false);
       setBulkDeletePreviewError(null);
@@ -160,7 +177,7 @@ export function useBulkDelete({
     bulkDeleteDialogOpen,
     bulkDeleteFilesOnDisk,
     client,
-    selectedTitles,
+    selectedTitlesKey,
     t,
     withFailureDetail,
   ]);

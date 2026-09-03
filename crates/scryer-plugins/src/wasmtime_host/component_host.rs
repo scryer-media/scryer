@@ -81,6 +81,7 @@ struct ComponentHostInner {
     config: BTreeMap<String, String>,
     provider_profile: Option<Vec<u8>>,
     allowed_hosts: Vec<String>,
+    egress_policy: scryer_outbound_http::PluginEgressPolicy,
     indexer_proxy_policy: Option<IndexerProxyPolicy>,
     timeout: Duration,
     max_response_bytes: usize,
@@ -153,6 +154,7 @@ impl ComponentHost {
         Self::for_indexer_with_provider_profile(
             config,
             allowed_hosts,
+            scryer_outbound_http::PluginEgressPolicy::default(),
             indexer_proxy_policy,
             timeout,
             max_http_response_bytes,
@@ -163,6 +165,7 @@ impl ComponentHost {
     pub(crate) fn for_indexer_with_provider_profile(
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
+        egress_policy: scryer_outbound_http::PluginEgressPolicy,
         indexer_proxy_policy: Option<IndexerProxyPolicy>,
         timeout: Duration,
         max_http_response_bytes: Option<u64>,
@@ -173,6 +176,7 @@ impl ComponentHost {
                 config,
                 provider_profile,
                 allowed_hosts,
+                egress_policy,
                 indexer_proxy_policy,
                 timeout,
                 max_response_bytes: max_http_response_bytes
@@ -330,7 +334,16 @@ impl ComponentHost {
                 &request.url,
                 &extra_ca_bundle_pem,
                 "component plugin HTTP",
-            ) => result.map_err(component_outbound_destination_error)?,
+                &self.inner.egress_policy,
+            ) => result
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        url = %solver::sanitized_url_for_log(&request.url),
+                        error = %error,
+                        "component plugin HTTP destination rejected"
+                    );
+                })
+                .map_err(component_outbound_destination_error)?,
         };
         let Some(policy) = self.inner.indexer_proxy_policy.as_ref() else {
             let direct = self
@@ -1309,6 +1322,7 @@ mod tests {
         ComponentHost::for_indexer_with_provider_profile(
             BTreeMap::new(),
             Vec::new(),
+            scryer_outbound_http::PluginEgressPolicy::default(),
             None,
             Duration::from_secs(1),
             None,

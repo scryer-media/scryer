@@ -1149,9 +1149,14 @@ fn public_http_ip_is_forbidden(ip: IpAddr) -> bool {
 //
 // Scryer is self-hosted, so — unlike `public_http_ip_is_forbidden` — this
 // policy deliberately ALLOWS RFC1918, loopback and IPv6 ULA: reaching a LAN or
-// on-box companion service is a legitimate plugin use. It HARD-BLOCKS link-local
-// space by default, while permitting an operator-configured download client to
-// use the container runtime's exact host-bridge origin. Known cloud metadata
+// on-box companion service is a legitimate plugin use. Link-local space is
+// blocked only for destinations the PLUGIN chose. An origin the operator typed
+// into an integration's configuration (a download client, an indexer, a
+// notification URL) carries operator authority and may resolve there: that is
+// how rootless container runtimes expose the host to a container — podman's
+// pasta and Docker Desktop hand out 169.254.0.0/16 addresses, reached through
+// the runtime's own alias (`host.containers.internal`, `host.docker.internal`)
+// or through operator-supplied `--add-host` names. Known cloud instance-metadata
 // endpoints remain blocked unconditionally.
 //
 // Validated addresses are DNS-pinned into the returned client so a declared
@@ -1163,12 +1168,14 @@ fn public_http_ip_is_forbidden(ip: IpAddr) -> bool {
 /// per-plugin allowlist, because they front cloud instance-metadata services.
 const BLOCKED_PLUGIN_EGRESS_HOSTS: &[&str] = &["metadata.google.internal"];
 
-/// Container-runtime host aliases that may resolve into IPv4 link-local space.
-const CONTAINER_HOST_BRIDGE_HOSTS: &[&str] = &["host.containers.internal", "host.docker.internal"];
-
+/// Operator authority over plugin egress destinations.
+///
+/// Holds the exact origins (scheme, host, port) the operator configured for a
+/// plugin instance. A request to one of those origins may resolve into
+/// link-local space; every other destination stays under the default guard.
 #[derive(Clone, Debug, Default)]
 pub struct PluginEgressPolicy {
-    operator_link_local_origin: Option<PluginHttpOrigin>,
+    operator_origins: Vec<PluginHttpOrigin>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1179,30 +1186,41 @@ struct PluginHttpOrigin {
 }
 
 impl PluginEgressPolicy {
-    /// Grants IPv4 link-local access only to an operator-configured download
-    /// client origin that uses a container-runtime host alias.
-    pub fn for_operator_download_client_base_url(raw: &str) -> Self {
-        let Ok(url) = reqwest::Url::parse(raw) else {
-            return Self::default();
-        };
-        if !matches!(url.scheme(), "http" | "https") {
-            return Self::default();
+    /// Grants link-local authority to every absolute `http`/`https` origin
+    /// among `urls`. Values that are not absolute HTTP URLs are ignored, so raw
+    /// configuration values can be passed through unfiltered.
+    pub fn for_operator_configured_urls<I, S>(urls: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut operator_origins = Vec::new();
+        for raw in urls {
+            let Ok(url) = reqwest::Url::parse(raw.as_ref().trim()) else {
+                continue;
+            };
+            if !matches!(url.scheme(), "http" | "https") {
+                continue;
+            }
+            let Some(origin) = PluginHttpOrigin::from_url(&url) else {
+                continue;
+            };
+            if !operator_origins.contains(&origin) {
+                operator_origins.push(origin);
+            }
         }
-        let Some(origin) = PluginHttpOrigin::from_url(&url) else {
-            return Self::default();
-        };
-        if !container_host_bridge_is_trusted(&origin.host) {
-            return Self::default();
-        }
-        Self {
-            operator_link_local_origin: Some(origin),
-        }
+        Self { operator_origins }
     }
 
+    /// Grants link-local authority to a single operator-configured origin.
+    pub fn for_operator_configured_url(raw: &str) -> Self {
+        Self::for_operator_configured_urls([raw])
+    }
+
+    /// True when `url` sits on an origin the operator configured.
     fn allows_operator_link_local_origin(&self, url: &reqwest::Url) -> bool {
-        self.operator_link_local_origin
-            .as_ref()
-            .is_some_and(|origin| PluginHttpOrigin::from_url(url).as_ref() == Some(origin))
+        PluginHttpOrigin::from_url(url)
+            .is_some_and(|origin| self.operator_origins.contains(&origin))
     }
 }
 
@@ -1220,25 +1238,21 @@ fn normalize_plugin_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
-fn container_host_bridge_is_trusted(host: &str) -> bool {
-    CONTAINER_HOST_BRIDGE_HOSTS
-        .iter()
-        .any(|trusted| host.eq_ignore_ascii_case(trusted))
-}
-
-/// Returns true when `ip` is forbidden by the plugin-egress policy. Known
-/// metadata endpoints and IPv6 link-local addresses are always forbidden;
-/// other IPv4 link-local addresses require explicit operator authority.
-fn plugin_egress_ip_is_forbidden(ip: IpAddr, allow_ipv4_link_local: bool) -> bool {
+/// Returns true when `ip` is forbidden by the plugin-egress policy. Known cloud
+/// instance-metadata endpoints are always forbidden; link-local addresses are
+/// forbidden unless the destination carries operator authority.
+fn plugin_egress_ip_is_forbidden(ip: IpAddr, allow_link_local: bool) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(ip) => {
             let octets = ip.octets();
+            // 169.254.169.254 fronts AWS/Azure/GCP/DO IMDS; 100.100.100.200 is
+            // Alibaba Cloud IMDS.
             octets == [169, 254, 169, 254]
                 || octets == [100, 100, 100, 200]
-                || ip.is_link_local() && !allow_ipv4_link_local
+                || ip.is_link_local() && !allow_link_local
         }
         // fe80::/10 link-local.
-        IpAddr::V6(ip) => ip.is_unicast_link_local(),
+        IpAddr::V6(ip) => ip.is_unicast_link_local() && !allow_link_local,
     }
 }
 
@@ -1254,9 +1268,9 @@ fn validate_plugin_egress_ip(
     ip: IpAddr,
     host: &str,
     label: &'static str,
-    allow_ipv4_link_local: bool,
+    allow_link_local: bool,
 ) -> Result<(), OutboundDestinationError> {
-    if plugin_egress_ip_is_forbidden(ip, allow_ipv4_link_local) {
+    if plugin_egress_ip_is_forbidden(ip, allow_link_local) {
         return Err(OutboundDestinationError::BlockedLinkLocalOrMetadata {
             label,
             host: host.to_string(),
@@ -1286,13 +1300,15 @@ fn plugin_egress_host_of<'a>(
 async fn resolve_plugin_http_destination(
     url: &reqwest::Url,
     label: &'static str,
+    policy: &PluginEgressPolicy,
 ) -> Result<Vec<SocketAddr>, OutboundDestinationError> {
     let host = plugin_egress_host_of(url, label)?;
     let port = url
         .port_or_known_default()
         .ok_or(OutboundDestinationError::MissingHost { label })?;
+    let allow_link_local = policy.allows_operator_link_local_origin(url);
     if let Some(ip) = parse_host_ip_literal(host) {
-        validate_plugin_egress_ip(ip, host, label, false)?;
+        validate_plugin_egress_ip(ip, host, label, allow_link_local)?;
         return Ok(vec![SocketAddr::new(ip, port)]);
     }
 
@@ -1306,7 +1322,7 @@ async fn resolve_plugin_http_destination(
     let mut resolved_addrs = Vec::new();
     for addr in &mut resolved {
         resolved_addrs.push(addr);
-        validate_plugin_egress_ip(addr.ip(), host, label, false)?;
+        validate_plugin_egress_ip(addr.ip(), host, label, allow_link_local)?;
     }
     if resolved_addrs.is_empty() {
         return Err(OutboundDestinationError::NoResolvedAddresses {
@@ -1326,12 +1342,11 @@ fn resolve_plugin_http_destination_blocking(
     let port = url
         .port_or_known_default()
         .ok_or(OutboundDestinationError::MissingHost { label })?;
+    let allow_link_local = policy.allows_operator_link_local_origin(url);
     if let Some(ip) = parse_host_ip_literal(host) {
-        validate_plugin_egress_ip(ip, host, label, false)?;
+        validate_plugin_egress_ip(ip, host, label, allow_link_local)?;
         return Ok(vec![SocketAddr::new(ip, port)]);
     }
-
-    let allow_ipv4_link_local = policy.allows_operator_link_local_origin(url);
 
     let resolved = (host, port).to_socket_addrs().map_err(|source| {
         OutboundDestinationError::ResolveFailed {
@@ -1343,7 +1358,7 @@ fn resolve_plugin_http_destination_blocking(
     let mut resolved_addrs = Vec::new();
     for addr in resolved {
         resolved_addrs.push(addr);
-        validate_plugin_egress_ip(addr.ip(), host, label, allow_ipv4_link_local)?;
+        validate_plugin_egress_ip(addr.ip(), host, label, allow_link_local)?;
     }
     if resolved_addrs.is_empty() {
         return Err(OutboundDestinationError::NoResolvedAddresses {
@@ -1384,26 +1399,31 @@ impl PinnedPluginHttpTarget {
 }
 
 /// Prepares a DNS-pinned, redirect-disabled async client for an untrusted
-/// plugin-controlled URL under the plugin egress policy.
+/// plugin-controlled URL under the plugin egress policy. `policy` carries the
+/// operator-configured origins that may resolve into link-local space; pass
+/// [`PluginEgressPolicy::default`] when no operator authority applies.
 pub async fn prepare_plugin_http_target(
     raw: &str,
     label: &'static str,
+    policy: &PluginEgressPolicy,
 ) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
     let url = validate_operator_http_url(raw, label)?;
-    prepare_plugin_http_target_from_url(url, label).await
+    prepare_plugin_http_target_from_url(url, label, policy).await
 }
 
-/// The trust-bundle-aware counterpart to [`prepare_plugin_http_target`].
-/// Component plugins use this path so their async requests retain the same
-/// operator-installed private roots as the legacy command host while keeping
-/// DNS pinning and redirects disabled.
+/// The trust-bundle-aware, policy-aware counterpart to
+/// [`prepare_plugin_http_target`]. Component plugins use this path so their
+/// async requests retain the same operator-installed private roots and the
+/// same operator egress authority as the command host while keeping DNS
+/// pinning and redirects disabled.
 pub async fn prepare_plugin_http_target_with_extra_ca(
     raw: &str,
     extra_ca_bundle_pem: &str,
     label: &'static str,
+    policy: &PluginEgressPolicy,
 ) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
     let url = validate_operator_http_url(raw, label)?;
-    let resolved_addrs = resolve_plugin_http_destination(&url, label).await?;
+    let resolved_addrs = resolve_plugin_http_destination(&url, label, policy).await?;
     let host = url
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
@@ -1440,8 +1460,9 @@ pub async fn prepare_plugin_http_target_with_extra_ca(
 pub async fn prepare_plugin_http_target_from_url(
     url: reqwest::Url,
     label: &'static str,
+    policy: &PluginEgressPolicy,
 ) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
-    let resolved_addrs = resolve_plugin_http_destination(&url, label).await?;
+    let resolved_addrs = resolve_plugin_http_destination(&url, label, policy).await?;
     let host = url
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
@@ -1511,8 +1532,8 @@ pub fn prepare_plugin_blocking_http_target(
     )
 }
 
-/// Policy-aware counterpart used when a download-client origin carries
-/// explicit operator authority to resolve into IPv4 link-local space.
+/// Policy-aware counterpart used when an operator-configured origin carries
+/// authority to resolve into link-local space.
 pub fn prepare_plugin_blocking_http_target_with_policy(
     raw: &str,
     extra_ca_bundle_pem: &str,
@@ -2671,7 +2692,12 @@ mod tests {
         for raw in PLUGIN_EGRESS_BLOCKED_TARGETS {
             assert!(
                 matches!(
-                    prepare_plugin_http_target(raw, "plugin egress").await,
+                    prepare_plugin_http_target(
+                        raw,
+                        "plugin egress",
+                        &PluginEgressPolicy::default()
+                    )
+                    .await,
                     Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
                 ),
                 "{raw} must be blocked for plugin egress"
@@ -2693,8 +2719,8 @@ mod tests {
     }
 
     #[test]
-    fn policy_aware_blocking_target_still_blocks_literal_link_local_urls() {
-        let policy = PluginEgressPolicy::for_operator_download_client_base_url(
+    fn policy_aware_blocking_target_blocks_link_local_literals_outside_operator_origins() {
+        let policy = PluginEgressPolicy::for_operator_configured_url(
             "http://host.containers.internal:9091/transmission",
         );
 
@@ -2705,6 +2731,51 @@ mod tests {
                 "plugin egress",
                 &policy,
             ),
+            Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
+        ));
+    }
+
+    #[test]
+    fn policy_aware_blocking_target_allows_operator_configured_link_local_literal() {
+        let policy = PluginEgressPolicy::for_operator_configured_url("http://169.254.1.2:8080");
+
+        let target = prepare_plugin_blocking_http_target_with_policy(
+            "http://169.254.1.2:8080/api/v2/app/version",
+            "",
+            "plugin egress",
+            &policy,
+        )
+        .expect("an operator-configured link-local literal should prepare");
+
+        assert_eq!(
+            target.resolved_addrs(),
+            &[SocketAddr::from(([169, 254, 1, 2], 8080))]
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_aware_async_target_allows_operator_configured_link_local_literal() {
+        let policy = PluginEgressPolicy::for_operator_configured_url("http://169.254.1.2:9696");
+
+        let target = prepare_plugin_http_target(
+            "http://169.254.1.2:9696/1/download?apikey=secret&link=abc",
+            "indexer download artifact",
+            &policy,
+        )
+        .await
+        .expect("an operator-configured link-local literal should prepare");
+
+        assert_eq!(
+            target.resolved_addrs(),
+            &[SocketAddr::from(([169, 254, 1, 2], 9696))]
+        );
+        assert!(matches!(
+            prepare_plugin_http_target(
+                "http://169.254.1.3:9696/1/download",
+                "indexer download artifact",
+                &policy,
+            )
+            .await,
             Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
         ));
     }
@@ -2725,16 +2796,21 @@ mod tests {
     }
 
     #[test]
-    fn operator_download_client_bridge_policy_allows_ipv4_link_local() {
-        for host in CONTAINER_HOST_BRIDGE_HOSTS {
+    fn operator_configured_origin_allows_link_local_for_any_hostname() {
+        for host in [
+            "host.containers.internal",
+            "host.docker.internal",
+            "qbittorrent.lan.example",
+            "seedbox-host",
+        ] {
             let raw = format!("http://{host}:9091/api");
-            let policy = PluginEgressPolicy::for_operator_download_client_base_url(&raw);
+            let policy = PluginEgressPolicy::for_operator_configured_url(&raw);
 
-            for ip in ["169.254.1.2", "169.254.42.9"] {
+            for ip in ["169.254.1.2", "169.254.42.9", "fe80::1"] {
                 validate_plugin_policy_ip(&policy, &raw, ip.parse().expect("test IP should parse"))
                     .unwrap_or_else(|error| {
                         panic!(
-                            "operator bridge {host} resolving to {ip} should be allowed: {error}"
+                            "operator origin {host} resolving to {ip} should be allowed: {error}"
                         )
                     });
             }
@@ -2742,8 +2818,8 @@ mod tests {
     }
 
     #[test]
-    fn operator_download_client_bridge_policy_requires_exact_origin() {
-        let policy = PluginEgressPolicy::for_operator_download_client_base_url(
+    fn operator_configured_origin_requires_exact_origin() {
+        let policy = PluginEgressPolicy::for_operator_configured_url(
             "http://HOST.CONTAINERS.INTERNAL.:9091/transmission",
         );
         let link_local: IpAddr = "169.254.1.2".parse().expect("test IP should parse");
@@ -2772,11 +2848,15 @@ mod tests {
     }
 
     #[test]
-    fn operator_download_client_bridge_policy_never_allows_metadata_or_ipv6_link_local() {
+    fn operator_configured_origin_never_allows_metadata_endpoints() {
         let raw = "http://host.containers.internal:9091/transmission";
-        let policy = PluginEgressPolicy::for_operator_download_client_base_url(raw);
+        let policy = PluginEgressPolicy::for_operator_configured_url(raw);
 
-        for ip in ["169.254.169.254", "100.100.100.200", "fe80::1"] {
+        for ip in [
+            "169.254.169.254",
+            "100.100.100.200",
+            "::ffff:169.254.169.254",
+        ] {
             assert!(
                 matches!(
                     validate_plugin_policy_ip(
@@ -2786,28 +2866,41 @@ mod tests {
                     ),
                     Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
                 ),
-                "metadata or IPv6 link-local address {ip} must remain blocked"
+                "metadata endpoint {ip} must remain blocked under operator authority"
             );
         }
-    }
 
-    #[test]
-    fn default_plugin_egress_policy_does_not_allow_container_bridge_link_local() {
-        let policy = PluginEgressPolicy::default();
-
+        let metadata_host = "http://metadata.google.internal/computeMetadata/v1/";
         assert!(matches!(
-            validate_plugin_policy_ip(
-                &policy,
-                "http://host.containers.internal:9091/transmission",
-                "169.254.1.2".parse().expect("test IP should parse")
+            prepare_plugin_blocking_http_target_with_policy(
+                metadata_host,
+                "",
+                "plugin egress",
+                &PluginEgressPolicy::for_operator_configured_url(metadata_host),
             ),
             Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
         ));
     }
 
     #[test]
-    fn non_bridge_download_client_origin_does_not_grant_link_local_authority() {
-        let policy = PluginEgressPolicy::for_operator_download_client_base_url(
+    fn default_plugin_egress_policy_blocks_link_local() {
+        let policy = PluginEgressPolicy::default();
+
+        for ip in ["169.254.1.2", "fe80::1"] {
+            assert!(matches!(
+                validate_plugin_policy_ip(
+                    &policy,
+                    "http://host.containers.internal:9091/transmission",
+                    ip.parse().expect("test IP should parse")
+                ),
+                Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn unrelated_operator_origin_does_not_grant_link_local_authority() {
+        let policy = PluginEgressPolicy::for_operator_configured_url(
             "http://download-client.example:9091/transmission",
         );
 
@@ -2821,10 +2914,46 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn operator_configured_urls_collect_http_origins_and_skip_other_values() {
+        let policy = PluginEgressPolicy::for_operator_configured_urls([
+            "http://qbittorrent.lan.example:8080",
+            " https://prowlarr.lan.example:9696/prowlarr ",
+            "admin",
+            "not a url",
+            "localhost:8080",
+            "ftp://files.lan.example",
+            "http://qbittorrent.lan.example:8080/duplicate-origin",
+        ]);
+        let link_local: IpAddr = "169.254.1.2".parse().expect("test IP should parse");
+
+        assert_eq!(policy.operator_origins.len(), 2);
+        for raw in [
+            "http://qbittorrent.lan.example:8080/api/v2/app/version",
+            "https://prowlarr.lan.example:9696/prowlarr/api/v1/search",
+        ] {
+            validate_plugin_policy_ip(&policy, raw, link_local)
+                .unwrap_or_else(|error| panic!("{raw} should carry operator authority: {error}"));
+        }
+        for raw in [
+            "http://files.lan.example/",
+            "http://localhost:8080/",
+            "http://admin/",
+        ] {
+            assert!(
+                matches!(
+                    validate_plugin_policy_ip(&policy, raw, link_local),
+                    Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
+                ),
+                "{raw} must not gain authority from a non-URL configuration value"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn plugin_http_targets_allow_private_and_local_destinations() {
         for raw in PLUGIN_EGRESS_ALLOWED_TARGETS {
-            prepare_plugin_http_target(raw, "plugin egress")
+            prepare_plugin_http_target(raw, "plugin egress", &PluginEgressPolicy::default())
                 .await
                 .unwrap_or_else(|error| {
                     panic!("{raw} should be allowed for self-hosted plugins: {error}")
@@ -2851,9 +2980,13 @@ mod tests {
         .await;
 
         // The loopback origin is allowed for self-hosted plugins...
-        let target = prepare_plugin_http_target(&origin_url, "plugin egress")
-            .await
-            .expect("loopback origin should be allowed");
+        let target = prepare_plugin_http_target(
+            &origin_url,
+            "plugin egress",
+            &PluginEgressPolicy::default(),
+        )
+        .await
+        .expect("loopback origin should be allowed");
         let response = send_reqwest_request(target.client().get(target.url().clone()))
             .await
             .expect("origin request should return a response");
@@ -2871,7 +3004,12 @@ mod tests {
             .expect("redirect location should be a valid URL");
         assert!(
             matches!(
-                prepare_plugin_http_target_from_url(redirect_url, "plugin egress redirect").await,
+                prepare_plugin_http_target_from_url(
+                    redirect_url,
+                    "plugin egress redirect",
+                    &PluginEgressPolicy::default(),
+                )
+                .await,
                 Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
             ),
             "redirect to cloud metadata must be rejected"

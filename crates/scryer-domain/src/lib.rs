@@ -215,6 +215,108 @@ pub struct MediaRequestRequester {
     pub requested_at: DateTime<Utc>,
 }
 
+/// Monitor type tag value that turns on explicit season/series-movie selection.
+pub const MONITOR_TYPE_ADVANCED: &str = "advanced";
+
+/// External-id sources consulted, in order, when deriving a stable key for a
+/// selected series movie.
+const MONITOR_SELECTION_MOVIE_KEY_SOURCES: [&str; 5] = ["tvdb", "tmdb", "imdb", "anidb", "mal"];
+
+/// One canon series movie the user chose to monitor under the `advanced`
+/// monitor type.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonitorSelectionMovie {
+    pub name: String,
+    pub external_ids: Vec<ExternalId>,
+}
+
+impl MonitorSelectionMovie {
+    /// Stable `source:value` key used as the persisted row key. `None` when the
+    /// movie carries none of the known id sources.
+    pub fn canonical_key(&self) -> Option<String> {
+        for source in MONITOR_SELECTION_MOVIE_KEY_SOURCES {
+            if let Some(external_id) = self.external_ids.iter().find(|external_id| {
+                external_id.source.trim().eq_ignore_ascii_case(source)
+                    && !external_id.value.trim().is_empty()
+            }) {
+                return Some(format!("{source}:{}", external_id.value.trim()));
+            }
+        }
+        None
+    }
+
+    fn matches_external_ids(&self, external_ids: &[ExternalId]) -> bool {
+        self.external_ids.iter().any(|selected| {
+            let selected_value = selected.value.trim();
+            !selected_value.is_empty()
+                && external_ids.iter().any(|candidate| {
+                    candidate
+                        .source
+                        .trim()
+                        .eq_ignore_ascii_case(selected.source.trim())
+                        && candidate.value.trim() == selected_value
+                })
+        })
+    }
+}
+
+/// The set of seasons and canon series movies to monitor under the `advanced`
+/// monitor type. Anything absent from the selection is left unmonitored.
+/// Season 0 (specials) is just another season number.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonitorSelection {
+    pub seasons: Vec<i32>,
+    pub series_movies: Vec<MonitorSelectionMovie>,
+}
+
+impl MonitorSelection {
+    pub fn is_empty(&self) -> bool {
+        self.seasons.is_empty() && self.series_movies.is_empty()
+    }
+
+    /// Sorted, de-duplicated form. Movies without a canonical key are dropped:
+    /// they cannot be persisted (the key is part of the primary key) and cannot
+    /// be matched back to metadata.
+    pub fn normalized(&self) -> Self {
+        let mut seasons = self.seasons.clone();
+        seasons.sort_unstable();
+        seasons.dedup();
+
+        let mut seen_keys = std::collections::BTreeSet::new();
+        let mut series_movies = Vec::new();
+        for movie in &self.series_movies {
+            let Some(key) = movie.canonical_key() else {
+                continue;
+            };
+            if !seen_keys.insert(key) {
+                continue;
+            }
+            series_movies.push(movie.clone());
+        }
+        series_movies.sort_by(|left, right| {
+            left.canonical_key()
+                .unwrap_or_default()
+                .cmp(&right.canonical_key().unwrap_or_default())
+        });
+
+        Self {
+            seasons,
+            series_movies,
+        }
+    }
+
+    pub fn monitors_season(&self, season_number: i32) -> bool {
+        self.seasons.contains(&season_number)
+    }
+
+    /// True when any selected movie shares an external id with the candidate.
+    pub fn monitors_series_movie(&self, external_ids: &[ExternalId]) -> bool {
+        self.series_movies
+            .iter()
+            .any(|movie| movie.matches_external_ids(external_ids))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MediaRequest {
     pub id: String,
@@ -226,6 +328,9 @@ pub struct MediaRequest {
     pub sort_title: Option<String>,
     pub slug: Option<String>,
     pub poster_url: Option<String>,
+    /// Background art captured at submit time, or `None` when the provider
+    /// had none.
+    pub background_url: Option<String>,
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub runtime_minutes: Option<i32>,
@@ -235,6 +340,9 @@ pub struct MediaRequest {
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,
+    /// Season/series-movie picks captured when the requester chose the
+    /// `advanced` monitor type. `None` for every other monitor type.
+    pub requested_monitor_selection: Option<MonitorSelection>,
     pub resolved_by_user_id: Option<String>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub created_title_id: Option<String>,

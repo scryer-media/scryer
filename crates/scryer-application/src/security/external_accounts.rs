@@ -797,10 +797,11 @@ impl AppUseCase {
             "{}/Scryer/Auth/Callback",
             external_url.trim_end_matches('/')
         );
-        if client.source != crate::oauth::OAuthClientSource::Custom
+        // Same rule as authorization: the stored kind identifies the plugin client, and any of its
+        // registered callbacks may carry the grant.
+        if client.kind != crate::oauth::OAuthClientKind::JellyfinPlugin
             || !client.enabled
-            || client.redirect_uris.len() != 1
-            || client.redirect_uris.first() != Some(&grant.redirect_uri)
+            || !client.redirect_uris.contains(&grant.redirect_uri)
             || grant.redirect_uri != expected_redirect
         {
             return Err(AppError::Unauthorized(
@@ -4105,6 +4106,7 @@ mod tests {
             display_name: "Jellyfin plugin".to_string(),
             redirect_uris: vec!["https://jellyfin.example.test/Scryer/Auth/Callback".to_string()],
             enabled: true,
+            kind: crate::oauth::OAuthClientKind::JellyfinPlugin,
             created_at: now,
             updated_at: now,
         }

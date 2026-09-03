@@ -247,21 +247,6 @@ fn worker_response_timeout(timeout: Duration) -> Duration {
 impl PluginHttpHost {
     pub(crate) fn new(
         allowed_hosts: Vec<String>,
-        indexer_proxy_policy: Option<IndexerProxyPolicy>,
-        destination_cooldown_key: Option<String>,
-        max_http_response_bytes: Option<u64>,
-    ) -> Self {
-        Self::new_with_egress_policy(
-            allowed_hosts,
-            scryer_outbound_http::PluginEgressPolicy::default(),
-            indexer_proxy_policy,
-            destination_cooldown_key,
-            max_http_response_bytes,
-        )
-    }
-
-    pub(crate) fn new_with_egress_policy(
-        allowed_hosts: Vec<String>,
         egress_policy: scryer_outbound_http::PluginEgressPolicy,
         indexer_proxy_policy: Option<IndexerProxyPolicy>,
         destination_cooldown_key: Option<String>,
@@ -488,7 +473,15 @@ impl PluginHttpHost {
         let request_client = worker_runtime
             .lock()
             .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-            .pinned_request_client(&runtime, &request.url, &egress_policy)?;
+            .pinned_request_client(&runtime, &request.url, &egress_policy)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    plugin = plugin_id,
+                    url = %solver::sanitized_url_for_log(&request.url),
+                    error = %error,
+                    "plugin HTTP destination rejected"
+                );
+            })?;
         let started_at = Instant::now();
         let request_is_get = request
             .method
@@ -1359,7 +1352,13 @@ mod tests {
 
         let server = MockServer::start().await;
         let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
-        let host = PluginHttpHost::new(vec!["127.0.0.1".to_string()], None, None, Some(64 * 1024));
+        let host = PluginHttpHost::new(
+            vec!["127.0.0.1".to_string()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
         let context = || IndexerErrorCaptureContext {
             indexer_id: "indexer-1".to_string(),
             indexer_name: "Test indexer".to_string(),
@@ -1447,7 +1446,13 @@ mod tests {
     #[test]
     fn capture_scope_records_failed_operations_without_an_http_response() {
         let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
-        let host = PluginHttpHost::new(vec![], None, None, Some(64 * 1024));
+        let host = PluginHttpHost::new(
+            vec![],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
         host.begin_indexer_error_capture(IndexerErrorCaptureContext {
             indexer_id: "indexer-1".to_string(),
             indexer_name: "Test indexer".to_string(),
@@ -1525,6 +1530,7 @@ mod tests {
             for child in 0..11 {
                 let host = PluginHttpHost::new(
                     vec!["127.0.0.1".to_string()],
+                    scryer_outbound_http::PluginEgressPolicy::default(),
                     None,
                     Some(format!("managed-indexer:parent:{child}")),
                     Some(64 * 1024),
@@ -1570,7 +1576,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let host = PluginHttpHost::new(vec!["127.0.0.1".to_string()], None, None, Some(64 * 1024));
+        let host = PluginHttpHost::new(
+            vec!["127.0.0.1".to_string()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
         for query in ["first", "second"] {
             let body = host
                 .request(

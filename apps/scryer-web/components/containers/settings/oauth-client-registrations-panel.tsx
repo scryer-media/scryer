@@ -23,7 +23,9 @@ import {
   canStartJellyfinPluginClientCreation,
   createdJellyfinPluginClientForCallback,
   isEligibleJellyfinPluginClient,
+  jellyfinConnectionIneligibilityReasons,
   jellyfinPluginCallbackUrl,
+  jellyfinPluginClientRegistrations,
   jellyfinPluginClientStatus,
   jellyfinPluginClientCreateDecision,
   jellyfinPluginCreateNeedsReconciliation,
@@ -32,6 +34,7 @@ import {
   reconcileCreatedJellyfinPluginClient,
   shouldApplyJellyfinPluginOAuthReload,
   type JellyfinMediaServerConnection,
+  type OAuthClientKind,
   type OAuthClientRegistrationForJellyfin,
 } from "@/lib/utils/jellyfin-plugin-oauth-setup";
 
@@ -263,9 +266,13 @@ export function OAuthClientRegistrationsPanel() {
       const result = await client
         .mutation<
           { createOAuthClientRegistration?: OAuthClientRegistration },
-          { input: { displayName: string; redirectUris: string[] } }
+          { input: { displayName: string; redirectUris: string[]; kind: OAuthClientKind } }
         >(createOAuthClientRegistrationMutation, {
-          input: { displayName: JELLYFIN_PLUGIN_DISPLAY_NAME, redirectUris: [callbackUrl] },
+          input: {
+            displayName: JELLYFIN_PLUGIN_DISPLAY_NAME,
+            redirectUris: [callbackUrl],
+            kind: "JELLYFIN_PLUGIN",
+          },
         })
         .toPromise();
       const registration = result.data?.createOAuthClientRegistration;
@@ -324,34 +331,40 @@ export function OAuthClientRegistrationsPanel() {
   const managedClients = clients.filter(
     (client) => client.source === "MANAGED" && client.clientId !== "generic-native",
   );
-  const customClients = clients.filter((client) => client.source === "CUSTOM");
-  const editingClient = customClients.find((client) => client.clientId === editingClientId);
+  // A plugin client is identified by the kind stored on its registration, so it belongs to the
+  // Jellyfin section rather than the generic custom-application list that created it.
+  const jellyfinPluginClients = jellyfinPluginClientRegistrations(clients);
+  const customClients = clients.filter(
+    (client) => client.source === "CUSTOM" && client.kind === "CUSTOM",
+  );
+  const editingClient = clients.find(
+    (client) => client.source === "CUSTOM" && client.clientId === editingClientId,
+  );
   const callbackPreview = normalizedPublicJellyfinBaseUrl(jellyfinPublicBaseUrl);
-  const matchingJellyfinClients = callbackPreview
-    ? customClients.filter((registeredClient) =>
-        isEligibleJellyfinPluginClient(
-          registeredClient,
-          `${callbackPreview}/Scryer/Auth/Callback`,
-        ),
-      )
-    : [];
-  const createdClientMatchesCallback = createdJellyfinClient && callbackPreview
-    ? createdJellyfinClient.callbackUrl === `${callbackPreview}/Scryer/Auth/Callback`
+  const previewCallbackUrl = jellyfinPluginCallbackUrl(callbackPreview);
+  const createdClientMatchesCallback = createdJellyfinClient && previewCallbackUrl
+    ? createdJellyfinClient.callbackUrl === previewCallbackUrl
     : false;
-  const uncertainCreateMatchesCallback = uncertainJellyfinCallbackUrl && callbackPreview
-    ? uncertainJellyfinCallbackUrl === `${callbackPreview}/Scryer/Auth/Callback`
+  const uncertainCreateMatchesCallback = uncertainJellyfinCallbackUrl && previewCallbackUrl
+    ? uncertainJellyfinCallbackUrl === previewCallbackUrl
     : false;
-  const jellyfinPluginClient = matchingJellyfinClients.length === 1
-    ? { clientId: matchingJellyfinClients[0].clientId, callbackUrl: `${callbackPreview}/Scryer/Auth/Callback` }
-    : matchingJellyfinClients.length === 0 && createdClientMatchesCallback
-      ? createdJellyfinClient
-      : null;
   const jellyfinClientStatus = jellyfinPluginClientStatus(
-    matchingJellyfinClients.length,
+    jellyfinPluginClients.length,
     Boolean(createdClientMatchesCallback),
     Boolean(uncertainCreateMatchesCallback),
   );
-  const linkingStatus = automaticLinkingStatus(callbackPreview, jellyfinConnections);
+  const reconcilingJellyfinClient = jellyfinPluginClients.length === 0 && createdClientMatchesCallback
+    ? createdJellyfinClient
+    : null;
+  // Once a plugin client exists its stored callback, not the text box, defines the public URL.
+  const jellyfinPublicBaseUrlInEffect = jellyfinPluginClients.length === 1
+    ? jellyfinPluginClients[0].publicBaseUrl
+    : callbackPreview;
+  const linkingStatus = automaticLinkingStatus(jellyfinPublicBaseUrlInEffect, jellyfinConnections);
+  const linkingIneligibilities = jellyfinConnectionIneligibilityReasons(
+    jellyfinPublicBaseUrlInEffect,
+    jellyfinConnections,
+  );
 
   return (
     <div className={PANEL_CLASS}>
@@ -397,78 +410,179 @@ export function OAuthClientRegistrationsPanel() {
                         : "requires exactly one enabled Jellyfin connection with linking, an API key, and this exact public URL"}
               </p>
             </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="jellyfin-plugin-public-base-url">Public Jellyfin base URL</Label>
-            <Input
-              id="jellyfin-plugin-public-base-url"
-              value={jellyfinPublicBaseUrl}
-              disabled={busy}
-              onChange={(event) => {
-                setJellyfinPublicBaseUrlTouched(true);
-                setJellyfinPublicBaseUrl(event.target.value);
-              }}
-              placeholder="https://jellyfin.example.com"
-            />
-            <p className="text-xs text-[var(--scry-muted3)]">
-              {callbackPreview
-                ? `Exact callback: ${callbackPreview}/Scryer/Auth/Callback`
-                : "Enter a public HTTPS URL to derive the exact callback."}
-            </p>
-          </div>
-          <Button
-            type="button"
-            disabled={!canCreateJellyfinPluginClient(busy, jellyfinClientStatus)}
-            onClick={() => void createJellyfinPluginClient()}
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Create Jellyfin plugin client
-          </Button>
-          {jellyfinPluginClient ? (
-            <div className="space-y-2 rounded-[10px] border border-[var(--scry-line2)] p-3">
-              <p className="text-sm font-medium text-[var(--scry-ink2)]">
-                {jellyfinClientStatus === "ready"
-                  ? "Jellyfin plugin OAuth client ready"
-                  : "Jellyfin plugin OAuth client reconciliation pending"}
-              </p>
-              <ClientIdLine clientId={jellyfinPluginClient.clientId} onCopy={copyClientId} />
-              <div className="flex min-w-0 items-center gap-1.5">
-                <code className="min-w-0 break-all text-xs text-[var(--scry-muted3)]">{jellyfinPluginClient.callbackUrl}</code>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0"
-                  aria-label="Copy Jellyfin plugin callback URL"
-                  onClick={() => void copyJellyfinCallback(jellyfinPluginClient.callbackUrl)}
-                >
-                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                </Button>
+            {linkingIneligibilities.length > 0 ? (
+              <div
+                id="jellyfin-plugin-linking-ineligibility"
+                role="status"
+                className="space-y-1 rounded-[10px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-2 text-xs text-[var(--scry-warning-text)]"
+              >
+                <p>Account linking cannot use this public URL:</p>
+                <ul className="space-y-0.5">
+                  {linkingIneligibilities.map((entry) => (
+                    <li key={`${entry.displayName}-${entry.reason}`}>
+                      {`${entry.displayName} ${entry.reason}`}
+                    </li>
+                  ))}
+                </ul>
+                <p>The plugin still signs in; it grants library access only until this is fixed.</p>
               </div>
-              {jellyfinClientStatus === "reconciling" ? (
+            ) : null}
+          </div>
+          {jellyfinPluginClients.length > 0 ? (
+            <div className="space-y-2">
+              {jellyfinPluginClients.length > 1 ? (
+                <p
+                  id="jellyfin-plugin-client-ambiguous"
+                  className="rounded-[10px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-2 text-xs text-[var(--scry-warning-text)]"
+                >
+                  More than one OAuth client is registered as the Jellyfin plugin. Delete all but one before the plugin signs in.
+                </p>
+              ) : null}
+              {jellyfinPluginClients.map((registeredClient) => (
+                <div
+                  key={registeredClient.clientId}
+                  className="space-y-2 rounded-[10px] border border-[var(--scry-line2)] p-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-[var(--scry-ink2)]">
+                          {registeredClient.displayName}
+                        </p>
+                        <span className="text-xs text-[var(--scry-muted3)]">
+                          {registeredClient.enabled ? "Enabled" : "Disabled"}
+                        </span>
+                      </div>
+                      <ClientIdLine clientId={registeredClient.clientId} onCopy={copyClientId} />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => {
+                          setEditingClientId(registeredClient.clientId);
+                          setDraft(draftFromClient(registeredClient));
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => setDeleteTarget(registeredClient)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                  {registeredClient.callbackUrl ? (
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <code className="min-w-0 break-all text-xs text-[var(--scry-muted3)]">
+                        {registeredClient.callbackUrl}
+                      </code>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="shrink-0"
+                        aria-label="Copy Jellyfin plugin callback URL"
+                        onClick={() => void copyJellyfinCallback(registeredClient.callbackUrl!)}
+                      >
+                        <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[var(--scry-muted3)]">
+                      This client has no callback URL registered. Edit it to add the plugin callback.
+                    </p>
+                  )}
+                  {registeredClient.publicBaseUrl ? (
+                    <p className="break-all text-xs text-[var(--scry-muted3)]">
+                      {`Public Jellyfin base URL: ${registeredClient.publicBaseUrl}`}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="jellyfin-plugin-public-base-url">Public Jellyfin base URL</Label>
+                <Input
+                  id="jellyfin-plugin-public-base-url"
+                  value={jellyfinPublicBaseUrl}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setJellyfinPublicBaseUrlTouched(true);
+                    setJellyfinPublicBaseUrl(event.target.value);
+                  }}
+                  placeholder="https://jellyfin.example.com"
+                />
+                <p className="text-xs text-[var(--scry-muted3)]">
+                  {previewCallbackUrl
+                    ? `Exact callback: ${previewCallbackUrl}`
+                    : "Enter a public HTTPS URL to derive the exact callback."}
+                </p>
+              </div>
+              <Button
+                type="button"
+                disabled={!canCreateJellyfinPluginClient(busy, jellyfinClientStatus)}
+                onClick={() => void createJellyfinPluginClient()}
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Create Jellyfin plugin client
+              </Button>
+              {reconcilingJellyfinClient ? (
+                <div className="space-y-2 rounded-[10px] border border-[var(--scry-line2)] p-3">
+                  <p className="text-sm font-medium text-[var(--scry-ink2)]">
+                    Jellyfin plugin OAuth client reconciliation pending
+                  </p>
+                  <ClientIdLine clientId={reconcilingJellyfinClient.clientId} onCopy={copyClientId} />
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <code className="min-w-0 break-all text-xs text-[var(--scry-muted3)]">
+                      {reconcilingJellyfinClient.callbackUrl}
+                    </code>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="shrink-0"
+                      aria-label="Copy Jellyfin plugin callback URL"
+                      onClick={() => void copyJellyfinCallback(reconcilingJellyfinClient.callbackUrl)}
+                    >
+                      <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Button>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={loading}
+                    onClick={() => void reload(reconcilingJellyfinClient)}
+                  >
+                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Retry client list
+                  </Button>
+                </div>
+              ) : null}
+              {jellyfinClientStatus === "reconciling" && !reconcilingJellyfinClient ? (
                 <Button
                   type="button"
                   variant="outline"
                   disabled={loading}
-                  onClick={() => void reload(jellyfinPluginClient)}
+                  onClick={() => void reload()}
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   Retry client list
                 </Button>
               ) : null}
-            </div>
-          ) : null}
-          {jellyfinClientStatus === "reconciling" && !jellyfinPluginClient ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={loading}
-              onClick={() => void reload()}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Retry client list
-            </Button>
-          ) : null}
+            </>
+          )}
         </section>
         {managedClients.length > 0 ? (
           <div className="space-y-2">

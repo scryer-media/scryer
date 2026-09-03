@@ -27,6 +27,7 @@ import {
 } from "@/components/common/external-media-links";
 import { TitleRatingsDisplay } from "@/components/common/title-ratings-display";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import { MonitorSelectionPicker } from "@/components/common/monitor-selection-picker";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { TitlePoster } from "@/components/title-poster";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,14 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { LibraryRecord, MediaRequestRecord } from "@/lib/types";
+import type { MonitorSelectionDraft } from "@/lib/types/titles";
+import {
+  EMPTY_MONITOR_SELECTION,
+  isMonitorSelectionEmpty,
+  monitorSelectionFromRecord,
+  monitorSelectionInput,
+  monitorSelectionSummaryParts,
+} from "@/lib/utils/monitor-selection";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   mediaRequestApproveId,
@@ -54,11 +63,15 @@ import {
   mediaRequestDismissId,
   mediaRequestEditId,
   mediaRequestMonitorOptionId,
+  mediaRequestMonitorSelectionId,
   mediaRequestProfileOptionId,
   mediaRequestRowId,
   mediaRequestStatusId,
 } from "@/lib/utils/dom-ids";
-import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import {
+  selectBackdropVariantUrl,
+  selectPosterVariantUrl,
+} from "@/lib/utils/poster-images";
 import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 
@@ -77,16 +90,19 @@ type RequestMonitorType =
   | "FUTURE_EPISODES"
   | "MISSING_AND_FUTURE_EPISODES"
   | "ALL_EPISODES"
-  | "NONE";
+  | "NONE"
+  | "ADVANCED";
 
 type UpdateRequestValues = {
   requestedQualityProfileId: string;
   requestedMonitorType?: RequestMonitorType;
+  requestedMonitorSelection?: MonitorSelectionDraft;
 };
 
 type ApproveRequestValues = {
   qualityProfileId: string;
   monitorType?: RequestMonitorType;
+  monitorSelection?: MonitorSelectionDraft;
 };
 
 type RequestsViewProps = {
@@ -183,6 +199,8 @@ function monitorTypeLabel(t: ReturnType<typeof useTranslate>, value: string | nu
       return t("search.monitorType.allEpisodes");
     case "none":
       return t("search.monitorType.none");
+    case "advanced":
+      return t("search.monitorType.advanced");
     default:
       return value?.trim() || null;
   }
@@ -204,6 +222,8 @@ function monitorTypeSelectValue(
       return "ALL_EPISODES";
     case "none":
       return "NONE";
+    case "advanced":
+      return "ADVANCED";
     case "futureepisodes":
     default:
       return facet === "MOVIE" ? "MONITORED" : "FUTURE_EPISODES";
@@ -219,6 +239,7 @@ function monitorOptions(t: ReturnType<typeof useTranslate>): Array<{ value: Requ
     },
     { value: "ALL_EPISODES", label: t("search.monitorType.allEpisodes") },
     { value: "NONE", label: t("search.monitorType.none") },
+    { value: "ADVANCED", label: t("search.monitorType.advanced") },
   ];
 }
 
@@ -374,11 +395,18 @@ export function RequestsView({
   const [approvalProfileId, setApprovalProfileId] = React.useState("");
   const [approvalMonitorType, setApprovalMonitorType] =
     React.useState<RequestMonitorType>("FUTURE_EPISODES");
+  const [approvalMonitorSelection, setApprovalMonitorSelection] =
+    React.useState<MonitorSelectionDraft>(EMPTY_MONITOR_SELECTION);
+  const [approvalSelectionLoading, setApprovalSelectionLoading] =
+    React.useState(false);
   const [editRequest, setEditRequest] =
     React.useState<MediaRequestRecord | null>(null);
   const [editProfileId, setEditProfileId] = React.useState("");
   const [editMonitorType, setEditMonitorType] =
     React.useState<RequestMonitorType>("FUTURE_EPISODES");
+  const [editMonitorSelection, setEditMonitorSelection] =
+    React.useState<MonitorSelectionDraft>(EMPTY_MONITOR_SELECTION);
+  const [editSelectionLoading, setEditSelectionLoading] = React.useState(false);
   const editProfileOptions = React.useMemo(
     () =>
       editRequest
@@ -420,6 +448,11 @@ export function RequestsView({
         approvalRequest.requestedMonitorType,
       ),
     );
+    setApprovalMonitorSelection(
+      monitorSelectionFromRecord(approvalRequest.requestedMonitorSelection) ??
+        EMPTY_MONITOR_SELECTION,
+    );
+    setApprovalSelectionLoading(false);
   }, [approvalRequest, libraries, qualityProfileOptions]);
 
   React.useEffect(() => {
@@ -436,7 +469,40 @@ export function RequestsView({
     setEditMonitorType(
       monitorTypeSelectValue(editRequest.facet, editRequest.requestedMonitorType),
     );
+    setEditMonitorSelection(
+      monitorSelectionFromRecord(editRequest.requestedMonitorSelection) ??
+        EMPTY_MONITOR_SELECTION,
+    );
+    setEditSelectionLoading(false);
   }, [editProfileOptions, editRequest]);
+
+  // The picker is mounted (and its metadata query issued) only while this
+  // dialog's own monitor-type select says ADVANCED. Reading a request's stored
+  // selection for the card summary never fetches anything.
+  const approvalAdvancedSelected =
+    approvalRequest !== null &&
+    approvalRequest.facet !== "MOVIE" &&
+    approvalMonitorType === "ADVANCED";
+  const approvalTvdbId = approvalRequest
+    ? requestExternalIdValue(approvalRequest, "tvdb")?.trim() ?? ""
+    : "";
+  const approvalBlocksConfirm =
+    approvalAdvancedSelected &&
+    (!approvalTvdbId ||
+      approvalSelectionLoading ||
+      isMonitorSelectionEmpty(approvalMonitorSelection));
+  const editAdvancedSelected =
+    editRequest !== null &&
+    editRequest.facet !== "MOVIE" &&
+    editMonitorType === "ADVANCED";
+  const editTvdbId = editRequest
+    ? requestExternalIdValue(editRequest, "tvdb")?.trim() ?? ""
+    : "";
+  const editBlocksConfirm =
+    editAdvancedSelected &&
+    (!editTvdbId ||
+      editSelectionLoading ||
+      isMonitorSelectionEmpty(editMonitorSelection));
 
   const openApprovalDialog = (request: MediaRequestRecord) => {
     onLoadQualityProfileOptions();
@@ -447,6 +513,8 @@ export function RequestsView({
     setApprovalRequest(null);
     setApprovalProfileId("");
     setApprovalMonitorType("FUTURE_EPISODES");
+    setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
+    setApprovalSelectionLoading(false);
   };
 
   const confirmApproval = () => {
@@ -455,6 +523,9 @@ export function RequestsView({
       qualityProfileId: approvalProfileId,
       monitorType:
         approvalRequest.facet === "MOVIE" ? undefined : approvalMonitorType,
+      monitorSelection: approvalAdvancedSelected
+        ? monitorSelectionInput(approvalMonitorSelection)
+        : undefined,
     });
     closeApprovalDialog();
   };
@@ -468,6 +539,8 @@ export function RequestsView({
     setEditRequest(null);
     setEditProfileId("");
     setEditMonitorType("FUTURE_EPISODES");
+    setEditMonitorSelection(EMPTY_MONITOR_SELECTION);
+    setEditSelectionLoading(false);
   };
 
   const confirmUpdate = () => {
@@ -475,14 +548,20 @@ export function RequestsView({
     onUpdateRequest(editRequest, {
       requestedQualityProfileId: editProfileId,
       requestedMonitorType: editRequest.facet === "MOVIE" ? undefined : editMonitorType,
+      requestedMonitorSelection: editAdvancedSelected
+        ? monitorSelectionInput(editMonitorSelection)
+        : undefined,
     });
     closeEditDialog();
   };
 
   const renderRequestCard = (request: MediaRequestRecord) => {
     const posterUrl = selectPosterVariantUrl(request.posterUrl, "w250");
-    const backgroundPosterUrl =
-      selectPosterVariantUrl(request.posterUrl, "original") ?? posterUrl;
+    // Background art when the provider had it; the poster is only a fallback.
+    const backgroundArtUrl =
+      selectBackdropVariantUrl(request.backgroundUrl, "w1280") ??
+      selectPosterVariantUrl(request.posterUrl, "original") ??
+      posterUrl;
     const requesters = requesterLabel(request);
     const imdbId = requestExternalIdValue(request, "imdb");
     const tvdbId = requestExternalIdValue(request, "tvdb");
@@ -499,8 +578,11 @@ export function RequestsView({
       Boolean(anilistId) ||
       Boolean(anidbId);
     const isResolving = actionRequestId === request.id;
-    const actionsDisabled = loading || actionRequestId !== null;
-    const approveDisabled = loading || actionRequestId !== null;
+    // Only an in-flight action locks the buttons. Background refreshes (focus
+    // and poll pulses) must not, or a click that lands while one is running
+    // hits a disabled button and is silently dropped.
+    const actionsDisabled = actionRequestId !== null;
+    const approveDisabled = actionRequestId !== null;
     const statusMeta = requestStatusTone(t, request.status);
     const StatusIcon = statusMeta.Icon;
     const canResolveRequest = mode === "admin" && request.status === "PENDING";
@@ -517,6 +599,24 @@ export function RequestsView({
     const requestedMonitorType = request.requestedMonitorType
       ? monitorTypeLabel(t, request.requestedMonitorType)
       : null;
+    const requestedSelection = monitorSelectionSummaryParts(
+      request.requestedMonitorSelection,
+      {
+        specials: t("monitorSelection.specials"),
+        season: (seasonNumber) =>
+          t("monitorSelection.season", { number: seasonNumber }),
+      },
+    );
+    const requestedSelectionSummary = [
+      requestedSelection.seasons.join(", "),
+      requestedSelection.movies.length > 0
+        ? t("monitorSelection.summaryMovies", {
+            movies: requestedSelection.movies.join(", "),
+          })
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
 
     return (
       <article
@@ -530,11 +630,11 @@ export function RequestsView({
         data-request-tmdb-id={requestExternalIdValue(request, "tmdb")}
         className="relative overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]"
       >
-        {backgroundPosterUrl ? (
+        {backgroundArtUrl ? (
           <div
             aria-hidden="true"
-            className="absolute inset-0 scale-105 bg-cover bg-center opacity-60"
-            style={{ backgroundImage: `url(${backgroundPosterUrl})` }}
+            className="absolute inset-0 bg-cover bg-center opacity-60"
+            style={{ backgroundImage: `url(${backgroundArtUrl})` }}
           />
         ) : null}
         <div
@@ -546,8 +646,10 @@ export function RequestsView({
           className="absolute inset-0 bg-[linear-gradient(0deg,rgba(4,7,16,0.76)_0%,rgba(4,7,16,0.22)_58%,rgba(255,255,255,0.04)_100%)]"
         />
         <div className="relative z-10 flex flex-col sm:flex-row">
-          <div className="w-full shrink-0 bg-[var(--scry-inset)] sm:w-[150px]">
-            <div className="aspect-[2/3] w-full overflow-hidden sm:h-full sm:min-h-[225px]">
+          {/* The poster floats over the full-bleed art: a fixed 2:3 frame,
+              vertically centred against the details column. */}
+          <div className="flex w-full shrink-0 items-center justify-center p-4 sm:w-[236px] sm:pr-0">
+            <div className="aspect-[2/3] w-[200px] shrink-0 overflow-hidden rounded-[9px] border border-[#2a3556] bg-[var(--scry-inset)] shadow-[0_8px_22px_rgba(0,0,0,0.5)]">
               {posterUrl ? (
                 <TitlePoster
                   src={posterUrl}
@@ -556,7 +658,7 @@ export function RequestsView({
                   loading="lazy"
                 />
               ) : (
-                <div className="flex h-full min-h-[180px] w-full items-center justify-center text-xs text-[var(--scry-muted3)]">
+                <div className="flex h-full w-full items-center justify-center text-xs text-[var(--scry-muted3)]">
                   {t("label.noArt")}
                 </div>
               )}
@@ -723,6 +825,16 @@ export function RequestsView({
                     {t("requests.requestedMonitorType")}
                   </div>
                   <div className="text-[var(--scry-ink2)]">{requestedMonitorType}</div>
+                  {requestedSelectionSummary ? (
+                    <div
+                      id={mediaRequestMonitorSelectionId(request.id)}
+                      className="mt-1 text-[var(--scry-ink2)]"
+                    >
+                      {t("monitorSelection.summaryPrefix", {
+                        selection: requestedSelectionSummary,
+                      })}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -854,7 +966,7 @@ export function RequestsView({
             <Select
               value={approvalProfileId}
               onValueChange={setApprovalProfileId}
-              disabled={loading || actionRequestId !== null}
+              disabled={actionRequestId !== null}
             >
               <SelectTrigger id="approve-media-request-quality-profile">
                 <SelectValue />
@@ -879,10 +991,14 @@ export function RequestsView({
               </span>
               <Select
                 value={approvalMonitorType}
-                onValueChange={(value) =>
-                  setApprovalMonitorType(value as RequestMonitorType)
-                }
-                disabled={loading || actionRequestId !== null}
+                onValueChange={(value) => {
+                  const nextMonitorType = value as RequestMonitorType;
+                  setApprovalMonitorType(nextMonitorType);
+                  if (nextMonitorType !== "ADVANCED") {
+                    setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
+                  }
+                }}
+                disabled={actionRequestId !== null}
               >
                 <SelectTrigger
                   id="approve-media-request-monitor-type"
@@ -904,6 +1020,17 @@ export function RequestsView({
               </Select>
             </label>
           ) : null}
+          {approvalRequest && approvalAdvancedSelected ? (
+            <MonitorSelectionPicker
+              facet={approvalRequest.facet}
+              tvdbId={approvalTvdbId}
+              value={approvalMonitorSelection}
+              onChange={setApprovalMonitorSelection}
+              onLoadingChange={setApprovalSelectionLoading}
+              disabled={actionRequestId !== null}
+              idPrefix="approve-media-request"
+            />
+          ) : null}
           <DialogFooter>
             <Button id="approve-media-request-cancel" type="button" variant="outline" onClick={closeApprovalDialog}>
               {t("label.cancel")}
@@ -912,7 +1039,11 @@ export function RequestsView({
               id="approve-media-request-confirm"
               type="button"
               onClick={confirmApproval}
-              disabled={!approvalProfileId || loading || actionRequestId !== null}
+              disabled={
+                !approvalProfileId ||
+                actionRequestId !== null ||
+                approvalBlocksConfirm
+              }
             >
               <Check className="h-4 w-4" />
               {t("requests.approve")}
@@ -932,7 +1063,7 @@ export function RequestsView({
             <Select
               value={editProfileId}
               onValueChange={setEditProfileId}
-              disabled={loading || actionRequestId !== null || editProfileOptions.length === 0}
+              disabled={actionRequestId !== null || editProfileOptions.length === 0}
             >
               <SelectTrigger id="edit-media-request-quality-profile">
                 <SelectValue />
@@ -957,8 +1088,14 @@ export function RequestsView({
               </span>
               <Select
                 value={editMonitorType}
-                onValueChange={(value) => setEditMonitorType(value as RequestMonitorType)}
-                disabled={loading || actionRequestId !== null}
+                onValueChange={(value) => {
+                  const nextMonitorType = value as RequestMonitorType;
+                  setEditMonitorType(nextMonitorType);
+                  if (nextMonitorType !== "ADVANCED") {
+                    setEditMonitorSelection(EMPTY_MONITOR_SELECTION);
+                  }
+                }}
+                disabled={actionRequestId !== null}
               >
                 <SelectTrigger id="edit-media-request-monitor-type">
                   <SelectValue />
@@ -977,6 +1114,17 @@ export function RequestsView({
               </Select>
             </label>
           ) : null}
+          {editRequest && editAdvancedSelected ? (
+            <MonitorSelectionPicker
+              facet={editRequest.facet}
+              tvdbId={editTvdbId}
+              value={editMonitorSelection}
+              onChange={setEditMonitorSelection}
+              onLoadingChange={setEditSelectionLoading}
+              disabled={actionRequestId !== null}
+              idPrefix="edit-media-request"
+            />
+          ) : null}
           <DialogFooter>
             <Button id="edit-media-request-cancel" type="button" variant="outline" onClick={closeEditDialog}>
               {t("label.cancel")}
@@ -985,7 +1133,11 @@ export function RequestsView({
               id="edit-media-request-confirm"
               type="button"
               onClick={confirmUpdate}
-              disabled={!editProfileId || loading || actionRequestId !== null}
+              disabled={
+                !editProfileId ||
+                actionRequestId !== null ||
+                editBlocksConfirm
+              }
             >
               <Check className="h-4 w-4" />
               {t("requests.saveChanges")}

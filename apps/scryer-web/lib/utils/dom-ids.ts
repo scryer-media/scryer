@@ -185,6 +185,20 @@ export function seriesOverviewSeasonSearchId(collectionId: string): string {
   return selectorId("series-overview-season-search", collectionId);
 }
 
+export function seriesOverviewSeasonSelectId(collectionId: string): string {
+  return selectorId("series-overview-season-select", collectionId);
+}
+
+export function seriesOverviewEpisodeSelectId(episodeId: string): string {
+  return selectorId("series-overview-episode-select", episodeId);
+}
+
+export const SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID =
+  "series-overview-delete-selected-episodes";
+
+export const SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID =
+  "series-overview-clear-episode-selection";
+
 export function globalSearchConfigureAddId(
   facet: string,
   result: MetadataSearchSelectorInput,
@@ -233,6 +247,10 @@ export function mediaRequestCancelId(requestId: string): string {
 
 export function mediaRequestProfileOptionId(scope: string, profileId: string): string {
   return selectorId(scope, "media-request-profile-option", profileId);
+}
+
+export function mediaRequestMonitorSelectionId(requestId: string): string {
+  return selectorId("media-request-monitor-selection", requestId);
 }
 
 export function mediaRequestMonitorOptionId(scope: string, monitorType: string): string {

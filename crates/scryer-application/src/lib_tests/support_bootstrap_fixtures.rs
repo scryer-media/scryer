@@ -390,6 +390,7 @@ pub(super) fn media_request_input(
         rating_summary: scryer_domain::TitleRatingSummary::default(),
         requested_quality_profile_id: None,
         requested_monitor_type: None,
+        requested_monitor_selection: None,
         external_ids: vec![
             ExternalId {
                 source: "TVDB".to_string(),

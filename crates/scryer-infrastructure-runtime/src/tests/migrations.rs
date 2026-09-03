@@ -4726,3 +4726,166 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
     })?;
     result
 }
+
+#[tokio::test]
+async fn migration_0206_rebuilds_media_requests_without_losing_child_rows() {
+    crate::spellfix::register_spellfix_auto_extension()
+        .expect("spellfix auto-extension should register");
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_0206_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("0205 database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(205), true)
+        .await
+        .expect("fresh 0205 fixture should apply");
+
+    let now = "2026-09-03T12:00:00Z";
+    sqlx::query(
+        "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+         VALUES ('library-0206', 'series', 'Series 0206', 'series-0206', 0, ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("0205 library should insert");
+    sqlx::query(
+        "INSERT INTO users (id, username, status, created_at, updated_at)
+         VALUES ('user-0206', 'requester-0206', 'active', ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("0205 user should insert");
+    sqlx::query(
+        "INSERT INTO media_requests (
+            id, library_id, facet, status, identity_fingerprint, title,
+            requested_monitor_type, created_by_user_id, created_at, updated_at
+         ) VALUES ('request-0206', 'library-0206', 'series', 'pending', 'fingerprint-0206',
+                   'Advanced Show', 'allepisodes', 'user-0206', ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("0205 media request should insert");
+    sqlx::query(
+        "INSERT INTO media_request_external_ids (request_id, library_id, source, external_id, created_at)
+         VALUES ('request-0206', 'library-0206', 'tvdb', '424242', ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("0205 request external id should insert");
+    sqlx::query(
+        "INSERT INTO media_request_requesters (request_id, user_id, requested_at)
+         VALUES ('request-0206', 'user-0206', ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("0205 request requester should insert");
+
+    // The pre-0206 CHECK enumerates the legacy monitor types, which is exactly
+    // why the table has to be rebuilt.
+    assert!(
+        sqlx::query("UPDATE media_requests SET requested_monitor_type = 'advanced' WHERE id = 'request-0206'")
+            .execute(&pool)
+            .await
+            .is_err(),
+        "0205 should reject the advanced monitor type"
+    );
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0206 upgrade should apply");
+
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_requests")
+            .fetch_one(&pool)
+            .await
+            .expect("rebuilt request count should load"),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT external_id FROM media_request_external_ids WHERE request_id = 'request-0206'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("child external id should survive the rebuild"),
+        "424242"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT user_id FROM media_request_requesters WHERE request_id = 'request-0206'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("child requester should survive the rebuild"),
+        "user-0206"
+    );
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+          WHERE type = 'index' AND tbl_name = 'media_requests' AND name NOT LIKE 'sqlite_%'
+          ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("rebuilt indexes should load");
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_media_requests_created_title".to_string(),
+            "idx_media_requests_library_facet_status".to_string(),
+            "idx_media_requests_status_updated".to_string(),
+        ]
+    );
+    let leftovers: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%0206%' ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("leftover table scan should run");
+    assert!(
+        leftovers.is_empty(),
+        "the rebuild should leave no scratch tables behind, found {leftovers:?}"
+    );
+
+    sqlx::query(
+        "UPDATE media_requests SET requested_monitor_type = 'advanced' WHERE id = 'request-0206'",
+    )
+    .execute(&pool)
+    .await
+    .expect("0206 should accept the advanced monitor type");
+    sqlx::query(
+        "INSERT INTO monitor_selections (
+            owner_kind, owner_id, entry_kind, entry_key, label, external_ids_json,
+            created_at, updated_at
+         ) VALUES ('media_request', 'request-0206', 'season', '2', NULL, '[]', ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("monitor selection row should insert");
+    assert!(
+        sqlx::query(
+            "INSERT INTO monitor_selections (
+                owner_kind, owner_id, entry_kind, entry_key, label, external_ids_json,
+                created_at, updated_at
+             ) VALUES ('bogus', 'request-0206', 'season', '3', NULL, '[]', ?1, ?1)",
+        )
+        .bind(now)
+        .execute(&pool)
+        .await
+        .is_err(),
+        "monitor_selections should reject an unknown owner kind"
+    );
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
+}

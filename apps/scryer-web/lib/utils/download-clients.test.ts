@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
   isFileBackedDownloadClientConfigField,
+  normalizeDownloadClientDraft,
 } from "./download-clients.ts";
 import type { ConfigFieldDef, DownloadClientDraft } from "../types/index.ts";
 
@@ -157,5 +159,60 @@ test("file-backed config field detection recognizes explicit and inferred paths"
   assert.equal(
     isFileBackedDownloadClientConfigField(configField({ key: "username" })),
     false,
+  );
+});
+
+test("a URL pasted into the host box is put where it belongs", () => {
+  const pasted = normalizeDownloadClientDraft(
+    draft({ host: "http://192.168.1.5:8080/qbt/", port: "", urlBase: "" }),
+  );
+  assert.equal(pasted.host, "192.168.1.5");
+  assert.equal(pasted.port, "8080");
+  assert.equal(pasted.urlBase, "/qbt");
+  assert.equal(pasted.useSsl, false);
+
+  // A scheme the operator wrote sets the SSL box, both ways.
+  assert.equal(
+    normalizeDownloadClientDraft(draft({ host: "https://qbit.example.com" })).useSsl,
+    true,
+  );
+  assert.equal(
+    normalizeDownloadClientDraft(draft({ host: "http://qbit.example.com", useSsl: true }))
+      .useSsl,
+    false,
+  );
+  // Without a scheme the checkbox is the operator's own statement and stands.
+  assert.equal(
+    normalizeDownloadClientDraft(draft({ host: "qbit.example.com", useSsl: true })).useSsl,
+    true,
+  );
+
+  // A port in the address wins over a stale one in the port box; without one,
+  // the port box is kept.
+  assert.equal(
+    normalizeDownloadClientDraft(draft({ host: "192.168.1.5:9091", port: "6789" })).port,
+    "9091",
+  );
+  assert.equal(
+    normalizeDownloadClientDraft(draft({ host: "192.168.1.5", port: "6789" })).port,
+    "6789",
+  );
+
+  // Nothing to do means the same object back, and a value we should not touch
+  // is left exactly as typed.
+  const plain = draft({ host: "download-client", port: "6789" });
+  assert.equal(normalizeDownloadClientDraft(plain), plain);
+  const credentials = draft({ host: "http://admin:pw@nzbget.lan:6789" });
+  assert.equal(normalizeDownloadClientDraft(credentials), credentials);
+});
+
+test("the connection test dials what a save would store", () => {
+  assert.equal(
+    buildDownloadClientBaseUrl(draft({ host: "http://192.168.1.5:8080/qbt", port: "", urlBase: "" })),
+    "http://192.168.1.5:8080/qbt",
+  );
+  assert.equal(
+    buildDownloadClientBaseUrl(draft({ host: "https://qbit.example.com", port: "", urlBase: "" })),
+    "https://qbit.example.com",
   );
 });

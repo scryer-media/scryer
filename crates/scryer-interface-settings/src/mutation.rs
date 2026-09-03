@@ -19,7 +19,7 @@ use scryer_application::{
 
 use super::{
     from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_ui_settings, ui_settings_update_from_input,
+    from_ui_settings, into_oauth_client_kind, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
     AuthlessDefaultSession, LoginAttemptPrincipal, LoginErrorClassification,
@@ -1119,6 +1119,7 @@ impl SettingsMutations {
             CreateOAuthClientRegistration {
                 display_name: input.display_name,
                 redirect_uris: input.redirect_uris,
+                kind: into_oauth_client_kind(input.kind),
             },
         )
         .await

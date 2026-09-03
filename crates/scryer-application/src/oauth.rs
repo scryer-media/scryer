@@ -34,6 +34,36 @@ pub enum OAuthClientSource {
     Custom,
 }
 
+/// What a registered OAuth client is for. Stored on the registration row so the
+/// authorization path and the settings panel never have to infer a client's
+/// purpose from the shape of its callback URL.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OAuthClientKind {
+    /// A generic third-party application an operator registered by hand.
+    #[default]
+    Custom,
+    /// The Jellyfin Scryer plugin. Only this kind can bind the `jellyfin-link` scope.
+    JellyfinPlugin,
+}
+
+impl OAuthClientKind {
+    /// Storage representation, matching the `kind` CHECK on `oauth_client_registrations`.
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Custom => "custom",
+            Self::JellyfinPlugin => "jellyfin_plugin",
+        }
+    }
+
+    /// Unknown values read back as `Custom`, the least privileged kind.
+    pub fn from_storage_str(value: &str) -> Self {
+        match value {
+            "jellyfin_plugin" => Self::JellyfinPlugin,
+            _ => Self::Custom,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OAuthClientInfo {
     pub client_id: String,
@@ -41,12 +71,15 @@ pub struct OAuthClientInfo {
     pub redirect_uris: Vec<String>,
     pub enabled: bool,
     pub source: OAuthClientSource,
+    pub kind: OAuthClientKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateOAuthClientRegistration {
     pub display_name: String,
     pub redirect_uris: Vec<String>,
+    /// Immutable after creation.
+    pub kind: OAuthClientKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +120,17 @@ struct OAuthJellyfinLinkBinding {
     api_key_hash: String,
 }
 
+/// Outcome of resolving the `jellyfin-link` scope against the configured Jellyfin connections.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OAuthJellyfinLinkResolution {
+    /// The request never asked for `jellyfin-link`.
+    NotRequested,
+    /// Exactly one eligible connection backs the link scope.
+    Bound(Box<OAuthJellyfinLinkBinding>),
+    /// No connection is eligible, so the grant narrows to library-only. Carries the operator diagnostic.
+    Unavailable { reason: String },
+}
+
 impl AppUseCase {
     pub fn oauth_builtin_clients(&self) -> Vec<OAuthClientInfo> {
         let mut clients = vec![OAuthClientInfo {
@@ -95,6 +139,7 @@ impl AppUseCase {
             redirect_uris: Vec::new(),
             enabled: true,
             source: OAuthClientSource::Managed,
+            kind: OAuthClientKind::Custom,
         }];
         if self.oauth_e2e_client_enabled() {
             clients.push(OAuthClientInfo {
@@ -103,6 +148,7 @@ impl AppUseCase {
                 redirect_uris: Vec::new(),
                 enabled: true,
                 source: OAuthClientSource::Managed,
+                kind: OAuthClientKind::Custom,
             });
         }
         clients
@@ -130,6 +176,7 @@ impl AppUseCase {
                         redirect_uris: record.redirect_uris,
                         enabled: record.enabled,
                         source: OAuthClientSource::Custom,
+                        kind: record.kind,
                     })
             })
     }
@@ -205,6 +252,7 @@ impl AppUseCase {
                     redirect_uris: record.redirect_uris,
                     enabled: record.enabled,
                     source: OAuthClientSource::Custom,
+                    kind: record.kind,
                 }),
         );
         clients.sort_by(|left, right| {
@@ -230,6 +278,7 @@ impl AppUseCase {
             display_name,
             redirect_uris,
             enabled: true,
+            kind: input.kind,
             created_at: now,
             updated_at: now,
         };
@@ -245,6 +294,7 @@ impl AppUseCase {
             redirect_uris: record.redirect_uris,
             enabled: record.enabled,
             source: OAuthClientSource::Custom,
+            kind: record.kind,
         })
     }
 
@@ -272,6 +322,7 @@ impl AppUseCase {
             display_name,
             redirect_uris,
             enabled: input.enabled,
+            kind: current.kind,
             created_at: current.created_at,
             updated_at: Utc::now(),
         };
@@ -290,6 +341,7 @@ impl AppUseCase {
             redirect_uris: record.redirect_uris,
             enabled: record.enabled,
             source: OAuthClientSource::Custom,
+            kind: record.kind,
         })
     }
 
@@ -363,66 +415,110 @@ impl AppUseCase {
         })
     }
 
-    pub fn effective_oauth_authorization_scope(
+    /// Returns the scope the consent page and the issued grant will actually carry.
+    ///
+    /// Narrowing happens here so the consent card, the stored grant, and the token response all
+    /// agree: an authless authorization drops `jellyfin-link`, and so does a request whose
+    /// `jellyfin-link` scope has no eligible Jellyfin connection behind it.
+    pub async fn effective_oauth_authorization_scope(
         &self,
+        client_id: &str,
+        redirect_uri: &str,
         scope: Option<&str>,
         form_login_enabled: bool,
     ) -> AppResult<String> {
-        self.validate_oauth_scope(scope)
-            .map(|scope| constrain_oauth_scope_for_authorization(scope, form_login_enabled))
+        let scope = constrain_oauth_scope_for_authorization(
+            self.validate_oauth_scope(scope)?,
+            form_login_enabled,
+        );
+        if !oauth_scope_has_jellyfin_link(&scope) {
+            return Ok(scope);
+        }
+        let (client, redirect_uri) = self
+            .validated_oauth_redirect_uri(client_id, redirect_uri)
+            .await?;
+        Ok(
+            match self
+                .oauth_jellyfin_link_resolution(&client, &redirect_uri, &scope)
+                .await?
+            {
+                OAuthJellyfinLinkResolution::Bound(_)
+                | OAuthJellyfinLinkResolution::NotRequested => scope,
+                OAuthJellyfinLinkResolution::Unavailable { reason } => {
+                    log_narrowed_jellyfin_link_scope(&client.client_id, &reason);
+                    oauth_scope_without_jellyfin_link(&scope)
+                }
+            },
+        )
     }
 
-    async fn oauth_jellyfin_link_binding(
+    async fn oauth_jellyfin_link_resolution(
         &self,
         client: &OAuthClientInfo,
         redirect_uri: &str,
         scope: &str,
-    ) -> AppResult<Option<OAuthJellyfinLinkBinding>> {
+    ) -> AppResult<OAuthJellyfinLinkResolution> {
         if !oauth_scope_has_jellyfin_link(scope) {
-            return Ok(None);
+            return Ok(OAuthJellyfinLinkResolution::NotRequested);
         }
-        if client.source != OAuthClientSource::Custom
-            || !client.enabled
-            || client.redirect_uris.len() != 1
-            || client
-                .redirect_uris
-                .first()
-                .is_none_or(|uri| uri != redirect_uri)
-        {
-            return Err(AppError::Validation(
-                "jellyfin-link requires an eligible plugin OAuth client".into(),
-            ));
+        if let Some(reason) = jellyfin_link_client_miss(
+            &client.name,
+            client.kind,
+            client.enabled,
+            &client.redirect_uris,
+            redirect_uri,
+        ) {
+            return Ok(OAuthJellyfinLinkResolution::Unavailable { reason });
         }
 
-        let mut candidates = self
+        let mut candidates = Vec::new();
+        let mut candidate_names = Vec::new();
+        let mut misses = Vec::new();
+        for connection in self
             .services
             .integrations
             .media_server_connections
             .list(Some(MediaServerProvider::Jellyfin))
             .await?
-            .into_iter()
-            .filter_map(|connection| {
-                let external_url = connection.external_url?.trim_end_matches('/').to_string();
-                let api_key = connection.api_key?.trim().to_string();
-                let expected_redirect = format!("{external_url}/Scryer/Auth/Callback");
-                (connection.enabled
-                    && connection.linking_enabled
-                    && !api_key.is_empty()
-                    && expected_redirect == redirect_uri)
-                    .then_some(OAuthJellyfinLinkBinding {
-                        connection_id: connection.id,
-                        external_url,
-                        base_url: connection.base_url,
-                        api_key_hash: self.oauth_token_hash("jellyfin_link_api_key", &api_key),
-                    })
-            })
-            .collect::<Vec<_>>();
-        if candidates.len() != 1 {
-            return Err(AppError::Validation(
-                "jellyfin-link requires exactly one eligible Jellyfin connection".into(),
-            ));
+        {
+            let external_url = connection
+                .external_url
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .trim_end_matches('/')
+                .to_string();
+            let api_key = connection.api_key.as_deref().unwrap_or_default().trim();
+            if let Some(reason) = jellyfin_link_connection_miss(
+                &connection.display_name,
+                connection.enabled,
+                connection.linking_enabled,
+                api_key,
+                &external_url,
+                redirect_uri,
+            ) {
+                misses.push(reason);
+                continue;
+            }
+            candidate_names.push(connection.display_name.clone());
+            candidates.push(OAuthJellyfinLinkBinding {
+                connection_id: connection.id,
+                external_url,
+                base_url: connection.base_url,
+                api_key_hash: self.oauth_token_hash("jellyfin_link_api_key", api_key),
+            });
         }
-        Ok(candidates.pop())
+        if candidates.len() > 1 {
+            return Err(AppError::Validation(jellyfin_link_ambiguous_message(
+                &candidate_names,
+            )));
+        }
+        Ok(match candidates.pop() {
+            Some(binding) => OAuthJellyfinLinkResolution::Bound(Box::new(binding)),
+            None => OAuthJellyfinLinkResolution::Unavailable {
+                reason: jellyfin_link_unavailable_reason(&misses),
+            },
+        })
     }
 
     #[expect(
@@ -444,9 +540,19 @@ impl AppUseCase {
             .validated_oauth_redirect_uri(client_id, redirect_uri)
             .await?;
         let scope = self.validate_oauth_scope(Some(scope))?;
-        let jellyfin_link_binding = self
-            .oauth_jellyfin_link_binding(&client, &redirect_uri, &scope)
-            .await?;
+        // A requested link scope with no eligible connection degrades to a library-only grant
+        // instead of failing the whole authorization; the operator diagnostic is logged instead.
+        let (scope, jellyfin_link_binding) = match self
+            .oauth_jellyfin_link_resolution(&client, &redirect_uri, &scope)
+            .await?
+        {
+            OAuthJellyfinLinkResolution::NotRequested => (scope, None),
+            OAuthJellyfinLinkResolution::Bound(binding) => (scope, Some(*binding)),
+            OAuthJellyfinLinkResolution::Unavailable { reason } => {
+                log_narrowed_jellyfin_link_scope(client_id, &reason);
+                (oauth_scope_without_jellyfin_link(&scope), None)
+            }
+        };
         self.validate_oauth_pkce_request(code_challenge, code_challenge_method)?;
         let id = Id::new().0;
         let secret = random_oauth_secret()?;
@@ -961,6 +1067,103 @@ pub(crate) fn oauth_scope_has_jellyfin_link(scope: &str) -> bool {
         .any(|scope| scope == OAUTH_JELLYFIN_LINK_SCOPE)
 }
 
+/// Drops `jellyfin-link` from an already-validated scope, leaving a library-only grant.
+pub(crate) fn oauth_scope_without_jellyfin_link(scope: &str) -> String {
+    if oauth_scope_has_jellyfin_link(scope) {
+        OAUTH_LIBRARY_SCOPE.to_string()
+    } else {
+        scope.to_string()
+    }
+}
+
+fn log_narrowed_jellyfin_link_scope(client_id: &str, reason: &str) {
+    tracing::info!(
+        client_id = %client_id,
+        reason = %reason,
+        "jellyfin-link scope narrowed to library-only for this authorization"
+    );
+}
+
+fn jellyfin_link_callback_url(external_url: &str) -> String {
+    format!("{external_url}/Scryer/Auth/Callback")
+}
+
+/// Why this OAuth client cannot carry a `jellyfin-link` binding, if it cannot.
+///
+/// Eligibility is stored, not inferred: only a client registered as
+/// [`OAuthClientKind::JellyfinPlugin`] can bind the scope.
+fn jellyfin_link_client_miss(
+    name: &str,
+    kind: OAuthClientKind,
+    enabled: bool,
+    redirect_uris: &[String],
+    redirect_uri: &str,
+) -> Option<String> {
+    if kind != OAuthClientKind::JellyfinPlugin {
+        return Some(format!(
+            "jellyfin-link: OAuth client {name:?} is not registered as a Jellyfin plugin client"
+        ));
+    }
+    if !enabled {
+        return Some(format!("jellyfin-link: OAuth client {name:?} is disabled"));
+    }
+    (!redirect_uris.iter().any(|uri| uri == redirect_uri)).then(|| {
+        format!(
+            "jellyfin-link: callback {redirect_uri} is not registered for OAuth client {name:?}"
+        )
+    })
+}
+
+/// Returns the first condition a Jellyfin connection fails for `jellyfin-link`, or `None` when it
+/// is eligible. The wording is reused verbatim by the settings UI, so keep the order stable.
+fn jellyfin_link_connection_miss(
+    display_name: &str,
+    enabled: bool,
+    linking_enabled: bool,
+    api_key: &str,
+    external_url: &str,
+    redirect_uri: &str,
+) -> Option<String> {
+    if !enabled {
+        return Some(format!("connection {display_name:?} is disabled"));
+    }
+    if !linking_enabled {
+        return Some(format!(
+            "connection {display_name:?} has account linking disabled"
+        ));
+    }
+    if api_key.is_empty() {
+        return Some(format!("connection {display_name:?} has no API key"));
+    }
+    if external_url.is_empty() {
+        return Some(format!("connection {display_name:?} has no external URL"));
+    }
+    let expected_redirect = jellyfin_link_callback_url(external_url);
+    (expected_redirect != redirect_uri).then(|| {
+        format!(
+            "connection {display_name:?} external URL {external_url} does not match callback {redirect_uri}"
+        )
+    })
+}
+
+fn jellyfin_link_unavailable_reason(misses: &[String]) -> String {
+    if misses.is_empty() {
+        return "jellyfin-link requires exactly one eligible Jellyfin connection".to_string();
+    }
+    format!("jellyfin-link: {}", misses.join("; "))
+}
+
+fn jellyfin_link_ambiguous_message(names: &[String]) -> String {
+    format!(
+        "jellyfin-link requires exactly one eligible Jellyfin connection; these all match: {}",
+        names
+            .iter()
+            .map(|name| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn oauth_token_id(token: &str, prefix: &str) -> AppResult<String> {
     let Some((id_part, secret)) = token.split_once('.') else {
         return Err(AppError::Unauthorized("OAuth token is malformed".into()));
@@ -1035,10 +1238,10 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 fn constrain_oauth_scope_for_authorization(scope: String, form_login_enabled: bool) -> String {
-    if !form_login_enabled && oauth_scope_has_jellyfin_link(&scope) {
-        OAUTH_LIBRARY_SCOPE.to_string()
-    } else {
+    if form_login_enabled {
         scope
+    } else {
+        oauth_scope_without_jellyfin_link(&scope)
     }
 }
 
@@ -1060,6 +1263,197 @@ mod tests {
             constrain_oauth_scope_for_authorization("library".to_string(), false),
             "library"
         );
+    }
+
+    const JELLYFIN_EXTERNAL_URL: &str = "https://jellyfin.example.test";
+
+    fn jellyfin_callback() -> String {
+        jellyfin_link_callback_url(JELLYFIN_EXTERNAL_URL)
+    }
+
+    #[test]
+    fn jellyfin_link_binds_only_to_a_stored_jellyfin_plugin_client() {
+        let callback = jellyfin_callback();
+        let uris = vec![callback.clone()];
+
+        assert_eq!(
+            jellyfin_link_client_miss(
+                "Jellyfin Scryer plugin",
+                OAuthClientKind::JellyfinPlugin,
+                true,
+                &uris,
+                &callback,
+            ),
+            None
+        );
+        // A plugin client may register several callbacks; any registered one binds.
+        assert_eq!(
+            jellyfin_link_client_miss(
+                "Jellyfin Scryer plugin",
+                OAuthClientKind::JellyfinPlugin,
+                true,
+                &[
+                    "https://other.example.test/cb".to_string(),
+                    callback.clone()
+                ],
+                &callback,
+            ),
+            None
+        );
+        // A custom client is never eligible, however its callback happens to be shaped.
+        assert_eq!(
+            jellyfin_link_client_miss(
+                "Some app",
+                OAuthClientKind::Custom,
+                true,
+                &uris,
+                &callback
+            ),
+            Some(
+                "jellyfin-link: OAuth client \"Some app\" is not registered as a Jellyfin plugin client"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            jellyfin_link_client_miss(
+                "Jellyfin Scryer plugin",
+                OAuthClientKind::JellyfinPlugin,
+                false,
+                &uris,
+                &callback,
+            ),
+            Some("jellyfin-link: OAuth client \"Jellyfin Scryer plugin\" is disabled".to_string())
+        );
+        assert_eq!(
+            jellyfin_link_client_miss(
+                "Jellyfin Scryer plugin",
+                OAuthClientKind::JellyfinPlugin,
+                true,
+                &uris,
+                "https://elsewhere.example.test/Scryer/Auth/Callback",
+            ),
+            Some(
+                "jellyfin-link: callback https://elsewhere.example.test/Scryer/Auth/Callback is not registered for OAuth client \"Jellyfin Scryer plugin\""
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn oauth_client_kind_round_trips_through_storage() {
+        assert_eq!(OAuthClientKind::Custom.as_storage_str(), "custom");
+        assert_eq!(
+            OAuthClientKind::JellyfinPlugin.as_storage_str(),
+            "jellyfin_plugin"
+        );
+        assert_eq!(
+            OAuthClientKind::from_storage_str("jellyfin_plugin"),
+            OAuthClientKind::JellyfinPlugin
+        );
+        assert_eq!(
+            OAuthClientKind::from_storage_str("custom"),
+            OAuthClientKind::Custom
+        );
+        // Anything unrecognised degrades to the least privileged kind.
+        assert_eq!(
+            OAuthClientKind::from_storage_str("something-new"),
+            OAuthClientKind::Custom
+        );
+    }
+
+    #[test]
+    fn jellyfin_link_names_the_first_failing_condition_per_connection() {
+        let callback = jellyfin_callback();
+
+        assert_eq!(
+            jellyfin_link_connection_miss(
+                "Jellyfin",
+                false,
+                true,
+                "api-key",
+                JELLYFIN_EXTERNAL_URL,
+                &callback
+            ),
+            Some(r#"connection "Jellyfin" is disabled"#.to_string())
+        );
+        assert_eq!(
+            jellyfin_link_connection_miss(
+                "Jellyfin",
+                true,
+                false,
+                "api-key",
+                JELLYFIN_EXTERNAL_URL,
+                &callback
+            ),
+            Some(r#"connection "Jellyfin" has account linking disabled"#.to_string())
+        );
+        assert_eq!(
+            jellyfin_link_connection_miss(
+                "Jellyfin",
+                true,
+                true,
+                "",
+                JELLYFIN_EXTERNAL_URL,
+                &callback
+            ),
+            Some(r#"connection "Jellyfin" has no API key"#.to_string())
+        );
+        assert_eq!(
+            jellyfin_link_connection_miss("Jellyfin", true, true, "api-key", "", &callback),
+            Some(r#"connection "Jellyfin" has no external URL"#.to_string())
+        );
+        assert_eq!(
+            jellyfin_link_connection_miss(
+                "Jellyfin",
+                true,
+                true,
+                "api-key",
+                "https://other.example.test",
+                &callback
+            ),
+            Some(format!(
+                r#"connection "Jellyfin" external URL https://other.example.test does not match callback {callback}"#
+            ))
+        );
+        assert_eq!(
+            jellyfin_link_connection_miss(
+                "Jellyfin",
+                true,
+                true,
+                "api-key",
+                JELLYFIN_EXTERNAL_URL,
+                &callback
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn jellyfin_link_diagnostics_separate_no_connections_from_ineligible_ones() {
+        assert_eq!(
+            jellyfin_link_unavailable_reason(&[]),
+            "jellyfin-link requires exactly one eligible Jellyfin connection"
+        );
+        assert_eq!(
+            jellyfin_link_unavailable_reason(&[
+                r#"connection "Jellyfin" is disabled"#.to_string(),
+                r#"connection "Backup" has no API key"#.to_string(),
+            ]),
+            r#"jellyfin-link: connection "Jellyfin" is disabled; connection "Backup" has no API key"#
+        );
+        assert_eq!(
+            jellyfin_link_ambiguous_message(&["Jellyfin".to_string(), "Backup".to_string()]),
+            r#"jellyfin-link requires exactly one eligible Jellyfin connection; these all match: "Jellyfin", "Backup""#
+        );
+    }
+
+    #[test]
+    fn an_ineligible_link_scope_narrows_to_a_library_only_grant() {
+        assert_eq!(
+            oauth_scope_without_jellyfin_link("library jellyfin-link"),
+            "library"
+        );
+        assert_eq!(oauth_scope_without_jellyfin_link("library"), "library");
     }
 
     #[test]

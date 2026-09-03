@@ -24,6 +24,7 @@ pub(super) struct MockTitleRepo {
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
+    pub(super) monitor_selections: Arc<Mutex<HashMap<String, scryer_domain::MonitorSelection>>>,
 }
 #[derive(Default)]
 pub(crate) struct RecordingJobRunRepo {
@@ -205,6 +206,30 @@ impl TitleImageRepository for BlockingTitleImageRepo {
 
 #[async_trait]
 impl TitleRepository for MockTitleRepo {
+    async fn replace_title_monitor_selection(
+        &self,
+        title_id: &str,
+        selection: Option<scryer_domain::MonitorSelection>,
+    ) -> AppResult<()> {
+        let mut selections = self.monitor_selections.lock().await;
+        match selection.map(|selection| selection.normalized()) {
+            Some(selection) if !selection.is_empty() => {
+                selections.insert(title_id.to_string(), selection);
+            }
+            _ => {
+                selections.remove(title_id);
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_title_monitor_selection(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<scryer_domain::MonitorSelection>> {
+        Ok(self.monitor_selections.lock().await.get(title_id).cloned())
+    }
+
     async fn list(
         &self,
         facet: Option<MediaFacet>,

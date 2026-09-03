@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use scryer_application::{
     ApiKeyProvisioningSource, ApiKeyRecord, AppError, AppResult, OAuthAuthorizationCodeRecord,
-    OAuthAuthorizationSource, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,
-    OAuthRefreshGrantRecord, OAuthRefreshRotation, OAuthRefreshRotationOutcome,
-    OAuthRefreshTokenRecord, OAuthRepository,
+    OAuthAuthorizationSource, OAuthClientKind, OAuthClientRegistrationRecord,
+    OAuthConnectedAppRecord, OAuthRefreshGrantRecord, OAuthRefreshRotation,
+    OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository,
 };
 use sqlx::query;
 
@@ -178,12 +178,13 @@ impl OAuthRepository for OAuthStore {
                 Box::pin(async move {
                     tx.execute(
                         "INSERT INTO oauth_client_registrations
-                            (client_id, display_name, enabled, created_at, updated_at)
-                         VALUES ({}, {}, {}, {}, {})",
+                            (client_id, display_name, enabled, kind, created_at, updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(record.client_id.clone()),
                             SqlArg::Text(record.display_name.clone()),
                             SqlArg::Bool(record.enabled),
+                            SqlArg::Text(record.kind.as_storage_str().to_string()),
                             SqlArg::Timestamp(record.created_at),
                             SqlArg::Timestamp(record.updated_at),
                         ],
@@ -208,7 +209,7 @@ impl OAuthRepository for OAuthStore {
     async fn list_client_registrations(&self) -> AppResult<Vec<OAuthClientRegistrationRecord>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT c.client_id, c.display_name, c.enabled, c.created_at, c.updated_at,
+            "SELECT c.client_id, c.display_name, c.enabled, c.kind, c.created_at, c.updated_at,
                     r.redirect_uri
                FROM oauth_client_registrations c
                LEFT JOIN oauth_client_redirect_uris r ON r.client_id = c.client_id
@@ -887,7 +888,7 @@ async fn load_client_registration(
 ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
     let rows = SqlRuntime::fetch_all(
         exec,
-        "SELECT c.client_id, c.display_name, c.enabled, c.created_at, c.updated_at,
+        "SELECT c.client_id, c.display_name, c.enabled, c.kind, c.created_at, c.updated_at,
                 r.redirect_uri
            FROM oauth_client_registrations c
            LEFT JOIN oauth_client_redirect_uris r ON r.client_id = c.client_id
@@ -1073,6 +1074,7 @@ fn rows_to_client_registrations(rows: &[SqlRow]) -> AppResult<Vec<OAuthClientReg
                 display_name: row.text("display_name")?,
                 redirect_uris: Vec::new(),
                 enabled: row.bool("enabled")?,
+                kind: OAuthClientKind::from_storage_str(&row.text("kind")?),
                 created_at: row.timestamp("created_at")?,
                 updated_at: row.timestamp("updated_at")?,
             });

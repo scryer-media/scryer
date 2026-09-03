@@ -21,9 +21,9 @@ use scryer_application::{
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, IndexerProxyConfig, MediaFacet};
 use scryer_outbound_http::{
-    AsyncOutboundHttpError, OutboundHttpClient, RateLimitRegistry, generic_reqwest_client,
-    indexer_proxy_reqwest_client, prepare_plugin_http_target, prepare_plugin_http_target_from_url,
-    send_reqwest_request_with_cooldown_budget,
+    AsyncOutboundHttpError, OutboundHttpClient, PluginEgressPolicy, RateLimitRegistry,
+    generic_reqwest_client, indexer_proxy_reqwest_client, prepare_plugin_http_target,
+    prepare_plugin_http_target_from_url, send_reqwest_request_with_cooldown_budget,
 };
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -1301,6 +1301,11 @@ impl PrioritizedDownloadClientRouter {
         {
             return Ok(request.clone());
         }
+        // The operator typed the indexer's base URL, so an artifact served from
+        // that exact origin may sit on a rootless container's host bridge.
+        let egress_policy = indexer
+            .map(|indexer| PluginEgressPolicy::for_operator_configured_url(&indexer.base_url))
+            .unwrap_or_default();
         // No indexer, or an indexer without an assigned solver: fetch the
         // artifact directly and classify it.
         let Some((indexer, proxy_config_id)) = indexer.zip(has_proxy) else {
@@ -1310,6 +1315,7 @@ impl PrioritizedDownloadClientRouter {
                     download_url,
                     &[],
                     scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
+                    &egress_policy,
                 )
                 .await?;
             return self.prepare_resolved_request(
@@ -1360,6 +1366,7 @@ impl PrioritizedDownloadClientRouter {
                 &proxy_config,
                 download_url,
                 request.info_hash_hint.clone(),
+                &egress_policy,
             )
             .await;
         if let Some(repo) = self.indexer_proxy_configs.as_ref() {
@@ -1404,6 +1411,7 @@ impl PrioritizedDownloadClientRouter {
         proxy_config: &IndexerProxyConfig,
         download_url: &str,
         info_hash_hint: Option<String>,
+        egress_policy: &PluginEgressPolicy,
     ) -> AppResult<ResolvedDownloadArtifact> {
         let provider = proxy_config.provider_type;
         let provider_name = solver::solver_provider_name(provider);
@@ -1412,7 +1420,7 @@ impl PrioritizedDownloadClientRouter {
         // retry. Otherwise the solver itself becomes a deputy for blocked
         // link-local or cloud-metadata destinations.
         drop(
-            prepare_plugin_http_target(download_url, "indexer download artifact")
+            prepare_plugin_http_target(download_url, "indexer download artifact", egress_policy)
                 .await
                 .map_err(|error| {
                     warn!(error = %error, "blocked unsafe indexer download artifact URL");
@@ -1437,6 +1445,7 @@ impl PrioritizedDownloadClientRouter {
                 scryer_outbound_http::effective_indexer_proxy_request_timeout(
                     proxy_config.request_timeout_seconds,
                 ),
+                egress_policy,
             )
             .await
         {
@@ -1600,6 +1609,7 @@ impl PrioritizedDownloadClientRouter {
                     scryer_outbound_http::effective_indexer_proxy_request_timeout(
                         proxy_config.request_timeout_seconds,
                     ),
+                    egress_policy,
                 )
                 .await?;
             solver::SolvedSessionCache::shared().store_solution(
@@ -1634,6 +1644,7 @@ impl PrioritizedDownloadClientRouter {
                     scryer_outbound_http::effective_indexer_proxy_request_timeout(
                         proxy_config.request_timeout_seconds,
                     ),
+                    egress_policy,
                 )
                 .await?;
             return Self::classify_resolved_download_artifact(
@@ -1669,6 +1680,7 @@ impl PrioritizedDownloadClientRouter {
                         scryer_outbound_http::effective_indexer_proxy_request_timeout(
                             proxy_config.request_timeout_seconds,
                         ),
+                        egress_policy,
                     )
                     .await?;
                 Self::classify_resolved_download_artifact(
@@ -1711,6 +1723,7 @@ impl PrioritizedDownloadClientRouter {
         download_url: &str,
         session_headers: &[(String, String)],
         request_timeout: Duration,
+        egress_policy: &PluginEgressPolicy,
     ) -> AppResult<FetchedDownloadArtifact> {
         let original = url::Url::parse(download_url)
             .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
@@ -1743,7 +1756,11 @@ impl PrioritizedDownloadClientRouter {
             }
             let target = timeout(
                 remaining,
-                prepare_plugin_http_target_from_url(current.clone(), "indexer download artifact"),
+                prepare_plugin_http_target_from_url(
+                    current.clone(),
+                    "indexer download artifact",
+                    egress_policy,
+                ),
             )
             .await
             .map_err(|_| {
@@ -4632,6 +4649,7 @@ mod tests {
                 &format!("{}/start", server.uri()),
                 &[("x-indexer-session".to_string(), "secret".to_string())],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("relative redirect should resolve");
@@ -4678,6 +4696,7 @@ mod tests {
                 &format!("{}/start", origin.uri()),
                 &[("x-indexer-session".to_string(), "secret".to_string())],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("cross-origin redirect should resolve without credentials");
@@ -4711,6 +4730,7 @@ mod tests {
                 &format!("{}/magnet", server.uri()),
                 &[],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("magnet redirect should resolve");
@@ -4722,6 +4742,7 @@ mod tests {
                 &format!("{}/loop", server.uri()),
                 &[],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect_err("redirect loops must fail");
@@ -4926,7 +4947,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_indexer_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("Trawl should resolve embedded NZB content");
 
@@ -4984,7 +5010,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_indexer_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("direct artifact should bypass Trawl");
 
@@ -5058,7 +5089,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_indexer_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("Trawl should refetch binary torrent content");
 
@@ -5127,7 +5163,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_indexer_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("Byparr should refetch the NZB with its clearance session");
 
@@ -5183,7 +5224,12 @@ mod tests {
         };
 
         let error = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_indexer_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect_err("Trawl server errors must fail as solver unavailable");
 
@@ -5259,6 +5305,7 @@ mod tests {
                         target,
                         &[],
                         Duration::from_secs(1),
+                        &PluginEgressPolicy::default(),
                     )
                     .await
                 {
@@ -5272,7 +5319,12 @@ mod tests {
                 );
 
                 let error = match router
-                    .resolve_download_artifact_via_indexer_proxy(&proxy, target, None)
+                    .resolve_download_artifact_via_indexer_proxy(
+                        &proxy,
+                        target,
+                        None,
+                        &PluginEgressPolicy::default(),
+                    )
                     .await
                 {
                     Ok(_) => panic!("metadata destination must not be delegated to the solver"),

@@ -1,6 +1,6 @@
 /// Parse a release title exactly as the grab path does for `title`.
 ///
-/// Grab-time scoring (`catalog/discovery.rs`, RSS/auto search) parses every
+/// Grab-time scoring (`catalog/release_search.rs`, RSS/auto search) parses every
 /// candidate with `parse_release_metadata_for_target` against the title's
 /// canonical parse context — name, aliases, year, external ids, facet — and
 /// import must start from the same facts so the post-download score is the

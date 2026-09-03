@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { backendClient } from "@/lib/graphql/urql-client";
 import {
@@ -39,6 +39,8 @@ function samePendingImportCounts(
   );
 }
 
+const BADGE_REFRESH_COALESCE_MS = 2_000;
+
 export function useNavigationBadges({
   serviceRestarting,
   canManageTitle,
@@ -78,7 +80,21 @@ export function useNavigationBadges({
     }
   }, [refreshScryerVersion, serviceRestarting]);
 
-  const refreshNavigationBadges = useCallback(async () => {
+  const lastBadgeRefreshStartedAtRef = useRef(0);
+
+  // A request action reaches this hook twice: the explicit dispatch from the
+  // page that ran the mutation and the subscription echo, in either order and
+  // up to a second apart. Triggers inside the window ride the earlier fetch;
+  // the delayed delta confirmation forces through.
+  const refreshNavigationBadges = useCallback(async (options?: { force?: boolean }) => {
+    const now = Date.now();
+    if (
+      !options?.force &&
+      now - lastBadgeRefreshStartedAtRef.current < BADGE_REFRESH_COALESCE_MS
+    ) {
+      return;
+    }
+    lastBadgeRefreshStartedAtRef.current = now;
     try {
       const badgeCountsResult = await backendClient
         .query(navigationBadgeCountsQuery, {})
@@ -145,7 +161,7 @@ export function useNavigationBadges({
       if (delta !== 0) {
         setManualImportRequiredCount((current) => Math.max(0, current + delta));
         window.setTimeout(() => {
-          void refreshNavigationBadges();
+          void refreshNavigationBadges({ force: true });
         }, 2_000);
         return;
       }

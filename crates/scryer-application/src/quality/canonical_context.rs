@@ -86,7 +86,7 @@ impl ResolvedScoringContext {
 /// the enrichment sees an empty language list and raises
 /// `required_audio_language_missing` against a release that is perfectly fine.
 /// That was the asymmetry between the grab side (enriched at
-/// `discovery.rs`) and the import side (not enriched at all).
+/// `catalog/release_search.rs`) and the import side (not enriched at all).
 ///
 /// The audio context is keyed on the **title's** facet, not the search category:
 /// a search collapses anime movies and series-movie links to `"movie"`, which

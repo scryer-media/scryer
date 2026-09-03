@@ -24,6 +24,15 @@ export function setGraphqlLanguage(lang: string) {
   currentLanguage = lang;
 }
 
+/**
+ * Read the language the Provider last published. Queries that take an explicit
+ * `language` input (metadata lookups) use this instead of threading uiLanguage
+ * through every component that can open a metadata-backed picker.
+ */
+export function getGraphqlLanguage(): string {
+  return currentLanguage;
+}
+
 // ---------------------------------------------------------------------------
 // Backend restart detection — when the backend returns HTML (upgrade splash)
 // instead of JSON, trigger a global callback so the shell can show the splash

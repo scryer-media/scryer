@@ -17,6 +17,7 @@ import {
   type ProviderConfigValueInput,
   providerConfigValuesToRecord,
 } from "./provider-config.ts";
+import { parseHostInput } from "./url-input.ts";
 
 type BuiltInDownloadClientType = (typeof BUILT_IN_DOWNLOAD_CLIENT_TYPES)[number];
 
@@ -302,7 +303,43 @@ export function splitBaseUrlForDraft(
   }
 }
 
-export function buildDownloadClientBaseUrl(draft: DownloadClientDraft) {
+/**
+ * The draft as it will be stored, with whatever the operator typed into the
+ * host box put where it belongs.
+ *
+ * Nobody types a bare hostname into a host box when they have a URL in front of
+ * them: they paste `http://192.168.1.5:8080/qbt`, because that is what their
+ * browser is showing. So a scheme sets the SSL box, a port fills the port box,
+ * and a path fills the URL-base box, rather than all three being refused as
+ * "not a host". A scheme-less value leaves the SSL box alone, because that
+ * checkbox is the operator's own statement and nothing here should overrule it.
+ */
+export function normalizeDownloadClientDraft(
+  draft: DownloadClientDraft,
+): DownloadClientDraft {
+  const parsed = parseHostInput(draft.host);
+  if (!parsed) {
+    return draft;
+  }
+  const port = parsed.port !== "" ? parsed.port : draft.port.trim();
+  const urlBase =
+    parsed.path !== "" ? parsed.path : draft.urlBase.trim().replace(/\/+$/, "");
+  const useSsl = parsed.scheme === null ? draft.useSsl : parsed.scheme === "https";
+  if (
+    parsed.host === draft.host &&
+    port === draft.port &&
+    urlBase === draft.urlBase &&
+    useSsl === draft.useSsl
+  ) {
+    return draft;
+  }
+  return { ...draft, host: parsed.host, port, urlBase, useSsl };
+}
+
+export function buildDownloadClientBaseUrl(rawDraft: DownloadClientDraft) {
+  // Normalized here as well as on save, so every caller — the connection test
+  // included — addresses the same server the operator meant.
+  const draft = normalizeDownloadClientDraft(rawDraft);
   const host = draft.host.trim();
   if (!host) {
     return "";
@@ -357,10 +394,11 @@ export function isFileBackedDownloadClientConfigField(field: ConfigFieldDef): bo
 }
 
 export function buildDownloadClientConfigValues(
-  draft: DownloadClientDraft,
+  rawDraft: DownloadClientDraft,
   fields: ConfigFieldDef[] = [],
   storedSecretKeys: ReadonlySet<string> = new Set(),
 ) {
+  const draft = normalizeDownloadClientDraft(rawDraft);
   const normalizedClientType = normalizeDownloadClientType(draft.clientType);
   const descriptorFieldKeys = normalizedConfigFieldKeys(fields);
   const payload: DownloadClientConfigPayloadRecord = {

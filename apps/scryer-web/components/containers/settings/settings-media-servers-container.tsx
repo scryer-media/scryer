@@ -40,6 +40,7 @@ import {
   type LocalPathStyle,
 } from "@/lib/utils/local-path-style";
 import { nonEmptySecret } from "@/lib/utils/secret-input";
+import { normalizeMediaServerConnectionDraft } from "@/lib/utils/media-server-input";
 
 type SettingsMediaServersSectionProps = ComponentProps<typeof SettingsMediaServersSection>;
 
@@ -533,15 +534,22 @@ export function SettingsMediaServersContainer() {
   const submitConnection = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setEditorError(null);
-    const name = draft.displayName.trim();
-    const baseUrl = draft.baseUrl.trim();
-    if (!name || (draft.provider !== "PLEX" && !baseUrl)) {
+    // Parse on save: `192.168.1.5:32400` or `plex.example.com` mean what they
+    // plainly mean, and the form is put back with the scheme that was chosen so
+    // nothing is decided behind the operator's back.
+    const submitted = normalizeMediaServerConnectionDraft(draft);
+    if (submitted !== draft) {
+      setDraft(submitted);
+    }
+    const name = submitted.displayName.trim();
+    const baseUrl = submitted.baseUrl.trim();
+    if (!name || (submitted.provider !== "PLEX" && !baseUrl)) {
       const message = t("settings.mediaServerValidation");
       setEditorError(message);
       setGlobalStatus(message);
       return;
     }
-    if (!pathMappingsTextHasValidLocalPaths(draft.pathMappingsText, localPathStyle)) {
+    if (!pathMappingsTextHasValidLocalPaths(submitted.pathMappingsText, localPathStyle)) {
       const message = t("settings.downloadClientRemotePathMappingsLocalRequired");
       setPathMappingsValid(false);
       setEditorError(message);
@@ -549,10 +557,10 @@ export function SettingsMediaServersContainer() {
       return;
     }
     if (
-      draft.provider === "PLEX" &&
-      (draft.loginEnabled || draft.linkingEnabled || draft.autoAddEnabled) &&
-      !draft.machineIdPresent &&
-      !draft.plexServerId
+      submitted.provider === "PLEX" &&
+      (submitted.loginEnabled || submitted.linkingEnabled || submitted.autoAddEnabled) &&
+      !submitted.machineIdPresent &&
+      !submitted.plexServerId
     ) {
       const message = t("settings.plexServerDiscoveryRequired");
       setEditorError(message);
@@ -566,7 +574,7 @@ export function SettingsMediaServersContainer() {
         const { error } = await client.mutation(updateMediaServerConnectionMutation, {
           input: buildUpdateInput(
             editingConnectionId,
-            draft,
+            submitted,
             plexDiscoveryToken,
             effectiveFormLoginEnabled,
           ),
@@ -575,7 +583,7 @@ export function SettingsMediaServersContainer() {
         setGlobalStatus(t("status.mediaServerUpdated"));
       } else {
         const { error } = await client.mutation(createMediaServerConnectionMutation, {
-          input: buildCreateInput(draft, plexDiscoveryToken, effectiveFormLoginEnabled),
+          input: buildCreateInput(submitted, plexDiscoveryToken, effectiveFormLoginEnabled),
         }).toPromise();
         if (error) throw error;
         setGlobalStatus(t("status.mediaServerCreated"));

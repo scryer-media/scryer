@@ -613,6 +613,7 @@ pub(super) fn monitor_type_value_from_normalized(value: &str) -> Option<MonitorT
         "futureepisodes" => Some(MonitorTypeValue::FutureEpisodes),
         "missingandfutureepisodes" => Some(MonitorTypeValue::MissingAndFutureEpisodes),
         "allepisodes" => Some(MonitorTypeValue::AllEpisodes),
+        "advanced" => Some(MonitorTypeValue::Advanced),
         "none" => Some(MonitorTypeValue::NoneSelected),
         _ => None,
     }

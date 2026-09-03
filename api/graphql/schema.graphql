@@ -773,6 +773,11 @@ input ApproveMediaRequestInput {
 	Optional monitoring policy to apply to the approved title.
 	"""
 	monitorType: MonitorTypeValue
+	"""
+	Optional approver override for the requested advanced selection; when
+	omitted the request's stored selection is applied.
+	"""
+	monitorSelection: MonitorSelectionInput
 }
 
 """
@@ -1985,6 +1990,10 @@ input CreateOAuthClientRegistrationInput {
 	Exact HTTPS callback URLs permitted for this application.
 	"""
 	redirectUris: [String!]!
+	"""
+	What the application is for. Omission registers a generic `CUSTOM` application.
+	"""
+	kind: OauthClientKindValue
 }
 
 """
@@ -2506,6 +2515,105 @@ input DeleteDownloadInput {
 	Whether deletion should use the provider's history path.
 	"""
 	isHistory: Boolean!
+}
+
+"""
+Per-file result within a multi-episode media-file deletion preview.
+"""
+type DeleteEpisodeFilePreviewResultPayload {
+	"""
+	Media-file identity that would be deleted.
+	"""
+	fileId: ID!
+	"""
+	Episode identity the media file is linked to.
+	"""
+	episodeId: ID!
+	"""
+	Deletion preview for this file, or null when preview generation failed.
+	"""
+	preview: DeletePreviewPayload
+	"""
+	Error message, or null when preview generation succeeded.
+	"""
+	error: String
+}
+
+"""
+Destructive deletion request for the media files of selected episodes.
+"""
+input DeleteEpisodeFilesInput {
+	"""
+	Title identity owning the episodes.
+	"""
+	titleId: ID!
+	"""
+	Episode identities whose media files are deleted.
+	"""
+	episodeIds: [ID!]!
+	"""
+	Whether the files are removed from disk.
+	"""
+	deleteFromDisk: Boolean
+	"""
+	Aggregate preview fingerprint required to confirm the current deletion target.
+	"""
+	previewFingerprint: String
+	"""
+	Required typed confirmation for large destructive deletions.
+	"""
+	typedConfirmation: String
+}
+
+"""
+Accepted media-file IDs and background job information for a multi-episode
+media-file deletion request.
+"""
+type DeleteEpisodeFilesPayload {
+	"""
+	Background job run tracking the deletion work.
+	"""
+	jobRun: JobRunPayload!
+	"""
+	Media-file identities accepted for processing.
+	"""
+	acceptedFileIds: [ID!]!
+}
+
+"""
+Input for previewing deletion of the media files of selected episodes.
+"""
+input DeleteEpisodeFilesPreviewInput {
+	"""
+	Title identity owning the episodes.
+	"""
+	titleId: ID!
+	"""
+	Episode identities whose media files would be deleted.
+	"""
+	episodeIds: [ID!]!
+}
+
+"""
+Combined deletion preview for the media files of several episodes of one title.
+"""
+type DeleteEpisodeFilesPreviewPayload {
+	"""
+	Aggregate preview across all resolved media files.
+	"""
+	preview: DeletePreviewPayload!
+	"""
+	Per-file results, ordered by media-file identity.
+	"""
+	items: [DeleteEpisodeFilePreviewResultPayload!]!
+	"""
+	Number of media files resolved from the requested episodes.
+	"""
+	fileCount: Int!
+	"""
+	Number of media files that failed preview generation.
+	"""
+	failedCount: Int!
 }
 
 """
@@ -9427,6 +9535,10 @@ type MediaRequestPayload {
 	"""
 	posterUrl: String
 	"""
+	Background art URL captured at submit time, or null when unavailable.
+	"""
+	backgroundUrl: String
+	"""
 	Release year, or null when unknown.
 	"""
 	year: Int
@@ -9470,6 +9582,10 @@ type MediaRequestPayload {
 	Requested monitoring mode, or null when not specified.
 	"""
 	requestedMonitorType: MonitorTypeValue
+	"""
+	Seasons and series movies requested under `ADVANCED` monitoring, or null.
+	"""
+	requestedMonitorSelection: MonitorSelectionPayload
 	"""
 	ID of the user who resolved the request, or null while unresolved.
 	"""
@@ -9917,6 +10033,36 @@ type MediaSettingsPayload {
 }
 
 """
+Metadata gateway companion-movie record for an anime series.
+"""
+type MetadataAnimeMoviePayload {
+	"""
+	Movie name.
+	"""
+	name: String!
+	"""
+	Release year, or null when unavailable.
+	"""
+	year: Int
+	"""
+	How confidently the provider associates the movie with the series.
+	"""
+	associationConfidence: String!
+	"""
+	Whether the movie is canon to the series.
+	"""
+	continuityStatus: String!
+	"""
+	Where the movie sits relative to the series seasons.
+	"""
+	placement: String!
+	"""
+	Provider identifiers for the movie.
+	"""
+	externalIds: [ExternalIdPayload!]!
+}
+
+"""
 Metadata gateway episode record.
 """
 type MetadataEpisodePayload {
@@ -10242,6 +10388,67 @@ type MetadataSeriesPayload {
 	Episode metadata; empty when not requested or unavailable.
 	"""
 	episodes: [MetadataEpisodePayload!]!
+	"""
+	Companion movies reported for an anime series; empty for other series.
+	"""
+	animeMovies: [MetadataAnimeMoviePayload!]!
+}
+
+"""
+Seasons and canon series movies chosen under the `ADVANCED` monitor type.
+"""
+input MonitorSelectionInput {
+	"""
+	Season numbers to monitor; 0 is specials.
+	"""
+	seasonNumbers: [Int!]!
+	"""
+	Canon series movies to monitor.
+	"""
+	seriesMovies: [MonitorSelectionMovieInput!]
+}
+
+"""
+One canon series movie inside an advanced monitoring selection.
+"""
+input MonitorSelectionMovieInput {
+	"""
+	Movie name to show back to the approver.
+	"""
+	name: String!
+	"""
+	Provider identifiers for the selected movie.
+	"""
+	externalIds: [ExternalIdInput!]!
+}
+
+"""
+One canon series movie inside an advanced monitoring selection.
+"""
+type MonitorSelectionMoviePayload {
+	"""
+	Movie name as it was presented when the selection was made.
+	"""
+	name: String!
+	"""
+	Provider identifiers for the selected movie.
+	"""
+	externalIds: [ExternalIdPayload!]!
+}
+
+"""
+Seasons and canon series movies chosen under the `ADVANCED` monitor type.
+Anything absent from the selection stays unmonitored.
+"""
+type MonitorSelectionPayload {
+	"""
+	Season numbers to monitor; 0 is specials.
+	"""
+	seasonNumbers: [Int!]!
+	"""
+	Canon series movies to monitor.
+	"""
+	seriesMovies: [MonitorSelectionMoviePayload!]!
 }
 
 """
@@ -10268,6 +10475,10 @@ enum MonitorTypeValue {
 	Monitor every episode, including already released episodes.
 	"""
 	ALL_EPISODES
+	"""
+	Monitor exactly the seasons and canon series movies the user selected.
+	"""
+	ADVANCED
 	"""
 	Explicitly select no episodes; exposed as `NONE` in GraphQL.
 	"""
@@ -11526,6 +11737,20 @@ type MutationRoot {
 		input: DeleteMediaFileInput!
 	): DeleteMediaFilePayload!
 	"""
+	Accept a background job deleting every media file linked to the supplied
+	episodes of one title.
+	
+	The aggregate preview from `deleteEpisodeFilesPreview` must still match
+	when files are removed from disk. Per-file results land on the returned
+	job run: a file that fails is recorded there while the rest still run.
+	"""
+	deleteEpisodeFiles(
+		"""
+		Title and episode identities, disk-deletion choice, and the aggregate preview fingerprint with optional typed confirmation.
+		"""
+		input: DeleteEpisodeFilesInput!
+	): DeleteEpisodeFilesPayload!
+	"""
 	Start a background job renaming the files of the given titles.
 	"""
 	renameTitles(
@@ -12304,6 +12529,20 @@ type OauthAuthorizationClientPayload {
 }
 
 """
+What a registered OAuth client is for. Set at creation and immutable afterwards.
+"""
+enum OauthClientKindValue {
+	"""
+	A generic third-party application an administrator registered by hand.
+	"""
+	CUSTOM
+	"""
+	The Jellyfin Scryer plugin. Only this kind can be granted the `jellyfin-link` scope.
+	"""
+	JELLYFIN_PLUGIN
+}
+
+"""
 An OAuth application allowed to receive Scryer authorization codes.
 """
 type OauthClientRegistrationPayload {
@@ -12327,6 +12566,10 @@ type OauthClientRegistrationPayload {
 	Whether the application is managed by Scryer or an administrator.
 	"""
 	source: OauthClientSourceValue!
+	"""
+	What the application is for. Immutable after creation.
+	"""
+	kind: OauthClientKindValue!
 }
 
 """
@@ -14167,6 +14410,15 @@ type QueryRoot {
 		"""
 		input: DeleteTitlesPreviewInput!
 	): DeleteTitlesPreviewPayload!
+	"""
+	Preview deleting the media files of the supplied episodes without changing files.
+	"""
+	deleteEpisodeFilesPreview(
+		"""
+		Title and episode IDs whose linked media files would be deleted; no files are changed.
+		"""
+		input: DeleteEpisodeFilesPreviewInput!
+	): DeleteEpisodeFilesPreviewPayload!
 	"""
 	Preview deleting one media file without changing files.
 	"""
@@ -17271,6 +17523,10 @@ input SubmitMediaRequestInput {
 	Monitoring policy requested for approval.
 	"""
 	requestedMonitorType: MonitorTypeValue
+	"""
+	Seasons and series movies to monitor; required with `ADVANCED`.
+	"""
+	requestedMonitorSelection: MonitorSelectionInput
 }
 
 """
@@ -18590,6 +18846,10 @@ input TitleOptionsInput {
 	Recap policy; omission preserves the current value, null clears it, and a value replaces it.
 	"""
 	recapPolicy: RecapPolicyValue
+	"""
+	Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
+	"""
+	monitorSelection: MonitorSelectionInput
 }
 
 """
@@ -19752,6 +20012,10 @@ input UpdateMediaRequestInput {
 	Optional monitoring policy requested for the title.
 	"""
 	requestedMonitorType: MonitorTypeValue
+	"""
+	Seasons and series movies to monitor; required with `ADVANCED`.
+	"""
+	requestedMonitorSelection: MonitorSelectionInput
 }
 
 """

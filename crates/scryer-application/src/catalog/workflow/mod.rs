@@ -21,9 +21,9 @@ use crate::domain_events::{
 use crate::settings::settings::root_folder_entries_from_library_roots;
 use scryer_domain::{
     DomainEventPayload, JobRunCompletedEventData, JobRunFailedEventData, JobRunStartedEventData,
-    MediaFileDeletedEventData, MediaFileDeletedReason, MetadataHydrationState,
-    ReleaseGrabbedEventData, SeriesMovieLink, TitleAddedEventData, TitleDeletedEventData,
-    TitleRematchedEventData,
+    MONITOR_TYPE_ADVANCED, MediaFileDeletedEventData, MediaFileDeletedReason,
+    MetadataHydrationState, MonitorSelection, ReleaseGrabbedEventData, SeriesMovieLink,
+    TitleAddedEventData, TitleDeletedEventData, TitleRematchedEventData,
 };
 use std::collections::HashMap;
 use std::collections::HashSet;

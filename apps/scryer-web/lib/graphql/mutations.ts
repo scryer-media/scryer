@@ -656,6 +656,27 @@ export const deleteMediaFileMutation = `mutation DeleteMediaFile($input: DeleteM
   }
 }`;
 
+export const deleteEpisodeFilesMutation = `mutation DeleteEpisodeFiles($input: DeleteEpisodeFilesInput!) {
+  deleteEpisodeFiles(input: $input) {
+    acceptedFileIds
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
+    }
+  }
+}`;
+
 export const scanLibraryMutation = `mutation ScanLibrary($input: ScanLibraryInput!) {
   scanLibrary(input: $input) {
     sessionId
@@ -914,7 +935,8 @@ const OAUTH_CLIENT_REGISTRATION_FIELDS = `
     displayName
     redirectUris
     enabled
-    source`;
+    source
+    kind`;
 
 export const createOAuthClientRegistrationMutation = `mutation CreateOAuthClientRegistration($input: CreateOAuthClientRegistrationInput!) {
   createOAuthClientRegistration: createOauthClientRegistration(input: $input) {${OAUTH_CLIENT_REGISTRATION_FIELDS}

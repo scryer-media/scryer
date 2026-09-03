@@ -111,6 +111,25 @@ fn from_oauth_client_registration(
             scryer_application::OAuthClientSource::Managed => OAuthClientSourceValue::Managed,
             scryer_application::OAuthClientSource::Custom => OAuthClientSourceValue::Custom,
         },
+        kind: from_oauth_client_kind(client.kind),
+    }
+}
+
+fn from_oauth_client_kind(kind: scryer_application::OAuthClientKind) -> OAuthClientKindValue {
+    match kind {
+        scryer_application::OAuthClientKind::Custom => OAuthClientKindValue::Custom,
+        scryer_application::OAuthClientKind::JellyfinPlugin => OAuthClientKindValue::JellyfinPlugin,
+    }
+}
+
+pub(crate) fn into_oauth_client_kind(
+    kind: Option<OAuthClientKindValue>,
+) -> scryer_application::OAuthClientKind {
+    match kind {
+        Some(OAuthClientKindValue::JellyfinPlugin) => {
+            scryer_application::OAuthClientKind::JellyfinPlugin
+        }
+        Some(OAuthClientKindValue::Custom) | None => scryer_application::OAuthClientKind::Custom,
     }
 }
 
@@ -703,16 +722,24 @@ impl SettingsQueries {
         let form_login_enabled = auth_runtime_from_ctx(ctx)
             .snapshot()
             .effective_form_login_enabled;
-        let scope =
-            app.effective_oauth_authorization_scope(scope.as_deref(), form_login_enabled)?;
-        app.validate_oauth_redirect_uri(&client_id, &redirect_uri)
+        let client = app
+            .validate_oauth_redirect_uri(&client_id, &redirect_uri)
             .await
-            .map(|client| OAuthAuthorizationClientPayload {
-                client_id: client.client_id,
-                display_name: client.name,
-                scope,
-            })
-            .map_err(to_gql_error)
+            .map_err(to_gql_error)?;
+        let scope = app
+            .effective_oauth_authorization_scope(
+                &client_id,
+                &redirect_uri,
+                scope.as_deref(),
+                form_login_enabled,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(OAuthAuthorizationClientPayload {
+            client_id: client.client_id,
+            display_name: client.name,
+            scope,
+        })
     }
 
     /// Returns effective external-auth providers and connections, hiding login capability when form login is disabled.

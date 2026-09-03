@@ -80,7 +80,7 @@ impl CommandHost {
                 plugin_id,
                 config,
                 state: Mutex::new(CommandState::default()),
-                http: PluginHttpHost::new_with_egress_policy(
+                http: PluginHttpHost::new(
                     allowed_hosts,
                     egress_policy,
                     None,
@@ -102,10 +102,12 @@ impl CommandHost {
     /// per child. Everything else — descriptor-bound config, plugin state, the
     /// timeout — is identical, so this mirrors `for_download_client` rather
     /// than growing it another two arguments that every caller passes `None` to.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_indexer(
         plugin_id: String,
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
+        egress_policy: scryer_outbound_http::PluginEgressPolicy,
         indexer_proxy_policy: Option<IndexerProxyPolicy>,
         destination_cooldown_key: Option<String>,
         timeout: Duration,
@@ -122,6 +124,7 @@ impl CommandHost {
                 state: Mutex::new(CommandState::default()),
                 http: PluginHttpHost::new(
                     allowed_hosts,
+                    egress_policy,
                     indexer_proxy_policy,
                     destination_cooldown_key,
                     max_http_response_bytes,

@@ -395,6 +395,12 @@ export function DashboardContainer() {
     void refreshAll();
   }, [refreshAll]);
 
+  // A request action only changes the overview counts and the request rail;
+  // the queue, import activity, and recent imports are untouched, so skip them.
+  const refreshAfterRequestAction = React.useCallback(async () => {
+    await Promise.all([refreshOverview(), refreshRequests()]);
+  }, [refreshOverview, refreshRequests]);
+
   // The shell already pulses the badge counts on poll and on window focus;
   // riding that pulse keeps the dashboard fresh without a timer of its own.
   React.useEffect(() => {
@@ -443,7 +449,7 @@ export function DashboardContainer() {
         if (error) throw error;
         setGlobalStatus(t("status.requestApproved", { name: request.title }));
         dispatchNavigationBadgesRefresh();
-        await refreshAll();
+        await refreshAfterRequestAction();
       } catch (error) {
         reportError(error);
       } finally {
@@ -453,7 +459,7 @@ export function DashboardContainer() {
     [
       actionRequestId,
       client,
-      refreshAll,
+      refreshAfterRequestAction,
       reportError,
       requestLibraries,
       setGlobalStatus,
@@ -475,14 +481,14 @@ export function DashboardContainer() {
         if (error) throw error;
         setGlobalStatus(t("status.requestDismissed", { name: request.title }));
         dispatchNavigationBadgesRefresh();
-        await refreshAll();
+        await refreshAfterRequestAction();
       } catch (error) {
         reportError(error);
       } finally {
         setActionRequestId(null);
       }
     },
-    [actionRequestId, client, refreshAll, reportError, setGlobalStatus, t],
+    [actionRequestId, client, refreshAfterRequestAction, reportError, setGlobalStatus, t],
   );
 
   const updatePlugin = React.useCallback(

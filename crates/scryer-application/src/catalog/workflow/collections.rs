@@ -95,6 +95,9 @@ fn known_episode_numbers_by_season(
     known
 }
 
+// Every argument is a distinct slice of the hydration pass; bundling them
+// would only move the shape into a one-off struct.
+#[allow(clippy::too_many_arguments)]
 async fn sync_series_movie_links(
     app: &AppUseCase,
     title: &Title,
@@ -103,6 +106,7 @@ async fn sync_series_movie_links(
     anime_mappings: &[AnimeMapping],
     season_last_aired: &std::collections::BTreeMap<i32, String>,
     episodes_by_number: &HashMap<(i32, i32), Episode>,
+    monitor_selection: Option<&MonitorSelection>,
 ) {
     if anime_movies.is_empty() {
         if let Err(err) = app
@@ -189,7 +193,13 @@ async fn sync_series_movie_links(
                 narrative_order,
                 *after_season,
                 linked_episode_id,
-                title_policy_monitors_series_movie(title, movie.continuity_status.as_str(), true),
+                title_policy_monitors_series_movie(
+                    title,
+                    movie.continuity_status.as_str(),
+                    true,
+                    monitor_selection,
+                    &monitor_selection_external_ids_from_anime_movie(movie),
+                ),
             );
 
             match app
@@ -298,6 +308,30 @@ impl AppUseCase {
         } else {
             "none".to_string()
         };
+        // Loaded once per hydration pass: advanced monitoring reads the
+        // title's stored selection for every season, episode and movie link.
+        let monitor_selection = if monitor_type == MONITOR_TYPE_ADVANCED {
+            match self
+                .services
+                .catalog
+                .titles
+                .get_title_monitor_selection(&title.id)
+                .await
+            {
+                Ok(selection) => selection,
+                Err(err) => {
+                    warn!(
+                        title_id = %title.id,
+                        error = %err,
+                        "failed to load advanced monitor selection; treating it as empty"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let monitor_selection = monitor_selection.as_ref();
         info!(
             title_id = %title.id,
             monitor_type = %monitor_type,
@@ -427,8 +461,12 @@ impl AppUseCase {
             std::collections::HashMap::new();
 
         for season in best_season_by_number.values() {
-            let season_should_monitor =
-                should_monitor_season(&monitor_type, season.number, monitor_specials);
+            let season_should_monitor = should_monitor_season(
+                &monitor_type,
+                season.number,
+                monitor_specials,
+                monitor_selection,
+            );
             let season_monitored = if season.number == 0 {
                 seasons_with_episodes.contains(&season.number) && season_should_monitor
             } else {
@@ -584,6 +622,7 @@ impl AppUseCase {
                     air_date.as_deref(),
                     &today,
                     monitor_specials,
+                    monitor_selection,
                 )
             };
 
@@ -732,6 +771,7 @@ impl AppUseCase {
                     anime_mappings,
                     &season_last_aired,
                     &episode_lookup_by_number,
+                    monitor_selection,
                 )
                 .await;
             }
