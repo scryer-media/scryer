@@ -174,14 +174,15 @@ type Props = {
    */
   onRequestDeleteEpisodeFiles?: (episodeIds: string[]) => void;
   /**
-   * Result of the last completed delete, used to reset the selection. `token`
-   * changes on every completed delete; `retainedEpisodeIds` are the episodes
-   * whose files failed and should stay selected.
+   * Bumped by the container each time a deletion job is accepted; the selection
+   * is cleared whenever it changes.
    */
-  episodeFileDeleteOutcome?: {
-    token: number;
-    retainedEpisodeIds: string[];
-  } | null;
+  episodeSelectionResetToken?: number;
+  /**
+   * Episodes whose media files an in-flight deletion job is working through.
+   * Their rows cannot be selected until that run finishes.
+   */
+  pendingEpisodeIds?: ReadonlySet<string>;
   onOpenFixMatch?: () => void;
   moreLikeThisActions?: TitleMoreLikeThisStripActions;
 };
@@ -241,7 +242,8 @@ function SeriesOverviewViewImpl({
   onMakePrimaryFile,
   primaryMovieFileUpdatingId = null,
   onRequestDeleteEpisodeFiles,
-  episodeFileDeleteOutcome,
+  episodeSelectionResetToken,
+  pendingEpisodeIds,
   onOpenFixMatch,
   moreLikeThisActions,
 }: Props) {
@@ -316,14 +318,12 @@ function SeriesOverviewViewImpl({
     setSelectedEpisodeIds(new Set());
   }, [titleId]);
 
-  // The container keeps this in state, so a new object identity means a delete
-  // actually completed. Episodes whose files failed stay selected.
   React.useEffect(() => {
-    if (!episodeFileDeleteOutcome) {
+    if (!episodeSelectionResetToken) {
       return;
     }
-    setSelectedEpisodeIds(new Set(episodeFileDeleteOutcome.retainedEpisodeIds));
-  }, [episodeFileDeleteOutcome]);
+    setSelectedEpisodeIds(new Set());
+  }, [episodeSelectionResetToken]);
 
   const handleToggleEpisodeSelected = React.useCallback((episodeId: string) => {
     setSelectedEpisodeIds((current) => {
@@ -1310,6 +1310,7 @@ function SeriesOverviewViewImpl({
                     onQueueFromSeasonSearch={canManageTitle ? onQueueFromSeasonSearch : undefined}
                     onDeleteFile={canManageTitle ? onDeleteFile : undefined}
                     selectedEpisodeIds={episodeSelectionEnabled ? selectedEpisodeIds : undefined}
+                    pendingEpisodeIds={episodeSelectionEnabled ? pendingEpisodeIds : undefined}
                     onToggleEpisodeSelected={
                       episodeSelectionEnabled ? handleToggleEpisodeSelected : undefined
                     }

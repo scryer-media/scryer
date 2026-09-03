@@ -144,6 +144,8 @@ export type EpisodeRowProps = {
   /** Present only when the viewer can manage the title; enables the delete-selection checkbox. */
   onToggleSelected?: (episodeId: string) => void;
   selected?: boolean;
+  /** True while a deletion job is working through this episode's media files. */
+  selectionPending?: boolean;
   queueItem?: DownloadQueueItem;
   releaseBlocklistEntries: TitleReleaseBlocklistEntry[];
   searchBlocked: boolean;
@@ -178,6 +180,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   onSetEpisodeMonitored,
   onToggleSelected,
   selected = false,
+  selectionPending = false,
   queueItem,
   releaseBlocklistEntries,
   searchBlocked,
@@ -321,6 +324,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
       id={seriesOverviewEpisodeSelectId(episode.id)}
       size="table"
       checked={selected}
+      disabled={selectionPending}
       aria-label={episodeSelectLabel}
       onClick={(event) => event.stopPropagation()}
       onCheckedChange={() => onToggleSelected(episode.id)}

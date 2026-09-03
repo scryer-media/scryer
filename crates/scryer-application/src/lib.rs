@@ -268,8 +268,8 @@ pub use catalog::interactive_release_search::{
 pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;
 pub use catalog::workflow::{
-    DeleteEpisodeFileFailure, DeleteEpisodeFilesOutcome, DeleteTitlesJobAccepted,
-    DeleteTitlesJobItem, DeleteTitlesJobRequest,
+    DeleteEpisodeFilesJobAccepted, DeleteTitlesJobAccepted, DeleteTitlesJobItem,
+    DeleteTitlesJobRequest,
 };
 pub use contracts::{
     AcquisitionScopeStatesQuery, ActivityWindowCounts, AudioStreamDetail,

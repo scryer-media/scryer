@@ -577,21 +577,13 @@ pub struct DeleteEpisodeFilesPreviewPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// One media file that could not be deleted during a multi-episode deletion.
-pub struct DeleteEpisodeFileFailurePayload {
-    /// Media-file identity that failed to delete.
-    pub file_id: ID,
-    /// Reason the deletion failed.
-    pub error: String,
-}
-
-#[derive(SimpleObject, Clone)]
-/// Result of deleting the media files of several episodes of one title.
+/// Accepted media-file IDs and background job information for a multi-episode
+/// media-file deletion request.
 pub struct DeleteEpisodeFilesPayload {
-    /// Media-file identities that were deleted.
-    pub deleted_file_ids: Vec<ID>,
-    /// Media files that could not be deleted; the rest still ran.
-    pub failed: Vec<DeleteEpisodeFileFailurePayload>,
+    /// Background job run tracking the deletion work.
+    pub job_run: JobRunPayload,
+    /// Media-file identities accepted for processing.
+    pub accepted_file_ids: Vec<ID>,
 }
 
 #[derive(SimpleObject, Clone)]

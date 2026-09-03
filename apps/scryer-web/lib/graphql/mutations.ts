@@ -658,10 +658,21 @@ export const deleteMediaFileMutation = `mutation DeleteMediaFile($input: DeleteM
 
 export const deleteEpisodeFilesMutation = `mutation DeleteEpisodeFiles($input: DeleteEpisodeFilesInput!) {
   deleteEpisodeFiles(input: $input) {
-    deletedFileIds
-    failed {
-      fileId
-      error
+    acceptedFileIds
+    jobRun {
+      id
+      jobKey
+      displayName
+      category
+      section
+      status
+      triggerSource
+      startedAt
+      completedAt
+      summaryJson
+      summaryText
+      errorText
+      progressJson
     }
   }
 }`;

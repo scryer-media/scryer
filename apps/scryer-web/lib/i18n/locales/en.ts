@@ -2314,9 +2314,8 @@ const en: LocaleDictionary = {
   "status.requestSubmitted": "Request submitted for {{name}}.",
   "status.queueSuccess": "Queued {{name}}",
   "status.primaryMovieFileUpdated": "Primary movie file updated",
+  "status.episodeFilesDeleteQueued": "Queued deletion of {{count}} episode files",
   "status.episodeFilesDeleted": "Deleted {{count}} episode files",
-  "status.episodeFilesDeletedWithFailures":
-    "Deleted {{deleted}} episode files, {{failed}} failed",
   "status.queuedLatest": "Queued latest release for {{name}}",
   "status.nothingFound": "No results found.",
   "status.searchingTvdb": 'Searching TVDB metadata for "{{query}}".',

@@ -2509,20 +2509,6 @@ input DeleteDownloadInput {
 }
 
 """
-One media file that could not be deleted during a multi-episode deletion.
-"""
-type DeleteEpisodeFileFailurePayload {
-	"""
-	Media-file identity that failed to delete.
-	"""
-	fileId: ID!
-	"""
-	Reason the deletion failed.
-	"""
-	error: String!
-}
-
-"""
 Per-file result within a multi-episode media-file deletion preview.
 """
 type DeleteEpisodeFilePreviewResultPayload {
@@ -2571,17 +2557,18 @@ input DeleteEpisodeFilesInput {
 }
 
 """
-Result of deleting the media files of several episodes of one title.
+Accepted media-file IDs and background job information for a multi-episode
+media-file deletion request.
 """
 type DeleteEpisodeFilesPayload {
 	"""
-	Media-file identities that were deleted.
+	Background job run tracking the deletion work.
 	"""
-	deletedFileIds: [ID!]!
+	jobRun: JobRunPayload!
 	"""
-	Media files that could not be deleted; the rest still ran.
+	Media-file identities accepted for processing.
 	"""
-	failed: [DeleteEpisodeFileFailurePayload!]!
+	acceptedFileIds: [ID!]!
 }
 
 """
@@ -11638,11 +11625,12 @@ type MutationRoot {
 		input: DeleteMediaFileInput!
 	): DeleteMediaFilePayload!
 	"""
-	Delete every media file linked to the supplied episodes of one title.
+	Accept a background job deleting every media file linked to the supplied
+	episodes of one title.
 	
 	The aggregate preview from `deleteEpisodeFilesPreview` must still match
-	when files are removed from disk. Files that fail are reported in
-	`failed` while the remaining files still run.
+	when files are removed from disk. Per-file results land on the returned
+	job run: a file that fails is recorded there while the rest still run.
 	"""
 	deleteEpisodeFiles(
 		"""

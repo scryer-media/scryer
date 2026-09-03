@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::mappers::{
-    from_cancel_library_scan_result, from_delete_episode_files_outcome,
+    from_cancel_library_scan_result, from_delete_episode_files_job_accepted,
     from_ignore_pending_import_result, from_job_run, from_library, from_library_scan_session,
     from_library_scan_summary, from_media_rename_apply, from_resolve_pending_import_result,
 };
@@ -397,11 +397,12 @@ impl LibraryMutations {
         })
     }
 
-    /// Delete every media file linked to the supplied episodes of one title.
+    /// Accept a background job deleting every media file linked to the supplied
+    /// episodes of one title.
     ///
     /// The aggregate preview from `deleteEpisodeFilesPreview` must still match
-    /// when files are removed from disk. Files that fail are reported in
-    /// `failed` while the remaining files still run.
+    /// when files are removed from disk. Per-file results land on the returned
+    /// job run: a file that fails is recorded there while the rest still run.
     async fn delete_episode_files(
         &self,
         ctx: &Context<'_>,
@@ -418,8 +419,8 @@ impl LibraryMutations {
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>();
-        let outcome = app
-            .delete_episode_files(
+        let accepted = app
+            .start_delete_episode_files_job(
                 &actor,
                 &title_id,
                 &episode_ids,
@@ -433,7 +434,7 @@ impl LibraryMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(from_delete_episode_files_outcome(outcome))
+        Ok(from_delete_episode_files_job_accepted(accepted))
     }
 
     /// Start a background job renaming the files of the given titles.

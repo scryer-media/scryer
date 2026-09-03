@@ -103,6 +103,8 @@ type SeasonSectionProps = {
    * wired when the viewer can manage the title.
    */
   selectedEpisodeIds?: ReadonlySet<string>;
+  /** Episodes locked by an in-flight file-deletion job; their checkboxes are disabled. */
+  pendingEpisodeIds?: ReadonlySet<string>;
   onToggleEpisodeSelected?: (episodeId: string) => void;
   onSetSeasonSelected?: (episodeIds: string[], selected: boolean) => void;
 };
@@ -119,6 +121,7 @@ const EPISODE_SCOPED_PROPS = new Set<keyof SeasonSectionProps>([
   // Compared per episode below: the Set identity changes on every selection
   // change, but only the seasons whose episodes actually changed must re-render.
   "selectedEpisodeIds",
+  "pendingEpisodeIds",
 ]);
 
 function sameSeasonSectionProps(
@@ -147,7 +150,9 @@ function sameSeasonSectionProps(
       previous.searchLoadingByEpisode[episodeId] !== next.searchLoadingByEpisode[episodeId] ||
       previous.searchResultsByEpisode[episodeId] !== next.searchResultsByEpisode[episodeId] ||
       (previous.selectedEpisodeIds?.has(episodeId) ?? false) !==
-        (next.selectedEpisodeIds?.has(episodeId) ?? false)
+        (next.selectedEpisodeIds?.has(episodeId) ?? false) ||
+      (previous.pendingEpisodeIds?.has(episodeId) ?? false) !==
+        (next.pendingEpisodeIds?.has(episodeId) ?? false)
     ) {
       return false;
     }
@@ -205,6 +210,7 @@ function SeasonSectionImpl({
   onMakePrimaryFile,
   primaryMovieFileUpdatingId = null,
   selectedEpisodeIds,
+  pendingEpisodeIds,
   onToggleEpisodeSelected,
   onSetSeasonSelected,
 }: SeasonSectionProps) {
@@ -215,28 +221,35 @@ function SeasonSectionImpl({
   const stableSubtitleDownloads = subtitleDownloads ?? EMPTY_SUBTITLE_DOWNLOADS;
   const selectionEnabled = Boolean(onToggleEpisodeSelected);
 
+  // Episodes an in-flight deletion job holds are out of the season checkbox's
+  // reach, so its state reflects only the rows the operator can still act on.
+  const selectableEpisodeIds = React.useMemo(
+    () =>
+      episodes
+        .filter((episode) => !(pendingEpisodeIds?.has(episode.id) ?? false))
+        .map((episode) => episode.id),
+    [episodes, pendingEpisodeIds],
+  );
+
   const seasonSelectionState: boolean | "indeterminate" = React.useMemo(() => {
-    if (episodes.length === 0) {
+    if (selectableEpisodeIds.length === 0) {
       return false;
     }
-    const selectedCount = episodes.filter(
-      (episode) => selectedEpisodeIds?.has(episode.id) ?? false,
+    const selectedCount = selectableEpisodeIds.filter(
+      (episodeId) => selectedEpisodeIds?.has(episodeId) ?? false,
     ).length;
     if (selectedCount === 0) {
       return false;
     }
-    return selectedCount === episodes.length ? true : "indeterminate";
-  }, [episodes, selectedEpisodeIds]);
+    return selectedCount === selectableEpisodeIds.length ? true : "indeterminate";
+  }, [selectableEpisodeIds, selectedEpisodeIds]);
 
   const handleToggleSeasonSelection = React.useCallback(() => {
     if (!onSetSeasonSelected) {
       return;
     }
-    onSetSeasonSelected(
-      episodes.map((episode) => episode.id),
-      seasonSelectionState !== true,
-    );
-  }, [episodes, onSetSeasonSelected, seasonSelectionState]);
+    onSetSeasonSelected(selectableEpisodeIds, seasonSelectionState !== true);
+  }, [onSetSeasonSelected, seasonSelectionState, selectableEpisodeIds]);
 
   const seasonCheckedState: boolean | "indeterminate" = React.useMemo(() => {
     if (episodes.length === 0) {
@@ -409,7 +422,7 @@ function SeasonSectionImpl({
                 size="table"
                 className="shrink-0"
                 checked={seasonSelectionState}
-                disabled={!episodesReady || episodes.length === 0}
+                disabled={!episodesReady || selectableEpisodeIds.length === 0}
                 aria-label={t("seriesOverview.selectSeasonForDelete", {
                   name: seasonHeading(collection, t),
                 })}
@@ -561,6 +574,7 @@ function SeasonSectionImpl({
                       onSetEpisodeMonitored={onSetEpisodeMonitored}
                       onToggleSelected={onToggleEpisodeSelected}
                       selected={selectedEpisodeIds?.has(episode.id) ?? false}
+                      selectionPending={pendingEpisodeIds?.has(episode.id) ?? false}
                       downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
                       queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                       releaseBlocklistEntries={releaseBlocklistEntries}
@@ -620,6 +634,7 @@ function SeasonSectionImpl({
                         onSetEpisodeMonitored={onSetEpisodeMonitored}
                         onToggleSelected={onToggleEpisodeSelected}
                         selected={selectedEpisodeIds?.has(episode.id) ?? false}
+                        selectionPending={pendingEpisodeIds?.has(episode.id) ?? false}
                         downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
                         queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                         releaseBlocklistEntries={releaseBlocklistEntries}

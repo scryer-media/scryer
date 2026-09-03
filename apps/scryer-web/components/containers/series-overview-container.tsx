@@ -74,6 +74,9 @@ import type {
   TitleCreditRecord,
 } from "@/lib/types/titles";
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
+import { useJobRunToasts } from "@/components/root/job-run-provider";
+import { normalizeJobRun } from "@/lib/utils/job-runs";
+import type { JobRun } from "@/lib/types/jobs";
 import type { DeleteEpisodeFilesPreview } from "@/lib/types/delete-preview";
 import {
   assertNoReplaceConflict,
@@ -349,6 +352,32 @@ function retainEquivalentSnapshot<T>(current: T, next: T): T {
 }
 
 /**
+ * Read the media-file ids a finished episode-file deletion run reports removing.
+ * Returns null when the run carried no usable summary, so the caller can fall
+ * back to dropping the whole cached episode instead of trusting a partial list.
+ */
+function readDeletedFileIds(summaryJson: unknown): Set<string> | null {
+  const parsed =
+    typeof summaryJson === "string"
+      ? (() => {
+          try {
+            return JSON.parse(summaryJson) as unknown;
+          } catch {
+            return null;
+          }
+        })()
+      : summaryJson;
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const ids = (parsed as { deletedFileIds?: unknown }).deletedFileIds;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+    return null;
+  }
+  return new Set(ids as string[]);
+}
+
+/**
  * The batch episode-file preview wraps the shared `DeletePreview` alongside the
  * per-file breakdown, so the shared hook needs to be told where the preview is.
  */
@@ -367,6 +396,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   initialEpisodeId,
 }: SeriesOverviewContainerProps) {
   const setGlobalStatus = useGlobalStatus();
+  const { registerInteractiveJobRun } = useJobRunToasts();
   const t = useTranslate();
   const client = useClient();
   const auth = useAuth();
@@ -455,10 +485,12 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     React.useState(false);
   const [episodeFilesDeleteTypedConfirmation, setEpisodeFilesDeleteTypedConfirmation] =
     React.useState("");
-  const [episodeFileDeleteOutcome, setEpisodeFileDeleteOutcome] = React.useState<{
-    token: number;
-    retainedEpisodeIds: string[];
-  } | null>(null);
+  const [episodeSelectionResetToken, setEpisodeSelectionResetToken] = React.useState(0);
+  // Episodes whose media files are being deleted by an in-flight job; their
+  // rows cannot be re-selected until the run reaches a terminal status.
+  const [pendingEpisodeFileDeletionEpisodeIds, setPendingEpisodeFileDeletionEpisodeIds] =
+    React.useState<Set<string>>(() => new Set());
+  const episodeFileDeletionUnregistersRef = React.useRef(new Set<() => void>());
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const [titleLookupAttempted, setTitleLookupAttempted] = React.useState(false);
   const [titleLookupFailed, setTitleLookupFailed] = React.useState(false);
@@ -1648,6 +1680,60 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     t,
   ]);
 
+  React.useEffect(() => {
+    const unregisters = episodeFileDeletionUnregistersRef.current;
+    return () => {
+      for (const unregister of unregisters) {
+        unregister();
+      }
+      unregisters.clear();
+    };
+  }, []);
+
+  const handleEpisodeFileDeletionTerminal = React.useCallback(
+    async (run: JobRun, targetedEpisodeIds: ReadonlySet<string>) => {
+      setPendingEpisodeFileDeletionEpisodeIds((current) => {
+        const next = new Set(current);
+        for (const episodeId of targetedEpisodeIds) {
+          next.delete(episodeId);
+        }
+        return next;
+      });
+
+      // The run's summary names the files it actually removed. When it is
+      // missing or unparseable, drop the cached files for every targeted
+      // episode instead so nothing stale is shown.
+      const deletedFileIds = readDeletedFileIds(run.summaryJson);
+      const dropCachedFiles = (
+        current: Record<string, EpisodeMediaFile[]>,
+      ): Record<string, EpisodeMediaFile[]> => {
+        if (deletedFileIds) {
+          return Object.fromEntries(
+            Object.entries(current).map(([key, files]) => [
+              key,
+              files.filter((file) => !deletedFileIds.has(file.id)),
+            ]),
+          );
+        }
+        return Object.fromEntries(
+          Object.entries(current).filter(([key]) => !targetedEpisodeIds.has(key)),
+        );
+      };
+      setMediaFilesByEpisode(dropCachedFiles);
+      setMediaFilesBySeriesMovieLink(dropCachedFiles);
+      await refreshTitleDetail();
+
+      setGlobalStatus(
+        run.status === "COMPLETED"
+          ? t("status.episodeFilesDeleted", {
+              count: deletedFileIds?.size ?? targetedEpisodeIds.size,
+            })
+          : (run.errorText ?? run.summaryText ?? t("status.apiError")),
+      );
+    },
+    [refreshTitleDetail, setGlobalStatus, t],
+  );
+
   const handleRequestDeleteEpisodeFiles = React.useCallback((episodeIds: string[]) => {
     if (episodeIds.length === 0) return;
     setEpisodeFilesDeleteTypedConfirmation("");
@@ -1663,9 +1749,17 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const handleConfirmDeleteEpisodeFiles = React.useCallback(async () => {
     if (!title || !episodeFilesToDelete || !episodeFilesDeletePreview) return;
     const requestedEpisodeIds = episodeFilesToDelete;
+    // Captured before the request so the terminal handler can restore exactly
+    // the rows this run locked, and drop their cached files if the run does not
+    // report which files it removed.
+    const targetedEpisodeIds = new Set(
+      (episodeFilesDeletePreviewPayload?.items ?? []).map((item) => item.episodeId),
+    );
     setEpisodeFilesDeleteLoading(true);
     try {
-      const { data, error } = await client.mutation(deleteEpisodeFilesMutation, {
+      const { data, error } = await client.mutation<{
+        deleteEpisodeFiles?: { acceptedFileIds?: string[]; jobRun?: unknown };
+      }>(deleteEpisodeFilesMutation, {
         input: {
           titleId: title.id,
           episodeIds: requestedEpisodeIds,
@@ -1676,53 +1770,30 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }).toPromise();
       if (error) throw error;
 
-      const payload = data?.deleteEpisodeFiles as
-        | { deletedFileIds: string[]; failed: { fileId: string; error: string }[] }
-        | undefined;
-      const deletedFileIds = new Set(payload?.deletedFileIds ?? []);
-      const failed = payload?.failed ?? [];
+      const run = normalizeJobRun(data?.deleteEpisodeFiles?.jobRun);
+      if (!run) {
+        throw new Error(t("status.apiError"));
+      }
+      const acceptedFileIds = data?.deleteEpisodeFiles?.acceptedFileIds ?? [];
 
-      const removeDeletedFiles = (
-        current: Record<string, EpisodeMediaFile[]>,
-      ): Record<string, EpisodeMediaFile[]> =>
-        Object.fromEntries(
-          Object.entries(current).map(([key, files]) => [
-            key,
-            files.filter((file) => !deletedFileIds.has(file.id)),
-          ]),
-        );
-      setMediaFilesByEpisode(removeDeletedFiles);
-      setMediaFilesBySeriesMovieLink(removeDeletedFiles);
-      await refreshTitleDetail();
-
-      // Map the failures back to episodes through the preview breakdown so the
-      // rows whose files survived stay selected for a retry.
-      const episodeIdByFileId = new Map(
-        (episodeFilesDeletePreviewPayload?.items ?? []).map((item) => [
-          item.fileId,
-          item.episodeId,
-        ]),
-      );
-      const retainedEpisodeIds = [
-        ...new Set(
-          failed
-            .map((failure) => episodeIdByFileId.get(failure.fileId))
-            .filter((episodeId): episodeId is string => Boolean(episodeId)),
-        ),
-      ];
-      setEpisodeFileDeleteOutcome((current) => ({
-        token: (current?.token ?? 0) + 1,
-        retainedEpisodeIds,
-      }));
+      setPendingEpisodeFileDeletionEpisodeIds((current) => {
+        const next = new Set(current);
+        for (const episodeId of targetedEpisodeIds) {
+          next.add(episodeId);
+        }
+        return next;
+      });
+      const unregister = registerInteractiveJobRun(run, (terminalRun) => {
+        unregister();
+        episodeFileDeletionUnregistersRef.current.delete(unregister);
+        void handleEpisodeFileDeletionTerminal(terminalRun, targetedEpisodeIds);
+      });
+      episodeFileDeletionUnregistersRef.current.add(unregister);
 
       setGlobalStatus(
-        failed.length > 0
-          ? t("status.episodeFilesDeletedWithFailures", {
-              deleted: deletedFileIds.size,
-              failed: failed.length,
-            })
-          : t("status.episodeFilesDeleted", { count: deletedFileIds.size }),
+        t("status.episodeFilesDeleteQueued", { count: acceptedFileIds.length }),
       );
+      setEpisodeSelectionResetToken((current) => current + 1);
       setEpisodeFilesToDelete(null);
       setEpisodeFilesDeleteTypedConfirmation("");
     } catch (error: unknown) {
@@ -1736,7 +1807,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     episodeFilesDeletePreviewPayload,
     episodeFilesDeleteTypedConfirmation,
     episodeFilesToDelete,
-    refreshTitleDetail,
+    handleEpisodeFileDeletionTerminal,
+    registerInteractiveJobRun,
     setGlobalStatus,
     t,
     title,
@@ -2006,7 +2078,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         deleteLoading={deleteLoading}
         onDeleteFile={handleDeleteMediaFile}
         onRequestDeleteEpisodeFiles={handleRequestDeleteEpisodeFiles}
-        episodeFileDeleteOutcome={episodeFileDeleteOutcome}
+        episodeSelectionResetToken={episodeSelectionResetToken}
+        pendingEpisodeIds={pendingEpisodeFileDeletionEpisodeIds}
         onMakePrimaryFile={canManageTitle ? handleMakePrimaryMovieFile : undefined}
         primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
         onOpenFixMatch={handleOpenFixMatch}

@@ -64,22 +64,15 @@ pub fn from_delete_episode_files_preview(
     }
 }
 
-pub fn from_delete_episode_files_outcome(
-    outcome: scryer_application::DeleteEpisodeFilesOutcome,
+pub fn from_delete_episode_files_job_accepted(
+    accepted: scryer_application::DeleteEpisodeFilesJobAccepted,
 ) -> DeleteEpisodeFilesPayload {
     DeleteEpisodeFilesPayload {
-        deleted_file_ids: outcome
-            .deleted_file_ids
+        job_run: crate::mappers::from_job_run(accepted.job_run),
+        accepted_file_ids: accepted
+            .accepted_file_ids
             .into_iter()
             .map(Into::into)
-            .collect(),
-        failed: outcome
-            .failed
-            .into_iter()
-            .map(|failure| DeleteEpisodeFileFailurePayload {
-                file_id: failure.file_id.into(),
-                error: failure.error,
-            })
             .collect(),
     }
 }
