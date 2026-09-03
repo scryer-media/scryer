@@ -416,7 +416,7 @@ async fn upsert_title_image_source_result_tx(
         ],
     )
     .await?
-    .map(|row| Ok((row.text("id")?, row.text("source_url")?)))
+    .map(|row| Ok::<_, AppError>((row.text("id")?, row.text("source_url")?)))
     .transpose()?;
     let source_changed = existing
         .as_ref()
