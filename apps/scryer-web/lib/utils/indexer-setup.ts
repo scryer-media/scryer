@@ -1,5 +1,6 @@
 import type { ConfigFieldDef } from "../types/index.ts";
 import { providerConfigRecordToValues } from "./provider-config.ts";
+import { normalizeIndexerConfigValues } from "./url-input.ts";
 
 export function setupIndexerConfigFields(fields: ConfigFieldDef[]) {
   return fields.filter((field) => field.valueSource !== "HOST_BINDING");
@@ -38,8 +39,11 @@ export function applyIndexerConfigOption(
 
 export function serializeSetupIndexerConfigValues(
   fields: ConfigFieldDef[],
-  values: Record<string, string>,
+  rawValues: Record<string, string>,
 ): ReturnType<typeof providerConfigRecordToValues> | undefined {
+  // The first-run wizard is where a URL is most likely to arrive pasted out of
+  // an email, so it forgives the same shapes the settings form does.
+  const values = normalizeIndexerConfigValues(fields, rawValues);
   const entries: Record<string, string> = {};
   const fieldKeySet = new Set(fields.map((field) => field.key));
 

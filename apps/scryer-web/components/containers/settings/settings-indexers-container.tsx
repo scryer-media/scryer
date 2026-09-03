@@ -27,6 +27,7 @@ import type {
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
 import { runConnectionFeedback } from "@/lib/utils/connection-feedback";
+import { normalizeIndexerConfigValues } from "@/lib/utils/url-input";
 import {
   buildCreateIndexerProxyInput,
   buildUpdateIndexerProxyInput,
@@ -500,9 +501,20 @@ export function SettingsIndexersContainer({
     const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
     const selectedProvider =
       providerTypes.find((pt) => pt.providerType === normalizedProviderType) ?? null;
-    const missingRequiredConfigField = findMissingRequiredConfigField(
+    // Parse on save: an operator pastes a tracker's address out of an email or
+    // their browser, so `nzbgeek.info` and `192.168.1.5:9117` mean what they
+    // plainly mean. The form is put back with the scheme that was chosen, so
+    // nothing is decided behind their back.
+    const configValues = normalizeIndexerConfigValues(
       selectedProvider?.configFields ?? [],
       indexerDraft.configValues,
+    );
+    if (configValues !== indexerDraft.configValues) {
+      setIndexerDraft((prev) => ({ ...prev, configValues }));
+    }
+    const missingRequiredConfigField = findMissingRequiredConfigField(
+      selectedProvider?.configFields ?? [],
+      configValues,
       indexerDraft.storedSecretKeys,
     );
     const payload = {
@@ -516,7 +528,7 @@ export function SettingsIndexersContainer({
       enableAutoSearch: indexerDraft.enableAutoSearch,
       config: serializeConfigValues(
         selectedProvider?.configFields ?? [],
-        indexerDraft.configValues,
+        configValues,
         indexerDraft.storedSecretKeys,
       ),
     };
@@ -963,9 +975,20 @@ export function SettingsIndexersContainer({
     const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
     const selectedProvider =
       providerTypes.find((pt) => pt.providerType === normalizedProviderType) ?? null;
-    const missingRequiredConfigField = findMissingRequiredConfigField(
+    // Parse on save: an operator pastes a tracker's address out of an email or
+    // their browser, so `nzbgeek.info` and `192.168.1.5:9117` mean what they
+    // plainly mean. The form is put back with the scheme that was chosen, so
+    // nothing is decided behind their back.
+    const configValues = normalizeIndexerConfigValues(
       selectedProvider?.configFields ?? [],
       indexerDraft.configValues,
+    );
+    if (configValues !== indexerDraft.configValues) {
+      setIndexerDraft((prev) => ({ ...prev, configValues }));
+    }
+    const missingRequiredConfigField = findMissingRequiredConfigField(
+      selectedProvider?.configFields ?? [],
+      configValues,
       indexerDraft.storedSecretKeys,
     );
     const payload = {
@@ -973,7 +996,7 @@ export function SettingsIndexersContainer({
       indexerProxyConfigId: indexerDraft.indexerProxyConfigId,
       config: serializeConfigValues(
         selectedProvider?.configFields ?? [],
-        indexerDraft.configValues,
+        configValues,
         indexerDraft.storedSecretKeys,
       ),
       indexerId: editingIndexerId ?? undefined,

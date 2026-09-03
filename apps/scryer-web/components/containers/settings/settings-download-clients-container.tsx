@@ -28,6 +28,7 @@ import {
 import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
+  normalizeDownloadClientDraft,
   buildDownloadClientDraftFromRecord,
   buildDownloadClientTypeOptions,
   ensureDownloadClientTypeOption,
@@ -274,17 +275,22 @@ export function SettingsDownloadClientsContainer({
 
   const submitDownloadClient = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // Parse on save: a URL pasted into the host box is taken apart into the
+    // host, port, URL-base and SSL fields, and the form is put back with them
+    // so the operator sees where their address went.
+    const draft = normalizeDownloadClientDraft(downloadClientDraft);
+    setDownloadClientDraft(draft);
     const payload = {
-      name: downloadClientDraft.name.trim(),
-      clientType: normalizeDownloadClientType(downloadClientDraft.clientType),
-      host: downloadClientDraft.host.trim(),
-      port: downloadClientDraft.port.trim(),
+      name: draft.name.trim(),
+      clientType: normalizeDownloadClientType(draft.clientType),
+      host: draft.host.trim(),
+      port: draft.port.trim(),
       config: buildDownloadClientConfigValues(
-        downloadClientDraft,
+        draft,
         selectedDownloadClientConfigFields,
         editingStoredSecretKeys,
       ),
-      isEnabled: downloadClientDraft.isEnabled,
+      isEnabled: draft.isEnabled,
     };
 
     if (!payload.name || !payload.host) {
@@ -378,13 +384,16 @@ export function SettingsDownloadClientsContainer({
   };
 
   const testDownloadClientConnection = async () => {
+    // The test dials what a save would store, so it normalizes the same way.
+    const draft = normalizeDownloadClientDraft(downloadClientDraft);
+    setDownloadClientDraft(draft);
     const payload = {
-      name: downloadClientDraft.name.trim(),
-      clientType: normalizeDownloadClientType(downloadClientDraft.clientType),
-      host: downloadClientDraft.host.trim(),
-      baseUrl: buildDownloadClientBaseUrl(downloadClientDraft),
+      name: draft.name.trim(),
+      clientType: normalizeDownloadClientType(draft.clientType),
+      host: draft.host.trim(),
+      baseUrl: buildDownloadClientBaseUrl(draft),
       config: buildDownloadClientConfigValues(
-        downloadClientDraft,
+        draft,
         selectedDownloadClientConfigFields,
         editingStoredSecretKeys,
       ),
