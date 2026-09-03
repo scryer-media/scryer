@@ -1076,6 +1076,7 @@ const en: LocaleDictionary = {
   "monitorSelection.seriesMovies": "Series movies",
   "monitorSelection.specials": "Specials",
   "monitorSelection.season": "Season {{number}}",
+  "monitorSelection.seasonNamed": "Season {{number}}: {{name}}",
   "monitorSelection.selectAll": "Select all",
   "monitorSelection.clear": "Clear",
   "monitorSelection.retry": "Retry",

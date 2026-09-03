@@ -78,6 +78,6 @@ test("the card summary renders specials and movie names", () => {
       season: (seasonNumber) => `Season ${seasonNumber}`,
     },
   );
-  assert.deepEqual(parts.seasons, ["Specials", "Season 1"]);
+  assert.deepEqual(parts.seasons, ["Season 1", "Specials"]);
   assert.deepEqual(parts.movies, ["Iron Rail"]);
 });

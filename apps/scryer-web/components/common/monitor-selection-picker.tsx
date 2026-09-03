@@ -86,6 +86,16 @@ function cacheChoices(
   return pending;
 }
 
+function compareSeasonNumbers(
+  left: { number: number },
+  right: { number: number },
+): number {
+  if (left.number === 0 || right.number === 0) {
+    return left.number === right.number ? 0 : left.number === 0 ? 1 : -1;
+  }
+  return left.number - right.number;
+}
+
 function toSeasonChoices(nodes: MetadataSeasonNode[]): SeasonChoice[] {
   const byNumber = new Map<number, SeasonChoice>();
   for (const node of nodes) {
@@ -98,7 +108,8 @@ function toSeasonChoices(nodes: MetadataSeasonNode[]): SeasonChoice[] {
     }
     byNumber.set(number, { number, label: node.label?.trim() ?? "" });
   }
-  return [...byNumber.values()].sort((left, right) => left.number - right.number);
+  // Specials (season 0) read best after the numbered seasons.
+  return [...byNumber.values()].sort(compareSeasonNumbers);
 }
 
 function toSeriesMovieChoices(
@@ -299,10 +310,17 @@ export function MonitorSelectionPicker({
     });
   };
 
-  const seasonLabel = (season: SeasonChoice): string =>
-    season.number === 0
-      ? t("monitorSelection.specials")
-      : season.label || t("monitorSelection.season", { number: season.number });
+  const seasonLabel = (season: SeasonChoice): string => {
+    if (season.number === 0) {
+      return t("monitorSelection.specials");
+    }
+    return season.label
+      ? t("monitorSelection.seasonNamed", {
+          number: season.number,
+          name: season.label,
+        })
+      : t("monitorSelection.season", { number: season.number });
+  };
 
   const movieLabel = (movie: SeriesMovieChoice): string =>
     movie.year ? `${movie.name} (${movie.year})` : movie.name;

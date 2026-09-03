@@ -110,8 +110,13 @@ export function monitorSelectionSummaryParts(
   if (!normalized) {
     return { seasons: [], movies: [] };
   }
+  // Specials trail the numbered seasons, matching the picker's order.
+  const orderedSeasons = [
+    ...normalized.seasonNumbers.filter((seasonNumber) => seasonNumber !== 0),
+    ...normalized.seasonNumbers.filter((seasonNumber) => seasonNumber === 0),
+  ];
   return {
-    seasons: normalized.seasonNumbers.map((seasonNumber) =>
+    seasons: orderedSeasons.map((seasonNumber) =>
       seasonNumber === 0 ? labels.specials : labels.season(seasonNumber),
     ),
     movies: normalized.seriesMovies.map((movie) => movie.name.trim()).filter(Boolean),
