@@ -157,6 +157,7 @@ impl MediaRequestRepository for MediaRequestStore {
             self.datastore.read_exec(),
             "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
                     poster_url, year, overview, runtime_minutes, language, content_status,
+                    rating_summary_json,
                     requested_quality_profile_id, requested_quality_profile_name,
                     requested_monitor_type,
                     resolved_by_user_id, resolved_at, created_title_id,
@@ -320,16 +321,21 @@ async fn insert_media_request_tx(
     request: &NewMediaRequest,
     now: chrono::DateTime<Utc>,
 ) -> AppResult<()> {
+    let rating_summary_json = serde_json::to_string(&request.rating_summary).map_err(|error| {
+        AppError::Repository(format!("serialize media request rating summary: {error}"))
+    })?;
     tx.execute(
         "INSERT INTO media_requests (
             id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
             poster_url, year, overview, runtime_minutes, language, content_status,
+            rating_summary_json,
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
             created_by_user_id, created_at, updated_at
         ) VALUES (
             {}, {}, {}, {}, {}, {}, {}, {},
             {}, {}, {}, {}, {}, {},
+            {},
             {}, {}, {},
             {}, {}, {}
         )",
@@ -348,6 +354,7 @@ async fn insert_media_request_tx(
             SqlArg::OptI32(request.runtime_minutes),
             SqlArg::OptText(request.language.clone()),
             SqlArg::OptText(request.content_status.clone()),
+            SqlArg::Text(rating_summary_json),
             SqlArg::OptText(request.requested_quality_profile_id.clone()),
             SqlArg::OptText(request.requested_quality_profile_name.clone()),
             SqlArg::OptText(request.requested_monitor_type.clone()),
@@ -571,6 +578,7 @@ async fn load_media_request_tx(
         SqlExec::Tx(tx),
         "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
                 poster_url, year, overview, runtime_minutes, language, content_status,
+                rating_summary_json,
                 requested_quality_profile_id, requested_quality_profile_name,
                 requested_monitor_type,
                 resolved_by_user_id, resolved_at, created_title_id,
@@ -662,6 +670,7 @@ fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlAr
     let mut sql = String::from(
         "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
                 poster_url, year, overview, runtime_minutes, language, content_status,
+                rating_summary_json,
                 requested_quality_profile_id, requested_quality_profile_name,
                 requested_monitor_type,
                 resolved_by_user_id, resolved_at, created_title_id,
@@ -729,6 +738,9 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         runtime_minutes: row.opt_i32("runtime_minutes")?,
         language: row.opt_text("language")?,
         content_status: row.opt_text("content_status")?,
+        rating_summary: serde_json::from_str(&row.text("rating_summary_json")?).map_err(
+            |error| AppError::Repository(format!("parse media request rating summary: {error}")),
+        )?,
         requested_quality_profile_id: row.opt_text("requested_quality_profile_id")?,
         requested_quality_profile_name: row.opt_text("requested_quality_profile_name")?,
         requested_monitor_type: row.opt_text("requested_monitor_type")?,

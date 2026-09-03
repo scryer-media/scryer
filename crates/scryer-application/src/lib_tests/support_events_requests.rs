@@ -384,6 +384,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             runtime_minutes: request.runtime_minutes,
             language: request.language,
             content_status: request.content_status,
+            rating_summary: request.rating_summary,
             requested_quality_profile_id: request.requested_quality_profile_id,
             requested_quality_profile_name: request.requested_quality_profile_name,
             requested_monitor_type: request.requested_monitor_type,

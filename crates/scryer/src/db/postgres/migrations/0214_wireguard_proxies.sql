@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0212_wireguard_proxies.sql.
+-- PostgreSQL twin of migrations/0214_wireguard_proxies.sql.
 --
 -- Seven added columns and nothing else, so both engines express this the same
 -- way. See the SQLite file for why `peer_public_key` and `tunnel_public_key`

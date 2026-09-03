@@ -10,11 +10,12 @@ use scryer_application::{
     EmbyConnectIdentityVerification, EmbyConnectServer, EmbyServerIdentity, EmbyServerUser,
     ExternalIdentityVerifier, JellyfinServerUser, MediaServerCatalogItem,
     MediaServerCatalogItemKind, PlexServerDiscovery, PlexServerUser, VerifiedExternalIdentity,
+    canonicalize_jellyfin_user_id,
 };
 use scryer_domain::{
     ExternalAccountProvider, ExternalId, MediaServerConnection, MediaServerProvider,
 };
-use scryer_outbound_http::generic_reqwest_client;
+use scryer_outbound_http::{generic_reqwest_client, no_redirect_reqwest_client};
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
@@ -591,6 +592,114 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             });
         }
         Ok(users)
+    }
+
+    async fn verify_jellyfin_user_with_api_key(
+        &self,
+        connection_id: &str,
+        base_url: &str,
+        api_key: &str,
+        canonical_user_id: &str,
+    ) -> AppResult<VerifiedExternalIdentity> {
+        const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+        let canonical_user_id = canonicalize_jellyfin_user_id(canonical_user_id)
+            .ok_or_else(|| AppError::Validation("Jellyfin user ID is invalid".into()))?;
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            return Err(AppError::Unauthorized(
+                "Jellyfin API key is unavailable".into(),
+            ));
+        }
+        let base_url = jellyfin_base_url(base_url)?;
+        let user_url = base_url
+            .join(&format!("Users/{canonical_user_id}"))
+            .map_err(|error| {
+                AppError::Validation(format!("Jellyfin user URL is invalid: {error}"))
+            })?;
+        let response = tokio::time::timeout(
+            TIMEOUT,
+            no_redirect_reqwest_client()
+                .get(user_url)
+                .header("Accept", "application/json")
+                .header("X-Emby-Token", api_key)
+                .send(),
+        )
+        .await
+        .map_err(|_| AppError::Repository("Jellyfin identity request timed out".into()))?
+        .map_err(|error| {
+            AppError::Repository(format!("failed to reach Jellyfin connection: {error}"))
+        })?;
+        match response.status() {
+            StatusCode::OK => {}
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
+                return Err(AppError::Unauthorized(
+                    "Jellyfin user verification failed".into(),
+                ));
+            }
+            status if status.is_redirection() => {
+                return Err(AppError::Repository(
+                    "Jellyfin identity response redirected".into(),
+                ));
+            }
+            status => {
+                return Err(AppError::Repository(format!(
+                    "Jellyfin user verification failed with status {status}"
+                )));
+            }
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(AppError::Repository(
+                "Jellyfin identity response is too large".into(),
+            ));
+        }
+        let body = tokio::time::timeout(TIMEOUT, async {
+            let mut response = response;
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to read Jellyfin identity response: {error}"
+                ))
+            })? {
+                if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                    return Err(AppError::Repository(
+                        "Jellyfin identity response is too large".into(),
+                    ));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok::<_, AppError>(body)
+        })
+        .await
+        .map_err(|_| AppError::Repository("Jellyfin identity response timed out".into()))??;
+        let user = serde_json::from_slice::<JellyfinUser>(&body).map_err(|error| {
+            AppError::Repository(format!("invalid Jellyfin identity response: {error}"))
+        })?;
+        let verified_user_id = canonicalize_jellyfin_user_id(&user.id)
+            .ok_or_else(|| AppError::Unauthorized("Jellyfin user verification failed".into()))?;
+        if verified_user_id != canonical_user_id {
+            return Err(AppError::Unauthorized(
+                "Jellyfin user verification failed".into(),
+            ));
+        }
+        let username = user.name.clone().unwrap_or_else(|| user.id.clone());
+        Ok(VerifiedExternalIdentity {
+            provider: ExternalAccountProvider::Jellyfin,
+            connection_id: connection_id.trim().to_string(),
+            external_user_id: verified_user_id,
+            display_name: Some(username.clone()),
+            username,
+            avatar_url: jellyfin_user_avatar_url(
+                &base_url,
+                &user.id,
+                user.primary_image_tag.as_deref(),
+            ),
+            remote_password_configured: jellyfin_remote_password_configured(&user),
+        })
     }
 
     async fn resolve_emby_api_base(

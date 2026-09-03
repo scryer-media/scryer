@@ -1,6 +1,6 @@
-//! End-to-end upgrade coverage for migrations 0208, 0209 and 0210 (numbered
-//! 0204-0206 on the feature branch; renumbered when release-NEXT's 0204-0207
-//! landed first).
+//! End-to-end upgrade coverage for migrations 0210, 0211 and 0212 (numbered
+//! 0204-0206 on the feature branch, 0208-0210 on release-NEXT before main's
+//! shipped 0204/0205 were merged in; renumbered each time).
 //!
 //! Each scenario drives the real migration runner over a database the real
 //! catalog built at the pre-upgrade state, because the behaviour worth pinning is
@@ -43,7 +43,7 @@ async fn apply_upgrade(pool: &SqlitePool) {
     crate::migrations::run_migrations(pool, crate::MigrationMode::Apply)
         .await
         .expect("synthetic-root-id upgrade should apply");
-    for version in [208, 209, 210] {
+    for version in [210, 211, 212] {
         let applied: i64 =
             sqlx::query_scalar("SELECT success FROM _sqlx_migrations WHERE version = ?1")
                 .bind(version)
@@ -57,7 +57,7 @@ async fn apply_upgrade(pool: &SqlitePool) {
     }
 }
 
-/// A root in the shape the pre-0204 writer produced: id == hash(normalized path).
+/// A root in the shape the pre-0210 writer produced: id == hash(normalized path).
 async fn seed_path_derived_root(pool: &SqlitePool, library_id: &str, path: &str) -> String {
     let id = path_derived_id(path);
     sqlx::query(
@@ -106,7 +106,7 @@ async fn root_exists(pool: &SqlitePool, root_id: &str) -> bool {
     count == 1
 }
 
-// ── 0204 ────────────────────────────────────────────────────────────────────
+// ── 0210 ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn the_upgrade_rekeys_path_derived_roots_and_carries_their_titles_along() {
@@ -219,7 +219,7 @@ async fn a_root_path_change_after_the_upgrade_no_longer_changes_identity() {
     assert!(root_exists(&pool, &root_id).await);
 }
 
-// ── 0205 ────────────────────────────────────────────────────────────────────
+// ── 0211 ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn the_upgrade_adds_nullable_full_hash_columns_to_media_files() {
@@ -273,7 +273,7 @@ async fn the_upgrade_adds_nullable_full_hash_columns_to_media_files() {
     assert_eq!(algorithm, "crc64/nvme");
 }
 
-// ── 0206 ────────────────────────────────────────────────────────────────────
+// ── 0212 ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn the_upgrade_creates_the_location_operation_tables() {
@@ -501,9 +501,9 @@ async fn deleting_an_operation_takes_its_checkpoints_and_records_with_it() {
 
 // ── PostgreSQL ──────────────────────────────────────────────────────────────
 //
-// The same scenarios against the other engine, because 0204-0206 ship separate
+// The same scenarios against the other engine, because 0210-0212 ship separate
 // PostgreSQL SQL files (timestamptz/boolean rather than TEXT/INTEGER) and the
-// 0204 hook has a separate `$1`-placeholder implementation. Skips when
+// 0210 hook has a separate `$1`-placeholder implementation. Skips when
 // `SCRYER_TEST_POSTGRES_URL` is unset, matching the convention in
 // `postgres::services`. Each run works inside its own schema and drops it.
 
@@ -613,7 +613,7 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
         .expect("seeded root count should load");
         assert_eq!(seeded, 1);
 
-        // 0205 columns exist and are nullable.
+        // 0211 columns exist and are nullable.
         let hashed: Option<String> =
             sqlx::query_scalar("SELECT full_blake3 FROM media_files LIMIT 1")
                 .fetch_optional(&pool)
@@ -622,7 +622,7 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
                 .flatten();
         assert_eq!(hashed, None);
 
-        // 0206 tables exist, including the single-owner registry index.
+        // 0212 tables exist, including the single-owner registry index.
         sqlx::query(
             "INSERT INTO location_operations (id, operation_type, execution_mode, state)
              VALUES ('pg-op-1', 'root_change', 'move', 'running'),
@@ -651,7 +651,7 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
             "a second live claim on the same root must be rejected by the registry"
         );
 
-        // The columns the amended 0206 added are on this engine too, with the
+        // The columns the amended 0212 added are on this engine too, with the
         // same names — the store issues one statement for both engines.
         sqlx::query(
             "INSERT INTO location_operation_title_checkpoints

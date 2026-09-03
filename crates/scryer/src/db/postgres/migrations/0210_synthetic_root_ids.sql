@@ -1,4 +1,4 @@
--- Synthetic stable root ids (FR-078, plan D1). PostgreSQL half of 0204.
+-- Synthetic stable root ids (FR-078, plan D1). PostgreSQL half of 0210.
 --
 -- See the SQLite file for the rationale. Only the column types differ; the
 -- `migrate_synthetic_root_ids` Rust hook performs the identical remap on both

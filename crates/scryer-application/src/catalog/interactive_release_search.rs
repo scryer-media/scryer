@@ -422,6 +422,11 @@ impl AppUseCase {
         let now = self.runtime.environment.now();
         let mut indexer_views = Vec::new();
         let mut dispatch = Vec::new();
+        let requested_indexers = request
+            .indexer_ids
+            .as_ref()
+            .filter(|ids| !ids.is_empty())
+            .map(|ids| ids.iter().cloned().collect::<HashSet<String>>());
         let mut routing_base = HashMap::new();
         for config in configs {
             if !config.is_enabled {
@@ -446,13 +451,14 @@ impl AppUseCase {
             if !config.enable_interactive_search {
                 continue;
             }
-            if routing_entry.is_some_and(|entry| !entry.enabled) {
-                continue;
-            }
-            if request
-                .indexer_ids
-                .as_ref()
-                .is_some_and(|ids| !ids.is_empty() && !ids.contains(&config.id))
+            // A routing-disabled indexer and one the request did not name are
+            // both ineligible; the shared contract decides, so this stays in
+            // step with the search client's own dispatch rule.
+            if crate::contracts::indexer_search_eligibility(
+                indexer_routing.as_ref(),
+                requested_indexers.as_ref(),
+                &config.id,
+            ) != crate::contracts::IndexerSearchEligibility::Eligible
             {
                 continue;
             }

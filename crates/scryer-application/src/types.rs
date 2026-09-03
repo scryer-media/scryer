@@ -2226,6 +2226,7 @@ pub struct IndexerSearchPage {
 pub struct IndexerSearchPageSink {
     sender: tokio::sync::mpsc::Sender<IndexerSearchPage>,
     reservations: std::sync::Arc<tokio::sync::Semaphore>,
+    indexer_restriction: Option<std::sync::Arc<std::collections::HashSet<String>>>,
 }
 
 #[derive(Debug)]
@@ -2239,7 +2240,20 @@ impl IndexerSearchPageSink {
         Self {
             sender,
             reservations: std::sync::Arc::new(tokio::sync::Semaphore::new(max_pages)),
+            indexer_restriction: None,
         }
+    }
+
+    pub fn with_indexer_restriction(
+        mut self,
+        indexer_ids: Option<std::collections::HashSet<String>>,
+    ) -> Self {
+        self.indexer_restriction = indexer_ids.map(std::sync::Arc::new);
+        self
+    }
+
+    pub fn indexer_restriction(&self) -> Option<&std::collections::HashSet<String>> {
+        self.indexer_restriction.as_deref()
     }
 
     pub async fn reserve(&self) -> Option<IndexerSearchPageReservation> {
@@ -2829,6 +2843,13 @@ pub struct OAuthAuthorizationCodeRecord {
     pub authorization_source: OAuthAuthorizationSource,
     pub redirect_uri: String,
     pub scope: String,
+    /// Immutable Jellyfin-link binding approved with this authorization code.
+    /// Both fields are absent unless the `jellyfin-link` scope was granted.
+    pub jellyfin_connection_id: Option<String>,
+    pub jellyfin_external_url: Option<String>,
+    pub jellyfin_base_url: Option<String>,
+    /// A keyed fingerprint, never the API key itself.
+    pub jellyfin_api_key_hash: Option<String>,
     pub code_challenge: String,
     pub code_challenge_method: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -2843,7 +2864,15 @@ pub struct OAuthRefreshGrantRecord {
     pub user_id: String,
     pub authorization_source: OAuthAuthorizationSource,
     pub client_id: String,
+    /// Exact redirect URI approved when this refresh grant was created.
+    pub redirect_uri: String,
     pub scope: String,
+    /// Immutable Jellyfin-link binding copied from the authorization code.
+    pub jellyfin_connection_id: Option<String>,
+    pub jellyfin_external_url: Option<String>,
+    pub jellyfin_base_url: Option<String>,
+    /// A keyed fingerprint, never the API key itself.
+    pub jellyfin_api_key_hash: Option<String>,
     pub auth_session_version: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -2861,6 +2890,34 @@ pub struct OAuthRefreshTokenRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub consumed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Normalizes Jellyfin's GUID aliases to the single persisted N form: 32
+/// lowercase hexadecimal characters, without hyphens. The all-zero UUID is
+/// deliberately not a user identity.
+pub fn canonicalize_jellyfin_user_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    let compact = match value.len() {
+        32 => value.to_string(),
+        36 if value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        }) =>
+        {
+            value.replace('-', "")
+        }
+        _ => return None,
+    };
+    if compact.len() != 32
+        || !compact.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || compact.bytes().all(|byte| byte == b'0')
+    {
+        return None;
+    }
+    Some(compact.to_ascii_lowercase())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3972,6 +4029,39 @@ mod indexer_search_identity_tests {
         assert_ne!(
             indexer_search_identity(&original, Some(7)),
             indexer_search_identity(&changed, Some(7))
+        );
+    }
+
+    #[test]
+    fn jellyfin_user_ids_canonicalize_to_lowercase_n_form() {
+        let canonical = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id(canonical).as_deref(),
+            Some(canonical)
+        );
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id("01234567-89AB-CDEF-0123-456789ABCDEF").as_deref(),
+            Some(canonical)
+        );
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id("0123456789ABCDEF0123456789ABCDEF").as_deref(),
+            Some(canonical)
+        );
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id("00000000000000000000000000000000"),
+            None
+        );
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id("00000000-0000-0000-0000-000000000000"),
+            None
+        );
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id("01234567-89ab-cdef-0123-456789abcdeg"),
+            None
+        );
+        assert_eq!(
+            super::canonicalize_jellyfin_user_id("0123456789abcdef0123456789abcde"),
+            None
         );
     }
 }

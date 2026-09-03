@@ -1,5 +1,5 @@
 -- Location-operation persistence (plan D5/D7; FR-030..033, FR-043, FR-084, FR-089, FR-092).
--- PostgreSQL half of 0206; see the SQLite file for the table-by-table rationale.
+-- PostgreSQL half of 0212; see the SQLite file for the table-by-table rationale.
 -- Column names and semantics are identical; only the types differ (timestamptz
 -- for instants, boolean for the flags SQLite stores as INTEGER). That parity is
 -- load-bearing: the store issues one statement per operation for both engines.

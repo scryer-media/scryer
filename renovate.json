@@ -3,12 +3,15 @@
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigests",
-    "docker:pinDigests",
-    ":maintainLockFilesWeekly"
+    "docker:pinDigests"
   ],
   "dependencyDashboard": true,
-  "prConcurrentLimit": 5,
-  "prHourlyLimit": 2,
+  "dependencyDashboardApproval": true,
+  "timezone": "America/Denver",
+  "schedule": ["* * * * 6"],
+  "updateNotScheduled": false,
+  "prConcurrentLimit": 1,
+  "prHourlyLimit": 1,
   "packageRules": [
     {
       "matchManagers": ["cargo"],

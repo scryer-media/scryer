@@ -4082,7 +4082,7 @@ async fn blocked_import_outcome_is_persisted_durably() {
         .snapshot()
         .await
         .revision;
-    let sync_rx = app.runtime.acquisition.download_queue_snapshot.subscribe();
+    let mut sync_rx = app.runtime.acquisition.download_queue_snapshot.subscribe();
 
     ingest
         .publish(crate::tracked_downloads::TrackedDownloadSnapshotUpdate {
@@ -4135,6 +4135,20 @@ async fn blocked_import_outcome_is_persisted_durably() {
     })
     .await
     .expect("blocked outcome should be persisted to submissions and identity states");
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if sync_rx.borrow().revision > initial_revision {
+                break;
+            }
+            sync_rx
+                .changed()
+                .await
+                .expect("download queue snapshot should remain available");
+        }
+    })
+    .await
+    .expect("blocked import should be published to the queue cache");
 
     let reads_before_visibility = (
         *download_client.queue_calls.lock().await,

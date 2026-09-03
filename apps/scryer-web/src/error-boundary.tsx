@@ -2,12 +2,9 @@ import { useEffect } from "react";
 import { useRouteError, isRouteErrorResponse, useNavigate } from "react-router";
 import { AlertTriangle, Home, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  shouldRetryStaleViteImport,
-} from "@/lib/utils/vite-import-recovery";
+import { claimViteImportRecovery } from "@/lib/utils/vite-import-recovery";
 
 const logoUrl = `${import.meta.env.BASE_URL}scryer-logo.svg`;
-const VITE_IMPORT_RECOVERY_STORAGE_KEY = "scryer:vite-import-recovery";
 const VITE_IMPORT_RECOVERY_DELAY_MS = 500;
 
 function errorInfo(error: unknown): { status: number | null; title: string; detail: string } {
@@ -47,30 +44,11 @@ export function RouteErrorBoundary() {
   const { status, title, detail } = errorInfo(error);
 
   useEffect(() => {
-    if (!import.meta.env.DEV || typeof window === "undefined") {
+    if (!import.meta.env.PROD || typeof window === "undefined") {
       return;
     }
 
-    const now = Date.now();
-    try {
-      const storedAttempt = window.sessionStorage.getItem(
-        VITE_IMPORT_RECOVERY_STORAGE_KEY,
-      );
-      const parsedAttempt = storedAttempt === null ? null : Number(storedAttempt);
-      const previousAttemptAt =
-        parsedAttempt !== null && Number.isFinite(parsedAttempt)
-          ? parsedAttempt
-        : null;
-
-      if (!shouldRetryStaleViteImport(error, previousAttemptAt, now)) {
-        return;
-      }
-
-      window.sessionStorage.setItem(
-        VITE_IMPORT_RECOVERY_STORAGE_KEY,
-        String(now),
-      );
-    } catch {
+    if (!claimViteImportRecovery(error, window.sessionStorage)) {
       return;
     }
 
