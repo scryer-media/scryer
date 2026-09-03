@@ -319,6 +319,7 @@ impl WasmIndexerClient {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>(),
             inputs.allowed_hosts,
+            inputs.egress_policy,
             inputs.indexer_proxy_policy,
             inputs.destination_cooldown_key,
             inputs.timeout,
@@ -394,6 +395,7 @@ impl WasmIndexerClient {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>(),
             inputs.allowed_hosts,
+            inputs.egress_policy,
             inputs.indexer_proxy_policy,
             inputs.timeout,
             None,
@@ -1015,6 +1017,7 @@ fn build_legacy_spec(
     let inputs = build_runtime_inputs(descriptor, indexer_name, config, indexer_proxy_config);
     let mut spec = LegacyPluginSpec::new(wasm_bytes, descriptor.id.clone());
     spec.allowed_hosts = inputs.allowed_hosts;
+    spec.egress_policy = inputs.egress_policy;
     spec.timeout = inputs.timeout;
     for (key, value) in inputs.config_entries {
         spec.config.insert(key, value);
@@ -1033,6 +1036,7 @@ fn build_legacy_spec(
 struct IndexerRuntimeInputs {
     config_entries: std::collections::HashMap<String, String>,
     allowed_hosts: Vec<String>,
+    egress_policy: scryer_outbound_http::PluginEgressPolicy,
     timeout: std::time::Duration,
     indexer_proxy_policy: Option<IndexerProxyPolicy>,
     destination_cooldown_key: Option<String>,
@@ -1051,6 +1055,10 @@ fn build_runtime_inputs(
         connection_url.as_deref(),
         config.config_json.as_deref(),
     );
+    let egress_policy = crate::loader::operator_egress_policy_for_descriptor(
+        connection_url.as_deref(),
+        config.config_json.as_deref(),
+    );
     let timeout = scryer_outbound_http::effective_indexer_timeout(
         indexer_proxy_config
             .as_ref()
@@ -1059,6 +1067,7 @@ fn build_runtime_inputs(
     IndexerRuntimeInputs {
         config_entries: config_entries.unwrap_or_default(),
         allowed_hosts,
+        egress_policy,
         timeout,
         indexer_proxy_policy: indexer_proxy_config.map(|proxy_config| IndexerProxyPolicy {
             indexer_id: config.id.clone(),

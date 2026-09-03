@@ -285,7 +285,7 @@ impl LegacyHostState {
             var_store_bytes: 0,
             var_store_max_bytes,
             config: spec.config,
-            http: PluginHttpHost::new_with_egress_policy(
+            http: PluginHttpHost::new(
                 spec.allowed_hosts,
                 spec.egress_policy,
                 spec.indexer_proxy_policy,

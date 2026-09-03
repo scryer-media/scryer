@@ -1376,10 +1376,10 @@ impl WasmDownloadClientPluginProvider {
         };
 
         let computed_base_url = compute_base_url_from_config_json(&config.config_json);
-        let egress_policy = computed_base_url
-            .as_deref()
-            .map(scryer_outbound_http::PluginEgressPolicy::for_operator_download_client_base_url)
-            .unwrap_or_default();
+        let egress_policy = operator_egress_policy_for_descriptor(
+            computed_base_url.as_deref(),
+            Some(&config.config_json),
+        );
         let backing = match PluginRuntimeBacking::for_artifact(&loaded.descriptor, &wasm_bytes) {
             Ok(backing) => backing,
             Err(error) => {
@@ -3174,6 +3174,26 @@ pub(crate) fn allowed_hosts_for_descriptor(
     hosts
 }
 
+/// Build the operator egress authority for a plugin instance.
+///
+/// Mirrors [`allowed_hosts_for_descriptor`]: the origins come from the
+/// configured `base_url` plus every `config_json` value that parses as an
+/// absolute HTTP URL. Those are addresses the operator typed, so they may
+/// resolve into link-local space (a rootless container's host bridge); anything
+/// the plugin chooses on its own stays under the default egress guard.
+pub(crate) fn operator_egress_policy_for_descriptor(
+    base_url: Option<&str>,
+    config_json: Option<&str>,
+) -> scryer_outbound_http::PluginEgressPolicy {
+    let mut urls: Vec<String> = base_url.map(str::to_string).into_iter().collect();
+    if let Some(json_str) = config_json
+        && let Ok(map) = parse_config_json_entries(json_str)
+    {
+        urls.extend(map.into_values());
+    }
+    scryer_outbound_http::PluginEgressPolicy::for_operator_configured_urls(urls)
+}
+
 fn host_from_url(url: &str) -> Option<String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -3482,6 +3502,7 @@ impl WasmNotificationPluginProvider {
         let mut spec = LegacyPluginSpec::new(wasm_bytes, loaded.descriptor.id.clone());
         spec.allowed_hosts =
             allowed_hosts_for_descriptor(&loaded.descriptor, None, Some(&config.config_json));
+        spec.egress_policy = operator_egress_policy_for_descriptor(None, Some(&config.config_json));
         spec.timeout = std::time::Duration::from_secs(30);
         let socket_host = socket_host_for_notification(loaded, &config.config_json);
         let process_host = process_host_for_notification(loaded, &config.config_json);
