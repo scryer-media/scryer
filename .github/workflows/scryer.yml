@@ -1012,7 +1012,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: macos-15
-            release_runner: mac_arm_release
+            release_runner: macos-15
             target: aarch64-apple-darwin
             sccache_lane: scryer-macos-arm64
             sccache_writer_id: scryer-darwin-arm64-portable
@@ -1302,7 +1302,7 @@ jobs:
           - arch: x86_64
             msi_arch: x64
             runner: windows-2025
-            release_runner: windows_x86_release
+            release_runner: windows-2025
             toolchain: 1.97.1-x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
             sccache_lane: scryer-windows-x86_64-msvc
