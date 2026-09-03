@@ -4856,10 +4856,12 @@ async fn migration_0206_rebuilds_media_requests_without_losing_child_rows() {
         "the rebuild should leave no scratch tables behind, found {leftovers:?}"
     );
 
-    sqlx::query("UPDATE media_requests SET requested_monitor_type = 'advanced' WHERE id = 'request-0206'")
-        .execute(&pool)
-        .await
-        .expect("0206 should accept the advanced monitor type");
+    sqlx::query(
+        "UPDATE media_requests SET requested_monitor_type = 'advanced' WHERE id = 'request-0206'",
+    )
+    .execute(&pool)
+    .await
+    .expect("0206 should accept the advanced monitor type");
     sqlx::query(
         "INSERT INTO monitor_selections (
             owner_kind, owner_id, entry_kind, entry_key, label, external_ids_json,

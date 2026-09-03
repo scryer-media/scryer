@@ -250,7 +250,10 @@ impl MonitorSelectionMovie {
             let selected_value = selected.value.trim();
             !selected_value.is_empty()
                 && external_ids.iter().any(|candidate| {
-                    candidate.source.trim().eq_ignore_ascii_case(selected.source.trim())
+                    candidate
+                        .source
+                        .trim()
+                        .eq_ignore_ascii_case(selected.source.trim())
                         && candidate.value.trim() == selected_value
                 })
         })
