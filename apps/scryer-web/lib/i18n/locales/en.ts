@@ -2041,6 +2041,7 @@ const en: LocaleDictionary = {
   "settings.pluginVerifiedCommunity": "Verified Community",
   "settings.pluginUnverified": "Unverified",
   "settings.pluginBeta": "Beta",
+  "settings.pluginDeprecated": "Deprecated",
   "settings.pluginSource": "Source",
   "settings.pluginDocs": "Docs",
   "settings.pluginInstallManually": "Install Manually",
