@@ -14,6 +14,43 @@ pub struct ExternalIdPayload {
     pub value: String,
 }
 
+/// One canon series movie inside an advanced monitoring selection.
+#[derive(SimpleObject, Clone)]
+pub struct MonitorSelectionMoviePayload {
+    /// Movie name as it was presented when the selection was made.
+    pub name: String,
+    /// Provider identifiers for the selected movie.
+    pub external_ids: Vec<ExternalIdPayload>,
+}
+
+/// Seasons and canon series movies chosen under the `ADVANCED` monitor type.
+/// Anything absent from the selection stays unmonitored.
+#[derive(SimpleObject, Clone)]
+pub struct MonitorSelectionPayload {
+    /// Season numbers to monitor; 0 is specials.
+    pub season_numbers: Vec<i32>,
+    /// Canon series movies to monitor.
+    pub series_movies: Vec<MonitorSelectionMoviePayload>,
+}
+
+/// One canon series movie inside an advanced monitoring selection.
+#[derive(InputObject, Clone)]
+pub struct MonitorSelectionMovieInput {
+    /// Movie name to show back to the approver.
+    pub name: String,
+    /// Provider identifiers for the selected movie.
+    pub external_ids: Vec<ExternalIdInput>,
+}
+
+/// Seasons and canon series movies chosen under the `ADVANCED` monitor type.
+#[derive(InputObject, Clone)]
+pub struct MonitorSelectionInput {
+    /// Season numbers to monitor; 0 is specials.
+    pub season_numbers: Vec<i32>,
+    /// Canon series movies to monitor.
+    pub series_movies: Option<Vec<MonitorSelectionMovieInput>>,
+}
+
 /// User who submitted a media request.
 #[derive(SimpleObject, Clone)]
 pub struct MediaRequestRequesterPayload {
@@ -104,6 +141,8 @@ pub struct MediaRequestPayload {
     pub requested_quality_profile_name: Option<String>,
     /// Requested monitoring mode, or null when not specified.
     pub requested_monitor_type: Option<MonitorTypeValue>,
+    /// Seasons and series movies requested under `ADVANCED` monitoring, or null.
+    pub requested_monitor_selection: Option<MonitorSelectionPayload>,
     /// ID of the user who resolved the request, or null while unresolved.
     pub resolved_by_user_id: Option<ID>,
     /// UTC time when the request was resolved, or null while unresolved.
@@ -197,6 +236,8 @@ pub struct SubmitMediaRequestInput {
     pub requested_quality_profile_id: Option<ID>,
     /// Monitoring policy requested for approval.
     pub requested_monitor_type: Option<MonitorTypeValue>,
+    /// Seasons and series movies to monitor; required with `ADVANCED`.
+    pub requested_monitor_selection: Option<MonitorSelectionInput>,
 }
 
 #[derive(InputObject, Clone)]
@@ -208,6 +249,9 @@ pub struct ApproveMediaRequestInput {
     pub quality_profile_id: ID,
     /// Optional monitoring policy to apply to the approved title.
     pub monitor_type: Option<MonitorTypeValue>,
+    /// Optional approver override for the requested advanced selection; when
+    /// omitted the request's stored selection is applied.
+    pub monitor_selection: Option<MonitorSelectionInput>,
 }
 
 #[derive(InputObject, Clone)]
@@ -219,6 +263,8 @@ pub struct UpdateMediaRequestInput {
     pub requested_quality_profile_id: ID,
     /// Optional monitoring policy requested for the title.
     pub requested_monitor_type: Option<MonitorTypeValue>,
+    /// Seasons and series movies to monitor; required with `ADVANCED`.
+    pub requested_monitor_selection: Option<MonitorSelectionInput>,
 }
 
 #[derive(SimpleObject, Clone)]

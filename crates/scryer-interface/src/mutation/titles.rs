@@ -6,7 +6,9 @@ use scryer_application::{
 use scryer_domain::{Library, LibraryPermission, LibraryRoot, MediaFacet, Title, User};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
-use crate::mappers::{from_job_run, from_library_scan_summary, from_title};
+use crate::mappers::{
+    from_job_run, from_library_scan_summary, from_title, monitor_selection_from_input,
+};
 use crate::types::*;
 use crate::utils::{
     ResolvedTitleOptionsInput, map_add_input, merge_title_option_tags, normalize_title_tags,
@@ -77,6 +79,7 @@ fn resolved_title_options(
         inter_season_movies,
         filler_policy,
         recap_policy,
+        monitor_selection,
     } = options;
 
     let use_season_folders = match use_season_folders {
@@ -87,6 +90,43 @@ fn resolved_title_options(
     if *facet == MediaFacet::Movie && use_season_folders.is_some() {
         return Err(validation_error(
             "useSeasonFolders is only valid for series and anime titles",
+        ));
+    }
+
+    let monitor_selection = match monitor_selection {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(value) => Some(Some(monitor_selection_from_input(value))),
+    };
+    if *facet == MediaFacet::Movie && monitor_selection.is_some() {
+        return Err(validation_error(
+            "monitorSelection is only valid for series and anime titles",
+        ));
+    }
+    // ADVANCED is meaningless without picks, and picks are meaningless without
+    // ADVANCED, so the pair has to agree whenever either half is supplied.
+    let requested_monitor_type = match &monitor_type {
+        MaybeUndefined::Value(value) => Some(value.as_tag_value()),
+        _ => None,
+    };
+    if requested_monitor_type == Some("advanced") {
+        let has_selection = monitor_selection
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .is_some_and(|selection| !selection.normalized().is_empty());
+        if !has_selection {
+            return Err(validation_error(
+                "monitorSelection with at least one season or series movie is required when monitorType is ADVANCED",
+            ));
+        }
+    } else if requested_monitor_type.is_some()
+        && monitor_selection
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .is_some()
+    {
+        return Err(validation_error(
+            "monitorSelection is only valid when monitorType is ADVANCED",
         ));
     }
 
@@ -134,6 +174,7 @@ fn resolved_title_options(
             MaybeUndefined::Null => Some(None),
             MaybeUndefined::Value(value) => Some(Some(value.as_app_str().to_string())),
         },
+        monitor_selection,
     })
 }
 
@@ -388,6 +429,7 @@ impl TitleMutations {
         let mut tags = tags.map(normalize_title_tags);
         let mut root_folder_id = None;
         let mut metadata_language_override = None;
+        let mut monitor_selection_update = None;
 
         if let Some(options) = options {
             let title = app
@@ -404,6 +446,9 @@ impl TitleMutations {
                 resolve_update_title_options(&app, &actor, &title, target_facet, options).await?;
             root_folder_id = resolved_options.root_folder_id.clone();
             metadata_language_override = resolved_options.metadata_language.clone();
+            // Applied after the tags land: whether the selection is kept or
+            // cleared is decided by the monitor type the update just stored.
+            monitor_selection_update = Some(resolved_options.monitor_selection.clone());
             tags = Some(merge_title_option_tags(base_tags, resolved_options));
         }
 
@@ -418,6 +463,11 @@ impl TitleMutations {
             )
             .await
             .map_err(to_gql_error)?;
+        if let Some(monitor_selection) = monitor_selection_update {
+            app.set_title_monitor_selection(&actor, &title.id, monitor_selection)
+                .await
+                .map_err(to_gql_error)?;
+        }
         if let Some(language) = metadata_language_override {
             app.set_title_metadata_language_override(&actor, &title.id, language)
                 .await

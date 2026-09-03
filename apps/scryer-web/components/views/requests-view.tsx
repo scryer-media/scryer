@@ -27,6 +27,7 @@ import {
 } from "@/components/common/external-media-links";
 import { TitleRatingsDisplay } from "@/components/common/title-ratings-display";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import { MonitorSelectionPicker } from "@/components/common/monitor-selection-picker";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { TitlePoster } from "@/components/title-poster";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,14 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { LibraryRecord, MediaRequestRecord } from "@/lib/types";
+import type { MonitorSelectionDraft } from "@/lib/types/titles";
+import {
+  EMPTY_MONITOR_SELECTION,
+  isMonitorSelectionEmpty,
+  monitorSelectionFromRecord,
+  monitorSelectionInput,
+  monitorSelectionSummaryParts,
+} from "@/lib/utils/monitor-selection";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   mediaRequestApproveId,
@@ -54,6 +63,7 @@ import {
   mediaRequestDismissId,
   mediaRequestEditId,
   mediaRequestMonitorOptionId,
+  mediaRequestMonitorSelectionId,
   mediaRequestProfileOptionId,
   mediaRequestRowId,
   mediaRequestStatusId,
@@ -77,16 +87,19 @@ type RequestMonitorType =
   | "FUTURE_EPISODES"
   | "MISSING_AND_FUTURE_EPISODES"
   | "ALL_EPISODES"
-  | "NONE";
+  | "NONE"
+  | "ADVANCED";
 
 type UpdateRequestValues = {
   requestedQualityProfileId: string;
   requestedMonitorType?: RequestMonitorType;
+  requestedMonitorSelection?: MonitorSelectionDraft;
 };
 
 type ApproveRequestValues = {
   qualityProfileId: string;
   monitorType?: RequestMonitorType;
+  monitorSelection?: MonitorSelectionDraft;
 };
 
 type RequestsViewProps = {
@@ -183,6 +196,8 @@ function monitorTypeLabel(t: ReturnType<typeof useTranslate>, value: string | nu
       return t("search.monitorType.allEpisodes");
     case "none":
       return t("search.monitorType.none");
+    case "advanced":
+      return t("search.monitorType.advanced");
     default:
       return value?.trim() || null;
   }
@@ -204,6 +219,8 @@ function monitorTypeSelectValue(
       return "ALL_EPISODES";
     case "none":
       return "NONE";
+    case "advanced":
+      return "ADVANCED";
     case "futureepisodes":
     default:
       return facet === "MOVIE" ? "MONITORED" : "FUTURE_EPISODES";
@@ -219,6 +236,7 @@ function monitorOptions(t: ReturnType<typeof useTranslate>): Array<{ value: Requ
     },
     { value: "ALL_EPISODES", label: t("search.monitorType.allEpisodes") },
     { value: "NONE", label: t("search.monitorType.none") },
+    { value: "ADVANCED", label: t("search.monitorType.advanced") },
   ];
 }
 
@@ -374,11 +392,18 @@ export function RequestsView({
   const [approvalProfileId, setApprovalProfileId] = React.useState("");
   const [approvalMonitorType, setApprovalMonitorType] =
     React.useState<RequestMonitorType>("FUTURE_EPISODES");
+  const [approvalMonitorSelection, setApprovalMonitorSelection] =
+    React.useState<MonitorSelectionDraft>(EMPTY_MONITOR_SELECTION);
+  const [approvalSelectionLoading, setApprovalSelectionLoading] =
+    React.useState(false);
   const [editRequest, setEditRequest] =
     React.useState<MediaRequestRecord | null>(null);
   const [editProfileId, setEditProfileId] = React.useState("");
   const [editMonitorType, setEditMonitorType] =
     React.useState<RequestMonitorType>("FUTURE_EPISODES");
+  const [editMonitorSelection, setEditMonitorSelection] =
+    React.useState<MonitorSelectionDraft>(EMPTY_MONITOR_SELECTION);
+  const [editSelectionLoading, setEditSelectionLoading] = React.useState(false);
   const editProfileOptions = React.useMemo(
     () =>
       editRequest
@@ -420,6 +445,11 @@ export function RequestsView({
         approvalRequest.requestedMonitorType,
       ),
     );
+    setApprovalMonitorSelection(
+      monitorSelectionFromRecord(approvalRequest.requestedMonitorSelection) ??
+        EMPTY_MONITOR_SELECTION,
+    );
+    setApprovalSelectionLoading(false);
   }, [approvalRequest, libraries, qualityProfileOptions]);
 
   React.useEffect(() => {
@@ -436,7 +466,40 @@ export function RequestsView({
     setEditMonitorType(
       monitorTypeSelectValue(editRequest.facet, editRequest.requestedMonitorType),
     );
+    setEditMonitorSelection(
+      monitorSelectionFromRecord(editRequest.requestedMonitorSelection) ??
+        EMPTY_MONITOR_SELECTION,
+    );
+    setEditSelectionLoading(false);
   }, [editProfileOptions, editRequest]);
+
+  // The picker is mounted (and its metadata query issued) only while this
+  // dialog's own monitor-type select says ADVANCED. Reading a request's stored
+  // selection for the card summary never fetches anything.
+  const approvalAdvancedSelected =
+    approvalRequest !== null &&
+    approvalRequest.facet !== "MOVIE" &&
+    approvalMonitorType === "ADVANCED";
+  const approvalTvdbId = approvalRequest
+    ? requestExternalIdValue(approvalRequest, "tvdb")?.trim() ?? ""
+    : "";
+  const approvalBlocksConfirm =
+    approvalAdvancedSelected &&
+    (!approvalTvdbId ||
+      approvalSelectionLoading ||
+      isMonitorSelectionEmpty(approvalMonitorSelection));
+  const editAdvancedSelected =
+    editRequest !== null &&
+    editRequest.facet !== "MOVIE" &&
+    editMonitorType === "ADVANCED";
+  const editTvdbId = editRequest
+    ? requestExternalIdValue(editRequest, "tvdb")?.trim() ?? ""
+    : "";
+  const editBlocksConfirm =
+    editAdvancedSelected &&
+    (!editTvdbId ||
+      editSelectionLoading ||
+      isMonitorSelectionEmpty(editMonitorSelection));
 
   const openApprovalDialog = (request: MediaRequestRecord) => {
     onLoadQualityProfileOptions();
@@ -447,6 +510,8 @@ export function RequestsView({
     setApprovalRequest(null);
     setApprovalProfileId("");
     setApprovalMonitorType("FUTURE_EPISODES");
+    setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
+    setApprovalSelectionLoading(false);
   };
 
   const confirmApproval = () => {
@@ -455,6 +520,9 @@ export function RequestsView({
       qualityProfileId: approvalProfileId,
       monitorType:
         approvalRequest.facet === "MOVIE" ? undefined : approvalMonitorType,
+      monitorSelection: approvalAdvancedSelected
+        ? monitorSelectionInput(approvalMonitorSelection)
+        : undefined,
     });
     closeApprovalDialog();
   };
@@ -468,6 +536,8 @@ export function RequestsView({
     setEditRequest(null);
     setEditProfileId("");
     setEditMonitorType("FUTURE_EPISODES");
+    setEditMonitorSelection(EMPTY_MONITOR_SELECTION);
+    setEditSelectionLoading(false);
   };
 
   const confirmUpdate = () => {
@@ -475,6 +545,9 @@ export function RequestsView({
     onUpdateRequest(editRequest, {
       requestedQualityProfileId: editProfileId,
       requestedMonitorType: editRequest.facet === "MOVIE" ? undefined : editMonitorType,
+      requestedMonitorSelection: editAdvancedSelected
+        ? monitorSelectionInput(editMonitorSelection)
+        : undefined,
     });
     closeEditDialog();
   };
@@ -517,6 +590,24 @@ export function RequestsView({
     const requestedMonitorType = request.requestedMonitorType
       ? monitorTypeLabel(t, request.requestedMonitorType)
       : null;
+    const requestedSelection = monitorSelectionSummaryParts(
+      request.requestedMonitorSelection,
+      {
+        specials: t("monitorSelection.specials"),
+        season: (seasonNumber) =>
+          t("monitorSelection.season", { number: seasonNumber }),
+      },
+    );
+    const requestedSelectionSummary = [
+      requestedSelection.seasons.join(", "),
+      requestedSelection.movies.length > 0
+        ? t("monitorSelection.summaryMovies", {
+            movies: requestedSelection.movies.join(", "),
+          })
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
 
     return (
       <article
@@ -723,6 +814,16 @@ export function RequestsView({
                     {t("requests.requestedMonitorType")}
                   </div>
                   <div className="text-[var(--scry-ink2)]">{requestedMonitorType}</div>
+                  {requestedSelectionSummary ? (
+                    <div
+                      id={mediaRequestMonitorSelectionId(request.id)}
+                      className="mt-1 text-[var(--scry-ink2)]"
+                    >
+                      {t("monitorSelection.summaryPrefix", {
+                        selection: requestedSelectionSummary,
+                      })}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -879,9 +980,13 @@ export function RequestsView({
               </span>
               <Select
                 value={approvalMonitorType}
-                onValueChange={(value) =>
-                  setApprovalMonitorType(value as RequestMonitorType)
-                }
+                onValueChange={(value) => {
+                  const nextMonitorType = value as RequestMonitorType;
+                  setApprovalMonitorType(nextMonitorType);
+                  if (nextMonitorType !== "ADVANCED") {
+                    setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
+                  }
+                }}
                 disabled={loading || actionRequestId !== null}
               >
                 <SelectTrigger
@@ -904,6 +1009,17 @@ export function RequestsView({
               </Select>
             </label>
           ) : null}
+          {approvalRequest && approvalAdvancedSelected ? (
+            <MonitorSelectionPicker
+              facet={approvalRequest.facet}
+              tvdbId={approvalTvdbId}
+              value={approvalMonitorSelection}
+              onChange={setApprovalMonitorSelection}
+              onLoadingChange={setApprovalSelectionLoading}
+              disabled={loading || actionRequestId !== null}
+              idPrefix="approve-media-request"
+            />
+          ) : null}
           <DialogFooter>
             <Button id="approve-media-request-cancel" type="button" variant="outline" onClick={closeApprovalDialog}>
               {t("label.cancel")}
@@ -912,7 +1028,12 @@ export function RequestsView({
               id="approve-media-request-confirm"
               type="button"
               onClick={confirmApproval}
-              disabled={!approvalProfileId || loading || actionRequestId !== null}
+              disabled={
+                !approvalProfileId ||
+                loading ||
+                actionRequestId !== null ||
+                approvalBlocksConfirm
+              }
             >
               <Check className="h-4 w-4" />
               {t("requests.approve")}
@@ -957,7 +1078,13 @@ export function RequestsView({
               </span>
               <Select
                 value={editMonitorType}
-                onValueChange={(value) => setEditMonitorType(value as RequestMonitorType)}
+                onValueChange={(value) => {
+                  const nextMonitorType = value as RequestMonitorType;
+                  setEditMonitorType(nextMonitorType);
+                  if (nextMonitorType !== "ADVANCED") {
+                    setEditMonitorSelection(EMPTY_MONITOR_SELECTION);
+                  }
+                }}
                 disabled={loading || actionRequestId !== null}
               >
                 <SelectTrigger id="edit-media-request-monitor-type">
@@ -977,6 +1104,17 @@ export function RequestsView({
               </Select>
             </label>
           ) : null}
+          {editRequest && editAdvancedSelected ? (
+            <MonitorSelectionPicker
+              facet={editRequest.facet}
+              tvdbId={editTvdbId}
+              value={editMonitorSelection}
+              onChange={setEditMonitorSelection}
+              onLoadingChange={setEditSelectionLoading}
+              disabled={loading || actionRequestId !== null}
+              idPrefix="edit-media-request"
+            />
+          ) : null}
           <DialogFooter>
             <Button id="edit-media-request-cancel" type="button" variant="outline" onClick={closeEditDialog}>
               {t("label.cancel")}
@@ -985,7 +1123,12 @@ export function RequestsView({
               id="edit-media-request-confirm"
               type="button"
               onClick={confirmUpdate}
-              disabled={!editProfileId || loading || actionRequestId !== null}
+              disabled={
+                !editProfileId ||
+                loading ||
+                actionRequestId !== null ||
+                editBlocksConfirm
+              }
             >
               <Check className="h-4 w-4" />
               {t("requests.saveChanges")}

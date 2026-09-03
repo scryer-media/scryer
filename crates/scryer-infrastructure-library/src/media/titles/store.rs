@@ -12,7 +12,7 @@ use scryer_application::{
         PersistedTitleDecodeOptions, PersistedTitleReadMode, finalize_persisted_title,
     },
 };
-use scryer_domain::{ExternalId, MediaFacet, Title, title_catalog_sort_key};
+use scryer_domain::{ExternalId, MediaFacet, MonitorSelection, Title, title_catalog_sort_key};
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use sqlx::{QueryBuilder, Row, Sqlite, postgres::PgRow};
@@ -22,6 +22,9 @@ use unicode_normalization::UnicodeNormalization;
 use crate::media::canonical_tags::{
     attach_metadata_tags_to_titles, load_title_metadata_ratings, load_title_metadata_tags,
     replace_title_metadata_ratings_tx, replace_title_metadata_tags_tx,
+};
+use crate::media::monitor_selections::{
+    OWNER_KIND_TITLE, load_monitor_selection, replace_monitor_selection_tx,
 };
 use crate::media::title_credits::{load_title_credits, replace_title_credits_tx};
 use crate::queries::{
@@ -1669,6 +1672,39 @@ impl TitleRepository for TitleStore {
         .await
     }
 
+    async fn replace_title_monitor_selection(
+        &self,
+        title_id: &str,
+        selection: Option<MonitorSelection>,
+    ) -> AppResult<()> {
+        let title_id = title_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_title_monitor_selection",
+            move |tx| {
+                let title_id = title_id.clone();
+                let selection = selection.clone();
+                Box::pin(async move {
+                    replace_monitor_selection_tx(
+                        tx,
+                        OWNER_KIND_TITLE,
+                        &title_id,
+                        selection.as_ref(),
+                    )
+                    .await
+                })
+            },
+        )
+        .await
+    }
+
+    async fn get_title_monitor_selection(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<MonitorSelection>> {
+        load_monitor_selection(self.datastore.read_exec(), OWNER_KIND_TITLE, title_id).await
+    }
+
     async fn delete(&self, id: &str) -> AppResult<()> {
         let id = id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
@@ -1676,6 +1712,9 @@ impl TitleRepository for TitleStore {
             Box::pin(async move {
                 delete_title_search_projection_sql_tx(tx, &id).await?;
                 delete_indexer_search_learning_for_title_tx(tx, &id).await?;
+                // `monitor_selections` is keyed by (owner_kind, owner_id) with
+                // no foreign key, so the cascade has to be explicit.
+                replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &id, None).await?;
                 let rows = SqlRuntime::execute(
                     SqlExec::Tx(tx),
                     "DELETE FROM titles WHERE id = {}",

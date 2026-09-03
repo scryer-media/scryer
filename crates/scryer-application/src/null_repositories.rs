@@ -2559,6 +2559,7 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _requested_quality_profile_id: String,
         _requested_quality_profile_name: String,
         _requested_monitor_type: Option<String>,
+        _requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
         _updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         Err(AppError::Repository(

@@ -249,6 +249,10 @@ export function mediaRequestProfileOptionId(scope: string, profileId: string): s
   return selectorId(scope, "media-request-profile-option", profileId);
 }
 
+export function mediaRequestMonitorSelectionId(requestId: string): string {
+  return selectorId("media-request-monitor-selection", requestId);
+}
+
 export function mediaRequestMonitorOptionId(scope: string, monitorType: string): string {
   return selectorId(scope, "media-request-monitor-option", monitorType);
 }
