@@ -1062,6 +1062,13 @@ fn compat_timestamp_to_utc(raw: Option<f64>) -> DateTime<Utc> {
 }
 
 fn is_weaver_schema_error(error: &AppError, needle: &str) -> bool {
+    weaver_error_message_contains(error, needle)
+}
+
+/// Whether a Weaver GraphQL error surfaced by `parse_graphql_response`
+/// carries `needle`. Runtime refusals (`NOT_FOUND`, `CONFLICT`) arrive the
+/// same way schema errors do: as the first error's message.
+fn weaver_error_message_contains(error: &AppError, needle: &str) -> bool {
     match error {
         AppError::Repository(message) => message.contains(needle),
         _ => false,
@@ -1603,6 +1610,14 @@ impl DownloadClient for WeaverDownloadClient {
     /// A history delete requests payload deletion when `remove_data` is true.
     /// Older Weaver versions fall back to removing the history entry only when
     /// they do not support the `deleteFiles` argument.
+    /// `is_history` is only a hint derived from the last polled state. Weaver
+    /// purges a job from its live map the moment it archives the job, so a
+    /// cancel for a job that has since finished answers `job N not found`
+    /// (`weaver-server-core` `SchedulerCommand::CancelJob`), and a history
+    /// delete for a job that is still live answers `cannot delete active job`
+    /// (`SchedulerCommand::DeleteHistory`). Neither removes anything, and the
+    /// row would come back on the next poll, so a wrong hint in either
+    /// direction falls through to the other mode.
     async fn delete_queue_item(
         &self,
         id: &str,
@@ -1613,110 +1628,165 @@ impl DownloadClient for WeaverDownloadClient {
             .parse()
             .map_err(|_| AppError::Validation(format!("invalid weaver job id: {id}")))?;
         if is_history {
-            let (mutation, variables) = if remove_data {
-                (
-                    graphql_docs::REMOVE_HISTORY_ITEMS_DELETE_FILES_MUTATION,
-                    json!({ "ids": [job_id], "deleteFiles": true }),
-                )
-            } else {
-                (
-                    graphql_docs::REMOVE_HISTORY_ITEMS_MUTATION,
-                    json!({ "ids": [job_id] }),
-                )
-            };
-            match self
-                .graphql_request_with_policy::<RemoveHistoryItemsPayload>(
-                    self.mutation_policy(if remove_data {
-                        "weaver_remove_history_items_delete_files"
-                    } else {
-                        "weaver_remove_history_items"
-                    }),
-                    mutation,
-                    variables,
-                )
-                .await
-            {
-                Ok(data) => {
-                    if !data.remove_history_items.success {
-                        return Err(AppError::Repository(
-                            "weaver removeHistoryItems did not succeed".into(),
-                        ));
-                    }
-                }
+            match self.remove_history_item(job_id, remove_data).await {
+                Ok(()) => Ok(()),
                 Err(error)
-                    if remove_data
-                        && (is_weaver_schema_error(&error, "Unknown argument \"deleteFiles\"")
-                            || is_weaver_schema_error(&error, "Variable \"$deleteFiles\"")) =>
+                    if weaver_error_message_contains(&error, WEAVER_ACTIVE_JOB_DELETE_REFUSAL) =>
                 {
-                    warn!(
-                        error = %error,
-                        "weaver: deleteFiles is unsupported; data could not be deleted"
+                    debug!(
+                        job_id,
+                        "weaver: job hinted as history is still live; cancelling it instead"
                     );
-                    let data: RemoveHistoryItemsPayload = self
-                        .graphql_request_with_policy(
-                            self.mutation_policy("weaver_remove_history_items"),
-                            graphql_docs::REMOVE_HISTORY_ITEMS_MUTATION,
-                            json!({ "ids": [job_id] }),
-                        )
-                        .await?;
-                    if !data.remove_history_items.success {
-                        return Err(AppError::Repository(
-                            "weaver removeHistoryItems did not succeed".into(),
-                        ));
+                    self.cancel_queue_job(job_id).await?;
+                    // Cancelling leaves a cancelled history row behind, and the
+                    // caller asked for the entry to go away, so clear that too.
+                    // The job itself is already gone, so this is best effort.
+                    if let Err(error) = self.remove_history_item(job_id, remove_data).await {
+                        warn!(
+                            job_id,
+                            error = %error,
+                            "weaver: cancelled job could not be cleared from history"
+                        );
                     }
+                    Ok(())
                 }
-                Err(error)
-                    if is_weaver_schema_error(&error, "Unknown field \"removeHistoryItems\"") =>
-                {
-                    let data: PublishedDeleteHistoryPayload = self
-                        .graphql_request_with_policy(
-                            self.mutation_policy("weaver_delete_history_batch"),
-                            graphql_docs::DELETE_HISTORY_BATCH_MUTATION,
-                            json!({ "ids": [job_id], "deleteFiles": remove_data }),
-                        )
-                        .await?;
-                    if !data.delete_history_batch.contains(&job_id) {
-                        return Err(AppError::Repository(
-                            "weaver deleteHistoryBatch did not remove the requested job".into(),
-                        ));
-                    }
-                }
-                Err(error) => return Err(error),
+                Err(error) => Err(error),
             }
         } else {
-            match self
-                .graphql_request_with_policy::<CancelQueueItemPayload>(
-                    self.mutation_policy("weaver_cancel_queue_item"),
-                    graphql_docs::CANCEL_QUEUE_ITEM_MUTATION,
-                    json!({ "id": job_id }),
-                )
-                .await
-            {
-                Ok(data) => {
-                    if !data.cancel_queue_item.success {
-                        return Err(AppError::Repository(
-                            "weaver cancelQueueItem did not succeed".into(),
-                        ));
-                    }
-                }
+            match self.cancel_queue_job(job_id).await {
+                Ok(()) => Ok(()),
                 Err(error)
-                    if is_weaver_schema_error(&error, "Unknown field \"cancelQueueItem\"") =>
+                    if weaver_error_message_contains(
+                        &error,
+                        &format!("job {job_id} not found"),
+                    ) =>
                 {
-                    let data: PublishedBoolPayload = self
-                        .graphql_request_with_policy(
-                            self.mutation_policy("weaver_cancel_job"),
-                            graphql_docs::CANCEL_JOB_MUTATION,
-                            json!({ "id": job_id }),
-                        )
-                        .await?;
-                    if data.cancel_job != Some(true) {
-                        return Err(AppError::Repository(
-                            "weaver cancelJob did not succeed".into(),
-                        ));
-                    }
+                    debug!(
+                        job_id,
+                        "weaver: job hinted as queued is no longer live; removing it from history instead"
+                    );
+                    self.remove_history_item(job_id, remove_data).await
                 }
-                Err(error) => return Err(error),
+                Err(error) => Err(error),
             }
+        }
+    }
+}
+
+/// Message Weaver's `DeleteHistory` answers with when the job is still live.
+/// Matched as a prefix: the full text carries an em dash and a hint suffix.
+const WEAVER_ACTIVE_JOB_DELETE_REFUSAL: &str = "cannot delete active job";
+
+impl WeaverDownloadClient {
+    /// Remove one history entry, with the published-schema fallbacks the
+    /// history path has always carried.
+    async fn remove_history_item(&self, job_id: u64, remove_data: bool) -> AppResult<()> {
+        let (mutation, variables) = if remove_data {
+            (
+                graphql_docs::REMOVE_HISTORY_ITEMS_DELETE_FILES_MUTATION,
+                json!({ "ids": [job_id], "deleteFiles": true }),
+            )
+        } else {
+            (
+                graphql_docs::REMOVE_HISTORY_ITEMS_MUTATION,
+                json!({ "ids": [job_id] }),
+            )
+        };
+        match self
+            .graphql_request_with_policy::<RemoveHistoryItemsPayload>(
+                self.mutation_policy(if remove_data {
+                    "weaver_remove_history_items_delete_files"
+                } else {
+                    "weaver_remove_history_items"
+                }),
+                mutation,
+                variables,
+            )
+            .await
+        {
+            Ok(data) => {
+                if !data.remove_history_items.success {
+                    return Err(AppError::Repository(
+                        "weaver removeHistoryItems did not succeed".into(),
+                    ));
+                }
+            }
+            Err(error)
+                if remove_data
+                    && (is_weaver_schema_error(&error, "Unknown argument \"deleteFiles\"")
+                        || is_weaver_schema_error(&error, "Variable \"$deleteFiles\"")) =>
+            {
+                warn!(
+                    error = %error,
+                    "weaver: deleteFiles is unsupported; data could not be deleted"
+                );
+                let data: RemoveHistoryItemsPayload = self
+                    .graphql_request_with_policy(
+                        self.mutation_policy("weaver_remove_history_items"),
+                        graphql_docs::REMOVE_HISTORY_ITEMS_MUTATION,
+                        json!({ "ids": [job_id] }),
+                    )
+                    .await?;
+                if !data.remove_history_items.success {
+                    return Err(AppError::Repository(
+                        "weaver removeHistoryItems did not succeed".into(),
+                    ));
+                }
+            }
+            Err(error)
+                if is_weaver_schema_error(&error, "Unknown field \"removeHistoryItems\"") =>
+            {
+                let data: PublishedDeleteHistoryPayload = self
+                    .graphql_request_with_policy(
+                        self.mutation_policy("weaver_delete_history_batch"),
+                        graphql_docs::DELETE_HISTORY_BATCH_MUTATION,
+                        json!({ "ids": [job_id], "deleteFiles": remove_data }),
+                    )
+                    .await?;
+                if !data.delete_history_batch.contains(&job_id) {
+                    return Err(AppError::Repository(
+                        "weaver deleteHistoryBatch did not remove the requested job".into(),
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
+
+    /// Cancel one live job, with the published-schema fallback the queue path
+    /// has always carried.
+    async fn cancel_queue_job(&self, job_id: u64) -> AppResult<()> {
+        match self
+            .graphql_request_with_policy::<CancelQueueItemPayload>(
+                self.mutation_policy("weaver_cancel_queue_item"),
+                graphql_docs::CANCEL_QUEUE_ITEM_MUTATION,
+                json!({ "id": job_id }),
+            )
+            .await
+        {
+            Ok(data) => {
+                if !data.cancel_queue_item.success {
+                    return Err(AppError::Repository(
+                        "weaver cancelQueueItem did not succeed".into(),
+                    ));
+                }
+            }
+            Err(error) if is_weaver_schema_error(&error, "Unknown field \"cancelQueueItem\"") => {
+                let data: PublishedBoolPayload = self
+                    .graphql_request_with_policy(
+                        self.mutation_policy("weaver_cancel_job"),
+                        graphql_docs::CANCEL_JOB_MUTATION,
+                        json!({ "id": job_id }),
+                    )
+                    .await?;
+                if data.cancel_job != Some(true) {
+                    return Err(AppError::Repository(
+                        "weaver cancelJob did not succeed".into(),
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
         }
         Ok(())
     }
@@ -2001,6 +2071,150 @@ mod tests {
             .delete_queue_item("10002", true, true)
             .await
             .expect("legacy fallback should remove the history entry");
+    }
+
+    // The queue hint is stale: the job finished between the last poll and the
+    // delete. Weaver answers NOT_FOUND for the cancel, so the client falls
+    // through to the history removal instead of leaving the row behind.
+    #[tokio::test]
+    async fn delete_queue_item_falls_back_to_history_when_job_already_finished() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains("mutation CancelQueueItem"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": null,
+                "errors": [{
+                    "message": "job 10002 not found",
+                    "extensions": { "code": "NOT_FOUND" }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains(
+                "mutation RemoveHistoryItems($ids: [Int!]!)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "removeHistoryItems": { "success": true } }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = WeaverDownloadClient::new(server.uri(), Some("wvr_test".to_string()));
+        client
+            .delete_queue_item("10002", false, false)
+            .await
+            .expect("finished job should be removed from history instead");
+    }
+
+    // The history hint is stale: Scryer saw the job as failed while Weaver
+    // still holds it live, so the history delete answers CONFLICT. The client
+    // cancels the job and then clears the cancelled row the cancel leaves.
+    #[tokio::test]
+    async fn delete_history_item_cancels_when_job_is_still_live() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains(
+                "mutation RemoveHistoryItems($ids: [Int!]!)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": null,
+                "errors": [{
+                    "message": "cannot delete active job — cancel it first",
+                    "extensions": { "code": "CONFLICT" }
+                }]
+            })))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains("mutation CancelQueueItem"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "cancelQueueItem": { "success": true } }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains(
+                "mutation RemoveHistoryItems($ids: [Int!]!)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "removeHistoryItems": { "success": true } }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = WeaverDownloadClient::new(server.uri(), Some("wvr_test".to_string()));
+        client
+            .delete_queue_item("10002", true, false)
+            .await
+            .expect("live job hinted as history should be cancelled");
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("requests should be recorded");
+        let bodies: Vec<String> = requests
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect();
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies[0].contains("mutation RemoveHistoryItems"));
+        assert!(bodies[1].contains("mutation CancelQueueItem"));
+        assert!(bodies[2].contains("mutation RemoveHistoryItems"));
+    }
+
+    // Other cancel refusals (here: the final move is running) are real and
+    // must surface, not be papered over with a history delete.
+    #[tokio::test]
+    async fn delete_queue_item_keeps_other_cancel_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains("mutation CancelQueueItem"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": null,
+                "errors": [{
+                    "message": "cancel is not supported while the final move is running",
+                    "extensions": { "code": "CONFLICT" }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains("mutation RemoveHistoryItems"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "removeHistoryItems": { "success": true } }
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = WeaverDownloadClient::new(server.uri(), Some("wvr_test".to_string()));
+        let error = client
+            .delete_queue_item("10002", false, false)
+            .await
+            .expect_err("a cancel refused for another reason must surface");
+        assert!(error.to_string().contains("final move"));
     }
 
     #[test]

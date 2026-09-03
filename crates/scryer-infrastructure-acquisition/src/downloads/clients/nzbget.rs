@@ -2174,7 +2174,13 @@ mod tests {
     use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    async fn mount_editqueue(server: &MockServer, command: &str, nzb_id: i64, result: bool, expected: u64) {
+    async fn mount_editqueue(
+        server: &MockServer,
+        command: &str,
+        nzb_id: i64,
+        result: bool,
+        expected: u64,
+    ) {
         Mock::given(method("POST"))
             .and(path("/jsonrpc"))
             .and(body_partial_json(json!({
@@ -2193,8 +2199,14 @@ mod tests {
 
     #[test]
     fn nzbget_delete_commands_fall_back_to_the_other_list() {
-        assert_eq!(nzbget_delete_commands(false), ("GroupDelete", "HistoryDelete"));
-        assert_eq!(nzbget_delete_commands(true), ("HistoryDelete", "GroupDelete"));
+        assert_eq!(
+            nzbget_delete_commands(false),
+            ("GroupDelete", "HistoryDelete")
+        );
+        assert_eq!(
+            nzbget_delete_commands(true),
+            ("HistoryDelete", "GroupDelete")
+        );
     }
 
     #[tokio::test]
