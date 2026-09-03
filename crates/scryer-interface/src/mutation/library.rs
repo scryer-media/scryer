@@ -6,9 +6,9 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::mappers::{
-    from_cancel_library_scan_result, from_ignore_pending_import_result, from_job_run, from_library,
-    from_library_scan_session, from_library_scan_summary, from_media_rename_apply,
-    from_resolve_pending_import_result,
+    from_cancel_library_scan_result, from_delete_episode_files_outcome,
+    from_ignore_pending_import_result, from_job_run, from_library, from_library_scan_session,
+    from_library_scan_summary, from_media_rename_apply, from_resolve_pending_import_result,
 };
 use crate::types::*;
 use crate::utils::map_add_input;
@@ -395,6 +395,45 @@ impl LibraryMutations {
             id: ID::from(file_id),
             job_run: from_job_run(accepted.job_run),
         })
+    }
+
+    /// Delete every media file linked to the supplied episodes of one title.
+    ///
+    /// The aggregate preview from `deleteEpisodeFilesPreview` must still match
+    /// when files are removed from disk. Files that fail are reported in
+    /// `failed` while the remaining files still run.
+    async fn delete_episode_files(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Title and episode identities, disk-deletion choice, and the aggregate preview fingerprint with optional typed confirmation."
+        )]
+        input: DeleteEpisodeFilesInput,
+    ) -> GqlResult<DeleteEpisodeFilesPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title_id = input.title_id.to_string();
+        let episode_ids = input
+            .episode_ids
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let outcome = app
+            .delete_episode_files(
+                &actor,
+                &title_id,
+                &episode_ids,
+                input.delete_from_disk.unwrap_or(false),
+                input
+                    .preview_fingerprint
+                    .map(|preview_fingerprint| DeleteExecutionConfirmation {
+                        preview_fingerprint,
+                        typed_confirmation: input.typed_confirmation,
+                    }),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_delete_episode_files_outcome(outcome))
     }
 
     /// Start a background job renaming the files of the given titles.

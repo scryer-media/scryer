@@ -267,7 +267,10 @@ pub use catalog::interactive_release_search::{
 };
 pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;
-pub use catalog::workflow::{DeleteTitlesJobAccepted, DeleteTitlesJobItem, DeleteTitlesJobRequest};
+pub use catalog::workflow::{
+    DeleteEpisodeFileFailure, DeleteEpisodeFilesOutcome, DeleteTitlesJobAccepted,
+    DeleteTitlesJobItem, DeleteTitlesJobRequest,
+};
 pub use contracts::{
     AcquisitionScopeStatesQuery, ActivityWindowCounts, AudioStreamDetail,
     CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator, CollectionUpdate,
@@ -408,7 +411,9 @@ pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
     JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
 };
-pub use library::user_delete::{DeletePreview, DeleteTitlesPreview};
+pub use library::user_delete::{
+    DeleteEpisodeFilePreviewResult, DeleteEpisodeFilesPreview, DeletePreview, DeleteTitlesPreview,
+};
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkArtworkUrlResult, BulkMetadataResult,
     DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,

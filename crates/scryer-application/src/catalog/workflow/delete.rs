@@ -28,6 +28,32 @@ pub struct DeleteMediaFileJobAccepted {
     pub job_run: JobRun,
 }
 
+/// How the on-disk half of a media-file delete is authorized.
+#[derive(Clone, Debug)]
+pub(crate) enum MediaFileDiskDeletion {
+    /// Leave the files on disk; only catalog rows are removed.
+    Keep,
+    /// Delete from disk after validating this file's own preview fingerprint.
+    DeleteConfirmed(DeleteExecutionConfirmation),
+    /// Delete from disk; an aggregate preview covering this file was already
+    /// validated by the caller.
+    DeletePreapproved,
+}
+
+/// One media file that could not be deleted during a batch episode-file delete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeleteEpisodeFileFailure {
+    pub file_id: String,
+    pub error: String,
+}
+
+/// Outcome of deleting the media files linked to a set of episodes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeleteEpisodeFilesOutcome {
+    pub deleted_file_ids: Vec<String>,
+    pub failed: Vec<DeleteEpisodeFileFailure>,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TitleDeletionProgress {
@@ -808,6 +834,31 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        let disk_deletion = if delete_from_disk {
+            MediaFileDiskDeletion::DeleteConfirmed(delete_confirmation.ok_or_else(|| {
+                AppError::Validation(
+                    "delete preview confirmation is required before deleting files on disk".into(),
+                )
+            })?)
+        } else {
+            MediaFileDiskDeletion::Keep
+        };
+        self.delete_media_file_authorized(actor, media_file, disk_deletion)
+            .await
+    }
+
+    /// Delete one media file's disk paths (per `disk_deletion`), catalog row,
+    /// dependents, and any movie collection that pointed at it. The caller is
+    /// responsible for the `ManageTitles` permission check.
+    pub(crate) async fn delete_media_file_authorized(
+        &self,
+        actor: &User,
+        media_file: TitleMediaFile,
+        disk_deletion: MediaFileDiskDeletion,
+    ) -> AppResult<()> {
+        let owned_file_id = media_file.id.clone();
+        let file_id = owned_file_id.as_str();
+        let delete_from_disk = !matches!(disk_deletion, MediaFileDiskDeletion::Keep);
         let matching_movie_collection_ids = self
             .services
             .catalog
@@ -827,22 +878,22 @@ impl AppUseCase {
             })
             .collect::<Vec<_>>();
 
-        if delete_from_disk {
-            let delete_confirmation = delete_confirmation.ok_or_else(|| {
-                AppError::Validation(
-                    "delete preview confirmation is required before deleting files on disk".into(),
-                )
-            })?;
-            let DeleteExecutionConfirmation {
+        match disk_deletion {
+            MediaFileDiskDeletion::Keep => {}
+            MediaFileDiskDeletion::DeleteConfirmed(DeleteExecutionConfirmation {
                 preview_fingerprint,
                 typed_confirmation,
-            } = delete_confirmation;
-            self.execute_delete_media_file(
-                file_id,
-                &preview_fingerprint,
-                typed_confirmation.as_deref(),
-            )
-            .await?;
+            }) => {
+                self.execute_delete_media_file(
+                    file_id,
+                    &preview_fingerprint,
+                    typed_confirmation.as_deref(),
+                )
+                .await?;
+            }
+            MediaFileDiskDeletion::DeletePreapproved => {
+                self.execute_delete_media_file_preapproved(file_id).await?;
+            }
         }
 
         self.delete_media_file_record_with_dependents(file_id).await?;
@@ -894,6 +945,120 @@ impl AppUseCase {
         }
 
         Ok(())
+    }
+
+    /// Delete every media file linked to `episode_ids` on `title_id`.
+    ///
+    /// The aggregate preview is recomputed here: it re-checks `ManageTitles` on
+    /// the title's library, and when `delete_from_disk` is set its fingerprint
+    /// must still match what the client confirmed. Per-file fingerprints are
+    /// deliberately not re-validated — the aggregate already covers them — but
+    /// each file's root folders are still required to be available. A file that
+    /// fails is recorded and the remaining files still run.
+    pub async fn delete_episode_files(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &[String],
+        delete_from_disk: bool,
+        delete_confirmation: Option<DeleteExecutionConfirmation>,
+    ) -> AppResult<DeleteEpisodeFilesOutcome> {
+        let preview = self
+            .preview_delete_episode_files(actor, title_id, episode_ids)
+            .await?;
+
+        if delete_from_disk {
+            let DeleteExecutionConfirmation {
+                preview_fingerprint,
+                typed_confirmation,
+            } = delete_confirmation.ok_or_else(|| {
+                AppError::Validation(
+                    "delete preview confirmation is required before deleting files on disk".into(),
+                )
+            })?;
+            crate::library::user_delete::ensure_aggregate_delete_confirmation(
+                &preview.preview,
+                &preview_fingerprint,
+                typed_confirmation.as_deref(),
+            )?;
+        }
+
+        let mut outcome = DeleteEpisodeFilesOutcome::default();
+        for item in &preview.items {
+            if let Some(error) = item.error.as_deref() {
+                outcome.failed.push(DeleteEpisodeFileFailure {
+                    file_id: item.file_id.clone(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+            match self
+                .delete_preapproved_media_file(actor, &item.file_id, delete_from_disk)
+                .await
+            {
+                Ok(()) => outcome.deleted_file_ids.push(item.file_id.clone()),
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        title_id = %title_id,
+                        file_id = %item.file_id,
+                        episode_id = %item.episode_id,
+                        "failed to delete episode media file in batch"
+                    );
+                    outcome.failed.push(DeleteEpisodeFileFailure {
+                        file_id: item.file_id.clone(),
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+
+        info!(
+            title_id = %title_id,
+            deleted = outcome.deleted_file_ids.len(),
+            failed = outcome.failed.len(),
+            delete_from_disk = %delete_from_disk,
+            "episode media files deleted"
+        );
+
+        Ok(outcome)
+    }
+
+    /// Delete one media file whose disk removal was already authorized by an
+    /// aggregate preview. Holds the same per-file interactive guard the
+    /// single-file deletion job uses so the two cannot race.
+    async fn delete_preapproved_media_file(
+        &self,
+        actor: &User,
+        file_id: &str,
+        delete_from_disk: bool,
+    ) -> AppResult<()> {
+        let guard_key = format!("media-file:{file_id}");
+        let _deletion_guard = self
+            .runtime
+            .jobs
+            .interactive_operation_guards
+            .try_acquire(&guard_key)
+            .await
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "a media file deletion is already running for {file_id}"
+                ))
+            })?;
+        let media_file = self
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(file_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        let disk_deletion = if delete_from_disk {
+            MediaFileDiskDeletion::DeletePreapproved
+        } else {
+            MediaFileDiskDeletion::Keep
+        };
+        self.delete_media_file_authorized(actor, media_file, disk_deletion)
+            .await
     }
 
     pub(crate) async fn cleanup_media_file_subtitle_state(&self, file_id: &str) -> AppResult<()> {

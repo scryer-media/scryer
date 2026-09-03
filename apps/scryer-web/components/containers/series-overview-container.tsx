@@ -2,6 +2,7 @@
 import * as React from "react";
 import { facetById } from "@/lib/facets/registry";
 import {
+  deleteEpisodeFilesPreviewQuery,
   deleteMediaFilePreviewQuery,
   deleteTitlePreviewQuery,
   episodeCollectionRefQuery,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/graphql/queries";
 import {
   clearTitleReleaseBlocklistEntryMutation,
+  deleteEpisodeFilesMutation,
   deleteMediaFileMutation,
   deleteTitleMutation,
   scanTitleLibraryMutation,
@@ -72,6 +74,7 @@ import type {
   TitleCreditRecord,
 } from "@/lib/types/titles";
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
+import type { DeleteEpisodeFilesPreview } from "@/lib/types/delete-preview";
 import {
   assertNoReplaceConflict,
   retryWithReplaceOnConflict,
@@ -345,6 +348,16 @@ function retainEquivalentSnapshot<T>(current: T, next: T): T {
   return next;
 }
 
+/**
+ * The batch episode-file preview wraps the shared `DeletePreview` alongside the
+ * per-file breakdown, so the shared hook needs to be told where the preview is.
+ */
+function selectEpisodeFilesDeletePreview(
+  payload: DeleteEpisodeFilesPreview,
+): DeleteEpisodeFilesPreview["preview"] {
+  return payload.preview;
+}
+
 export const SeriesOverviewContainer = React.memo(function SeriesOverviewContainer({
   titleId,
   fullBleedHero,
@@ -436,6 +449,16 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     React.useState<string | null>(null);
   const [mediaFileDeleteTypedConfirmation, setMediaFileDeleteTypedConfirmation] =
     React.useState("");
+  const [episodeFilesToDelete, setEpisodeFilesToDelete] =
+    React.useState<string[] | null>(null);
+  const [episodeFilesDeleteLoading, setEpisodeFilesDeleteLoading] =
+    React.useState(false);
+  const [episodeFilesDeleteTypedConfirmation, setEpisodeFilesDeleteTypedConfirmation] =
+    React.useState("");
+  const [episodeFileDeleteOutcome, setEpisodeFileDeleteOutcome] = React.useState<{
+    token: number;
+    retainedEpisodeIds: string[];
+  } | null>(null);
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const [titleLookupAttempted, setTitleLookupAttempted] = React.useState(false);
   const [titleLookupFailed, setTitleLookupFailed] = React.useState(false);
@@ -482,6 +505,30 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     "deleteMediaFilePreview",
     mediaFileDeletePreviewVariables,
     mediaFileToDelete !== null,
+  );
+  const episodeFilesDeletePreviewVariables = React.useMemo(
+    () =>
+      title && episodeFilesToDelete
+        ? {
+            input: {
+              titleId: title.id,
+              episodeIds: [...episodeFilesToDelete].sort(),
+            },
+          }
+        : null,
+    [episodeFilesToDelete, title],
+  );
+  const {
+    preview: episodeFilesDeletePreview,
+    payload: episodeFilesDeletePreviewPayload,
+    loading: episodeFilesDeletePreviewLoading,
+    error: episodeFilesDeletePreviewError,
+  } = useDeletePreview<Record<string, unknown>, DeleteEpisodeFilesPreview>(
+    deleteEpisodeFilesPreviewQuery,
+    "deleteEpisodeFilesPreview",
+    episodeFilesDeletePreviewVariables,
+    episodeFilesToDelete !== null,
+    selectEpisodeFilesDeletePreview,
   );
 
   const applyDownloadFeedbackSnapshot = React.useCallback(
@@ -1601,6 +1648,100 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     t,
   ]);
 
+  const handleRequestDeleteEpisodeFiles = React.useCallback((episodeIds: string[]) => {
+    if (episodeIds.length === 0) return;
+    setEpisodeFilesDeleteTypedConfirmation("");
+    setEpisodeFilesToDelete([...episodeIds].sort());
+  }, []);
+
+  const handleCancelDeleteEpisodeFiles = React.useCallback(() => {
+    if (episodeFilesDeleteLoading) return;
+    setEpisodeFilesToDelete(null);
+    setEpisodeFilesDeleteTypedConfirmation("");
+  }, [episodeFilesDeleteLoading]);
+
+  const handleConfirmDeleteEpisodeFiles = React.useCallback(async () => {
+    if (!title || !episodeFilesToDelete || !episodeFilesDeletePreview) return;
+    const requestedEpisodeIds = episodeFilesToDelete;
+    setEpisodeFilesDeleteLoading(true);
+    try {
+      const { data, error } = await client.mutation(deleteEpisodeFilesMutation, {
+        input: {
+          titleId: title.id,
+          episodeIds: requestedEpisodeIds,
+          deleteFromDisk: true,
+          previewFingerprint: episodeFilesDeletePreview.fingerprint,
+          typedConfirmation: episodeFilesDeleteTypedConfirmation.trim() || undefined,
+        },
+      }).toPromise();
+      if (error) throw error;
+
+      const payload = data?.deleteEpisodeFiles as
+        | { deletedFileIds: string[]; failed: { fileId: string; error: string }[] }
+        | undefined;
+      const deletedFileIds = new Set(payload?.deletedFileIds ?? []);
+      const failed = payload?.failed ?? [];
+
+      const removeDeletedFiles = (
+        current: Record<string, EpisodeMediaFile[]>,
+      ): Record<string, EpisodeMediaFile[]> =>
+        Object.fromEntries(
+          Object.entries(current).map(([key, files]) => [
+            key,
+            files.filter((file) => !deletedFileIds.has(file.id)),
+          ]),
+        );
+      setMediaFilesByEpisode(removeDeletedFiles);
+      setMediaFilesBySeriesMovieLink(removeDeletedFiles);
+      await refreshTitleDetail();
+
+      // Map the failures back to episodes through the preview breakdown so the
+      // rows whose files survived stay selected for a retry.
+      const episodeIdByFileId = new Map(
+        (episodeFilesDeletePreviewPayload?.items ?? []).map((item) => [
+          item.fileId,
+          item.episodeId,
+        ]),
+      );
+      const retainedEpisodeIds = [
+        ...new Set(
+          failed
+            .map((failure) => episodeIdByFileId.get(failure.fileId))
+            .filter((episodeId): episodeId is string => Boolean(episodeId)),
+        ),
+      ];
+      setEpisodeFileDeleteOutcome((current) => ({
+        token: (current?.token ?? 0) + 1,
+        retainedEpisodeIds,
+      }));
+
+      setGlobalStatus(
+        failed.length > 0
+          ? t("status.episodeFilesDeletedWithFailures", {
+              deleted: deletedFileIds.size,
+              failed: failed.length,
+            })
+          : t("status.episodeFilesDeleted", { count: deletedFileIds.size }),
+      );
+      setEpisodeFilesToDelete(null);
+      setEpisodeFilesDeleteTypedConfirmation("");
+    } catch (error: unknown) {
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")));
+    } finally {
+      setEpisodeFilesDeleteLoading(false);
+    }
+  }, [
+    client,
+    episodeFilesDeletePreview,
+    episodeFilesDeletePreviewPayload,
+    episodeFilesDeleteTypedConfirmation,
+    episodeFilesToDelete,
+    refreshTitleDetail,
+    setGlobalStatus,
+    t,
+    title,
+  ]);
+
   const handleMakePrimaryMovieFile = React.useCallback(
     async (fileId: string) => {
       if (!title) return;
@@ -1637,6 +1778,22 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     !mediaFileDeletePreview ||
     (mediaFileDeletePreview.requiresTypedConfirmation &&
       mediaFileDeleteTypedConfirmation.trim() !== "DELETE");
+  // Selected episodes without any media file contribute nothing to the delete,
+  // so the summary counts the episodes the preview actually resolved files for.
+  const episodeFilesDeleteEpisodeCount = React.useMemo(
+    () =>
+      new Set(
+        (episodeFilesDeletePreviewPayload?.items ?? []).map((item) => item.episodeId),
+      ).size,
+    [episodeFilesDeletePreviewPayload],
+  );
+  const deleteEpisodeFilesConfirmDisabled =
+    episodeFilesDeletePreviewLoading ||
+    !!episodeFilesDeletePreviewError ||
+    !episodeFilesDeletePreview ||
+    (episodeFilesDeletePreviewPayload?.fileCount ?? 0) === 0 ||
+    (episodeFilesDeletePreview.requiresTypedConfirmation &&
+      episodeFilesDeleteTypedConfirmation.trim() !== "DELETE");
 
   const handleAutoSearchEpisode = React.useCallback(
     async (episode: CollectionEpisode) => {
@@ -1848,6 +2005,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onRequestDeleteTitle={handleRequestDeleteTitle}
         deleteLoading={deleteLoading}
         onDeleteFile={handleDeleteMediaFile}
+        onRequestDeleteEpisodeFiles={handleRequestDeleteEpisodeFiles}
+        episodeFileDeleteOutcome={episodeFileDeleteOutcome}
         onMakePrimaryFile={canManageTitle ? handleMakePrimaryMovieFile : undefined}
         primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
         onOpenFixMatch={handleOpenFixMatch}
@@ -1919,6 +2078,48 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           typedConfirmation={mediaFileDeleteTypedConfirmation}
           onTypedConfirmationChange={setMediaFileDeleteTypedConfirmation}
         />
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={episodeFilesToDelete !== null}
+        title={t("seriesOverview.deleteEpisodeFilesTitle")}
+        description={t("seriesOverview.deleteEpisodeFilesDescription")}
+        confirmLabel={t("label.delete")}
+        cancelLabel={t("label.cancel")}
+        isBusy={episodeFilesDeleteLoading}
+        confirmDisabled={deleteEpisodeFilesConfirmDisabled}
+        onConfirm={handleConfirmDeleteEpisodeFiles}
+        onCancel={handleCancelDeleteEpisodeFiles}
+      >
+        <div className="space-y-3">
+          <p
+            id="series-overview-delete-episode-files-summary"
+            className="text-sm text-muted-foreground"
+          >
+            {t("seriesOverview.deleteEpisodeFilesSummary", {
+              files: episodeFilesDeletePreviewPayload?.fileCount ?? 0,
+              episodes: episodeFilesDeleteEpisodeCount,
+            })}
+          </p>
+          {(episodeFilesDeletePreviewPayload?.failedCount ?? 0) > 0 ? (
+            <p
+              id="series-overview-delete-episode-files-preview-failures"
+              className="text-sm text-destructive"
+            >
+              {t("seriesOverview.deleteEpisodeFilesPreviewFailures", {
+                count: episodeFilesDeletePreviewPayload?.failedCount ?? 0,
+              })}
+            </p>
+          ) : null}
+          <DeletePreviewSummary
+            preview={episodeFilesDeletePreview}
+            loading={episodeFilesDeletePreviewLoading}
+            error={episodeFilesDeletePreviewError}
+            typedConfirmation={episodeFilesDeleteTypedConfirmation}
+            onTypedConfirmationChange={setEpisodeFilesDeleteTypedConfirmation}
+            typedConfirmationPromptId="series-overview-delete-episode-files-typed-confirmation-prompt"
+            typedConfirmationInputId="series-overview-delete-episode-files-typed-confirmation"
+          />
+        </div>
       </ConfirmDialog>
       {manualImportItem && title && (
         <ManualImportDialog

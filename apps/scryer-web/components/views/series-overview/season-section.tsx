@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import { TitleSearchDownloadClientNotice } from "@/components/common/title-search-download-client-notice";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -26,6 +27,7 @@ import {
   seriesOverviewSeasonMonitorId,
   seriesOverviewSeasonSectionId,
   seriesOverviewSeasonSearchId,
+  seriesOverviewSeasonSelectId,
   seriesOverviewSeasonToggleId,
 } from "@/lib/utils/dom-ids";
 import {
@@ -96,6 +98,13 @@ type SeasonSectionProps = {
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   primaryMovieFileUpdatingId?: string | null;
+  /**
+   * Episode ids currently selected for the bulk file delete. Selection is only
+   * wired when the viewer can manage the title.
+   */
+  selectedEpisodeIds?: ReadonlySet<string>;
+  onToggleEpisodeSelected?: (episodeId: string) => void;
+  onSetSeasonSelected?: (episodeIds: string[], selected: boolean) => void;
 };
 
 const EPISODE_SCOPED_PROPS = new Set<keyof SeasonSectionProps>([
@@ -107,6 +116,9 @@ const EPISODE_SCOPED_PROPS = new Set<keyof SeasonSectionProps>([
   "searchIndexerProgressByEpisode",
   "searchLoadingByEpisode",
   "searchResultsByEpisode",
+  // Compared per episode below: the Set identity changes on every selection
+  // change, but only the seasons whose episodes actually changed must re-render.
+  "selectedEpisodeIds",
 ]);
 
 function sameSeasonSectionProps(
@@ -133,7 +145,9 @@ function sameSeasonSectionProps(
       previous.searchIndexerProgressByEpisode[episodeId] !==
         next.searchIndexerProgressByEpisode[episodeId] ||
       previous.searchLoadingByEpisode[episodeId] !== next.searchLoadingByEpisode[episodeId] ||
-      previous.searchResultsByEpisode[episodeId] !== next.searchResultsByEpisode[episodeId]
+      previous.searchResultsByEpisode[episodeId] !== next.searchResultsByEpisode[episodeId] ||
+      (previous.selectedEpisodeIds?.has(episodeId) ?? false) !==
+        (next.selectedEpisodeIds?.has(episodeId) ?? false)
     ) {
       return false;
     }
@@ -190,12 +204,39 @@ function SeasonSectionImpl({
   onDeleteFile,
   onMakePrimaryFile,
   primaryMovieFileUpdatingId = null,
+  selectedEpisodeIds,
+  onToggleEpisodeSelected,
+  onSetSeasonSelected,
 }: SeasonSectionProps) {
   const t = useTranslate();
   const isMobile = useIsMobile();
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const [seasonToggling, setSeasonToggling] = React.useState(false);
   const stableSubtitleDownloads = subtitleDownloads ?? EMPTY_SUBTITLE_DOWNLOADS;
+  const selectionEnabled = Boolean(onToggleEpisodeSelected);
+
+  const seasonSelectionState: boolean | "indeterminate" = React.useMemo(() => {
+    if (episodes.length === 0) {
+      return false;
+    }
+    const selectedCount = episodes.filter(
+      (episode) => selectedEpisodeIds?.has(episode.id) ?? false,
+    ).length;
+    if (selectedCount === 0) {
+      return false;
+    }
+    return selectedCount === episodes.length ? true : "indeterminate";
+  }, [episodes, selectedEpisodeIds]);
+
+  const handleToggleSeasonSelection = React.useCallback(() => {
+    if (!onSetSeasonSelected) {
+      return;
+    }
+    onSetSeasonSelected(
+      episodes.map((episode) => episode.id),
+      seasonSelectionState !== true,
+    );
+  }, [episodes, onSetSeasonSelected, seasonSelectionState]);
 
   const seasonCheckedState: boolean | "indeterminate" = React.useMemo(() => {
     if (episodes.length === 0) {
@@ -362,6 +403,20 @@ function SeasonSectionImpl({
           className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80"
         >
           <div className="flex items-center gap-2">
+            {selectionEnabled ? (
+              <Checkbox
+                id={seriesOverviewSeasonSelectId(collection.id)}
+                size="table"
+                className="shrink-0"
+                checked={seasonSelectionState}
+                disabled={!episodesReady || episodes.length === 0}
+                aria-label={t("seriesOverview.selectSeasonForDelete", {
+                  name: seasonHeading(collection, t),
+                })}
+                onClick={(event) => event.stopPropagation()}
+                onCheckedChange={handleToggleSeasonSelection}
+              />
+            ) : null}
             <button
               id={seriesOverviewSeasonMonitorId(collection.id)}
               type="button"
@@ -504,6 +559,8 @@ function SeasonSectionImpl({
                       onRefreshSubtitles={onRefreshSubtitles}
                       onRunEpisodeSearch={onRunEpisodeSearch}
                       onSetEpisodeMonitored={onSetEpisodeMonitored}
+                      onToggleSelected={onToggleEpisodeSelected}
+                      selected={selectedEpisodeIds?.has(episode.id) ?? false}
                       downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
                       queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                       releaseBlocklistEntries={releaseBlocklistEntries}
@@ -520,6 +577,11 @@ function SeasonSectionImpl({
                 <Table overflow="clip" layout="fixed" density="dense">
                   <TableHeader aria-hidden="true">
                     <TableRow className="collapse">
+                      {selectionEnabled ? (
+                        <TableHead className="w-10 text-center">
+                          {t("seriesOverview.selectColumn")}
+                        </TableHead>
+                      ) : null}
                       <TableHead className="w-10 text-center" />
                       <TableHead className="w-12 text-center">{t("episode.numberLabel")}</TableHead>
                       <TableHead>{t("label.title")}</TableHead>
@@ -556,6 +618,8 @@ function SeasonSectionImpl({
                         onRefreshSubtitles={onRefreshSubtitles}
                         onRunEpisodeSearch={onRunEpisodeSearch}
                         onSetEpisodeMonitored={onSetEpisodeMonitored}
+                        onToggleSelected={onToggleEpisodeSelected}
+                        selected={selectedEpisodeIds?.has(episode.id) ?? false}
                         downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
                         queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                         releaseBlocklistEntries={releaseBlocklistEntries}

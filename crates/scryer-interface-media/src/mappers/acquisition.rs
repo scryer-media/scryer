@@ -39,6 +39,51 @@ pub fn from_delete_titles_preview(
     }
 }
 
+pub fn from_delete_episode_files_preview(
+    preview: scryer_application::DeleteEpisodeFilesPreview,
+) -> DeleteEpisodeFilesPreviewPayload {
+    let failed_count = preview
+        .items
+        .iter()
+        .filter(|item| item.error.is_some())
+        .count() as i32;
+    DeleteEpisodeFilesPreviewPayload {
+        preview: from_delete_preview(preview.preview),
+        items: preview
+            .items
+            .into_iter()
+            .map(|item| DeleteEpisodeFilePreviewResultPayload {
+                file_id: item.file_id.into(),
+                episode_id: item.episode_id.into(),
+                preview: item.preview.map(from_delete_preview),
+                error: item.error,
+            })
+            .collect(),
+        file_count: preview.file_count,
+        failed_count,
+    }
+}
+
+pub fn from_delete_episode_files_outcome(
+    outcome: scryer_application::DeleteEpisodeFilesOutcome,
+) -> DeleteEpisodeFilesPayload {
+    DeleteEpisodeFilesPayload {
+        deleted_file_ids: outcome
+            .deleted_file_ids
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        failed: outcome
+            .failed
+            .into_iter()
+            .map(|failure| DeleteEpisodeFileFailurePayload {
+                file_id: failure.file_id.into(),
+                error: failure.error,
+            })
+            .collect(),
+    }
+}
+
 pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPayload {
     let seeders = result
         .extra

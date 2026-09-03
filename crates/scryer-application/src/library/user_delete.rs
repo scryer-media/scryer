@@ -42,6 +42,32 @@ pub struct DeleteTitlesPreview {
     pub items: Vec<DeleteTitlePreviewResult>,
 }
 
+/// One media file targeted by a batch episode-file delete, with the episode it
+/// is linked to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeleteEpisodeFilePreviewResult {
+    pub file_id: String,
+    pub episode_id: String,
+    pub preview: Option<DeletePreview>,
+    pub error: Option<String>,
+}
+
+/// Combined preview for deleting every media file linked to a set of episodes
+/// of one title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeleteEpisodeFilesPreview {
+    pub preview: DeletePreview,
+    pub items: Vec<DeleteEpisodeFilePreviewResult>,
+    pub file_count: i32,
+}
+
+/// One media file resolved from the requested episode ids.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EpisodeFileDeleteTarget {
+    pub(crate) file_id: String,
+    pub(crate) episode_id: String,
+}
+
 #[derive(Clone, Debug)]
 enum UserDeleteContext {
     Title(TitleDeleteContext),
@@ -341,6 +367,123 @@ impl AppUseCase {
         Ok(manifest.to_preview())
     }
 
+    /// Preview deleting every media file linked to the supplied episodes of one
+    /// title. The `ManageTitles` permission is checked once against the title's
+    /// library. Episodes without a linked file simply contribute nothing, so a
+    /// selection that matches no files yields an empty preview rather than an
+    /// error.
+    pub async fn preview_delete_episode_files(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<DeleteEpisodeFilesPreview> {
+        let targets = self
+            .resolve_episode_file_delete_targets(actor, title_id, episode_ids)
+            .await?;
+        let mut items = Vec::with_capacity(targets.len());
+        for chunk in targets.chunks(BULK_DELETE_PREVIEW_CONCURRENCY) {
+            let mut tasks = Vec::with_capacity(chunk.len());
+            for target in chunk {
+                let app = self.clone();
+                let file_id = target.file_id.clone();
+                let episode_id = target.episode_id.clone();
+                tasks.push(tokio::spawn(async move {
+                    let result = app.build_media_file_delete_preview(&file_id).await;
+                    DeleteEpisodeFilePreviewResult {
+                        file_id,
+                        episode_id,
+                        preview: result.as_ref().ok().cloned(),
+                        error: result.err().map(|error| error.to_string()),
+                    }
+                }));
+            }
+
+            for task in tasks {
+                let item = task.await.map_err(|error| {
+                    AppError::Repository(format!("delete preview task failed: {error}"))
+                })?;
+                items.push(item);
+            }
+        }
+
+        let file_count = items.len() as i32;
+        let preview = aggregate_delete_episode_file_previews(&items);
+        Ok(DeleteEpisodeFilesPreview {
+            preview,
+            items,
+            file_count,
+        })
+    }
+
+    /// Resolve the media files of `title_id` that are linked to any of
+    /// `episode_ids`, deduplicated by file id and ordered by file id so the
+    /// aggregate fingerprint does not depend on the order episodes were
+    /// selected in. Files with no episode link are ignored.
+    pub(crate) async fn resolve_episode_file_delete_targets(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<Vec<EpisodeFileDeleteTarget>> {
+        if episode_ids.iter().all(|episode_id| episode_id.trim().is_empty()) {
+            return Err(AppError::Validation(
+                "at least one episode id is required".into(),
+            ));
+        }
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+
+        let requested = episode_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut seen_file_ids = HashSet::new();
+        let mut targets = Vec::new();
+        for media_file in self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(title_id)
+            .await?
+        {
+            let Some(episode_id) = media_file.episode_id.clone() else {
+                continue;
+            };
+            if !requested.contains(episode_id.as_str()) {
+                continue;
+            }
+            if !seen_file_ids.insert(media_file.id.clone()) {
+                continue;
+            }
+            targets.push(EpisodeFileDeleteTarget {
+                file_id: media_file.id,
+                episode_id,
+            });
+        }
+        targets.sort_by(|left, right| left.file_id.cmp(&right.file_id));
+        Ok(targets)
+    }
+
+    /// Build the delete preview for one media file without re-checking
+    /// permissions; callers that already authorized the whole batch use this.
+    async fn build_media_file_delete_preview(&self, file_id: &str) -> AppResult<DeletePreview> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let manifest = self.build_delete_manifest(context).await?;
+        Ok(manifest.to_preview())
+    }
+
     pub async fn preview_delete_external_subtitle_file(
         &self,
         actor: &User,
@@ -538,17 +681,21 @@ impl AppUseCase {
         let manifest = self
             .validate_delete_context(context, preview_fingerprint, typed_confirmation)
             .await?;
+        apply_delete_manifest(&manifest).await
+    }
 
-        for entry in &manifest.entries {
-            delete_single_path(entry).await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to delete {}: {error}",
-                    entry.path.display()
-                ))
-            })?;
-        }
-
-        Ok(())
+    /// Delete one media file's paths after the caller has already validated an
+    /// aggregate preview fingerprint covering this file. The root-folder
+    /// availability guard still runs per file so an offline root aborts the
+    /// individual delete instead of silently removing catalog rows.
+    pub(crate) async fn execute_delete_media_file_preapproved(
+        &self,
+        file_id: &str,
+    ) -> AppResult<()> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let manifest = self.build_delete_manifest(context.clone()).await?;
+        ensure_delete_context_roots_available(&context)?;
+        apply_delete_manifest(&manifest).await
     }
 
     async fn validate_delete_context(
@@ -1317,6 +1464,78 @@ fn aggregate_delete_title_previews(items: &[DeleteTitlePreviewResult]) -> Delete
     }
 }
 
+/// Aggregate the per-file previews of a batch episode-file delete into one
+/// preview. The fingerprint parts are sorted by file id so the result depends
+/// only on the set of files, never on the order the episodes were selected in.
+fn aggregate_delete_episode_file_previews(
+    items: &[DeleteEpisodeFilePreviewResult],
+) -> DeletePreview {
+    let mut total_file_count = 0i32;
+    let mut media_count = 0i32;
+    let mut subtitle_count = 0i32;
+    let mut image_count = 0i32;
+    let mut other_count = 0i32;
+    let mut directory_count = 0i32;
+    let mut requires_typed_confirmation = false;
+    let mut sample_paths = Vec::new();
+    let mut item_fingerprints = Vec::with_capacity(items.len());
+
+    let mut ordered = items.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.file_id.cmp(&right.file_id));
+
+    for item in ordered {
+        match item.preview.as_ref() {
+            Some(preview) => {
+                item_fingerprints.push(format!(
+                    "file:{}\npreview:{}",
+                    item.file_id, preview.fingerprint
+                ));
+                total_file_count += preview.total_file_count;
+                media_count += preview.media_count;
+                subtitle_count += preview.subtitle_count;
+                image_count += preview.image_count;
+                other_count += preview.other_count;
+                directory_count += preview.directory_count;
+                requires_typed_confirmation |= preview.requires_typed_confirmation;
+                for path in &preview.sample_paths {
+                    if sample_paths.len() >= DELETE_PREVIEW_SAMPLE_PATH_LIMIT {
+                        break;
+                    }
+                    sample_paths.push(path.clone());
+                }
+            }
+            None => {
+                item_fingerprints.push(format!("file:{}\npreview:failed", item.file_id));
+            }
+        }
+    }
+
+    if media_count as usize > LARGE_DELETE_MEDIA_THRESHOLD {
+        requires_typed_confirmation = true;
+    }
+
+    let mut fingerprint_parts = vec!["intent:bulk_episode_file_delete".to_string()];
+    fingerprint_parts.extend(item_fingerprints);
+
+    DeletePreview {
+        fingerprint: crate::helpers::blake3_identity_hex(
+            crate::helpers::HashDomain::DeletePreview,
+            fingerprint_parts.join("\n"),
+        ),
+        total_file_count,
+        media_count,
+        subtitle_count,
+        image_count,
+        other_count,
+        directory_count,
+        requires_typed_confirmation,
+        typed_confirmation_prompt: requires_typed_confirmation
+            .then(|| DELETE_TYPED_CONFIRMATION_PROMPT.to_string()),
+        target_label: format!("{} selected episode files", items.len()),
+        sample_paths,
+    }
+}
+
 fn build_delete_manifest_fingerprint(
     intent_kind: &str,
     target_id: &str,
@@ -1341,6 +1560,45 @@ fn build_delete_manifest_fingerprint(
         crate::helpers::HashDomain::DeletePreview,
         payload.join("\n"),
     )
+}
+
+/// Check a client-supplied confirmation against an aggregate delete preview:
+/// the fingerprint must still match the recomputed preview, and a preview that
+/// crossed the large-delete threshold must carry the typed confirmation. Uses
+/// the same messages as the single-target `validate_delete_context` path.
+pub(crate) fn ensure_aggregate_delete_confirmation(
+    preview: &DeletePreview,
+    preview_fingerprint: &str,
+    typed_confirmation: Option<&str>,
+) -> AppResult<()> {
+    if preview.fingerprint != preview_fingerprint {
+        return Err(AppError::Validation(
+            "delete preview is stale; refresh the delete dialog and confirm again".into(),
+        ));
+    }
+
+    if preview.requires_typed_confirmation
+        && typed_confirmation.unwrap_or_default().trim() != DELETE_TYPED_CONFIRMATION_VALUE
+    {
+        return Err(AppError::Validation(format!(
+            "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
+        )));
+    }
+
+    Ok(())
+}
+
+async fn apply_delete_manifest(manifest: &UserDeleteManifest) -> AppResult<()> {
+    for entry in &manifest.entries {
+        delete_single_path(entry).await.map_err(|error| {
+            AppError::Repository(format!(
+                "failed to delete {}: {error}",
+                entry.path.display()
+            ))
+        })?;
+    }
+
+    Ok(())
 }
 
 async fn delete_single_path(entry: &DeleteManifestEntry) -> AppResult<()> {
@@ -1601,5 +1859,126 @@ mod tests {
             .expect("write mount marker");
         ensure_delete_context_roots_available(&context)
             .expect("missing target is allowed once the containing root is available");
+    }
+
+    fn episode_file_preview_item(
+        file_id: &str,
+        episode_id: &str,
+        fingerprint: &str,
+        media_count: i32,
+    ) -> DeleteEpisodeFilePreviewResult {
+        DeleteEpisodeFilePreviewResult {
+            file_id: file_id.to_string(),
+            episode_id: episode_id.to_string(),
+            preview: Some(DeletePreview {
+                fingerprint: fingerprint.to_string(),
+                total_file_count: media_count,
+                media_count,
+                subtitle_count: 0,
+                image_count: 0,
+                other_count: 0,
+                directory_count: 0,
+                requires_typed_confirmation: false,
+                typed_confirmation_prompt: None,
+                target_label: file_id.to_string(),
+                sample_paths: vec![format!("/data/series/{file_id}.mkv")],
+            }),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn aggregate_episode_file_preview_fingerprint_is_order_independent() {
+        let first = episode_file_preview_item("file-a", "episode-1", "fp-a", 1);
+        let second = episode_file_preview_item("file-b", "episode-2", "fp-b", 2);
+
+        let forward = aggregate_delete_episode_file_previews(&[first.clone(), second.clone()]);
+        let reversed = aggregate_delete_episode_file_previews(&[second, first]);
+
+        assert_eq!(forward.fingerprint, reversed.fingerprint);
+        assert_eq!(forward.media_count, 3);
+        assert_eq!(forward.total_file_count, 3);
+    }
+
+    #[test]
+    fn aggregate_episode_file_preview_fingerprint_changes_with_the_file_set() {
+        let first = episode_file_preview_item("file-a", "episode-1", "fp-a", 1);
+        let second = episode_file_preview_item("file-b", "episode-2", "fp-b", 2);
+        let mut retargeted = second.clone();
+        retargeted.preview.as_mut().expect("preview").fingerprint = "fp-b-changed".to_string();
+
+        let baseline = aggregate_delete_episode_file_previews(&[first.clone(), second.clone()]);
+
+        assert_ne!(
+            baseline.fingerprint,
+            aggregate_delete_episode_file_previews(std::slice::from_ref(&first)).fingerprint,
+            "dropping a file must change the aggregate fingerprint"
+        );
+        assert_ne!(
+            baseline.fingerprint,
+            aggregate_delete_episode_file_previews(&[first, retargeted]).fingerprint,
+            "a changed per-file fingerprint must change the aggregate fingerprint"
+        );
+    }
+
+    #[test]
+    fn aggregate_episode_file_preview_requires_typed_confirmation_over_the_threshold() {
+        let items = vec![
+            episode_file_preview_item(
+                "file-a",
+                "episode-1",
+                "fp-a",
+                LARGE_DELETE_MEDIA_THRESHOLD as i32,
+            ),
+            episode_file_preview_item("file-b", "episode-2", "fp-b", 1),
+        ];
+
+        let preview = aggregate_delete_episode_file_previews(&items);
+
+        assert!(preview.requires_typed_confirmation);
+        assert_eq!(
+            preview.typed_confirmation_prompt.as_deref(),
+            Some(DELETE_TYPED_CONFIRMATION_PROMPT)
+        );
+    }
+
+    #[test]
+    fn aggregate_episode_file_preview_is_empty_when_nothing_matches() {
+        let preview = aggregate_delete_episode_file_previews(&[]);
+
+        assert_eq!(preview.total_file_count, 0);
+        assert_eq!(preview.media_count, 0);
+        assert!(!preview.requires_typed_confirmation);
+        assert_eq!(preview.target_label, "0 selected episode files");
+    }
+
+    #[test]
+    fn ensure_aggregate_delete_confirmation_enforces_fingerprint_and_typed_text() {
+        let mut preview = aggregate_delete_episode_file_previews(&[episode_file_preview_item(
+            "file-a",
+            "episode-1",
+            "fp-a",
+            1,
+        )]);
+
+        ensure_aggregate_delete_confirmation(&preview, &preview.fingerprint.clone(), None)
+            .expect("matching fingerprint is accepted");
+        assert!(matches!(
+            ensure_aggregate_delete_confirmation(&preview, "stale", None),
+            Err(AppError::Validation(_))
+        ));
+
+        preview.requires_typed_confirmation = true;
+        let fingerprint = preview.fingerprint.clone();
+        assert!(matches!(
+            ensure_aggregate_delete_confirmation(&preview, &fingerprint, None),
+            Err(AppError::Validation(_))
+        ));
+        ensure_aggregate_delete_confirmation(
+            &preview,
+            &fingerprint,
+            Some(DELETE_TYPED_CONFIRMATION_VALUE),
+        )
+        .expect("typed confirmation is accepted");
     }
 }
