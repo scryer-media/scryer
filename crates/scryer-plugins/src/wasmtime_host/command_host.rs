@@ -67,6 +67,7 @@ impl CommandHost {
         plugin_id: String,
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
+        egress_policy: scryer_outbound_http::PluginEgressPolicy,
         timeout: Duration,
         max_http_response_bytes: Option<u64>,
     ) -> Self {
@@ -79,7 +80,13 @@ impl CommandHost {
                 plugin_id,
                 config,
                 state: Mutex::new(CommandState::default()),
-                http: PluginHttpHost::new(allowed_hosts, None, None, max_http_response_bytes),
+                http: PluginHttpHost::new_with_egress_policy(
+                    allowed_hosts,
+                    egress_policy,
+                    None,
+                    None,
+                    max_http_response_bytes,
+                ),
                 timeout,
             })),
             request_deadline: None,
