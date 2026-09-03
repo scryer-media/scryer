@@ -416,12 +416,15 @@ export function MonitorSelectionPicker({
                 {t("monitorSelection.noSeasons")}
               </p>
             ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              // CSS columns fill top-to-bottom, so seasons read 1, 2, 3 down the
+              // first column rather than across the row.
+              <div className="-mb-2 gap-x-2 sm:columns-2 lg:columns-3">
                 {choices.seasons.map((season) => (
                   <CheckboxField
                     key={season.number}
                     id={selectorId(idPrefix, "season", String(season.number))}
                     size="compact"
+                    className="mb-2 break-inside-avoid"
                     label={seasonLabel(season)}
                     checked={selectedSeasons.has(season.number)}
                     disabled={disabled}
@@ -469,12 +472,13 @@ export function MonitorSelectionPicker({
                   </button>
                 </span>
               </header>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="-mb-2 gap-x-2 sm:columns-2">
                 {choices.seriesMovies.map((movie) => (
                   <CheckboxField
                     key={movie.key}
                     id={selectorId(idPrefix, "movie", movie.key)}
                     size="compact"
+                    className="mb-2 break-inside-avoid"
                     label={movieLabel(movie)}
                     checked={selectedMovieKeys.has(movie.key)}
                     disabled={disabled}
