@@ -1179,7 +1179,9 @@ function SeriesOverviewViewImpl({
       <div>
         <Card className="relative overflow-hidden">
           <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {/* min-h matches the small buttons so the header keeps one
+                height whether or not the selection controls are showing. */}
+            <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
                 <FolderOpen className="h-4 w-4" />
                 {t("title.seasonsAndEpisodes")}
