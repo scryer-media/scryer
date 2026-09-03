@@ -4861,6 +4861,11 @@ const ru: LocaleDictionary = {
   "appUpgrade.failed": "Не удалось обновить приложение.",
     // ── Maintenance rules ──
     "settings.maintenanceRules": "Правила обслуживания",
+  "nav.rules": "Правила",
+  "settings.rulesScoring": "Правила оценки",
+  "settings.maintenanceNavRules": "Правила",
+  "settings.maintenanceNavHistory": "История",
+  "settings.maintenanceNavGates": "Разрешения",
     "settings.maintenanceRuleAction": "Действие",
     "settings.maintenanceRuleActionHelp": "Что сделало бы это правило, когда действия обслуживания будут включены.",
     "settings.maintenanceRuleActionPlaceholder": "Выберите действие",

@@ -1773,6 +1773,11 @@ const zh_CN: LocaleDictionary = {
   "appUpgrade.failed": "升级失败。",
   // ── Maintenance rules ──
   "settings.maintenanceRules": "维护规则",
+  "nav.rules": "规则",
+  "settings.rulesScoring": "评分规则",
+  "settings.maintenanceNavRules": "规则",
+  "settings.maintenanceNavHistory": "历史",
+  "settings.maintenanceNavGates": "执行开关",
   "settings.maintenanceRuleAction": "操作",
   "settings.maintenanceRuleActionHelp": "维护操作启用后，此规则将执行的动作。",
   "settings.maintenanceRuleActionPlaceholder": "选择操作",

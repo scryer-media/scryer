@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import type { MaintenanceRulesSection } from "@/components/root/types";
 import maintenanceInputContract from "@/lib/contracts/maintenance-input-contract.json";
 import {
   MAINTENANCE_RULE_TEMPLATES,
@@ -116,6 +117,10 @@ type SettingsMaintenanceRulesSectionProps = {
   gates: MaintenanceInstanceGates | null;
   setRuleMode: (record: MaintenanceRuleSetRecord, mode: MaintenanceEvaluationMode) => void;
   setRuleArming: (record: MaintenanceRuleSetRecord, arming: MaintenanceEffectArming) => void;
+  /// Which pane of the maintenance gutter is open. Only the rule list wants the
+  /// editor, the preview and the reference rail; the operational panes are a
+  /// single panel each and read better across the full width.
+  section: MaintenanceRulesSection;
   /// Panels rendered under the rules table. They are passed in rather than
   /// rendered here so the container owns their queries and this view stays a
   /// pure rendering of what it is handed.
@@ -659,6 +664,7 @@ export function SettingsMaintenanceRulesSection({
   gates,
   setRuleMode,
   setRuleArming,
+  section,
   operationsPanels,
   ...previewProps
 }: SettingsMaintenanceRulesSectionProps) {
@@ -675,6 +681,21 @@ export function SettingsMaintenanceRulesSection({
     actionDescriptors,
     ruleSetDraft.actionKind,
   );
+
+  // Candidates, history and gates are one panel each. They keep the status
+  // banner, because what the instance is allowed to do explains every row they
+  // show, but they get the full column: there is no editor to sit beside and no
+  // rule being written for the reference rail to describe.
+  if (section !== "rules") {
+    return (
+      <div id="settings-maintenance-rules-section" className="space-y-4 text-sm">
+        <div className="mx-auto w-full max-w-[1600px] space-y-4">
+          <MaintenanceStatusBanner gates={gates} ruleSetRecords={ruleSetRecords} />
+          {operationsPanels}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div id="settings-maintenance-rules-section" className="space-y-4 text-sm">
@@ -1169,8 +1190,6 @@ export function SettingsMaintenanceRulesSection({
               </Card>
             ) : null}
 
-            <MaintenanceTemplateGallery onApply={applyTemplate} />
-
             <div className="flex justify-center">
               <AddNewButton
                 id="settings-maintenance-rule-create"
@@ -1193,6 +1212,7 @@ export function SettingsMaintenanceRulesSection({
           </div>
         </div>
         <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
+          <MaintenanceTemplateGallery onApply={applyTemplate} />
           <MaintenanceContextReference />
         </div>
       </div>

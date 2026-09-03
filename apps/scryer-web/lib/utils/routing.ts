@@ -4,6 +4,8 @@ import type {
   ContentSettingsSection,
   IndexerSettingsTab,
   LogsSection,
+  MaintenanceRulesSection,
+  RulesSection,
   SettingsSection,
   SystemSection,
   ViewId,
@@ -36,11 +38,93 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
 
 const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   acquisition: "acquisition",
-  rules: "rules",
-  maintenanceRules: "maintenance-rules",
   subtitles: "subtitles",
   "post-processing": "post-processing",
 };
+
+/// Panes of the Rules page. Both scoring and maintenance rules hang off
+/// `/automation/rules`, so the sidebar carries one entry and the page's own
+/// gutter picks the kind.
+export const RULES_SECTION_PATH: Record<RulesSection, string> = {
+  scoring: "scoring",
+  maintenance: "maintenance",
+};
+
+const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
+  scoring: "scoring",
+  "scoring-rules": "scoring",
+  maintenance: "maintenance",
+  "maintenance-rules": "maintenance",
+  maintenancerules: "maintenance",
+};
+
+/// Panes of the Maintenance Rules page. The rule list is the default and has no
+/// segment of its own, so `/automation/rules/maintenance` keeps resolving to
+/// the list an existing maintenance-rules link expected.
+export const MAINTENANCE_RULES_SECTION_PATH: Record<MaintenanceRulesSection, string> = {
+  rules: "",
+  candidates: "candidates",
+  history: "history",
+  gates: "gates",
+};
+
+const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<string, MaintenanceRulesSection> = {
+  rules: "rules",
+  candidates: "candidates",
+  history: "history",
+  runs: "history",
+  gates: "gates",
+  // Exclusions were their own pane before they moved in with the gates, so the
+  // segment redirects rather than 404ing on links people already hold.
+  exclusions: "gates",
+};
+
+/// The `rules` settings section is the Scoring pane and `maintenanceRules` is
+/// the Maintenance pane. Which `SettingsSection` a pane maps to still decides
+/// its permissions, so the two stay distinct underneath one nav entry.
+export const RULES_SECTION_BY_SETTINGS_SECTION: Partial<
+  Record<SettingsSection, RulesSection>
+> = {
+  rules: "scoring",
+  maintenanceRules: "maintenance",
+};
+
+/// Path of one Rules pane. Maintenance carries its own pane as a fourth
+/// segment; the maintenance rule list is the default and adds none.
+export function buildRulesPath(
+  section: RulesSection,
+  maintenanceSection: MaintenanceRulesSection = "rules",
+): string {
+  const base = `/automation/rules/${RULES_SECTION_PATH[section]}`;
+  if (section !== "maintenance") {
+    return base;
+  }
+  const segment = MAINTENANCE_RULES_SECTION_PATH[maintenanceSection];
+  return segment ? `${base}/${segment}` : base;
+}
+
+export function rulesSectionFromPath(pathname: string): RulesSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const rulesAt = segments.findIndex((segment) => segment.toLowerCase() === "rules");
+  if (rulesAt < 0) {
+    return "scoring";
+  }
+  return RULES_SECTION_BY_SEGMENT[segments[rulesAt + 1]?.toLowerCase() ?? ""] ?? "scoring";
+}
+
+export function maintenanceRulesSectionFromPath(
+  pathname: string,
+): MaintenanceRulesSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const rulesAt = segments.findIndex((segment) => segment.toLowerCase() === "rules");
+  if (rulesAt < 0) {
+    return "rules";
+  }
+  return (
+    MAINTENANCE_RULES_SECTION_BY_SEGMENT[segments[rulesAt + 2]?.toLowerCase() ?? ""] ??
+    "rules"
+  );
+}
 
 const INTEGRATIONS_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   indexers: "indexers",
@@ -143,6 +227,12 @@ export function buildViewPath(
 ) {
   const base = `/${nextView}`;
   if (nextView === "settings" && nextSettingsSection) {
+    // Scoring and maintenance rules are panes of one page, so their canonical
+    // paths nest under `/automation/rules` rather than sitting beside it.
+    const rulesSection = RULES_SECTION_BY_SETTINGS_SECTION[nextSettingsSection];
+    if (rulesSection) {
+      return buildRulesPath(rulesSection);
+    }
     const automationPath = AUTOMATION_SETTINGS_SECTION_PATH[nextSettingsSection];
     if (automationPath) {
       return `/automation/${automationPath}`;
@@ -255,12 +345,24 @@ const MEDIA_SETTINGS_SECTIONS = new Set<ContentSettingsSection>([
 ]);
 const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   acquisition: "acquisition",
-  rules: "rules",
-  "maintenance-rules": "maintenanceRules",
-  maintenancerules: "maintenanceRules",
   subtitles: "subtitles",
   "post-processing": "post-processing",
   "post-procesing": "post-processing",
+};
+
+/// Segments that used to name a rules page of their own. Maintenance rules are
+/// a pane of the Rules page now, so these redirect rather than resolve.
+const MOVED_MAINTENANCE_RULES_SEGMENTS = new Set([
+  "maintenance-rules",
+  "maintenancerules",
+]);
+
+/// `/settings/...` segments that now name a Rules pane. Both were settings
+/// sections of their own before the two kinds of rule shared a page.
+const MOVED_SETTINGS_RULES_BY_SEGMENT: Record<string, RulesSection> = {
+  rules: "scoring",
+  "maintenance-rules": "maintenance",
+  maintenancerules: "maintenance",
 };
 const INTEGRATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   indexers: "indexers",
@@ -341,6 +443,56 @@ function settingsRoute(section: SettingsSection): ParsedAppRoute {
   return parsedRoute(buildViewPath("settings", section), "settings", {
     settingsSection: section,
   });
+}
+
+/// `/automation/rules/...` — the Rules page and its two levels of panes.
+///
+/// A bare `/automation/rules` names the page rather than a pane, so it lands on
+/// Scoring rather than 404ing. Maintenance takes a further segment for its own
+/// pane, and the rule list is the pane a segment-less maintenance path means.
+function resolveRulesRoute(
+  currentPath: string,
+  rawSegments: string[],
+  normalizedSegments: string[],
+  search: string,
+  hash: string,
+): AppRouteResolution {
+  if (rawSegments.length === 2) {
+    return redirectTo(buildRulesPath("scoring"), search, hash);
+  }
+
+  const rulesSection = RULES_SECTION_BY_SEGMENT[normalizedSegments[2] ?? ""];
+  if (!rulesSection) {
+    return { kind: "not-found" };
+  }
+
+  if (rulesSection === "scoring") {
+    if (rawSegments.length !== 3) {
+      return { kind: "not-found" };
+    }
+    return canonicalOrRedirect(currentPath, settingsRoute("rules"), search, hash);
+  }
+
+  if (rawSegments.length > 4) {
+    return { kind: "not-found" };
+  }
+
+  const maintenanceSection =
+    rawSegments.length === 3
+      ? "rules"
+      : MAINTENANCE_RULES_SECTION_BY_SEGMENT[normalizedSegments[3] ?? ""];
+  if (!maintenanceSection) {
+    return { kind: "not-found" };
+  }
+
+  return canonicalOrRedirect(
+    currentPath,
+    parsedRoute(buildRulesPath("maintenance", maintenanceSection), "settings", {
+      settingsSection: "maintenanceRules",
+    }),
+    search,
+    hash,
+  );
 }
 
 function resolveMediaRoute(
@@ -526,6 +678,14 @@ export function resolveAppRoute(
       );
     }
 
+    if (section === "rules") {
+      return resolveRulesRoute(currentPath, rawSegments, normalizedSegments, search, hash);
+    }
+
+    if (MOVED_MAINTENANCE_RULES_SEGMENTS.has(section)) {
+      return redirectTo(buildRulesPath("maintenance"), search, hash);
+    }
+
     const settingsSection = AUTOMATION_SETTINGS_BY_SEGMENT[section];
     if (!settingsSection || rawSegments.length !== 2) {
       return { kind: "not-found" };
@@ -605,6 +765,10 @@ export function resolveAppRoute(
     const localSection = LOCAL_SETTINGS_BY_SEGMENT[section];
     if (localSection) {
       return canonicalOrRedirect(currentPath, settingsRoute(localSection), search, hash);
+    }
+    const movedRulesSection = MOVED_SETTINGS_RULES_BY_SEGMENT[section];
+    if (movedRulesSection) {
+      return redirectTo(buildRulesPath(movedRulesSection), search, hash);
     }
     const movedSection =
       AUTOMATION_SETTINGS_BY_SEGMENT[section] ??

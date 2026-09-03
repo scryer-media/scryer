@@ -1927,6 +1927,11 @@ const pt_BR: LocaleDictionary = {
   "appUpgrade.failed": "A atualização falhou.",
   // ── Maintenance rules ──
   "settings.maintenanceRules": "Regras de manutenção",
+  "nav.rules": "Regras",
+  "settings.rulesScoring": "Regras de pontuação",
+  "settings.maintenanceNavRules": "Regras",
+  "settings.maintenanceNavHistory": "Histórico",
+  "settings.maintenanceNavGates": "Permissões",
   "settings.maintenanceRuleAction": "Ação",
   "settings.maintenanceRuleActionHelp": "O que esta regra faria assim que as ações de manutenção forem ativadas.",
   "settings.maintenanceRuleActionPlaceholder": "Escolha uma ação",

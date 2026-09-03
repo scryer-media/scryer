@@ -388,15 +388,15 @@ export function buildRouteCommands({
           onSelect: buildNavigate(onNavigate, "settings", "delayProfiles"),
         } satisfies RouteCommand, {
           id: "settings-rules",
-          label: `${automationGroupLabel} / ${t("settings.rules")}`,
-          description: t("settings.rules"),
+          label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.rulesScoring")}`,
+          description: t("settings.rulesScoring"),
           groupLabel: automationGroupLabel,
           keywords: ["settings", "rules", "rego", "opa", "scoring", "custom"],
           icon: SlidersHorizontal,
           onSelect: buildNavigate(onNavigate, "settings", "rules"),
         } satisfies RouteCommand, {
           id: "settings-maintenance-rules",
-          label: `${automationGroupLabel} / ${t("settings.maintenanceRules")}`,
+          label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.maintenanceRules")}`,
           description: t("settings.maintenanceRules"),
           groupLabel: automationGroupLabel,
           keywords: ["settings", "maintenance", "rules", "rego", "cleanup", "prune"],

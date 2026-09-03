@@ -1890,6 +1890,11 @@ const ja: LocaleDictionary = {
   "appUpgrade.failed": "アップグレードに失敗しました。",
   // ── Maintenance rules ──
   "settings.maintenanceRules": "メンテナンスルール",
+  "nav.rules": "ルール",
+  "settings.rulesScoring": "スコアリングルール",
+  "settings.maintenanceNavRules": "ルール",
+  "settings.maintenanceNavHistory": "履歴",
+  "settings.maintenanceNavGates": "実行許可",
   "settings.maintenanceRuleAction": "アクション",
   "settings.maintenanceRuleActionHelp": "メンテナンスアクションが有効になったときに、このルールが行う処理です。",
   "settings.maintenanceRuleActionPlaceholder": "アクションを選択",

@@ -4,8 +4,11 @@ import test from "node:test";
 import {
   buildIndexerSettingsPath,
   buildOverviewDetailPath,
+  buildRulesPath,
   indexerSettingsTabFromPath,
+  maintenanceRulesSectionFromPath,
   resolveAppRoute,
+  rulesSectionFromPath,
   type ParsedAppRoute,
 } from "./routing.ts";
 import { isMediaSettingsSection } from "./routes.ts";
@@ -49,7 +52,11 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/wanted/cutoff-unmet",
     "/automation/wanted/pending",
     "/automation/acquisition",
-    "/automation/rules",
+    "/automation/rules/scoring",
+    "/automation/rules/maintenance",
+    "/automation/rules/maintenance/candidates",
+    "/automation/rules/maintenance/history",
+    "/automation/rules/maintenance/gates",
     "/automation/subtitles",
     "/automation/post-processing",
     "/integrations/indexers",
@@ -114,7 +121,20 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/wanted/history", "/activity/history"],
     ["/history", "/activity/history"],
     ["/settings/acquisition", "/automation/acquisition"],
-    ["/settings/rules", "/automation/rules"],
+    ["/settings/rules", "/automation/rules/scoring"],
+    ["/settings/maintenance-rules", "/automation/rules/maintenance"],
+    ["/settings/maintenanceRules", "/automation/rules/maintenance"],
+    // Rules names the page, not a pane, so it lands on the first one.
+    ["/automation/rules", "/automation/rules/scoring"],
+    ["/automation/rules/scoring-rules", "/automation/rules/scoring"],
+    // Maintenance rules were a page of their own before they became a pane.
+    ["/automation/maintenance-rules", "/automation/rules/maintenance"],
+    ["/automation/maintenanceRules", "/automation/rules/maintenance"],
+    ["/automation/rules/maintenance-rules", "/automation/rules/maintenance"],
+    ["/automation/rules/maintenance/rules", "/automation/rules/maintenance"],
+    // Exclusions moved in with the gates.
+    ["/automation/rules/maintenance/exclusions", "/automation/rules/maintenance/gates"],
+    ["/automation/rules/maintenance/runs", "/automation/rules/maintenance/history"],
     ["/settings/subtitles", "/automation/subtitles"],
     ["/settings/post-processing", "/automation/post-processing"],
     ["/settings/post-procesing", "/automation/post-processing"],
@@ -254,4 +274,49 @@ test("indexer pane paths round-trip through the tab helpers", () => {
     indexerSettingsTabFromPath("/integrations/indexers/proxies"),
     "indexers",
   );
+});
+
+test("the rules page carries both kinds of rule as panes", () => {
+  assert.equal(canonical("/automation/rules/scoring").settingsSection, "rules");
+  for (const path of [
+    "/automation/rules/maintenance",
+    "/automation/rules/maintenance/candidates",
+    "/automation/rules/maintenance/history",
+    "/automation/rules/maintenance/gates",
+  ]) {
+    const route = canonical(path);
+    assert.equal(route.canonicalPath, path, path);
+    assert.equal(route.settingsSection, "maintenanceRules", path);
+  }
+  assert.deepEqual(resolveAppRoute("/automation/rules/nope"), {
+    kind: "not-found",
+  });
+  assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/nope"), {
+    kind: "not-found",
+  });
+  // Scoring has no second level of panes, and maintenance stops at one.
+  assert.deepEqual(resolveAppRoute("/automation/rules/scoring/candidates"), {
+    kind: "not-found",
+  });
+  assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/gates/extra"), {
+    kind: "not-found",
+  });
+});
+
+test("rules pane paths round-trip through the section helpers", () => {
+  for (const section of ["scoring", "maintenance"] as const) {
+    assert.equal(rulesSectionFromPath(buildRulesPath(section)), section, section);
+  }
+  for (const section of ["rules", "candidates", "history", "gates"] as const) {
+    const path = buildRulesPath("maintenance", section);
+    assert.equal(maintenanceRulesSectionFromPath(path), section, section);
+    assert.equal(rulesSectionFromPath(path), "maintenance", section);
+  }
+  // Anything that is not a known pane segment falls back to the default pane.
+  assert.equal(rulesSectionFromPath("/automation/rules"), "scoring");
+  assert.equal(rulesSectionFromPath("/automation/rules/unknown"), "scoring");
+  assert.equal(rulesSectionFromPath("/settings/profile"), "scoring");
+  assert.equal(maintenanceRulesSectionFromPath("/automation/rules/maintenance"), "rules");
+  assert.equal(maintenanceRulesSectionFromPath("/automation/rules/scoring"), "rules");
+  assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
 });

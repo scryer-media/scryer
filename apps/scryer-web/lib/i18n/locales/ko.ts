@@ -1846,6 +1846,11 @@ const ko: LocaleDictionary = {
   "appUpgrade.failed": "업그레이드에 실패했습니다.",
   // ── Maintenance rules ──
   "settings.maintenanceRules": "유지 관리 규칙",
+  "nav.rules": "규칙",
+  "settings.rulesScoring": "점수 규칙",
+  "settings.maintenanceNavRules": "규칙",
+  "settings.maintenanceNavHistory": "기록",
+  "settings.maintenanceNavGates": "실행 허용",
   "settings.maintenanceRuleAction": "작업",
   "settings.maintenanceRuleActionHelp": "유지 관리 작업이 켜지면 이 규칙이 수행할 동작입니다.",
   "settings.maintenanceRuleActionPlaceholder": "작업 선택",

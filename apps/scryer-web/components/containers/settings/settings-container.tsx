@@ -10,12 +10,15 @@ import {
   Database,
   Download,
   FolderCog,
+  History,
+  ListChecks,
   Puzzle,
   Rss,
   ScanSearch,
   Server,
   Settings2,
   ShieldCheck,
+  ShieldAlert,
   Network,
   SlidersHorizontal,
   Timer,
@@ -28,15 +31,23 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
-import type { IndexerSettingsTab, SettingsSection } from "@/components/root/types";
+import type {
+  IndexerSettingsTab,
+  MaintenanceRulesSection,
+  RulesSection,
+  SettingsSection,
+} from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
   buildIndexerSettingsPath,
+  buildRulesPath,
   buildViewPath,
   indexerSettingsTabFromPath,
+  maintenanceRulesSectionFromPath,
+  rulesSectionFromPath,
 } from "@/lib/utils/routing";
 import {
   type ProviderCatalogFamily,
@@ -213,6 +224,125 @@ function IndexerSettingsSubnav({
   );
 }
 
+const RULES_SECTIONS: {
+  section: RulesSection;
+  labelKey: string;
+  icon: LucideIcon;
+}[] = [
+  { section: "scoring", labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
+  { section: "maintenance", labelKey: "settings.maintenanceRules", icon: Wrench },
+];
+
+const MAINTENANCE_RULES_SECTIONS: {
+  section: MaintenanceRulesSection;
+  labelKey: string;
+  icon: LucideIcon;
+}[] = [
+  { section: "rules", labelKey: "settings.maintenanceNavRules", icon: Wrench },
+  {
+    section: "candidates",
+    labelKey: "settings.maintenanceCandidatesTitle",
+    icon: ListChecks,
+  },
+  { section: "history", labelKey: "settings.maintenanceNavHistory", icon: History },
+  { section: "gates", labelKey: "settings.maintenanceNavGates", icon: ShieldAlert },
+];
+
+/// Kind switcher for the Rules page. Scoring and maintenance rules are two
+/// kinds of the same subject, so they share a page instead of taking a sidebar
+/// entry each. Same shape as the Wanted view's section rail.
+function RulesSubnav({
+  activeSection,
+  t,
+}: {
+  activeSection: RulesSection;
+  t: ReturnType<typeof useTranslate>;
+}) {
+  return (
+    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
+      <nav
+        id="settings-rules-subnav"
+        className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
+        aria-label={t("nav.rules")}
+      >
+        {RULES_SECTIONS.map((item) => {
+          const Icon = item.icon;
+          const active = activeSection === item.section;
+          return (
+            <Link
+              key={item.section}
+              id={selectorId("settings-rules-subnav", item.section)}
+              to={buildRulesPath(item.section)}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
+                active &&
+                  "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
+              )}
+            >
+              <Icon
+                className={cn(
+                  "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                  active && "text-[var(--scry-accent-text)]",
+                )}
+              />
+              <span className="whitespace-nowrap">{t(item.labelKey)}</span>
+            </Link>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
+/// Pane switcher for Maintenance Rules, a second gutter beside the kind rail.
+/// The rules a maintenance policy is made of, the titles it currently matches,
+/// what it has already done, and what this instance permits are four separate
+/// jobs; they used to be four panels stacked on one scroll.
+function MaintenanceRulesSubnav({
+  activeSection,
+  t,
+}: {
+  activeSection: MaintenanceRulesSection;
+  t: ReturnType<typeof useTranslate>;
+}) {
+  return (
+    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[196px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
+      <nav
+        id="settings-maintenance-rules-subnav"
+        className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
+        aria-label={t("settings.maintenanceRules")}
+      >
+        {MAINTENANCE_RULES_SECTIONS.map((item) => {
+          const Icon = item.icon;
+          const active = activeSection === item.section;
+          return (
+            <Link
+              key={item.section}
+              id={selectorId("settings-maintenance-rules-subnav", item.section)}
+              to={buildRulesPath("maintenance", item.section)}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
+                active &&
+                  "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
+              )}
+            >
+              <Icon
+                className={cn(
+                  "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                  active && "text-[var(--scry-accent-text)]",
+                )}
+              />
+              <span className="whitespace-nowrap">{t(item.labelKey)}</span>
+            </Link>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
 type SettingsContainerProps = {
   settingsSection: SettingsSection;
   userId?: string;
@@ -242,7 +372,12 @@ export const SettingsContainer = memo(function SettingsContainer({
   const client = useClient();
   // The Indexers page's pane lives in the path rather than in state so a pane
   // can be linked to and reloaded into.
-  const indexerSettingsTab = indexerSettingsTabFromPath(useLocation().pathname);
+  const pathname = useLocation().pathname;
+  const indexerSettingsTab = indexerSettingsTabFromPath(pathname);
+  // Same for the Rules page's two levels of pane. The kind is derivable from
+  // the settings section, but the maintenance pane exists only in the path.
+  const rulesSection = rulesSectionFromPath(pathname);
+  const maintenanceRulesSection = maintenanceRulesSectionFromPath(pathname);
   const [indexerDownloadClientMappingCatalogResource, setIndexerDownloadClientMappingCatalogResource] =
     useState<IndexerDownloadClientMappingCatalogResource>({
       catalog: null,
@@ -419,7 +554,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                     : settingsSection === "proxies"
                       ? t("settings.proxies")
                     : settingsSection === "rules"
-                      ? t("settings.rules")
+                      ? t("settings.rulesScoring")
                       : settingsSection === "maintenanceRules"
                         ? t("settings.maintenanceRules")
                       : settingsSection === "plugins"
@@ -470,9 +605,11 @@ export const SettingsContainer = memo(function SettingsContainer({
   const showPrimarySettingsSubnav = primarySettingsNav.some(
     (item) => item.section === settingsSection,
   );
+  // Both kinds of rule are panes of one page, so both carry its gutter.
+  const isRulesSection =
+    settingsSection === "rules" || settingsSection === "maintenanceRules";
   const usesAutomationHeader =
-    settingsSection === "rules" ||
-    settingsSection === "maintenanceRules" ||
+    isRulesSection ||
     settingsSection === "subtitles" ||
     settingsSection === "post-processing" ||
     settingsSection === "acquisition";
@@ -525,10 +662,17 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection === "indexers" && indexerSettingsTab !== "indexers"
       ? INDEXER_SETTINGS_TABS.find((item) => item.tab === indexerSettingsTab)
       : undefined;
-  const pageLabel = activeIndexerTab
-    ? t(activeIndexerTab.labelKey)
-    : settingsSectionLabel;
-  const PageIcon = activeIndexerTab ? activeIndexerTab.icon : SettingsSectionIcon;
+  // Same for the Maintenance Rules panes. The rule list is the page itself
+  // rather than a pane of it, so it adds no crumb and keeps the page's icon.
+  const activeMaintenancePane =
+    settingsSection === "maintenanceRules" && maintenanceRulesSection !== "rules"
+      ? MAINTENANCE_RULES_SECTIONS.find(
+          (item) => item.section === maintenanceRulesSection,
+        )
+      : undefined;
+  const activePane = activeIndexerTab ?? activeMaintenancePane;
+  const pageLabel = activePane ? t(activePane.labelKey) : settingsSectionLabel;
+  const PageIcon = activePane ? activePane.icon : SettingsSectionIcon;
   const breadcrumbRootLabel =
     usesAutomationHeader
       ? t("nav.group.automation")
@@ -599,6 +743,10 @@ export const SettingsContainer = memo(function SettingsContainer({
       {settingsSection === "indexers" ? (
         <IndexerSettingsSubnav activeTab={indexerSettingsTab} t={t} />
       ) : null}
+      {isRulesSection ? <RulesSubnav activeSection={rulesSection} t={t} /> : null}
+      {settingsSection === "maintenanceRules" ? (
+        <MaintenanceRulesSubnav activeSection={maintenanceRulesSection} t={t} />
+      ) : null}
       <main
         ref={settingsContentRef}
         data-slot="settings-main-scroll"
@@ -643,10 +791,14 @@ export const SettingsContainer = memo(function SettingsContainer({
           <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
             <span>{breadcrumbRootLabel}</span>
             <ChevronRight className="h-3.5 w-3.5" />
-            {activeIndexerTab ? (
+            {activePane ? (
               <>
                 <Link
-                  to={buildIndexerSettingsPath("indexers")}
+                  to={
+                    activeIndexerTab
+                      ? buildIndexerSettingsPath("indexers")
+                      : buildRulesPath("maintenance")
+                  }
                   className="transition hover:text-[var(--scry-ink2)]"
                 >
                   {settingsSectionLabel}
@@ -763,7 +915,7 @@ export const SettingsContainer = memo(function SettingsContainer({
           ) : settingsSection === "rules" ? (
             <SettingsRulesContainer />
           ) : settingsSection === "maintenanceRules" ? (
-            <SettingsMaintenanceRulesContainer />
+            <SettingsMaintenanceRulesContainer section={maintenanceRulesSection} />
           ) : settingsSection === "plugins" ? (
             <SettingsPluginsContainer />
           ) : settingsSection === "proxies" ? (

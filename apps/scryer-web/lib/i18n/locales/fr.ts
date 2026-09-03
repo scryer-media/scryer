@@ -1945,6 +1945,11 @@ const fr: LocaleDictionary = {
   "appUpgrade.failed": "La mise à niveau a échoué.",
   // ── Maintenance rules ──
   "settings.maintenanceRules": "Règles de maintenance",
+  "nav.rules": "Règles",
+  "settings.rulesScoring": "Règles de notation",
+  "settings.maintenanceNavRules": "Règles",
+  "settings.maintenanceNavHistory": "Historique",
+  "settings.maintenanceNavGates": "Autorisations",
   "settings.maintenanceRuleAction": "Action",
   "settings.maintenanceRuleActionHelp": "Ce que ferait cette règle une fois les actions de maintenance activées.",
   "settings.maintenanceRuleActionPlaceholder": "Choisir une action",

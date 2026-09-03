@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import type { MaintenanceRulesSection } from "@/components/root/types";
 import {
   MaintenanceCandidatesPanel,
   MaintenanceExclusionsPanel,
@@ -120,7 +121,11 @@ type PendingEditorAction =
   | { type: "close" }
   | null;
 
-export function SettingsMaintenanceRulesContainer() {
+export function SettingsMaintenanceRulesContainer({
+  section = "rules",
+}: {
+  section?: MaintenanceRulesSection;
+}) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
@@ -519,17 +524,29 @@ export function SettingsMaintenanceRulesContainer() {
     void refreshGates();
   }, [refreshGates]);
 
+  // Each pane pays only for what it shows. Rule sets, catalogs and gates are
+  // shared — the rule list needs them, and every other pane labels its rows
+  // with them — but candidates, runs and exclusions are one pane's own query.
   useEffect(() => {
+    if (section !== "candidates") {
+      return;
+    }
     void refreshCandidates();
-  }, [refreshCandidates]);
+  }, [refreshCandidates, section]);
 
   useEffect(() => {
+    if (section !== "history") {
+      return;
+    }
     void refreshRuns();
-  }, [refreshRuns]);
+  }, [refreshRuns, section]);
 
   useEffect(() => {
+    if (section !== "gates") {
+      return;
+    }
     void refreshExclusions();
-  }, [refreshExclusions]);
+  }, [refreshExclusions, section]);
 
   const confirmPendingEditorAction = useCallback(() => {
     if (!pendingEditorAction) return;
@@ -1104,14 +1121,25 @@ export function SettingsMaintenanceRulesContainer() {
         gates={gates}
         setRuleMode={(record, mode) => void setRuleMode(record, mode)}
         setRuleArming={setRuleArming}
+        section={section}
         operationsPanels={
-          <>
-            <MaintenanceGatesPanel
-              gates={gates}
-              gatesLocked={gatesLocked}
-              savingGate={savingGate}
-              onGateChange={handleGateChange}
-            />
+          section === "gates" ? (
+            <>
+              <MaintenanceGatesPanel
+                gates={gates}
+                gatesLocked={gatesLocked}
+                savingGate={savingGate}
+                onGateChange={handleGateChange}
+              />
+              <MaintenanceExclusionsPanel
+                exclusions={exclusions}
+                exclusionsError={exclusionsError}
+                ruleSetRecords={ruleSetRecords}
+                removingExclusionId={removingExclusionId}
+                removeExclusion={setPendingRemoveExclusion}
+              />
+            </>
+          ) : section === "candidates" ? (
             <MaintenanceCandidatesPanel
               candidates={candidates}
               candidatesLoading={candidatesLoading}
@@ -1128,6 +1156,7 @@ export function SettingsMaintenanceRulesContainer() {
               refreshCandidates={() => void refreshCandidates()}
               excludeCandidate={excludeCandidate}
             />
+          ) : section === "history" ? (
             <MaintenanceRunsPanel
               evaluationRuns={evaluationRuns}
               actionRuns={actionRuns}
@@ -1142,14 +1171,7 @@ export function SettingsMaintenanceRulesContainer() {
               runActionHandlerNow={() => void runActionHandlerNow()}
               refreshRuns={() => void refreshRuns()}
             />
-            <MaintenanceExclusionsPanel
-              exclusions={exclusions}
-              exclusionsError={exclusionsError}
-              ruleSetRecords={ruleSetRecords}
-              removingExclusionId={removingExclusionId}
-              removeExclusion={setPendingRemoveExclusion}
-            />
-          </>
+          ) : null
         }
       />
       <ConfirmDialog

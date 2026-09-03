@@ -1926,6 +1926,11 @@ const it: LocaleDictionary = {
   "appUpgrade.failed": "Aggiornamento non riuscito.",
   // ── Maintenance rules ──
   "settings.maintenanceRules": "Regole di manutenzione",
+  "nav.rules": "Regole",
+  "settings.rulesScoring": "Regole di punteggio",
+  "settings.maintenanceNavRules": "Regole",
+  "settings.maintenanceNavHistory": "Cronologia",
+  "settings.maintenanceNavGates": "Abilitazioni",
   "settings.maintenanceRuleAction": "Azione",
   "settings.maintenanceRuleActionHelp": "Cosa farebbe questa regola una volta attivate le azioni di manutenzione.",
   "settings.maintenanceRuleActionPlaceholder": "Scegli un'azione",

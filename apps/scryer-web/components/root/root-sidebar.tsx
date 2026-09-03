@@ -120,6 +120,19 @@ type TopNavGroupItemDefinition =
       icon: LucideIcon;
     };
 
+/// Whether a sidebar settings entry owns the section currently open. Rules is
+/// one entry over two sections, so it stays lit while either kind of rule is
+/// open; every other entry is the section it names.
+function isSettingsNavEntryActive(
+  entryId: SettingsSection,
+  settingsSection: SettingsSection,
+): boolean {
+  if (entryId === "rules") {
+    return settingsSection === "rules" || settingsSection === "maintenanceRules";
+  }
+  return entryId === settingsSection;
+}
+
 type TopNavGroupItem =
   | (NavItem & { kind: "view" })
   | {
@@ -183,8 +196,9 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "calendar" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
-      { kind: "settings", id: "rules", icon: SlidersHorizontal },
-      { kind: "settings", id: "maintenanceRules", icon: Wrench },
+      // Scoring and maintenance rules share this entry; the Rules page's own
+      // gutter picks the kind, so the sidebar names the subject once.
+      { kind: "settings", id: "rules", labelKey: "nav.rules", icon: SlidersHorizontal },
       { kind: "settings", id: "post-processing", icon: FolderCog },
     ],
   },
@@ -1132,7 +1146,8 @@ function RootSidebarContent({
                               item.id,
                             )}
                             isActive={
-                              view === "settings" && settingsSection === item.id
+                              view === "settings" &&
+                              isSettingsNavEntryActive(item.id, settingsSection)
                             }
                             className={TOP_NAV_BUTTON_CLASS}
                             onClick={(event) => {
