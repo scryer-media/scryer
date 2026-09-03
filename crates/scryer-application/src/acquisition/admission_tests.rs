@@ -936,6 +936,7 @@ fn queued(title: &str, tier_index: Option<usize>, revision: i32, score: i32) -> 
         tier_index,
         revision,
         score,
+        release_key: crate::admission::release_key(title),
     }
 }
 
@@ -973,6 +974,114 @@ fn an_equal_queued_release_refuses_the_candidate() {
         ),
         "an unoccupied scope with an equal release in flight must not fetch a second: {verdict:?}"
     );
+}
+
+/// The Desert Warrior loop: the very release already grabbed for a scope came
+/// back from the feed every sync and was fetched again — 79 copies of one
+/// BluRay. Whatever the scores say (a re-scored candidate can read *higher*
+/// than the copy in flight), the same release is never fetched twice.
+#[test]
+fn the_release_already_grabbed_is_never_fetched_again() {
+    let release = "Desert.Warrior.2025.1080p.BluRay.DD+5.1.x264-SPHD";
+    let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![queued(
+        release,
+        Some(1),
+        0,
+        900,
+    )]);
+    let policy = grab_policy_with_queue(0);
+
+    for score in [900, 1_500, 9_000] {
+        let verdict = evaluate_admission(
+            &subject,
+            CandidateFacts::new(Some(1), 0, score).with_release_title(release),
+            &policy,
+        );
+        assert!(
+            matches!(
+                verdict.rejection().map(|rejection| &rejection.reason),
+                Some(AdmissionRejectionReason::QueuedSameRelease { queued_title }) if queued_title == release
+            ),
+            "score {score}: the grabbed release must be refused by name: {verdict:?}"
+        );
+    }
+
+    // Name matching is separator- and case-insensitive: the client echoes the
+    // job under its own spelling.
+    let verdict = evaluate_admission(
+        &subject,
+        CandidateFacts::new(Some(0), 0, 9_000)
+            .with_release_title("desert warrior 2025 1080p bluray dd+5 1 x264 sphd"),
+        &policy,
+    );
+    assert!(
+        !verdict.is_admitted(),
+        "a re-spelt copy of the grabbed release is still the same release: {verdict:?}"
+    );
+
+    // A genuinely different, better release still gets through.
+    let verdict = evaluate_admission(
+        &subject,
+        CandidateFacts::new(Some(0), 0, 9_000)
+            .with_release_title("Desert.Warrior.2025.2160p.UHD.BluRay.x265-GRP"),
+        &policy,
+    );
+    assert!(
+        verdict.is_admitted(),
+        "a better release is not blocked by the same-release guard: {verdict:?}"
+    );
+}
+
+/// A zero churn threshold used to let an equal score *win* over a queued
+/// release (`0 >= 0`), so an identical release under another name was
+/// fetched beside the first. A tie is never an upgrade.
+#[test]
+fn an_equal_score_never_wins_over_a_queued_release_even_with_no_churn_threshold() {
+    let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![queued(
+        "Movie.2025.1080p.BluRay-A",
+        Some(1),
+        0,
+        900,
+    )]);
+    let policy = grab_policy_with_queue(0);
+
+    let verdict = evaluate_admission(
+        &subject,
+        CandidateFacts::new(Some(1), 0, 900).with_release_title("Movie.2025.1080p.BluRay-B"),
+        &policy,
+    );
+    assert!(
+        matches!(
+            verdict.rejection().map(|rejection| &rejection.reason),
+            Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+        ),
+        "an equal release must not be fetched beside the queued one: {verdict:?}"
+    );
+
+    let verdict = evaluate_admission(
+        &subject,
+        CandidateFacts::new(Some(1), 0, 901).with_release_title("Movie.2025.1080p.BluRay-B"),
+        &policy,
+    );
+    assert!(
+        verdict.is_admitted(),
+        "with no churn threshold any strict improvement still wins: {verdict:?}"
+    );
+}
+
+#[test]
+fn release_keys_fold_case_and_separators_and_ignore_empty_names() {
+    use crate::admission::release_key;
+    assert_eq!(
+        release_key("Desert.Warrior.2025.1080p.BluRay.DD+5.1.x264-SPHD"),
+        release_key("desert warrior 2025 1080p bluray dd+5 1 x264 sphd")
+    );
+    assert_ne!(
+        release_key("Desert.Warrior.2025.1080p.BluRay-SPHD"),
+        release_key("Desert.Warrior.2025.2160p.BluRay-SPHD")
+    );
+    assert_eq!(release_key("   "), None);
+    assert_eq!(release_key(""), None);
 }
 
 /// …and a worse one, and a same-tier improvement that does not clear the churn

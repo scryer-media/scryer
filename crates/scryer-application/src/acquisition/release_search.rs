@@ -1450,7 +1450,8 @@ pub(crate) fn automatic_candidate_delay_decision(
         ),
         candidate_revision(candidate),
         candidate_score,
-    );
+    )
+    .with_release_title(&candidate.title);
     let delay_context = crate::delay_profile::DelayPolicyContext {
         user_invoked,
         candidate_score,
@@ -1640,7 +1641,8 @@ pub(crate) fn evaluate_auto_candidate(
         ),
         candidate_revision(candidate),
         candidate_score,
-    );
+    )
+    .with_release_title(&candidate.title);
 
     if let Some(code) = cutoff_refusal(
         candidate_facts,
@@ -1713,7 +1715,8 @@ pub(crate) fn evaluate_auto_candidate(
         // rejection: an operator can act on "something better is already
         // downloading", and cannot act on "upgrade policy said no".
         return match rejection.reason {
-            crate::admission::AdmissionRejectionReason::QueuedEqualOrBetter { .. } => {
+            crate::admission::AdmissionRejectionReason::QueuedEqualOrBetter { .. }
+            | crate::admission::AdmissionRejectionReason::QueuedSameRelease { .. } => {
                 ReleaseAutoDecisionCode::QueuedBetterOrEqual
             }
             _ => ReleaseAutoDecisionCode::UpgradeRejected,
@@ -2005,6 +2008,10 @@ impl AppUseCase {
         // An unobservable queue is the one case that still hard-skips, in the
         // lane; here it means the pseudo-incumbents would be built from a
         // snapshot that reports everything as active, so they are skipped.
+        let membership = self
+            .scope_membership_for(title, &subject.submission_scope)
+            .await;
+        let mut queued = Vec::new();
         if !dl_snapshot.queue_listing_failed() {
             let submissions = self
                 .services
@@ -2031,10 +2038,7 @@ impl AppUseCase {
                             .map(|state| (identity, state))
                     })
                     .collect();
-                let membership = self
-                    .scope_membership_for(title, &subject.submission_scope)
-                    .await;
-                let queued = self
+                queued = self
                     .queued_releases_for_scope(
                         title,
                         &membership.view(),
@@ -2046,9 +2050,21 @@ impl AppUseCase {
                         &catalog_collections,
                     )
                     .await;
-                admission = admission.with_queued(queued);
             }
         }
+        // The ledger's recorded grab claims the scope even when the client
+        // shows nothing for it this pass.
+        let queued = self
+            .queued_releases_with_grabbed_claims(
+                queued,
+                title,
+                &membership.view(),
+                &scoring_context,
+                &catalog_episodes,
+                &catalog_collections,
+            )
+            .await;
+        admission = admission.with_queued(queued);
         let has_active_pending_overlap = if user_invoked {
             false
         } else {

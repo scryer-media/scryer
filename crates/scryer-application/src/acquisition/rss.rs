@@ -2029,11 +2029,12 @@ impl AppUseCase {
             .await;
         // D18: whatever this title already has in flight, compared on the same
         // ladder as a file on disk. `queue` was read once for the whole title.
+        let membership = self
+            .scope_membership_for(title, &subject.submission_scope)
+            .await;
+        let mut queued = Vec::new();
         if let Some(queue) = queue {
-            let membership = self
-                .scope_membership_for(title, &subject.submission_scope)
-                .await;
-            let queued = self
+            queued = self
                 .queued_releases_for_scope(
                     title,
                     &membership.view(),
@@ -2045,8 +2046,21 @@ impl AppUseCase {
                     &catalog_collections,
                 )
                 .await;
-            admission = admission.with_queued(queued);
         }
+        // The ledger's own record of the last grab claims the scope too, so a
+        // job the client is post-processing (or has not surfaced yet) cannot
+        // read as "nothing in flight" and be fetched again.
+        let queued = self
+            .queued_releases_with_grabbed_claims(
+                queued,
+                title,
+                &membership.view(),
+                &scoring_context,
+                &catalog_episodes,
+                &catalog_collections,
+            )
+            .await;
+        admission = admission.with_queued(queued);
 
         let title_pending = self
             .services

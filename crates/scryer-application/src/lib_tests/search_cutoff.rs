@@ -1666,6 +1666,7 @@ async fn a_queued_releases_announced_size_is_part_of_its_score() {
             tier_index: queued_facts.tier_index,
             revision: queued_facts.revision,
             score: queued_facts.score,
+            release_key: None,
         }]);
     let grab_policy = AdmissionPolicy {
         allow_upgrades: true,
@@ -1778,6 +1779,7 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
             tier_index: facts.tier_index,
             revision: facts.revision,
             score: facts.score,
+            release_key: None,
         }]);
     let policy = AdmissionPolicy {
         allow_upgrades: true,

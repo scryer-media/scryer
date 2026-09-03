@@ -277,6 +277,24 @@ fn note_completed_item(
     }
 }
 
+/// A history-listed job that is still being worked on. Mirrors the queue leg's
+/// live-claim set minus `ImportPending` (a history item awaiting import lists
+/// as `Completed`), so a job the client reports from either listing claims its
+/// scope the same way.
+fn history_item_is_live_claim(state: DownloadQueueState) -> bool {
+    matches!(
+        state,
+        DownloadQueueState::Queued
+            | DownloadQueueState::Downloading
+            | DownloadQueueState::Paused
+            | DownloadQueueState::Verifying
+            | DownloadQueueState::Repairing
+            | DownloadQueueState::Extracting
+            | DownloadQueueState::ImportPending
+            | DownloadQueueState::Warning
+    )
+}
+
 impl DownloadClientSnapshot {
     pub(crate) async fn fetch(app: &AppUseCase) -> Self {
         let mut active_titles = std::collections::HashSet::new();
@@ -392,6 +410,22 @@ impl DownloadClientSnapshot {
                             &item.client_id,
                             &item.download_client_item_id,
                         );
+                    } else if history_item_is_live_claim(item.state) {
+                        // SABnzbd moves a job into *history* the moment the
+                        // download finishes and post-processes it there
+                        // (verify → repair → unpack → move). For those minutes
+                        // the job is in neither the queue leg above nor the
+                        // completed set, so this leg used to report the scope
+                        // as free: every RSS pass in that window grabbed the
+                        // same release again. Post-processing is a live claim.
+                        active_titles.insert(item.title_name.to_ascii_lowercase());
+                        active_client_ids.insert(download_client_item_identity(
+                            Some(item.client_id.as_str()),
+                            &item.download_client_item_id,
+                        ));
+                        *active_raw_item_id_counts
+                            .entry(item.download_client_item_id.clone())
+                            .or_insert(0) += 1;
                     } else if item.state == DownloadQueueState::Failed {
                         // `Warning` is not a failure: it stays out of this map
                         // so failure recovery never fires on a download the
@@ -1918,6 +1952,34 @@ mod client_snapshot_tests {
             "grab guard is title-string equality, so it cannot see that this \
              scope is already queued under another release name"
         );
+    }
+
+    /// SABnzbd post-processes in *history*: the job leaves the queue listing
+    /// while it verifies, repairs, unpacks and moves. Each of those states is
+    /// still a live claim on the scope; only a settled outcome is not.
+    #[test]
+    fn history_post_processing_states_are_live_claims() {
+        for state in [
+            DownloadQueueState::Queued,
+            DownloadQueueState::Downloading,
+            DownloadQueueState::Paused,
+            DownloadQueueState::Verifying,
+            DownloadQueueState::Repairing,
+            DownloadQueueState::Extracting,
+            DownloadQueueState::ImportPending,
+            DownloadQueueState::Warning,
+        ] {
+            assert!(
+                history_item_is_live_claim(state),
+                "{state:?} in history is work the client is still doing"
+            );
+        }
+        for state in [DownloadQueueState::Completed, DownloadQueueState::Failed] {
+            assert!(
+                !history_item_is_live_claim(state),
+                "{state:?} is an outcome, recorded by the completed/failed sets instead"
+            );
+        }
     }
 
     fn standby(id: &str, score: i32, added_at: &str) -> PendingRelease {
