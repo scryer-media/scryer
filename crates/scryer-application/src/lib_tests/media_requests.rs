@@ -1859,7 +1859,10 @@ async fn submit_non_advanced_series_request_drops_a_supplied_monitor_selection()
         .expect("request should succeed");
 
     let request = harness.media_requests.requests.lock().await[0].clone();
-    assert_eq!(request.requested_monitor_type.as_deref(), Some("allepisodes"));
+    assert_eq!(
+        request.requested_monitor_type.as_deref(),
+        Some("allepisodes")
+    );
     assert!(request.requested_monitor_selection.is_none());
 }
 

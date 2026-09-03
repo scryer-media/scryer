@@ -537,7 +537,10 @@ async fn delete_episode_files_records_per_file_failures_and_keeps_going() {
     // A row whose path sits outside every configured root: its preview fails, so
     // it must be reported as a failure rather than aborting the whole batch.
     let outside_root = fixture
-        .insert_media_file_row("/definitely/not/a/root/Emberfall - S01E02.mkv", Some("episode-2"))
+        .insert_media_file_row(
+            "/definitely/not/a/root/Emberfall - S01E02.mkv",
+            Some("episode-2"),
+        )
         .await;
 
     let episode_ids = vec!["episode-1".to_string(), "episode-2".to_string()];

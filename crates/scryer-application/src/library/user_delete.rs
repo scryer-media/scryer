@@ -426,7 +426,10 @@ impl AppUseCase {
         title_id: &str,
         episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeFileDeleteTarget>> {
-        if episode_ids.iter().all(|episode_id| episode_id.trim().is_empty()) {
+        if episode_ids
+            .iter()
+            .all(|episode_id| episode_id.trim().is_empty())
+        {
             return Err(AppError::Validation(
                 "at least one episode id is required".into(),
             ));

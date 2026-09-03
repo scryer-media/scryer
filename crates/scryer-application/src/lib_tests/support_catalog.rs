@@ -24,8 +24,7 @@ pub(super) struct MockTitleRepo {
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
-    pub(super) monitor_selections:
-        Arc<Mutex<HashMap<String, scryer_domain::MonitorSelection>>>,
+    pub(super) monitor_selections: Arc<Mutex<HashMap<String, scryer_domain::MonitorSelection>>>,
 }
 #[derive(Default)]
 pub(crate) struct RecordingJobRunRepo {
