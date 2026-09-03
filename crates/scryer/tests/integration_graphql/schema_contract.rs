@@ -571,6 +571,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // metadata series type: OBJECT 323->326, INPUT_OBJECT 176->178,
     // public types 623->628. Query, mutation, and subscription roots are
     // unchanged; ADVANCED joins the existing MonitorTypeValue enum.
+    // Stored OAuth client kinds add one enum behind the existing registration
+    // payload and create input: ENUM 112->113, public types 628->629. Root,
+    // object, and input-object counts are unchanged.
     assert_eq!(
         query_field_count, 135,
         "query fields: {query_field_names:?}"
@@ -580,10 +583,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 628);
+    assert_eq!(public_types.len(), 629);
     assert_eq!(kind_count("OBJECT"), 326);
     assert_eq!(kind_count("INPUT_OBJECT"), 178);
-    assert_eq!(kind_count("ENUM"), 112);
+    assert_eq!(kind_count("ENUM"), 113);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
