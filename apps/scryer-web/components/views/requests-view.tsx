@@ -68,7 +68,10 @@ import {
   mediaRequestRowId,
   mediaRequestStatusId,
 } from "@/lib/utils/dom-ids";
-import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import {
+  selectBackdropVariantUrl,
+  selectPosterVariantUrl,
+} from "@/lib/utils/poster-images";
 import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 
@@ -554,8 +557,11 @@ export function RequestsView({
 
   const renderRequestCard = (request: MediaRequestRecord) => {
     const posterUrl = selectPosterVariantUrl(request.posterUrl, "w250");
-    const backgroundPosterUrl =
-      selectPosterVariantUrl(request.posterUrl, "original") ?? posterUrl;
+    // Background art when the provider had it; the poster is only a fallback.
+    const backgroundArtUrl =
+      selectBackdropVariantUrl(request.backgroundUrl, "w1280") ??
+      selectPosterVariantUrl(request.posterUrl, "original") ??
+      posterUrl;
     const requesters = requesterLabel(request);
     const imdbId = requestExternalIdValue(request, "imdb");
     const tvdbId = requestExternalIdValue(request, "tvdb");
@@ -621,11 +627,11 @@ export function RequestsView({
         data-request-tmdb-id={requestExternalIdValue(request, "tmdb")}
         className="relative overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]"
       >
-        {backgroundPosterUrl ? (
+        {backgroundArtUrl ? (
           <div
             aria-hidden="true"
-            className="absolute inset-0 scale-105 bg-cover bg-center opacity-60"
-            style={{ backgroundImage: `url(${backgroundPosterUrl})` }}
+            className="absolute inset-0 bg-cover bg-center opacity-60"
+            style={{ backgroundImage: `url(${backgroundArtUrl})` }}
           />
         ) : null}
         <div
@@ -637,8 +643,10 @@ export function RequestsView({
           className="absolute inset-0 bg-[linear-gradient(0deg,rgba(4,7,16,0.76)_0%,rgba(4,7,16,0.22)_58%,rgba(255,255,255,0.04)_100%)]"
         />
         <div className="relative z-10 flex flex-col sm:flex-row">
-          <div className="w-full shrink-0 bg-[var(--scry-inset)] sm:w-[150px]">
-            <div className="aspect-[2/3] w-full overflow-hidden">
+          {/* The poster floats over the full-bleed art: a fixed 2:3 frame,
+              vertically centred against the details column. */}
+          <div className="flex w-full shrink-0 items-center justify-center p-4 sm:w-[236px] sm:pr-0">
+            <div className="aspect-[2/3] w-[200px] shrink-0 overflow-hidden rounded-[9px] border border-[#2a3556] bg-[var(--scry-inset)] shadow-[0_8px_22px_rgba(0,0,0,0.5)]">
               {posterUrl ? (
                 <TitlePoster
                   src={posterUrl}
@@ -647,7 +655,7 @@ export function RequestsView({
                   loading="lazy"
                 />
               ) : (
-                <div className="flex h-full min-h-[180px] w-full items-center justify-center text-xs text-[var(--scry-muted3)]">
+                <div className="flex h-full w-full items-center justify-center text-xs text-[var(--scry-muted3)]">
                   {t("label.noArt")}
                 </div>
               )}

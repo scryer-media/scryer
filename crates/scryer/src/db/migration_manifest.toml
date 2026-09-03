@@ -1707,6 +1707,23 @@ file = "postgres/migrations/0206_monitor_selections.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 207
+description = "media request background art"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0207_media_request_background.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0207_media_request_background.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

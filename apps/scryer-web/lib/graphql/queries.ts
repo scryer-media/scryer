@@ -3779,6 +3779,7 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     sortTitle
     slug
     posterUrl
+    backgroundUrl
     year
     overview
     runtimeMinutes
@@ -3839,6 +3840,7 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     sortTitle
     slug
     posterUrl
+    backgroundUrl
     year
     overview
     runtimeMinutes

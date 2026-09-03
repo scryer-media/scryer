@@ -272,6 +272,22 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         ImageProxyKind::Poster,
         "w250",
     );
+    // Unlike the poster, no placeholder: requests submitted before background
+    // art was captured must fall back to the poster on the card.
+    let background_url = request
+        .background_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .and_then(|url| {
+            app.media_image_url(
+                Some(url),
+                Some("media_request"),
+                Some(&owner_id),
+                ImageProxyKind::Fanart,
+                "w1280",
+            )
+        });
     let rating_summary = request.rating_summary;
     MediaRequestPayload {
         id: request.id.into(),
@@ -283,6 +299,7 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         sort_title: request.sort_title,
         slug: request.slug,
         poster_url,
+        background_url,
         year: request.year,
         overview: request.overview,
         runtime_minutes: request.runtime_minutes,

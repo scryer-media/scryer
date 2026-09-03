@@ -129,6 +129,7 @@ impl AppUseCase {
             input.requested_monitor_selection,
         )?;
         let poster_url = metadata_enrichment.poster_url;
+        let background_url = metadata_enrichment.background_url;
         let overview = metadata_enrichment
             .overview
             .or_else(|| normalized_optional_string(input.overview));
@@ -149,6 +150,7 @@ impl AppUseCase {
             sort_title: normalized_optional_string(input.sort_title),
             slug: normalized_optional_string(input.slug),
             poster_url,
+            background_url,
             year: input.year,
             overview,
             runtime_minutes: input.runtime_minutes,
@@ -1033,6 +1035,7 @@ fn movie_title_ref_from_external_ids(external_ids: &[ExternalId]) -> Option<crat
 struct MediaRequestMetadataEnrichment {
     external_ids: Vec<ExternalId>,
     poster_url: Option<String>,
+    background_url: Option<String>,
     overview: Option<String>,
     rating_summary: TitleRatingSummary,
 }
@@ -1050,6 +1053,7 @@ impl AppUseCase {
                     return MediaRequestMetadataEnrichment {
                         external_ids,
                         poster_url: None,
+                        background_url: None,
                         overview: None,
                         rating_summary: TitleRatingSummary::default(),
                     };
@@ -1080,6 +1084,7 @@ impl AppUseCase {
                             return MediaRequestMetadataEnrichment {
                                 external_ids,
                                 poster_url: None,
+                                background_url: None,
                                 overview: None,
                                 rating_summary: TitleRatingSummary::default(),
                             };
@@ -1107,6 +1112,7 @@ impl AppUseCase {
                     return MediaRequestMetadataEnrichment {
                         external_ids,
                         poster_url: None,
+                        background_url: None,
                         overview: None,
                         rating_summary: TitleRatingSummary::default(),
                     };
@@ -1120,6 +1126,7 @@ impl AppUseCase {
                     return MediaRequestMetadataEnrichment {
                         external_ids,
                         poster_url: None,
+                        background_url: None,
                         overview: None,
                         rating_summary: TitleRatingSummary::default(),
                     };
@@ -1138,6 +1145,8 @@ impl AppUseCase {
                 let overview = normalized_optional_string(result.metadata_update.overview.clone());
                 let poster_url =
                     normalized_optional_string(result.metadata_update.poster_url.clone());
+                let background_url =
+                    normalized_optional_string(result.metadata_update.background_url.clone());
                 let rating_summary = result.metadata_update.ratings.clone().unwrap_or_default();
                 let enriched =
                     crate::catalog::facets::handler::external_ids_from_hydration_metadata(
@@ -1148,6 +1157,7 @@ impl AppUseCase {
                     external_ids: normalize_media_request_external_ids(enriched)
                         .unwrap_or(external_ids),
                     poster_url,
+                    background_url,
                     overview,
                     rating_summary,
                 }
@@ -1161,6 +1171,7 @@ impl AppUseCase {
                 MediaRequestMetadataEnrichment {
                     external_ids,
                     poster_url: None,
+                    background_url: None,
                     overview: None,
                     rating_summary: TitleRatingSummary::default(),
                 }

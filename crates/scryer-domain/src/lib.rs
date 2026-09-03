@@ -325,6 +325,9 @@ pub struct MediaRequest {
     pub sort_title: Option<String>,
     pub slug: Option<String>,
     pub poster_url: Option<String>,
+    /// Background art captured at submit time, or `None` when the provider
+    /// had none.
+    pub background_url: Option<String>,
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub runtime_minutes: Option<i32>,

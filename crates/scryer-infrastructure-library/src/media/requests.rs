@@ -101,7 +101,7 @@ impl MediaRequestRepository for MediaRequestStore {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
             "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                    poster_url, year, overview, runtime_minutes, language, content_status,
+                    poster_url, background_url, year, overview, runtime_minutes, language, content_status,
                     rating_summary_json,
                     requested_quality_profile_id, requested_quality_profile_name,
                     requested_monitor_type,
@@ -295,14 +295,14 @@ async fn insert_media_request_tx(
     tx.execute(
         "INSERT INTO media_requests (
             id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-            poster_url, year, overview, runtime_minutes, language, content_status,
+            poster_url, background_url, year, overview, runtime_minutes, language, content_status,
             rating_summary_json,
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
             created_by_user_id, created_at, updated_at
         ) VALUES (
             {}, {}, {}, {}, {}, {}, {}, {},
-            {}, {}, {}, {}, {}, {},
+            {}, {}, {}, {}, {}, {}, {},
             {},
             {}, {}, {},
             {}, {}, {}
@@ -317,6 +317,7 @@ async fn insert_media_request_tx(
             SqlArg::OptText(request.sort_title.clone()),
             SqlArg::OptText(request.slug.clone()),
             SqlArg::OptText(request.poster_url.clone()),
+            SqlArg::OptText(request.background_url.clone()),
             SqlArg::OptI32(request.year),
             SqlArg::OptText(request.overview.clone()),
             SqlArg::OptI32(request.runtime_minutes),
@@ -554,7 +555,7 @@ async fn load_media_request_tx(
     let row = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                poster_url, year, overview, runtime_minutes, language, content_status,
+                poster_url, background_url, year, overview, runtime_minutes, language, content_status,
                 rating_summary_json,
                 requested_quality_profile_id, requested_quality_profile_name,
                 requested_monitor_type,
@@ -648,7 +649,7 @@ async fn load_media_request_requesters(
 fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlArg>) {
     let mut sql = String::from(
         "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                poster_url, year, overview, runtime_minutes, language, content_status,
+                poster_url, background_url, year, overview, runtime_minutes, language, content_status,
                 rating_summary_json,
                 requested_quality_profile_id, requested_quality_profile_name,
                 requested_monitor_type,
@@ -712,6 +713,7 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         sort_title: row.opt_text("sort_title")?,
         slug: row.opt_text("slug")?,
         poster_url: row.opt_text("poster_url")?,
+        background_url: row.opt_text("background_url")?,
         year: row.opt_i32("year")?,
         overview: row.opt_text("overview")?,
         runtime_minutes: row.opt_i32("runtime_minutes")?,

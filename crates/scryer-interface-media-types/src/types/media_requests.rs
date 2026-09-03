@@ -119,6 +119,8 @@ pub struct MediaRequestPayload {
     pub slug: Option<String>,
     /// Poster URL, or null when unavailable.
     pub poster_url: Option<String>,
+    /// Background art URL captured at submit time, or null when unavailable.
+    pub background_url: Option<String>,
     /// Release year, or null when unknown.
     pub year: Option<i32>,
     /// Overview text, or null when unavailable.

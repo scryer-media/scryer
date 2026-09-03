@@ -291,6 +291,7 @@ export type MediaRequestRecord = {
   sortTitle?: string | null;
   slug?: string | null;
   posterUrl?: string | null;
+  backgroundUrl?: string | null;
   year?: number | null;
   overview?: string | null;
   runtimeMinutes?: number | null;

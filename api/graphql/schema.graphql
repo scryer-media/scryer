@@ -9531,6 +9531,10 @@ type MediaRequestPayload {
 	"""
 	posterUrl: String
 	"""
+	Background art URL captured at submit time, or null when unavailable.
+	"""
+	backgroundUrl: String
+	"""
 	Release year, or null when unknown.
 	"""
 	year: Int

@@ -379,6 +379,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             sort_title: request.sort_title,
             slug: request.slug,
             poster_url: request.poster_url,
+            background_url: request.background_url,
             year: request.year,
             overview: request.overview,
             runtime_minutes: request.runtime_minutes,
