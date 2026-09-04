@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
   SettingsRecycleBinSection,
@@ -27,6 +27,8 @@ import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
   hasAnyAppPermission,
+  hasAnyLibraryPermission,
+  hasLibraryPermission,
 } from "@/lib/utils/permissions";
 import {
   normalizeLibraryFilterSelection,
@@ -88,16 +90,12 @@ export function SettingsRecycleBinContainer() {
   const client = useClient();
   const { user } = useAuth();
   const canManageConfig = hasAnyAppPermission(user, [APP_PERMISSIONS.manageSystemSettings]);
-  const manageTitleLibraryIds = useMemo(
-    () =>
-      new Set(
-        (user?.libraryPermissions ?? [])
-          .filter((grant) => grant.permissions.includes(LIBRARY_PERMISSIONS.manageTitles))
-          .map((grant) => grant.libraryId),
-      ),
+  const canManageLibraryItems = useCallback(
+    (libraryId: string) =>
+      hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageTitles),
     [user],
   );
-  const canManageItems = manageTitleLibraryIds.size > 0;
+  const canManageItems = hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles);
   const [items, setItems] = useState<RecycledItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [itemsRefreshRevision, setItemsRefreshRevision] = useState(0);
@@ -155,7 +153,7 @@ export function SettingsRecycleBinContainer() {
         if (cancelled) return;
         if (error) throw error;
         const nextLibraries = (data?.libraries ?? []).filter((library) =>
-          manageTitleLibraryIds.has(library.id),
+          canManageLibraryItems(library.id),
         );
         setLibraries(nextLibraries);
         setSelectedLibraryIds((current) => normalizeLibraryFilterSelection(current, nextLibraries));
@@ -170,7 +168,7 @@ export function SettingsRecycleBinContainer() {
     return () => {
       cancelled = true;
     };
-  }, [canManageItems, client, manageTitleLibraryIds, setGlobalStatus, t]);
+  }, [canManageItems, canManageLibraryItems, client, setGlobalStatus, t]);
 
   const fetchItems = useCallback(async () => {
     if (settingsLoading || !settings.enabled || !canManageItems) {
@@ -259,7 +257,7 @@ export function SettingsRecycleBinContainer() {
 
   const validateBatchItems = (requested: RecycledItem[]): RecycledItem[] | null => {
     const targets = uniqueItems(requested).filter(
-      (item) => manageTitleLibraryIds.has(item.libraryId) && !pendingItemIds.has(item.id),
+      (item) => canManageLibraryItems(item.libraryId) && !pendingItemIds.has(item.id),
     );
     if (targets.length === 0) return null;
     if (targets.length > RECYCLE_BATCH_MAX_ITEMS) {
