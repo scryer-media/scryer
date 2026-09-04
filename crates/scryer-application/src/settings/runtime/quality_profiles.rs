@@ -412,7 +412,7 @@ impl AppUseCase {
             .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageTitles)
             .await?;
         let can_manage_library = self
-            .has_any_granted_library_permission(
+            .has_any_library_permission(
                 actor,
                 scryer_domain::LibraryPermission::ManageLibrary,
             )

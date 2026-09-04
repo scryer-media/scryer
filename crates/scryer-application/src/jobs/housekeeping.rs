@@ -299,7 +299,7 @@ impl AppUseCase {
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?
             || self
-                .has_any_granted_library_permission(
+                .has_any_library_permission(
                     actor,
                     scryer_domain::LibraryPermission::ManageTitles,
                 )
@@ -319,7 +319,7 @@ impl AppUseCase {
         library_ids: Option<Vec<String>>,
     ) -> AppResult<HashSet<String>> {
         let allowed = self
-            .granted_library_ids_for_permission(
+            .authorized_library_ids(
                 actor,
                 None,
                 scryer_domain::LibraryPermission::ManageTitles,
@@ -1430,7 +1430,7 @@ impl AppUseCase {
                     .ok_or_else(|| {
                         AppError::Unauthorized("You do not have access to this library".to_string())
                     })?;
-                self.require_granted_library_permission(
+                self.require_library_permission(
                     actor,
                     &library.id,
                     scryer_domain::LibraryPermission::ManageTitles,
@@ -2032,7 +2032,7 @@ impl AppUseCase {
                     .ok_or_else(|| {
                         AppError::Unauthorized("You do not have access to this library".to_string())
                     })?;
-                self.require_granted_library_permission(
+                self.require_library_permission(
                     actor,
                     &library.id,
                     scryer_domain::LibraryPermission::ManageTitles,
