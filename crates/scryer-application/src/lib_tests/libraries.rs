@@ -2016,3 +2016,101 @@ async fn movie_library_rejects_plexmatch_override() {
         other => panic!("expected validation error, got {other:?}"),
     }
 }
+
+/// Grant rows are seeded only for the libraries that exist when an admin
+/// account is provisioned. A library created afterwards has no row, and a
+/// real session loads authorization from the datastore with an empty
+/// per-library fallback. The catalog listing already lets catalog admins
+/// through on the app-level mask; the single-title reads must agree, or a
+/// title that appears in the catalog cannot be opened.
+#[tokio::test]
+async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() {
+    let (app, mut user) = bootstrap();
+    let admin = scryer_domain::UserAuthorization::full_admin();
+
+    let library = app
+        .create_library(
+            &user,
+            MediaFacet::Movie,
+            "Kids".to_string(),
+            vec![LibraryRootDraft {
+                path: "/Volumes/Media/Kids".to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("library should be created");
+    let created = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Kids Movie".into(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                slug: Some("kids-movie".to_string()),
+                ..Default::default()
+            },
+            library.id.clone(),
+        )
+        .await
+        .expect("title should be created");
+
+    // Persist what provisioning leaves behind: the app mask plus grant rows on
+    // the default libraries only, then force the next check to reload it.
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, admin.app)
+        .await
+        .expect("app permission mask should be stored");
+    let default_library_grants = [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime]
+        .into_iter()
+        .map(|facet| scryer_domain::LibraryGrant {
+            user_id: user.id.clone(),
+            library_id: scryer_domain::default_library_id_for_facet(&facet),
+            permissions: admin.default_library,
+        })
+        .collect();
+    app.services
+        .catalog
+        .libraries
+        .set_grants_for_user(&user.id, default_library_grants)
+        .await
+        .expect("library grants should be stored");
+    user.authorization.loaded = false;
+
+    let by_id = app
+        .get_title(&user, &created.title.id)
+        .await
+        .expect("catalog admin should read a title in an ungranted library");
+    assert_eq!(by_id.map(|title| title.id), Some(created.title.id.clone()));
+
+    let by_slug = app
+        .get_title_by_slug(
+            &user,
+            MediaFacet::Movie,
+            None,
+            Some(library.slug.clone()),
+            "kids-movie",
+        )
+        .await
+        .expect("catalog admin slug lookup should succeed in an ungranted library");
+    assert_eq!(by_slug.map(|title| title.id), Some(created.title.id.clone()));
+
+    // Without the catalog-admin mask the explicit grant rows still decide.
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, AppPermissionMask::NONE)
+        .await
+        .expect("app permission mask should be stored");
+    user.authorization.loaded = false;
+    match app.get_title(&user, &created.title.id).await {
+        Err(AppError::Unauthorized(_)) => {}
+        other => panic!("expected unauthorized without a grant, got {other:?}"),
+    }
+}
