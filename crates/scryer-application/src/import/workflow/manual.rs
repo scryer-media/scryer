@@ -1024,7 +1024,7 @@ async fn preview_manual_import(
     if *facet == MediaFacet::Movie {
         video_files.retain(|candidate| !is_sample_named_file(&candidate.source_entry_path));
     }
-    let grabbed_episode_ids = match release_evidence.scope() {
+    let mut grabbed_episode_ids = match release_evidence.scope() {
         Some(SubmissionScope::Episode { episode_id }) => HashSet::from([episode_id.clone()]),
         Some(SubmissionScope::EpisodeSet { episode_ids }) => episode_ids.iter().cloned().collect(),
         Some(SubmissionScope::Collection { collection_id }) => available_episodes
@@ -1037,6 +1037,20 @@ async fn preview_manual_import(
         )
         | None => HashSet::new(),
     };
+    // A verified pack vouches for every standard episode in the seasons its
+    // release name declares, not only the season (or episode set) the grab was
+    // scoped to: a two-season pack grabbed for season 1 imports its season 2
+    // members automatically, so Manual Import keeps their suggestions instead
+    // of erasing them as "outside the grab".
+    let verified_pack = verified_episode_pack(release_evidence, title);
+    if let Some(pack) = verified_pack.as_ref() {
+        grabbed_episode_ids.extend(
+            available_episodes
+                .iter()
+                .filter(|episode| pack.vouches_for(episode))
+                .map(|episode| episode.id.clone()),
+        );
+    }
     let grabbed_series_movie_link_id = match release_evidence.scope() {
         Some(SubmissionScope::SeriesMovie {
             series_movie_link_id,
@@ -1052,7 +1066,6 @@ async fn preview_manual_import(
             .map(|candidate| candidate.source_entry_path.clone())
     })
     .flatten();
-    let verified_pack = verified_episode_pack(release_evidence, title);
     let expected_pack_episode_ids = match (verified_pack.as_ref(), release_evidence.scope()) {
         (Some(_), Some(scope)) => {
             expected_episode_ids_from_submission_scope(app, title, scope, false).await
