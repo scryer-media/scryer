@@ -51,6 +51,15 @@ pub struct AcquisitionTarget {
     /// Recent air/release/add → hot lane (high candidate value); long-tail and
     /// upgrades → cold lane (low value, drained under scheduler backpressure).
     pub is_hot: bool,
+    /// Whether this scope is hot because *its own* air/release date is recent,
+    /// rather than only because its title was added in the last few days.
+    ///
+    /// Both halves are hot, but they are not equally urgent. A freshly added
+    /// series contributes its whole back catalog to the hot lane at once, and a
+    /// newly aired episode of a show that is already in the library must not
+    /// queue behind that block. The batch selector therefore orders air-date
+    /// heat ahead of recently-added heat (§D3).
+    pub hot_by_air_date: bool,
     /// Whether a primary file already occupies this scope.
     ///
     /// The two derivations differ by exactly this: `derive_missing_targets`
@@ -102,54 +111,112 @@ pub(crate) fn movie_is_available_for_acquisition(
     }
 }
 
-/// The batch to evaluate this cycle plus the new cold-lane resume position.
+/// The batch to evaluate this cycle plus the new per-lane resume positions.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CursorSelection {
-    /// Indices into the input targets, in evaluation order (hot first, then
-    /// cold in rotation order).
+    /// Indices into the input targets, in evaluation order (hot first — air-date
+    /// heat before recently-added heat — then cold in rotation order).
     pub indices: Vec<usize>,
     /// The cold scope_key to resume *after* next cycle (rotating cursor),
     /// carried forward unchanged when the cold lane did not advance.
     pub resume_after: Option<String>,
+    /// The hot scope_key to resume *after* next cycle. The hot lane rotates for
+    /// the same reason the cold one does: a hot set larger than `max_scopes`
+    /// would otherwise re-evaluate its head every cycle and never reach its
+    /// tail. Carried forward unchanged when the hot lane did not advance.
+    pub hot_resume_after: Option<String>,
+}
+
+/// Numeric `(season, episode)` walk order for a target's scope work.
+///
+/// Derived order is the datastore's row order — `list_missing_scope_candidates`
+/// orders by episode id, which is a random UUID — so a title's episodes arrive
+/// shuffled. Sorting on this key makes a title's walk predictable: S01E01
+/// first, unnumbered scopes last, and a stable sort keeps the derived order
+/// among equals.
+pub(crate) fn scope_walk_order_key(target: &AcquisitionTarget) -> (u32, u32) {
+    fn parse(value: Option<&String>) -> u32 {
+        value
+            .map(|value| value.trim())
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(u32::MAX)
+    }
+
+    (
+        parse(target.season_number.as_ref()),
+        parse(target.episode_number.as_ref()),
+    )
 }
 
 /// Select the background acquisition batch for one cycle. Scheduler backpressure is
 /// the pace; this only bounds how many scopes get *evaluated* (coverage lookup,
 /// routing resolve, fingerprint compute) per tick:
-/// - **hot targets first** (recent = high candidate value), in stable order;
+/// - **hot targets first** (recent = high candidate value), rotating after
+///   `hot_resume_after` so a hot set larger than `max_scopes` cannot starve its
+///   tail, and ordered air-date heat before recently-added heat;
 /// - then **cold targets rotating** after `resume_after` (wrapping once), so
 ///   every cold scope gets a turn and a stuck head never starves the tail;
 /// - stop once `max_scopes` are selected — the evaluation cost ceiling, sized
 ///   above the scheduler's per-tick admission capacity so it never becomes the
 ///   effective rate limiter.
 ///
+/// Rotation decides *which* hot targets get a turn; the priority sort decides
+/// the order they are walked in. Keeping those separate is what lets the hot
+/// lane both drain fairly and still put a newly aired episode ahead of a
+/// freshly added title's back catalog on every cycle, wherever the cursor
+/// happens to sit.
+///
 /// Host availability is checked during evaluation (after routing resolves),
-/// not here — the enumeration stays cheap. Returns the new cold resume
-/// position: the last cold scope_key *considered*, so the cursor always
-/// advances.
+/// not here — the enumeration stays cheap. Returns the new resume positions:
+/// the last scope_key each lane *considered*, so both cursors always advance.
 pub(crate) fn select_background_acquisition_batch(
     targets: &[AcquisitionTarget],
+    hot_resume_after: Option<&str>,
     resume_after: Option<&str>,
     max_scopes: usize,
 ) -> CursorSelection {
     let mut selection = CursorSelection {
         indices: Vec::new(),
         resume_after: resume_after.map(str::to_string),
+        hot_resume_after: hot_resume_after.map(str::to_string),
     };
     if max_scopes == 0 {
         return selection;
     }
 
-    // Hot targets: always considered first, in stable order. They do not move
-    // the cold rotation cursor.
-    for (index, target) in targets.iter().enumerate() {
-        if !target.is_hot {
-            continue;
+    // Hot targets: always considered first, rotating after `hot_resume_after`
+    // and wrapping once. They do not move the cold rotation cursor.
+    let hot: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| target.is_hot)
+        .map(|(index, _)| index)
+        .collect();
+    if !hot.is_empty() {
+        let start = hot_resume_after
+            .and_then(|after| {
+                hot.iter()
+                    .position(|index| targets[*index].scope_key == after)
+            })
+            .map(|position| position + 1)
+            .unwrap_or(0);
+        let mut selected_hot = Vec::new();
+        for offset in 0..hot.len() {
+            if selected_hot.len() >= max_scopes {
+                break;
+            }
+            let index = hot[(start + offset) % hot.len()];
+            selection.hot_resume_after = Some(targets[index].scope_key.clone());
+            selected_hot.push(index);
         }
+        // Air-date heat leads, then recently-added heat, each in derived order.
+        // `sort_by_key` is stable, and the index tie-break makes the order total
+        // so a wrap never leaves the batch ordered by where the cursor sat.
+        selected_hot.sort_by_key(|index| (!targets[*index].hot_by_air_date, *index));
+        selection.indices = selected_hot;
         if selection.indices.len() >= max_scopes {
             return selection;
         }
-        selection.indices.push(index);
     }
 
     // Cold targets: rotate starting after `resume_after`, wrapping once.
@@ -262,15 +329,17 @@ impl AppUseCase {
             let Some(scope_key) = convergence_scope_key(&scope, &episode.title_id) else {
                 continue;
             };
-            let is_hot = date_is_recent(
+            let hot_by_air_date = date_is_recent(
                 episode.air_date.as_deref(),
                 now,
                 HOT_EPISODE_AIR_WINDOW_DAYS,
-            ) || date_is_recent(
-                Some(episode.title_created_at.as_str()),
-                now,
-                HOT_RECENTLY_ADDED_WINDOW_DAYS,
             );
+            let is_hot = hot_by_air_date
+                || date_is_recent(
+                    Some(episode.title_created_at.as_str()),
+                    now,
+                    HOT_RECENTLY_ADDED_WINDOW_DAYS,
+                );
             targets.push(AcquisitionTarget {
                 occupied: false,
                 scope_key,
@@ -284,6 +353,7 @@ impl AppUseCase {
                 season_number: episode.season_number,
                 episode_number: episode.episode_number,
                 is_hot,
+                hot_by_air_date,
             });
         }
 
@@ -317,7 +387,8 @@ impl AppUseCase {
                 .digital_release_date
                 .as_deref()
                 .or(title.first_aired.as_deref());
-            let is_hot = date_is_recent(release_date, now, HOT_MOVIE_RELEASE_WINDOW_DAYS)
+            let hot_by_air_date = date_is_recent(release_date, now, HOT_MOVIE_RELEASE_WINDOW_DAYS);
+            let is_hot = hot_by_air_date
                 || date_is_recent(
                     Some(title.created_at.as_str()),
                     now,
@@ -336,6 +407,7 @@ impl AppUseCase {
                 season_number: None,
                 episode_number: None,
                 is_hot,
+                hot_by_air_date,
             });
         }
 
@@ -373,15 +445,17 @@ impl AppUseCase {
             let Some(scope_key) = convergence_scope_key(&scope, &link.title_id) else {
                 continue;
             };
-            let is_hot = date_is_recent(
+            let hot_by_air_date = date_is_recent(
                 link.movie_digital_release_date.as_deref(),
                 now,
                 HOT_MOVIE_RELEASE_WINDOW_DAYS,
-            ) || date_is_recent(
-                Some(link.link_created_at.as_str()),
-                now,
-                HOT_RECENTLY_ADDED_WINDOW_DAYS,
             );
+            let is_hot = hot_by_air_date
+                || date_is_recent(
+                    Some(link.link_created_at.as_str()),
+                    now,
+                    HOT_RECENTLY_ADDED_WINDOW_DAYS,
+                );
             targets.push(AcquisitionTarget {
                 occupied: false,
                 scope_key,
@@ -395,6 +469,7 @@ impl AppUseCase {
                 season_number: Some("0".to_string()),
                 episode_number: None,
                 is_hot,
+                hot_by_air_date,
             });
         }
 
@@ -435,6 +510,7 @@ impl AppUseCase {
                     season_number: item.season_number,
                     episode_number: item.episode_number,
                     is_hot: false,
+                    hot_by_air_date: false,
                 })
             })
             .collect();
@@ -566,6 +642,7 @@ impl AppUseCase {
                     season_number: summary.season_number.clone(),
                     episode_number: summary.episode_number.clone(),
                     is_hot: false,
+                    hot_by_air_date: false,
                 });
             }
         }
@@ -632,6 +709,15 @@ mod tests {
             season_number: None,
             episode_number: None,
             is_hot,
+            hot_by_air_date: is_hot,
+        }
+    }
+
+    /// A hot target whose heat comes only from its title having just been added.
+    fn recently_added_target(scope_key: &str) -> AcquisitionTarget {
+        AcquisitionTarget {
+            hot_by_air_date: false,
+            ..cursor_target(scope_key, true)
         }
     }
 
@@ -651,7 +737,7 @@ mod tests {
             cursor_target("cold-2", false),
             cursor_target("hot-2", true),
         ];
-        let selection = select_background_acquisition_batch(&targets, None, 10);
+        let selection = select_background_acquisition_batch(&targets, None, None, 10);
         assert_eq!(
             selected_keys(&targets, &selection),
             vec!["hot-1", "hot-2", "cold-1", "cold-2"],
@@ -666,7 +752,7 @@ mod tests {
             cursor_target("b", false),
             cursor_target("c", false),
         ];
-        let selection = select_background_acquisition_batch(&targets, None, 2);
+        let selection = select_background_acquisition_batch(&targets, None, None, 2);
         assert_eq!(selected_keys(&targets, &selection), vec!["a", "b"]);
         assert_eq!(
             selection.resume_after.as_deref(),
@@ -682,11 +768,11 @@ mod tests {
             cursor_target("b", false),
             cursor_target("c", false),
         ];
-        let first = select_background_acquisition_batch(&targets, None, 2);
+        let first = select_background_acquisition_batch(&targets, None, None, 2);
         assert_eq!(selected_keys(&targets, &first), vec!["a", "b"]);
         // Next cycle resumes after "b" → c, then wraps to a.
         let second =
-            select_background_acquisition_batch(&targets, first.resume_after.as_deref(), 2);
+            select_background_acquisition_batch(&targets, None, first.resume_after.as_deref(), 2);
         assert_eq!(selected_keys(&targets, &second), vec!["c", "a"]);
     }
 
@@ -699,9 +785,97 @@ mod tests {
         ];
         // The cap is filled by hot targets, so the cold lane is not reached and
         // its rotation cursor is carried forward unchanged.
-        let selection = select_background_acquisition_batch(&targets, Some("cold-1"), 2);
+        let selection = select_background_acquisition_batch(&targets, None, Some("cold-1"), 2);
         assert_eq!(selected_keys(&targets, &selection), vec!["hot-1", "hot-2"]);
         assert_eq!(selection.resume_after.as_deref(), Some("cold-1"));
+    }
+
+    #[test]
+    fn cursor_walks_air_date_heat_before_recently_added_heat() {
+        // Derived order interleaves the two: a freshly added series' back
+        // catalog must not push the newly aired episode down the batch.
+        let targets = vec![
+            recently_added_target("added-1"),
+            cursor_target("aired-1", true),
+            recently_added_target("added-2"),
+            cursor_target("aired-2", true),
+            cursor_target("cold-1", false),
+        ];
+        let selection = select_background_acquisition_batch(&targets, None, None, 10);
+        assert_eq!(
+            selected_keys(&targets, &selection),
+            vec!["aired-1", "aired-2", "added-1", "added-2", "cold-1"],
+            "air-date heat leads the hot lane, then recently-added heat, then cold"
+        );
+    }
+
+    #[test]
+    fn cursor_rotates_hot_targets_so_a_large_hot_set_cannot_starve_its_tail() {
+        let targets = vec![
+            cursor_target("hot-a", true),
+            cursor_target("hot-b", true),
+            cursor_target("hot-c", true),
+        ];
+        let first = select_background_acquisition_batch(&targets, None, None, 2);
+        assert_eq!(selected_keys(&targets, &first), vec!["hot-a", "hot-b"]);
+        assert_eq!(
+            first.hot_resume_after.as_deref(),
+            Some("hot-b"),
+            "the hot cursor advances to the last hot scope it considered"
+        );
+        // Without rotation "hot-c" would never be reached: the cap is filled by
+        // the head of the hot lane on every cycle.
+        let second = select_background_acquisition_batch(
+            &targets,
+            first.hot_resume_after.as_deref(),
+            None,
+            2,
+        );
+        assert_eq!(selected_keys(&targets, &second), vec!["hot-a", "hot-c"]);
+        assert_eq!(second.hot_resume_after.as_deref(), Some("hot-a"));
+    }
+
+    #[test]
+    fn a_hot_rotation_still_walks_air_date_heat_first() {
+        let targets = vec![
+            recently_added_target("added-1"),
+            recently_added_target("added-2"),
+            cursor_target("aired-1", true),
+        ];
+        // Resuming after "added-1" takes "added-2" and "aired-1"; the batch is
+        // still ordered by heat rather than by where the cursor sat.
+        let selection = select_background_acquisition_batch(&targets, Some("added-1"), None, 2);
+        assert_eq!(
+            selected_keys(&targets, &selection),
+            vec!["aired-1", "added-2"]
+        );
+    }
+
+    #[test]
+    fn cursor_hot_lane_carries_its_position_when_it_did_not_advance() {
+        let targets = vec![cursor_target("cold-1", false)];
+        let selection = select_background_acquisition_batch(&targets, Some("hot-1"), None, 4);
+        assert_eq!(selected_keys(&targets, &selection), vec!["cold-1"]);
+        assert_eq!(selection.hot_resume_after.as_deref(), Some("hot-1"));
+    }
+
+    #[test]
+    fn scope_walk_order_sorts_by_season_then_episode_with_unparsable_last() {
+        let mut target = cursor_target("scope", false);
+        target.season_number = Some(" 2 ".to_string());
+        target.episode_number = Some("10".to_string());
+        assert_eq!(scope_walk_order_key(&target), (2, 10));
+
+        target.episode_number = Some("special".to_string());
+        assert_eq!(
+            scope_walk_order_key(&target),
+            (2, u32::MAX),
+            "an unparsable episode number sorts last within its season"
+        );
+
+        target.season_number = None;
+        target.episode_number = None;
+        assert_eq!(scope_walk_order_key(&target), (u32::MAX, u32::MAX));
     }
 
     #[test]
