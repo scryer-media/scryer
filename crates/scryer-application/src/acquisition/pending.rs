@@ -1389,10 +1389,13 @@ impl AppUseCase {
             })
             .await;
 
+        let grab_indexer = self
+            .grab_indexer_name(pr.indexer_id.as_deref(), pr.indexer_source.as_deref())
+            .await;
         record_grab_submission_outcome(
             GrabTrigger::Pending,
             &title.facet,
-            pr.indexer_source.as_deref(),
+            grab_indexer.as_deref(),
             &canonical_result,
         );
 
@@ -1406,8 +1409,11 @@ impl AppUseCase {
 
         match canonical_submission {
             Ok(canonical_submission) => {
+                let newly_submitted = canonical_submission.newly_submitted;
                 let grab = canonical_submission.grab;
-                self.record_indexer_grab(pr.indexer_id.as_deref(), pr.indexer_source.as_deref());
+                if newly_submitted {
+                    self.record_indexer_grab(pr.indexer_id.as_deref(), grab_indexer.as_deref());
+                }
 
                 let _ = self
                     .services

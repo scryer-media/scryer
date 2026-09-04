@@ -2509,10 +2509,13 @@ impl AppUseCase {
             })
             .await;
 
+        let grab_indexer = self
+            .grab_indexer_name(best.indexer_id.as_deref(), Some(best.source.as_str()))
+            .await;
         record_grab_submission_outcome(
             GrabTrigger::Rss,
             &title.facet,
-            Some(best.source.as_str()),
+            grab_indexer.as_deref(),
             &canonical_result,
         );
 
@@ -2523,8 +2526,13 @@ impl AppUseCase {
         };
 
         match canonical_submission {
-            Ok(_canonical_submission) => {
-                self.record_indexer_grab(best.indexer_id.as_deref(), Some(best.source.as_str()));
+            Ok(canonical_submission) => {
+                // A reused submission re-attached to an existing download; the
+                // indexer was not asked for the release again, so it is not a
+                // grab — the same rule `scryer_grabs_total` applies.
+                if canonical_submission.newly_submitted {
+                    self.record_indexer_grab(best.indexer_id.as_deref(), grab_indexer.as_deref());
+                }
 
                 let _ = self
                     .services

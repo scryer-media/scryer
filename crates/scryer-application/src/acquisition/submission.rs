@@ -666,11 +666,13 @@ impl AppUseCase {
 
 // ── Grab submission metrics ────────────────────────────────────────────────
 //
-// Every grab in the product funnels through `submit_canonical_download`, so
-// its outcome is counted once, here, rather than at each caller. Counting only
-// successes (what the five call sites used to do inline) made a download
-// client that rejects everything look like "no grabs happened" instead of
-// "every grab failed", and let each site invent its own `indexer` label.
+// Every title-owned grab funnels through `submit_canonical_download`, and the
+// one direct submission (the operator's unlinked grab) reports through
+// `record_direct_grab_outcome`, so each outcome is counted once with the same
+// label vocabulary. Counting only successes (what the call sites used to do
+// inline) made a download client that rejects everything look like "no grabs
+// happened" instead of "every grab failed", and let each site invent its own
+// `indexer` label.
 //
 // Label discipline: every value is a `&'static str` from a bounded set, except
 // `indexer`, which is a configured indexer name (bounded by the configured
@@ -735,13 +737,18 @@ fn grab_submission_result_label(
             }
         }
         Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => RESULT_CONFLICT,
-        Err(err) => {
-            if is_download_submit_unavailable_error(err) || err.is_download_submit_ambiguous() {
-                RESULT_DEFERRED
-            } else {
-                RESULT_FAILED
-            }
-        }
+        Err(err) => grab_error_result_label(err),
+    }
+}
+
+/// The `result` label for a submission that errored, shared by the canonical
+/// and the direct grab paths so the two can never classify the same error
+/// differently.
+fn grab_error_result_label(err: &AppError) -> &'static str {
+    if is_download_submit_unavailable_error(err) || err.is_download_submit_ambiguous() {
+        RESULT_DEFERRED
+    } else {
+        RESULT_FAILED
     }
 }
 
@@ -749,15 +756,48 @@ fn grab_submission_result_label(
 ///
 /// Call this at every grab site immediately after the submission returns and
 /// before the outcome is matched, passing the same indexer name the site hands
-/// to `record_indexer_grab`. `scryer_grabs_total` is incremented only for a
-/// genuinely new submission, and only from here.
+/// to `record_indexer_grab` — the *configured* indexer name resolved through
+/// `AppUseCase::grab_indexer_name`, so the `indexer` label matches the one
+/// `scryer_indexer_queries_total` carries. `scryer_grabs_total` is incremented
+/// only for a genuinely new submission.
 pub(crate) fn record_grab_submission_outcome(
     trigger: GrabTrigger,
     facet: &MediaFacet,
     indexer: Option<&str>,
     result: &AppResult<CanonicalDownloadSubmissionOutcome>,
 ) {
-    let result_label = grab_submission_result_label(result);
+    record_grab_outcome_labels(
+        trigger,
+        facet,
+        indexer,
+        grab_submission_result_label(result),
+    );
+}
+
+/// Records a grab that went straight to a download client without passing
+/// through `submit_canonical_download` — today only the operator's unlinked
+/// grab from the Indexers page. A direct submission has no scope to reuse or
+/// conflict with, so success is always `grabbed`; a failure is classified by
+/// the same predicate the canonical path uses.
+pub(crate) fn record_direct_grab_outcome(
+    trigger: GrabTrigger,
+    facet: &MediaFacet,
+    indexer: Option<&str>,
+    result: &AppResult<DownloadGrabResult>,
+) {
+    let result_label = match result {
+        Ok(_) => RESULT_GRABBED,
+        Err(err) => grab_error_result_label(err),
+    };
+    record_grab_outcome_labels(trigger, facet, indexer, result_label);
+}
+
+fn record_grab_outcome_labels(
+    trigger: GrabTrigger,
+    facet: &MediaFacet,
+    indexer: Option<&str>,
+    result_label: &'static str,
+) {
     metrics::counter!(
         GRAB_SUBMISSIONS_TOTAL,
         "trigger" => trigger.as_str(),
@@ -794,7 +834,7 @@ pub fn describe_acquisition_metrics() {
     );
     metrics::describe_counter!(
         GRABS_TOTAL,
-        "Releases newly sent to a download client, labelled by the indexer that supplied the release, the media facet, and the trigger that asked for the grab."
+        "Releases newly sent to a download client, labelled by the configured name of the indexer that supplied the release (the same value scryer_indexer_queries_total uses), the media facet, and the trigger that asked for the grab. Reused submissions and indexer-file downloads handed to the operator are not grabs."
     );
 
     metrics::describe_counter!(
@@ -1049,6 +1089,61 @@ mod grab_metrics_tests {
         assert_eq!(labels.get("indexer").map(String::as_str), Some("nzbgeek"));
         assert_eq!(labels.get("facet").map(String::as_str), Some("movie"));
         assert_eq!(labels.get("trigger").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn a_direct_grab_is_grabbed_on_success_and_classified_like_a_canonical_failure() {
+        let counters = recorded_counters(|| {
+            record_direct_grab_outcome(
+                GrabTrigger::Manual,
+                &MediaFacet::Series,
+                Some("nzbgeek"),
+                &Ok(grab_result()),
+            );
+        });
+        let submissions = series(&counters, GRAB_SUBMISSIONS_TOTAL);
+        assert_eq!(submissions.len(), 1, "{counters:?}");
+        assert_eq!(
+            submissions[0].1.get("result").map(String::as_str),
+            Some(RESULT_GRABBED)
+        );
+        let grabs = series(&counters, GRABS_TOTAL);
+        assert_eq!(grabs.len(), 1, "{counters:?}");
+        let (_, labels, value) = grabs[0];
+        assert_eq!(*value, 1);
+        assert_eq!(labels.get("indexer").map(String::as_str), Some("nzbgeek"));
+        assert_eq!(labels.get("facet").map(String::as_str), Some("series"));
+        assert_eq!(labels.get("trigger").map(String::as_str), Some("manual"));
+
+        for (error, expected) in [
+            (
+                AppError::DownloadSubmitUnavailable("offline".to_string()),
+                RESULT_DEFERRED,
+            ),
+            (
+                AppError::DownloadSubmitRejected("client said no".to_string()),
+                RESULT_FAILED,
+            ),
+        ] {
+            let counters = recorded_counters(|| {
+                record_direct_grab_outcome(
+                    GrabTrigger::Manual,
+                    &MediaFacet::Series,
+                    Some("nzbgeek"),
+                    &Err(error),
+                );
+            });
+            let submissions = series(&counters, GRAB_SUBMISSIONS_TOTAL);
+            assert_eq!(submissions.len(), 1, "{counters:?}");
+            assert_eq!(
+                submissions[0].1.get("result").map(String::as_str),
+                Some(expected)
+            );
+            assert!(
+                series(&counters, GRABS_TOTAL).is_empty(),
+                "a failed direct grab must not count as a grab: {counters:?}"
+            );
+        }
     }
 
     #[test]

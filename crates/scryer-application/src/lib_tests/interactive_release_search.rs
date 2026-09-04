@@ -644,8 +644,12 @@ async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
         vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
     );
     let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
-    let app =
-        app.with_test_overrides(|services| services.with_download_submissions(submissions.clone()));
+    let stats = Arc::new(RecordingIndexerStatsTracker::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_download_submissions(submissions.clone())
+            .with_indexer_stats(stats.clone())
+    });
     let download_client =
         create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
 
@@ -666,6 +670,19 @@ async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
         .expect("queue unlinked release");
     assert_eq!(outcome.client_name, download_client.name);
     assert_eq!(outcome.source_title, release.title);
+
+    // The indexer's grab is counted like every other trigger, under the
+    // configured indexer name rather than the release's display source.
+    let grabs = stats.grabs.lock().expect("grab log mutex").clone();
+    assert_eq!(
+        grabs,
+        vec![("idx-a".to_string(), "Synthetic newznab".to_string())],
+        "an accepted unlinked grab counts once against its indexer: {grabs:?}"
+    );
+    assert_ne!(
+        release.source, "Synthetic newznab",
+        "the fixture must exercise the source-to-configured-name resolution"
+    );
 
     let rows = submissions.store.lock().await.clone();
     assert_eq!(rows.len(), 1, "one submission per grab: {rows:?}");
@@ -730,6 +747,41 @@ async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
         grabbed.title.title_name, release.title,
         "with no catalog title the release name stands in"
     );
+}
+
+#[tokio::test]
+async fn grab_indexer_name_prefers_the_configured_name_and_falls_back_to_the_source() {
+    let (app, _user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        ScriptedIndexerClient::default(),
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+
+    // A live release: `source` is the adapter's "<name> (<type>)" display
+    // string, but the grab is counted under the configured name.
+    assert_eq!(
+        app.grab_indexer_name(Some("idx-a"), Some("Synthetic newznab (newznab)"))
+            .await
+            .as_deref(),
+        Some("Synthetic newznab")
+    );
+    // The indexer was deleted since the release was found (a parked pending
+    // release, say): the recorded source is the best remaining name.
+    assert_eq!(
+        app.grab_indexer_name(Some("idx-gone"), Some("Old Indexer (newznab)"))
+            .await
+            .as_deref(),
+        Some("Old Indexer (newznab)")
+    );
+    // No indexer identity at all.
+    assert_eq!(
+        app.grab_indexer_name(None, Some(" pushed "))
+            .await
+            .as_deref(),
+        Some("pushed")
+    );
+    assert_eq!(app.grab_indexer_name(None, Some("  ")).await, None);
+    assert_eq!(app.grab_indexer_name(Some("  "), None).await, None);
 }
 
 #[tokio::test]

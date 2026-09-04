@@ -481,6 +481,51 @@ impl AppUseCase {
         Ok(self.services.integrations.indexer_stats.all_stats())
     }
 
+    /// The name a grabbed release's indexer is counted under, for both
+    /// `scryer_grabs_total{indexer}` and the trailing-24h indexer stats.
+    ///
+    /// Search results carry `source`, a display string the plugin adapter
+    /// formats as `"<name> (<provider type>)"`, while queries are counted
+    /// under the configured indexer name. Counting grabs under the display
+    /// string split one indexer into two label values (and made the stats
+    /// row's name flip with whichever event came last), so the configured
+    /// name is resolved from the indexer id and `source` is only the fallback
+    /// for a release whose indexer is gone or was never recorded. A lookup
+    /// failure falls back the same way: a metric label must never fail a grab.
+    pub(crate) async fn grab_indexer_name(
+        &self,
+        indexer_id: Option<&str>,
+        source: Option<&str>,
+    ) -> Option<String> {
+        let fallback = || {
+            source
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        };
+        let Some(indexer_id) = indexer_id.map(str::trim).filter(|id| !id.is_empty()) else {
+            return fallback();
+        };
+        match self
+            .services
+            .integrations
+            .indexer_configs
+            .get_by_id(indexer_id)
+            .await
+        {
+            Ok(Some(config)) if !config.name.trim().is_empty() => Some(config.name),
+            Ok(_) => fallback(),
+            Err(error) => {
+                tracing::debug!(
+                    indexer_id,
+                    error = %error,
+                    "indexer config lookup failed while naming a grab; using the release source"
+                );
+                fallback()
+            }
+        }
+    }
+
     /// Count one release grabbed through `indexer_id` toward that indexer's
     /// trailing-24h grab total.
     ///

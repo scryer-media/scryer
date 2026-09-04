@@ -14,6 +14,7 @@ use super::release_search::{
     QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
     incomplete_indexer_reason,
 };
+use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
 use crate::domain_events::{new_global_domain_event, title_context_snapshot};
 use crate::quality_profile::evaluate_against_profile_for_category;
@@ -1196,7 +1197,10 @@ impl AppUseCase {
             .get("info_hash")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
-        let grab = self
+        let grab_indexer = self
+            .grab_indexer_name(result.indexer_id.as_deref(), Some(result.source.as_str()))
+            .await;
+        let grab_result = self
             .services
             .integrations
             .download_client
@@ -1234,7 +1238,19 @@ impl AppUseCase {
                 season_pack: None,
                 pinned_download_client_id: Some(client.id.clone()),
             })
-            .await?;
+            .await;
+        // This is the one grab that does not pass through
+        // `submit_canonical_download`, so it reports its own outcome; the
+        // indexer's grab is counted the moment the client accepts, like every
+        // other trigger.
+        record_direct_grab_outcome(
+            GrabTrigger::Manual,
+            &facet,
+            grab_indexer.as_deref(),
+            &grab_result,
+        );
+        let grab = grab_result?;
+        self.record_indexer_grab(result.indexer_id.as_deref(), grab_indexer.as_deref());
 
         self.services
             .workflow

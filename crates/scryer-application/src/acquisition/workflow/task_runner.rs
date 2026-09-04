@@ -1483,10 +1483,16 @@ async fn commit_season_pack_proposal(
                 })
                 .await;
 
+            let grab_indexer = app
+                .grab_indexer_name(
+                    best_pack.indexer_id.as_deref(),
+                    Some(best_pack.source.as_str()),
+                )
+                .await;
             record_grab_submission_outcome(
                 GrabTrigger::SeasonPack,
                 &title.facet,
-                Some(best_pack.source.as_str()),
+                grab_indexer.as_deref(),
                 &canonical_result,
             );
 
@@ -1502,12 +1508,15 @@ async fn commit_season_pack_proposal(
 
             match canonical_submission {
                 Ok(canonical_submission) => {
+                    let newly_submitted = canonical_submission.newly_submitted;
                     let grab = canonical_submission.grab;
                     let download_job_id = grab.job_id.clone();
-                    app.record_indexer_grab(
-                        best_pack.indexer_id.as_deref(),
-                        Some(best_pack.source.as_str()),
-                    );
+                    if newly_submitted {
+                        app.record_indexer_grab(
+                            best_pack.indexer_id.as_deref(),
+                            grab_indexer.as_deref(),
+                        );
+                    }
                     cycle.mark_submitted(&url_str);
                     cycle.mark_season_pack_grabbed(&season_key);
                     let _ = app
@@ -3708,10 +3717,16 @@ async fn commit_scope_grab(
             })
             .await;
 
+        let grab_indexer = app
+            .grab_indexer_name(
+                candidate.indexer_id.as_deref(),
+                Some(candidate.source.as_str()),
+            )
+            .await;
         record_grab_submission_outcome(
             GrabTrigger::Auto,
             &title.facet,
-            Some(candidate.source.as_str()),
+            grab_indexer.as_deref(),
             &canonical_result,
         );
 
@@ -3729,15 +3744,18 @@ async fn commit_scope_grab(
 
         match canonical_submission {
             Ok(canonical_submission) => {
+                let newly_submitted = canonical_submission.newly_submitted;
                 let grab = canonical_submission.grab;
                 // ── Success ─────────────────────────────────────────────────
                 if let Some(url) = source_hint.as_deref() {
                     cycle.mark_submitted(url);
                 }
-                app.record_indexer_grab(
-                    candidate.indexer_id.as_deref(),
-                    Some(candidate.source.as_str()),
-                );
+                if newly_submitted {
+                    app.record_indexer_grab(
+                        candidate.indexer_id.as_deref(),
+                        grab_indexer.as_deref(),
+                    );
+                }
                 let _ = app
                     .services
                     .workflow
