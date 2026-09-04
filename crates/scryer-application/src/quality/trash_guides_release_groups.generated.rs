@@ -2,7 +2,7 @@
 // Do not edit by hand.
 
 #[allow(dead_code)]
-pub const TRASH_GUIDES_SOURCE_REVISION: &str = "e6aa63c782aa049e47be746889e4d06db0fe686f";
+pub const TRASH_GUIDES_SOURCE_REVISION: &str = "f3b00725e0aa8ac374bd3c768538d370ccd93fb6";
 
 pub static GROUP_RULES: &[GroupRule] = &[
     GroupRule {
@@ -320,7 +320,7 @@ pub static GROUP_RULES: &[GroupRule] = &[
         match_kind: GroupMatchKind::Exact,
         entry: GroupEntry {
             name: "ATELiER",
-            tier: GroupTier::Silver,
+            tier: GroupTier::Gold,
             facet: RuleFacet::Movie,
             source_context: SourceContext::BluRay,
         },
@@ -330,7 +330,7 @@ pub static GROUP_RULES: &[GroupRule] = &[
         match_kind: GroupMatchKind::Exact,
         entry: GroupEntry {
             name: "ATELiER",
-            tier: GroupTier::Silver,
+            tier: GroupTier::Gold,
             facet: RuleFacet::Movie,
             source_context: SourceContext::Remux,
         },
@@ -4626,6 +4626,26 @@ pub static GROUP_RULES: &[GroupRule] = &[
         },
     },
     GroupRule {
+        matcher: "OldT",
+        match_kind: GroupMatchKind::Exact,
+        entry: GroupEntry {
+            name: "OldT",
+            tier: GroupTier::Banned,
+            facet: RuleFacet::Movie,
+            source_context: SourceContext::Any,
+        },
+    },
+    GroupRule {
+        matcher: "OldT",
+        match_kind: GroupMatchKind::Exact,
+        entry: GroupEntry {
+            name: "OldT",
+            tier: GroupTier::Banned,
+            facet: RuleFacet::Series,
+            source_context: SourceContext::Any,
+        },
+    },
+    GroupRule {
         matcher: "Orphan",
         match_kind: GroupMatchKind::Exact,
         entry: GroupEntry {
@@ -5363,6 +5383,16 @@ pub static GROUP_RULES: &[GroupRule] = &[
             tier: GroupTier::Banned,
             facet: RuleFacet::Anime,
             source_context: SourceContext::Anime,
+        },
+    },
+    GroupRule {
+        matcher: "RandomBytes",
+        match_kind: GroupMatchKind::Exact,
+        entry: GroupEntry {
+            name: "RandomBytes",
+            tier: GroupTier::Silver,
+            facet: RuleFacet::Movie,
+            source_context: SourceContext::UhdBluRay,
         },
     },
     GroupRule {
@@ -7930,6 +7960,16 @@ pub static GROUP_RULES: &[GroupRule] = &[
         match_kind: GroupMatchKind::Exact,
         entry: GroupEntry {
             name: "neko-kBaraka",
+            tier: GroupTier::Bronze,
+            facet: RuleFacet::Anime,
+            source_context: SourceContext::Anime,
+        },
+    },
+    GroupRule {
+        matcher: "nekotan",
+        match_kind: GroupMatchKind::Exact,
+        entry: GroupEntry {
+            name: "nekotan",
             tier: GroupTier::Bronze,
             facet: RuleFacet::Anime,
             source_context: SourceContext::Anime,

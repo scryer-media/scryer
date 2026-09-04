@@ -1,5 +1,5 @@
 {
-  "source_revision": "e6aa63c782aa049e47be746889e4d06db0fe686f",
+  "source_revision": "f3b00725e0aa8ac374bd3c768538d370ccd93fb6",
   "score_envelope": [
     {
       "score_set": "anime-radarr",
@@ -141,7 +141,7 @@
     {
       "score_set": "sqp-4-ma-hybrid",
       "min": -10000,
-      "max": 3070,
+      "max": 3970,
       "vetoes": [
         -10000
       ]
@@ -402,9 +402,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 30,
+      "emitted_rule_count": 31,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:1989904a2cd1df8d"
+      "emitted_rule_digest": "fnv1a64:f09d475bfd2db52b"
     },
     {
       "app": "radarr",
@@ -502,9 +502,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 18,
+      "emitted_rule_count": 19,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:af064e81f070f484"
+      "emitted_rule_digest": "fnv1a64:8bc44134e4b86b2b"
     },
     {
       "app": "radarr",
@@ -650,9 +650,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 36,
+      "emitted_rule_count": 37,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:7eb205256e60e3da"
+      "emitted_rule_digest": "fnv1a64:5cca01be2773d30f"
     },
     {
       "app": "radarr",
@@ -899,6 +899,16 @@
     {
       "app": "radarr",
       "stem": "extras",
+      "detection_owner": "unsupported",
+      "effect_binding": "none",
+      "reason": "unsupported_unreviewed_stem",
+      "emitted_rule_count": 0,
+      "emitted_fact_codes": [],
+      "emitted_rule_digest": ""
+    },
+    {
+      "app": "radarr",
+      "stem": "fand",
       "detection_owner": "unsupported",
       "effect_binding": "none",
       "reason": "unsupported_unreviewed_stem",
@@ -1420,11 +1430,11 @@
       "detection_owner": "native_fact",
       "effect_binding": "locale_score",
       "reason": "reviewed_locale_fact",
-      "emitted_rule_count": 7,
+      "emitted_rule_count": 8,
       "emitted_fact_codes": [
         "trash.locale.german.group.tier2"
       ],
-      "emitted_rule_digest": "fnv1a64:bc639b046b11b010"
+      "emitted_rule_digest": "fnv1a64:ef858894d2fa6910"
     },
     {
       "app": "radarr",
@@ -1556,11 +1566,11 @@
       "detection_owner": "native_fact",
       "effect_binding": "locale_score",
       "reason": "reviewed_locale_fact",
-      "emitted_rule_count": 8,
+      "emitted_rule_count": 9,
       "emitted_fact_codes": [
         "trash.locale.german.group.tier2"
       ],
-      "emitted_rule_digest": "fnv1a64:784ad2ceea95c271"
+      "emitted_rule_digest": "fnv1a64:f13ab4b32f509414"
     },
     {
       "app": "radarr",
@@ -1610,9 +1620,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 22,
+      "emitted_rule_count": 23,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:26e5abba218e0927"
+      "emitted_rule_digest": "fnv1a64:801a4f86c806da6e"
     },
     {
       "app": "radarr",
@@ -1620,9 +1630,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 9,
+      "emitted_rule_count": 8,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:e0fe39b8f86e81e6"
+      "emitted_rule_digest": "fnv1a64:a3cbf58ad6487e12"
     },
     {
       "app": "radarr",
@@ -1888,7 +1898,7 @@
       "reason": "reviewed_native_fact",
       "emitted_rule_count": 10,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:9727ec3765cc6eca"
+      "emitted_rule_digest": "fnv1a64:39fe710cdf93b5fa"
     },
     {
       "app": "radarr",
@@ -2164,9 +2174,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 10,
+      "emitted_rule_count": 11,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:b8643fcd1824f4e8"
+      "emitted_rule_digest": "fnv1a64:dd5b27bd5b0bafe1"
     },
     {
       "app": "radarr",
@@ -2174,9 +2184,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 6,
+      "emitted_rule_count": 5,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:9a8ff65f1fd76a45"
+      "emitted_rule_digest": "fnv1a64:e59a1d363d2d8e55"
     },
     {
       "app": "radarr",
@@ -2402,6 +2412,16 @@
     },
     {
       "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "detection_owner": "unsupported",
+      "effect_binding": "none",
+      "reason": "unsupported_unreviewed_stem",
+      "emitted_rule_count": 0,
+      "emitted_fact_codes": [],
+      "emitted_rule_digest": ""
+    },
+    {
+      "app": "radarr",
       "stem": "uhd-bluray-tier-01",
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
@@ -2416,9 +2436,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 2,
+      "emitted_rule_count": 3,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:4232a6778e12e993"
+      "emitted_rule_digest": "fnv1a64:f98da9203fd5bb12"
     },
     {
       "app": "radarr",
@@ -2928,9 +2948,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 30,
+      "emitted_rule_count": 31,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:1989904a2cd1df8d"
+      "emitted_rule_digest": "fnv1a64:f09d475bfd2db52b"
     },
     {
       "app": "sonarr",
@@ -3028,9 +3048,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 18,
+      "emitted_rule_count": 19,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:af064e81f070f484"
+      "emitted_rule_digest": "fnv1a64:8bc44134e4b86b2b"
     },
     {
       "app": "sonarr",
@@ -3176,9 +3196,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 33,
+      "emitted_rule_count": 34,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:1de685fca63f72f6"
+      "emitted_rule_digest": "fnv1a64:7f851a8a383865f2"
     },
     {
       "app": "sonarr",
@@ -3465,6 +3485,16 @@
     {
       "app": "sonarr",
       "stem": "extras",
+      "detection_owner": "unsupported",
+      "effect_binding": "none",
+      "reason": "unsupported_unreviewed_stem",
+      "emitted_rule_count": 0,
+      "emitted_fact_codes": [],
+      "emitted_rule_digest": ""
+    },
+    {
+      "app": "sonarr",
+      "stem": "fand",
       "detection_owner": "unsupported",
       "effect_binding": "none",
       "reason": "unsupported_unreviewed_stem",
@@ -5897,8 +5927,8 @@
       "stem": "german-anime-bluray-tier-01",
       "trash_id": "b2ff1353b447d4ca6acc3a83a52cda59",
       "cf_name": "German Anime Bluray Tier 01",
-      "spec_name": "Not REMUX",
-      "implementation": "SourceSpecification",
+      "spec_name": "Not Remux",
+      "implementation": "QualityModifierSpecification",
       "reason": "locale_group_spec_not_supported",
       "source_path": "docs/json/radarr/cf/german-anime-bluray-tier-01.json"
     },
@@ -5917,10 +5947,20 @@
       "stem": "german-anime-bluray-tier-02",
       "trash_id": "82cc7396f79afb2da7ac485235254ade",
       "cf_name": "German Anime Bluray Tier 02",
-      "spec_name": "Not REMUX",
-      "implementation": "SourceSpecification",
+      "spec_name": "Not Remux",
+      "implementation": "QualityModifierSpecification",
       "reason": "locale_group_spec_not_supported",
       "source_path": "docs/json/radarr/cf/german-anime-bluray-tier-02.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "german-anime-bluray-tier-03",
+      "trash_id": "aa9661d31c293c4951967f2e4a4f232b",
+      "cf_name": "German Anime Bluray Tier 03",
+      "spec_name": "Bluray",
+      "implementation": "SourceSpecification",
+      "reason": "locale_group_spec_not_supported",
+      "source_path": "docs/json/radarr/cf/german-anime-bluray-tier-03.json"
     },
     {
       "app": "radarr",
@@ -11136,6 +11176,36 @@
     },
     {
       "app": "radarr",
+      "stem": "fand",
+      "trash_id": "6c6af63910e3e4e8ff32a85102a94c11",
+      "cf_name": "FAND",
+      "spec_name": "FAND",
+      "implementation": "ReleaseTitleSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/fand.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "fand",
+      "trash_id": "6c6af63910e3e4e8ff32a85102a94c11",
+      "cf_name": "FAND",
+      "spec_name": "WEBDL",
+      "implementation": "SourceSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/fand.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "fand",
+      "trash_id": "6c6af63910e3e4e8ff32a85102a94c11",
+      "cf_name": "FAND",
+      "spec_name": "WEBRIP",
+      "implementation": "SourceSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/fand.json"
+    },
+    {
+      "app": "radarr",
       "stem": "flac",
       "trash_id": "a570d4a0e56a2874b64e5bfa55202a1b",
       "cf_name": "FLAC",
@@ -12179,6 +12249,16 @@
       "stem": "truehd",
       "trash_id": "3cafb66171b47f226146a0770576870f",
       "cf_name": "TrueHD",
+      "spec_name": "Not Atmos Group (non-5.1)",
+      "implementation": "ReleaseTitleSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/truehd.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "truehd",
+      "trash_id": "3cafb66171b47f226146a0770576870f",
+      "cf_name": "TrueHD",
       "spec_name": "Not Basic Dolby Digital",
       "implementation": "ReleaseTitleSpecification",
       "reason": "unsupported_unreviewed_stem",
@@ -12219,16 +12299,6 @@
       "stem": "truehd",
       "trash_id": "3cafb66171b47f226146a0770576870f",
       "cf_name": "TrueHD",
-      "spec_name": "Not RlsGrp (TrueHD only)",
-      "implementation": "ReleaseTitleSpecification",
-      "reason": "unsupported_unreviewed_stem",
-      "source_path": "docs/json/radarr/cf/truehd.json"
-    },
-    {
-      "app": "radarr",
-      "stem": "truehd",
-      "trash_id": "3cafb66171b47f226146a0770576870f",
-      "cf_name": "TrueHD",
       "spec_name": "TrueHD",
       "implementation": "ReleaseTitleSpecification",
       "reason": "unsupported_unreviewed_stem",
@@ -12240,6 +12310,16 @@
       "trash_id": "496f355514737f7d83bf7aa4d24f8169",
       "cf_name": "TrueHD ATMOS",
       "spec_name": "ATMOS",
+      "implementation": "ReleaseTitleSpecification",
+      "reason": "custom_rule_only_existing_parser_signal",
+      "source_path": "docs/json/radarr/cf/truehd-atmos.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "truehd-atmos",
+      "trash_id": "496f355514737f7d83bf7aa4d24f8169",
+      "cf_name": "TrueHD ATMOS",
+      "spec_name": "Not 5.1 Surround",
       "implementation": "ReleaseTitleSpecification",
       "reason": "custom_rule_only_existing_parser_signal",
       "source_path": "docs/json/radarr/cf/truehd-atmos.json"
@@ -12279,7 +12359,7 @@
       "stem": "truehd-atmos",
       "trash_id": "496f355514737f7d83bf7aa4d24f8169",
       "cf_name": "TrueHD ATMOS",
-      "spec_name": "Not Dolby Digital Plus ",
+      "spec_name": "Not Dolby Digital Plus",
       "implementation": "ReleaseTitleSpecification",
       "reason": "custom_rule_only_existing_parser_signal",
       "source_path": "docs/json/radarr/cf/truehd-atmos.json"
@@ -12333,6 +12413,116 @@
       "implementation": "SourceSpecification",
       "reason": "service_alias_unrepresentable_compound_token",
       "source_path": "docs/json/radarr/cf/u-next.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "2160p",
+      "implementation": "ResolutionSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "CtrlHD",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "DON",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "HiDt",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "MainFrame",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "Not REMUX",
+      "implementation": "QualityModifierSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "Not WEBDL",
+      "implementation": "SourceSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "Not WEBRIP",
+      "implementation": "SourceSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "RandomBytes",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "Softboat",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "uhd-bluray-rlsgrp-sqp-4-ma",
+      "trash_id": "c3ecdda99c633e0743627c2cc91566ec",
+      "cf_name": "UHD Bluray RlsGrp (SQP-4 MA)",
+      "spec_name": "W4NK3R",
+      "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/uhd-bluray-rlsgrp-sqp-4-ma.json"
     },
     {
       "app": "radarr",
@@ -14736,6 +14926,36 @@
     },
     {
       "app": "sonarr",
+      "stem": "fand",
+      "trash_id": "1f233ed024e7c35cf50fbd739a82de4b",
+      "cf_name": "FAND",
+      "spec_name": "Fandango",
+      "implementation": "ReleaseTitleSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/sonarr/cf/fand.json"
+    },
+    {
+      "app": "sonarr",
+      "stem": "fand",
+      "trash_id": "1f233ed024e7c35cf50fbd739a82de4b",
+      "cf_name": "FAND",
+      "spec_name": "WEBDL",
+      "implementation": "SourceSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/sonarr/cf/fand.json"
+    },
+    {
+      "app": "sonarr",
+      "stem": "fand",
+      "trash_id": "1f233ed024e7c35cf50fbd739a82de4b",
+      "cf_name": "FAND",
+      "spec_name": "WEBRIP",
+      "implementation": "SourceSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/sonarr/cf/fand.json"
+    },
+    {
+      "app": "sonarr",
       "stem": "flac",
       "trash_id": "851bd64e04c9374c51102be3dd9ae4cc",
       "cf_name": "FLAC",
@@ -15449,6 +15669,16 @@
       "stem": "truehd",
       "trash_id": "1808e4b9cee74e064dfae3f1db99dbfe",
       "cf_name": "TrueHD",
+      "spec_name": "Not Atmos Group (non-5.1)",
+      "implementation": "ReleaseTitleSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/sonarr/cf/truehd.json"
+    },
+    {
+      "app": "sonarr",
+      "stem": "truehd",
+      "trash_id": "1808e4b9cee74e064dfae3f1db99dbfe",
+      "cf_name": "TrueHD",
       "spec_name": "Not Basic Dolby Digital",
       "implementation": "ReleaseTitleSpecification",
       "reason": "unsupported_unreviewed_stem",
@@ -15509,6 +15739,16 @@
       "stem": "truehd-atmos",
       "trash_id": "0d7824bb924701997f874e7ff7d4844a",
       "cf_name": "TrueHD ATMOS",
+      "spec_name": "Not 5.1 Surround",
+      "implementation": "ReleaseTitleSpecification",
+      "reason": "custom_rule_only_existing_parser_signal",
+      "source_path": "docs/json/sonarr/cf/truehd-atmos.json"
+    },
+    {
+      "app": "sonarr",
+      "stem": "truehd-atmos",
+      "trash_id": "0d7824bb924701997f874e7ff7d4844a",
+      "cf_name": "TrueHD ATMOS",
       "spec_name": "Not Basic Dolby Digital",
       "implementation": "ReleaseTitleSpecification",
       "reason": "custom_rule_only_existing_parser_signal",
@@ -15539,7 +15779,7 @@
       "stem": "truehd-atmos",
       "trash_id": "0d7824bb924701997f874e7ff7d4844a",
       "cf_name": "TrueHD ATMOS",
-      "spec_name": "Not Dolby Digital Plus ",
+      "spec_name": "Not Dolby Digital Plus",
       "implementation": "ReleaseTitleSpecification",
       "reason": "custom_rule_only_existing_parser_signal",
       "source_path": "docs/json/sonarr/cf/truehd-atmos.json"

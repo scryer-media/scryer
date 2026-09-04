@@ -2,7 +2,7 @@
 // Do not edit by hand.
 
 #[allow(dead_code)]
-pub const TRASH_GUIDES_SOURCE_REVISION: &str = "e6aa63c782aa049e47be746889e4d06db0fe686f";
+pub const TRASH_GUIDES_SOURCE_REVISION: &str = "f3b00725e0aa8ac374bd3c768538d370ccd93fb6";
 
 pub static SERVICE_ALIAS_RULES: &[ServiceAliasRule] = &[
     ServiceAliasRule {
@@ -8767,6 +8767,20 @@ pub static LOCALE_GROUP_FACT_RULES: &[LocaleGroupFactRule] = &[
         source_context: LocaleSourceContext::BluRay,
     },
     LocaleGroupFactRule {
+        code: "trash.locale.german.group.tier2",
+        matcher: "toto",
+        match_kind: LocaleGroupMatchKind::Exact,
+        facet: RuleFacet::Movie,
+        source_context: LocaleSourceContext::Web,
+    },
+    LocaleGroupFactRule {
+        code: "trash.locale.german.group.tier2",
+        matcher: "toto",
+        match_kind: LocaleGroupMatchKind::Exact,
+        facet: RuleFacet::Movie,
+        source_context: LocaleSourceContext::BluRay,
+    },
+    LocaleGroupFactRule {
         code: "trash.locale.german.group.tier3",
         matcher: "4Baka",
         match_kind: LocaleGroupMatchKind::Exact,
@@ -12868,36 +12882,6 @@ pub static BLOCKED_TITLE_RULES: &[BlockedTitleRule] = &[
         category: TitleCategoryScope::Any,
         pattern: TokenPattern {
             kind: TokenPatternKind::Sequence,
-            tokens: &["12", "D3", "WEB", "DL", "RIP", "EVO"],
-        },
-        app: "radarr",
-        stem: "lq-release-title",
-        trash_id: "e204b80c87be9497a8a6eaff48f72905",
-        cf_name: "LQ (Release Title)",
-        spec_name: "EVO (no WEBDL)",
-        source_path: "docs/json/radarr/cf/lq-release-title.json",
-    },
-    BlockedTitleRule {
-        code: "trash_guides_lq_release_title",
-        facet: RuleFacet::Movie,
-        category: TitleCategoryScope::Any,
-        pattern: TokenPattern {
-            kind: TokenPatternKind::Sequence,
-            tokens: &["12", "D3", "WEB", "DL", "RIP", "PIRATES"],
-        },
-        app: "radarr",
-        stem: "lq-release-title",
-        trash_id: "e204b80c87be9497a8a6eaff48f72905",
-        cf_name: "LQ (Release Title)",
-        spec_name: "PiRaTeS (no WEBDL)",
-        source_path: "docs/json/radarr/cf/lq-release-title.json",
-    },
-    BlockedTitleRule {
-        code: "trash_guides_lq_release_title",
-        facet: RuleFacet::Movie,
-        category: TitleCategoryScope::Any,
-        pattern: TokenPattern {
-            kind: TokenPatternKind::Sequence,
             tokens: &["1XBET"],
         },
         app: "radarr",
@@ -12995,6 +12979,36 @@ pub static BLOCKED_TITLE_RULES: &[BlockedTitleRule] = &[
         trash_id: "e204b80c87be9497a8a6eaff48f72905",
         cf_name: "LQ (Release Title)",
         spec_name: "TEKNO3D",
+        source_path: "docs/json/radarr/cf/lq-release-title.json",
+    },
+    BlockedTitleRule {
+        code: "trash_guides_lq_release_title",
+        facet: RuleFacet::Movie,
+        category: TitleCategoryScope::Any,
+        pattern: TokenPattern {
+            kind: TokenPatternKind::Sequence,
+            tokens: &["WEB", "DL", "RIP", "EVO"],
+        },
+        app: "radarr",
+        stem: "lq-release-title",
+        trash_id: "e204b80c87be9497a8a6eaff48f72905",
+        cf_name: "LQ (Release Title)",
+        spec_name: "EVO (no WEBDL)",
+        source_path: "docs/json/radarr/cf/lq-release-title.json",
+    },
+    BlockedTitleRule {
+        code: "trash_guides_lq_release_title",
+        facet: RuleFacet::Movie,
+        category: TitleCategoryScope::Any,
+        pattern: TokenPattern {
+            kind: TokenPatternKind::Sequence,
+            tokens: &["WEB", "DL", "RIP", "PIRATES"],
+        },
+        app: "radarr",
+        stem: "lq-release-title",
+        trash_id: "e204b80c87be9497a8a6eaff48f72905",
+        cf_name: "LQ (Release Title)",
+        spec_name: "PiRaTeS (no WEBDL)",
         source_path: "docs/json/radarr/cf/lq-release-title.json",
     },
     BlockedTitleRule {

@@ -1,13 +1,13 @@
 TRaSH Guides sync summary
-Source revision: e6aa63c782aa049e47be746889e4d06db0fe686f
+Source revision: f3b00725e0aa8ac374bd3c768538d370ccd93fb6
 
-Active release-group rules: 826
-  by facet: movies=275, series=174, anime=377
+Active release-group rules: 830
+  by facet: movies=277, series=175, anime=378
 Active service aliases: 100
 Active parser token signals: 29
 Active guide facts: 132
 Active language rules: 17
 Active blocked title rules: 55
   by facet: movies=10, series=5, anime=40
-Preserved inactive records: 432
-Ignored records: 737
+Preserved inactive records: 433
+Ignored records: 757
