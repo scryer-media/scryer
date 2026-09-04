@@ -2695,6 +2695,8 @@ export const acquisitionSettingsQuery = `query AcquisitionSettings {
 
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    experimentalFeaturesEnabled
+    personalizedDiscoveryEnabled
     keepHistoryForever
     historyRetentionDays
     imageCacheMaxSizeMb
@@ -3226,6 +3228,13 @@ ${JOB_RUN_FIELDS}
 
 export const scryerVersionQuery = `query ScryerVersion {
   scryerVersion
+}`;
+
+export const instanceFeaturesQuery = `query InstanceFeatures {
+  instanceFeatures {
+    experimentalFeaturesEnabled
+    personalizedDiscoveryEnabled
+  }
 }`;
 
 export const serviceLogsQuery = `query ServiceLogs($limit: Int) {

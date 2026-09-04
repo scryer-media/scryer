@@ -227,6 +227,11 @@ struct DiscoveryNextRunCandidates {
     /// bucket is seed-jittered, it could land inside the first-snapshot
     /// window and pre-empt the wake the state actually scheduled.
     incremental_reload_possible: bool,
+    /// False when the instance-wide personalized discovery switch is off. Both
+    /// personalized candidates are then excluded and the fallback settles on
+    /// the public feed slot instead of waking on an incremental bucket that
+    /// cannot do any work.
+    personalized_enabled: bool,
     next_context: DateTime<Utc>,
     next_public: DateTime<Utc>,
     bootstrap_quiet_until: Option<DateTime<Utc>>,
@@ -242,6 +247,7 @@ fn discovery_next_run_at(
     let DiscoveryNextRunCandidates {
         next_incremental,
         incremental_reload_possible,
+        personalized_enabled,
         next_context,
         next_public,
         bootstrap_quiet_until,
@@ -250,19 +256,31 @@ fn discovery_next_run_at(
         pending_changes_quiet_at,
     } = candidates;
     [
-        incremental_reload_possible.then_some(next_incremental),
-        Some(next_context),
+        (personalized_enabled && incremental_reload_possible).then_some(next_incremental),
+        personalized_enabled.then_some(next_context),
         Some(next_public),
-        bootstrap_quiet_until,
+        personalized_enabled
+            .then_some(bootstrap_quiet_until)
+            .flatten(),
         backoff_until,
-        scan_blocked_retry_at,
-        pending_changes_quiet_at,
+        // A blocked scan only ever holds up personalized work; the public feed
+        // does not care, so it is not a wake reason while the switch is off.
+        personalized_enabled
+            .then_some(scan_blocked_retry_at)
+            .flatten(),
+        personalized_enabled
+            .then_some(pending_changes_quiet_at)
+            .flatten(),
     ]
     .into_iter()
     .flatten()
     .filter(|candidate| *candidate >= now)
     .min()
-    .unwrap_or(next_incremental)
+    .unwrap_or(if personalized_enabled {
+        next_incremental
+    } else {
+        next_public
+    })
 }
 
 fn discovery_pending_changes_quiet_at(
@@ -462,6 +480,9 @@ struct HousekeepingRunSummary {
 #[derive(Clone, Debug, serde::Serialize)]
 struct DiscoverySyncRunSummary {
     state_created: bool,
+    /// False when the instance-wide personalized discovery switch is off. The
+    /// run then refreshes the public feed and sends nothing else to SMG.
+    personalized_discovery_enabled: bool,
     trigger_source: String,
     subject_count: usize,
     subject_fingerprint: String,
@@ -1790,6 +1811,11 @@ impl AppUseCase {
     ) -> AppResult<JobExecutionOutcome> {
         let now = self.runtime.environment.now();
         let scheduler_seed = self.discovery_scheduler_seed().await?;
+        // Instance-wide opt out. When off, nothing about the local library
+        // leaves this instance: no context snapshot, no incremental change
+        // submit, and no scheduling bookkeeping for either. The public feed
+        // (region and language only) keeps refreshing.
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let titles = self.services.catalog.titles.list(None, None).await?;
         let defaults = DiscoveryContextDefaults {
             region: self.discovery_region().await,
@@ -1840,7 +1866,7 @@ impl AppUseCase {
                 DISCOVERY_SYNC_DAILY_BACKSTOP_SECONDS + state.public_feed_jitter_seconds,
             );
 
-        if state.last_success_generation_id.is_some() {
+        if personalized_discovery_enabled && state.last_success_generation_id.is_some() {
             if state.next_incremental_reload_eligible_at.is_none() {
                 state.next_incremental_reload_eligible_at = Some(next_incremental);
                 state.updated_at = now;
@@ -1917,8 +1943,13 @@ impl AppUseCase {
         let active_scan_count = self.active_library_scan_run_count().await?;
         let scans_active = active_scan_count > 0;
         let snapshot_backoff_ready = state.backoff_until.is_none_or(|until| now >= until);
-        let first_snapshot_pending =
-            state.last_success_generation_id.is_none() && !library_context.subjects.is_empty();
+        // With personalized discovery off there is no first snapshot to reach
+        // for, so the acceleration, the bootstrap-quiet wake, and the silent
+        // wake below all stay inert and none of them writes a
+        // `next_context_snapshot_eligible_at`.
+        let first_snapshot_pending = personalized_discovery_enabled
+            && state.last_success_generation_id.is_none()
+            && !library_context.subjects.is_empty();
         let discovery_sync_tracker_due = trigger_source == JobTriggerSource::ScheduledInterval
             && self
                 .runtime
@@ -1977,7 +2008,9 @@ impl AppUseCase {
             && state.inflight_context_snapshot_run_id.is_none()
             && !manual_context_cooldown_active
             && snapshot_backoff_ready;
-        let context_snapshot_due = if snapshot_resume_due {
+        let context_snapshot_due = if !personalized_discovery_enabled {
+            false
+        } else if snapshot_resume_due {
             true
         } else if snapshot_can_submit && state.last_success_generation_id.is_none() {
             // First snapshot: let the bootstrap quiet window elapse so library churn
@@ -2035,7 +2068,8 @@ impl AppUseCase {
             None
         };
 
-        let incremental_due = context_snapshot.is_none()
+        let incremental_due = personalized_discovery_enabled
+            && context_snapshot.is_none()
             && !scans_active
             && state.last_success_generation_id.is_some()
             && !pending_changes.is_empty()
@@ -2088,6 +2122,7 @@ impl AppUseCase {
             DiscoveryNextRunCandidates {
                 next_incremental: effective_next_incremental,
                 incremental_reload_possible: state.last_success_generation_id.is_some(),
+                personalized_enabled: personalized_discovery_enabled,
                 next_context: effective_next_context,
                 next_public: effective_next_public,
                 bootstrap_quiet_until: state.bootstrap_quiet_until,
@@ -2107,6 +2142,7 @@ impl AppUseCase {
 
         let summary = DiscoverySyncRunSummary {
             state_created,
+            personalized_discovery_enabled,
             trigger_source: trigger_source.as_str().to_string(),
             subject_count: library_context.subjects.len(),
             subject_fingerprint: library_context.fingerprint.clone(),
@@ -2146,17 +2182,29 @@ impl AppUseCase {
             )
             .await?;
             return Ok(JobExecutionOutcome::warning(
-                Some("Discovery sync deferred; no work is currently eligible".to_string()),
+                Some(if personalized_discovery_enabled {
+                    "Discovery sync deferred; no work is currently eligible".to_string()
+                } else {
+                    "Discovery sync deferred; personalized discovery disabled; public feed only"
+                        .to_string()
+                }),
                 summary_json,
             ));
         }
 
         Ok(JobExecutionOutcome::new(
-            Some(format!(
-                "Discovery sync evaluated {} local subjects; next incremental reload window at {}",
-                library_context.subjects.len(),
-                effective_next_incremental.to_rfc3339()
-            )),
+            Some(if personalized_discovery_enabled {
+                format!(
+                    "Discovery sync evaluated {} local subjects; next incremental reload window at {}",
+                    library_context.subjects.len(),
+                    effective_next_incremental.to_rfc3339()
+                )
+            } else {
+                format!(
+                    "Discovery sync: personalized discovery disabled; public feed only; next public feed window at {}",
+                    effective_next_public.to_rfc3339()
+                )
+            }),
             summary_json,
         ))
     }
@@ -3544,6 +3592,7 @@ mod tests {
         let candidates = |incremental_reload_possible: bool| DiscoveryNextRunCandidates {
             next_incremental: now + chrono::Duration::seconds(37),
             incremental_reload_possible,
+            personalized_enabled: true,
             next_context: now + chrono::Duration::seconds(358),
             next_public: now + chrono::Duration::days(1),
             bootstrap_quiet_until: None,
@@ -3561,6 +3610,51 @@ mod tests {
             discovery_next_run_at(now, candidates(true)),
             now + chrono::Duration::seconds(37),
             "after the first snapshot the incremental bucket is a normal wake candidate"
+        );
+    }
+
+    #[test]
+    fn discovery_next_run_settles_on_the_public_slot_when_personalized_is_disabled() {
+        // With personalized discovery off, neither the incremental bucket nor
+        // the context gate can do any work, so waking on either is pure waste.
+        // The public feed slot is the only real candidate, including in the
+        // fallback branch where every remaining candidate is already in the
+        // past.
+        let now = Utc.timestamp_opt(10_000, 0).unwrap();
+        let next_public = now + chrono::Duration::days(1);
+        let disabled = DiscoveryNextRunCandidates {
+            next_incremental: now + chrono::Duration::seconds(37),
+            incremental_reload_possible: true,
+            personalized_enabled: false,
+            next_context: now + chrono::Duration::seconds(358),
+            next_public,
+            bootstrap_quiet_until: Some(now + chrono::Duration::seconds(90)),
+            backoff_until: None,
+            scan_blocked_retry_at: Some(now + chrono::Duration::seconds(120)),
+            pending_changes_quiet_at: Some(now + chrono::Duration::seconds(60)),
+        };
+        assert_eq!(
+            discovery_next_run_at(now, disabled),
+            next_public,
+            "disabled: only the public feed slot is a wake reason"
+        );
+
+        let elapsed_public = now - chrono::Duration::seconds(5);
+        let fallback = DiscoveryNextRunCandidates {
+            next_incremental: now + chrono::Duration::seconds(37),
+            incremental_reload_possible: true,
+            personalized_enabled: false,
+            next_context: now + chrono::Duration::seconds(358),
+            next_public: elapsed_public,
+            bootstrap_quiet_until: None,
+            backoff_until: None,
+            scan_blocked_retry_at: None,
+            pending_changes_quiet_at: None,
+        };
+        assert_eq!(
+            discovery_next_run_at(now, fallback),
+            elapsed_public,
+            "disabled fallback: the public slot, not the incremental bucket"
         );
     }
 

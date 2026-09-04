@@ -18,6 +18,12 @@ type MovieTitleSettingsPanelProps = {
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
   onTitleChanged: () => Promise<void> | void;
   onOpenFixMatch: () => void;
+  /**
+   * Whether the move entry point is offered on this instance. The flag is read
+   * once by the view that owns this panel and passed down, so the panel keeps
+   * a module graph that server-renders.
+   */
+  experimentalFeaturesEnabled?: boolean;
 };
 
 export function MovieTitleSettingsPanel({
@@ -26,6 +32,7 @@ export function MovieTitleSettingsPanel({
   onUpdateTitleOptions,
   onTitleChanged,
   onOpenFixMatch,
+  experimentalFeaturesEnabled = false,
 }: MovieTitleSettingsPanelProps) {
   const client = useClient();
   const [qualityProfiles, setQualityProfiles] = React.useState<
@@ -121,26 +128,30 @@ export function MovieTitleSettingsPanel({
         currentLibraryName={libraryName ?? title.libraryName ?? null}
         rootFolderReadOnly
       />
-      <MoveTitleSettingsCard
-        idPrefix="title-overview-settings"
-        onOpen={() => setMoveOpen(true)}
-      />
-      <MoveTitlesDialog
-        open={moveOpen}
-        onOpenChange={setMoveOpen}
-        titles={[
-          {
-            id: title.id,
-            name: title.name,
-            libraryId: title.libraryId,
-            libraryName: libraryName ?? title.libraryName ?? null,
-            rootFolderId: title.rootFolderId ?? null,
-            rootFolderPath: title.rootFolderPath ?? null,
-          },
-        ]}
-        libraries={moveLibraries}
-        initialRootId={null}
-      />
+      {experimentalFeaturesEnabled ? (
+        <>
+          <MoveTitleSettingsCard
+            idPrefix="title-overview-settings"
+            onOpen={() => setMoveOpen(true)}
+          />
+          <MoveTitlesDialog
+            open={moveOpen}
+            onOpenChange={setMoveOpen}
+            titles={[
+              {
+                id: title.id,
+                name: title.name,
+                libraryId: title.libraryId,
+                libraryName: libraryName ?? title.libraryName ?? null,
+                rootFolderId: title.rootFolderId ?? null,
+                rootFolderPath: title.rootFolderPath ?? null,
+              },
+            ]}
+            libraries={moveLibraries}
+            initialRootId={null}
+          />
+        </>
+      ) : null}
       <FixTitleMatchSettingsCard
         facet={title.facet}
         idPrefix="title-overview-settings"

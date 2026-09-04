@@ -715,6 +715,8 @@ async fn graphql_typed_general_settings_defaults() {
         r#"
         query GeneralSettings {
           generalSettings {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
             keepHistoryForever
             historyRetentionDays
             imageCacheMaxSizeMb
@@ -733,6 +735,14 @@ async fn graphql_typed_general_settings_defaults() {
     )
     .await;
     assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["generalSettings"]["experimentalFeaturesEnabled"],
+        false
+    );
+    assert_eq!(
+        read["data"]["generalSettings"]["personalizedDiscoveryEnabled"],
+        true
+    );
     assert_eq!(read["data"]["generalSettings"]["keepHistoryForever"], false);
     assert_eq!(read["data"]["generalSettings"]["historyRetentionDays"], 180);
     assert_eq!(read["data"]["generalSettings"]["imageCacheMaxSizeMb"], 256);
@@ -751,6 +761,240 @@ async fn graphql_typed_general_settings_defaults() {
         read["data"]["generalSettings"]["pluginHttpTrustedCertificates"],
         json!([])
     );
+}
+
+#[tokio::test]
+async fn graphql_typed_general_settings_instance_feature_switches_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
+          updateGeneralSettings(input: $input) {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
+            keepHistoryForever
+            historyRetentionDays
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "experimentalFeaturesEnabled": true,
+            "personalizedDiscoveryEnabled": false
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+    assert_eq!(
+        update["data"]["updateGeneralSettings"]["experimentalFeaturesEnabled"],
+        true
+    );
+    assert_eq!(
+        update["data"]["updateGeneralSettings"]["personalizedDiscoveryEnabled"],
+        false
+    );
+    // Untouched fields keep their stored values through a partial update.
+    assert_eq!(
+        update["data"]["updateGeneralSettings"]["historyRetentionDays"],
+        180
+    );
+
+    let read = gql(
+        &ctx,
+        r#"
+        query GeneralSettings {
+          generalSettings {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["generalSettings"]["experimentalFeaturesEnabled"],
+        true
+    );
+    assert_eq!(
+        read["data"]["generalSettings"]["personalizedDiscoveryEnabled"],
+        false
+    );
+
+    let restore = gql(
+        &ctx,
+        r#"
+        mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
+          updateGeneralSettings(input: $input) {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "experimentalFeaturesEnabled": false,
+            "personalizedDiscoveryEnabled": true
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&restore);
+    assert_eq!(
+        restore["data"]["updateGeneralSettings"]["experimentalFeaturesEnabled"],
+        false
+    );
+    assert_eq!(
+        restore["data"]["updateGeneralSettings"]["personalizedDiscoveryEnabled"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn graphql_instance_features_readable_without_manage_system_settings() {
+    const INSTANCE_FEATURES_QUERY: &str = r#"
+        query InstanceFeatures {
+          instanceFeatures {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
+          }
+        }
+        "#;
+
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let viewer = ctx
+        .app
+        .create_user(
+            &admin,
+            "instance_features_viewer".to_string(),
+            "viewer-pass1".to_string(),
+            AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .expect("create user without manage system settings");
+    let viewer_token = ctx
+        .app
+        .issue_access_token(&viewer)
+        .await
+        .expect("issue viewer token");
+
+    let denied = gql_with_token(
+        &ctx,
+        r#"
+        query GeneralSettings {
+          generalSettings {
+            experimentalFeaturesEnabled
+          }
+        }
+        "#,
+        json!({}),
+        &viewer_token,
+    )
+    .await;
+    assert_graphql_field_denied(&denied, "generalSettings");
+
+    let defaults =
+        gql_with_token(&ctx, INSTANCE_FEATURES_QUERY, json!({}), &viewer_token).await;
+    assert_no_errors(&defaults);
+    assert_eq!(
+        defaults["data"]["instanceFeatures"]["experimentalFeaturesEnabled"],
+        false
+    );
+    assert_eq!(
+        defaults["data"]["instanceFeatures"]["personalizedDiscoveryEnabled"],
+        true
+    );
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
+          updateGeneralSettings(input: $input) {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "experimentalFeaturesEnabled": true,
+            "personalizedDiscoveryEnabled": false
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let after = gql_with_token(&ctx, INSTANCE_FEATURES_QUERY, json!({}), &viewer_token).await;
+    assert_no_errors(&after);
+    assert_eq!(
+        after["data"]["instanceFeatures"]["experimentalFeaturesEnabled"],
+        true
+    );
+    assert_eq!(
+        after["data"]["instanceFeatures"]["personalizedDiscoveryEnabled"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn graphql_instance_features_requires_a_session() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    // Form login refuses to turn on until a full administrator can actually
+    // log in, so give the default admin a password first.
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .set_initial_own_password(&admin, "admin-pass1".to_string())
+        .await
+        .expect("set initial default admin password");
+
+    let enable_form_login = gql(
+        &ctx,
+        r#"
+        mutation UpdateSecuritySettings {
+          updateSecuritySettings(input: {
+            formLoginEnabled: true
+            passwordMinLength: 8
+            skipLoginForLocalIps: false
+            mfaRequireConfigStepUp: false
+            mfaRequirePasswordLogin: false
+            totpRequireJellyfinLogin: false
+            totpRequireEmbyLogin: false
+          }) {
+            effectiveFormLoginEnabled
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&enable_form_login);
+
+    let anonymous = gql(
+        &ctx,
+        r#"
+        query InstanceFeatures {
+          instanceFeatures {
+            experimentalFeaturesEnabled
+            personalizedDiscoveryEnabled
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_graphql_field_denied(&anonymous, "instanceFeatures");
 }
 
 #[tokio::test]

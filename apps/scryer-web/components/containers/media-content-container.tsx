@@ -142,6 +142,7 @@ import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
 import {
@@ -774,6 +775,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  // Library and root moves are still being finished, so the bulk dialog only
+  // becomes a move entry point when the instance has opted in.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { registerInteractiveJobRun } = useJobRunToasts();
   const { confirmReplaceConflict, replaceConflictDialog } =
     useDownloadConflictConfirmation();
@@ -5514,10 +5518,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
         destinationLibraryName={editDialogLibraryName}
-        onRequestMove={(rootFolderId) => {
-          setBulkEditDialogOpen(false);
-          setBulkMoveRootId(rootFolderId);
-        }}
+        onRequestMove={
+          experimentalFeaturesEnabled
+            ? (rootFolderId) => {
+                setBulkEditDialogOpen(false);
+                setBulkMoveRootId(rootFolderId);
+              }
+            : undefined
+        }
       />
       <MoveTitlesDialog
         open={bulkMoveRootId !== null}

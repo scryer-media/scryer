@@ -43,6 +43,7 @@ import { useConfigStepUp } from "@/lib/hooks/use-config-step-up";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { RootHeader } from "@/components/root/root-header";
 import { buildRouteCommands } from "@/components/root/route-commands";
 import { JobRunProvider } from "@/components/root/job-run-provider";
@@ -777,6 +778,9 @@ function AuthenticatedHomePage({
   serviceRestarting: boolean;
 }) {
   const isOnline = useOnlineStatus();
+  // The palette must not offer a page the sidebar is hiding, so the same
+  // instance-wide switch decides both.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { canPrompt, isInstalled, isIosSafari, promptInstall } =
     useInstallPrompt();
 
@@ -1399,9 +1403,16 @@ function AuthenticatedHomePage({
         t,
         user: authenticatedUser,
         activityImportCount: manualImportRequiredCount,
+        experimentalFeaturesEnabled,
         onNavigate: navigateTo,
       }),
-    [authenticatedUser, manualImportRequiredCount, navigateTo, t],
+    [
+      authenticatedUser,
+      experimentalFeaturesEnabled,
+      manualImportRequiredCount,
+      navigateTo,
+      t,
+    ],
   );
 
   useAutoBackupNotice({

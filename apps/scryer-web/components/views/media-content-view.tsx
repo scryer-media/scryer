@@ -38,6 +38,7 @@ import {
 } from "@/components/common/external-media-links";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useActiveDownloadTitleIds } from "@/lib/hooks/use-active-download-title-ids";
@@ -1146,6 +1147,9 @@ function TitleContextPanel({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const dateTimeFormat = useUiDateTimeFormat();
+  // Library and root moves are still being finished, so the panel's move entry
+  // point only exists when the instance has opted in.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [autoQueueLoadingTitleId, setAutoQueueLoadingTitleId] = React.useState<
     string | null
   >(null);
@@ -1610,6 +1614,7 @@ function TitleContextPanel({
                 Promise.resolve(onTitleOptionsChanged(title))
               }
               onOpenFixMatch={() => setFixMatchOpen(true)}
+              experimentalFeaturesEnabled={experimentalFeaturesEnabled}
             />
           </div>
         ) : null}

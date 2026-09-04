@@ -663,8 +663,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // payload and create input: ENUM +1, public types +1.
     // Totals: query 149->150, mutation 219->220, OBJECT 381->387,
     // INPUT_OBJECT 194->198, ENUM 139->140, public types 726->737.
+    // The instance-wide feature switches add the actor-only `instanceFeatures`
+    // query and its `InstanceFeaturesPayload`: query 150->151, OBJECT 387->388,
+    // public types 737->738. The two switches themselves are additive fields on
+    // the existing general settings payload and update input, so INPUT_OBJECT,
+    // ENUM, mutation, and subscription counts are unchanged.
     assert_eq!(
-        query_field_count, 150,
+        query_field_count, 151,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -734,8 +739,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // census. Combined with the location-surface fold above, the totals are
     // public types 720->724, OBJECT 379->380, INPUT_OBJECT 191->193, and
     // ENUM 138->139.
-    assert_eq!(public_types.len(), 737);
-    assert_eq!(kind_count("OBJECT"), 387);
+    assert_eq!(public_types.len(), 738);
+    assert_eq!(kind_count("OBJECT"), 388);
     assert_eq!(kind_count("INPUT_OBJECT"), 198);
     assert_eq!(kind_count("ENUM"), 140);
     assert_eq!(kind_count("SCALAR"), 10);
@@ -5834,6 +5839,8 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         .collect();
     assert!(general_names.contains(&"keepHistoryForever"));
     assert!(general_names.contains(&"historyRetentionDays"));
+    assert!(general_names.contains(&"experimentalFeaturesEnabled"));
+    assert!(general_names.contains(&"personalizedDiscoveryEnabled"));
 
     let media_fields = body["data"]["mediaSettings"]["fields"]
         .as_array()
@@ -6038,4 +6045,6 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         .collect();
     assert!(general_input_names.contains(&"keepHistoryForever"));
     assert!(general_input_names.contains(&"historyRetentionDays"));
+    assert!(general_input_names.contains(&"experimentalFeaturesEnabled"));
+    assert!(general_input_names.contains(&"personalizedDiscoveryEnabled"));
 }

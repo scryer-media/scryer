@@ -40,6 +40,13 @@ pub const USE_SEASON_FOLDERS_KEY: &str = "rename.use_season_folders";
 // Discovery region seam. Read like metadata_language; a future
 // preferences UI only has to write this key (defaults to "US" -> unchanged).
 pub const DISCOVERY_REGION_KEY: &str = "discovery.region";
+// Instance-wide opt in for surfaces that are still being finished. Absent row
+// means disabled, so existing installs keep the unfinished surfaces hidden.
+pub const EXPERIMENTAL_FEATURES_ENABLED_KEY: &str = "ui.experimental_features_enabled";
+// Instance-wide opt out for sending the library context to the metadata
+// gateway. Stored in the positive sense; absent row means enabled, so existing
+// installs keep personalized discovery working with no data change.
+pub const DISCOVERY_PERSONALIZED_ENABLED_KEY: &str = "discovery.personalized_enabled";
 pub const HISTORY_KEEP_FOREVER_KEY: &str = "history.keep_forever";
 pub const HISTORY_RETENTION_DAYS_KEY: &str = "history.retention_days";
 pub const IMAGE_CACHE_MAX_SIZE_MB_KEY: &str = "images.cache.max_size_mb";

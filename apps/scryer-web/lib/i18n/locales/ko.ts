@@ -662,6 +662,14 @@ const ko: LocaleDictionary = {
     "이 설정은 Scryer의 사용자 표시 기록과 감사 추적을 보존합니다. 변경 사항은 다음 하우스키핑 실행 시 적용됩니다.",
   "settings.historyRetentionExternalHelp":
     "수집 임시 데이터에 대한 운영 정리는 계속 실행되며, 이 설정은 SABnzbd, NZBGet, Weaver가 보존하는 기록에는 적용되지 않습니다.",
+  "settings.featuresHeader": "기능",
+  "settings.experimentalFeaturesLabel": "실험적 기능 사용",
+  "settings.experimentalFeaturesHelp":
+    "이 인스턴스의 모든 사용자를 위해 아직 마무리 중인 기능을 표시합니다. 라이브러리와 루트 간 타이틀 이동, 그리고 유지 관리 규칙입니다.",
+  "settings.personalizedDiscoveryLabel": "개인화된 발견",
+  "settings.personalizedDiscoveryHelp":
+    "라이브러리 요약을 메타데이터 게이트웨이로 보내 보유한 작품을 기준으로 발견이 타이틀을 추천할 수 있게 합니다. 끄면 발견은 공개 피드만 사용합니다.",
+  "discovery.personalizedDisabled": "이 인스턴스에서는 개인화된 발견이 꺼져 있습니다.",
   "settings.keepHistoryForever": "기록을 영구히 보존",
   "settings.historyRetentionDaysHeader": "기록 보존 기간",
   "settings.historyRetentionDaysSuffix": "일",

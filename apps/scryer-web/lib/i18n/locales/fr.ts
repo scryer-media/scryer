@@ -687,6 +687,16 @@ const fr: LocaleDictionary = {
     "Cela conserve l’historique visible par l’utilisateur et la piste d’audit de Scryer. Les modifications prendront effet lors de la prochaine exécution du nettoyage.",
   "settings.historyRetentionExternalHelp":
     "Le nettoyage opérationnel des données temporaires d’acquisition continue de s’exécuter, et ce réglage ne contrôle pas l’historique conservé par SABnzbd, NZBGet ou Weaver.",
+  "settings.featuresHeader": "Fonctionnalités",
+  "settings.experimentalFeaturesLabel":
+    "Activer les fonctionnalités expérimentales",
+  "settings.experimentalFeaturesHelp":
+    "Affiche les fonctionnalités encore en cours de finalisation pour tous sur cette instance : le déplacement de titres entre bibliothèques et racines, et les règles de maintenance.",
+  "settings.personalizedDiscoveryLabel": "Découverte personnalisée",
+  "settings.personalizedDiscoveryHelp":
+    "Envoie un résumé de votre bibliothèque à la passerelle de métadonnées afin que la Découverte puisse recommander des titres en fonction de ce que vous possédez. Désactivez cette option pour limiter la Découverte aux flux publics.",
+  "discovery.personalizedDisabled":
+    "La découverte personnalisée est désactivée pour cette instance.",
   "settings.keepHistoryForever": "Conserver l’historique indéfiniment",
   "settings.historyRetentionDaysHeader": "Conserver l’historique pendant",
   "settings.historyRetentionDaysSuffix": "jours",

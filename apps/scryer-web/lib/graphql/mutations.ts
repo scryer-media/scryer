@@ -852,6 +852,8 @@ export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSett
 
 export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
   updateGeneralSettings(input: $input) {
+    experimentalFeaturesEnabled
+    personalizedDiscoveryEnabled
     keepHistoryForever
     historyRetentionDays
     imageCacheMaxSizeMb

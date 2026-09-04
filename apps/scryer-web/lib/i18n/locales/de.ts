@@ -678,6 +678,15 @@ const de: LocaleDictionary = {
     "Dadurch bleiben der benutzerseitige Verlauf und die Audit-Spur von Scryer erhalten. Änderungen werden beim nächsten Housekeeping-Lauf wirksam.",
   "settings.historyRetentionExternalHelp":
     "Die betriebliche Bereinigung für temporäre Akquisitionsdaten läuft weiterhin, und dies steuert nicht den Verlauf, der von SABnzbd, NZBGet oder Weaver aufbewahrt wird.",
+  "settings.featuresHeader": "Funktionen",
+  "settings.experimentalFeaturesLabel": "Experimentelle Funktionen aktivieren",
+  "settings.experimentalFeaturesHelp":
+    "Zeigt Funktionen, die für alle auf dieser Instanz noch fertiggestellt werden: das Verschieben von Titeln zwischen Bibliotheken und Stammverzeichnissen sowie Wartungsregeln.",
+  "settings.personalizedDiscoveryLabel": "Personalisierte Entdeckung",
+  "settings.personalizedDiscoveryHelp":
+    "Sendet eine Zusammenfassung Ihrer Bibliothek an das Metadaten-Gateway, damit die Entdeckung Titel auf Basis Ihres Bestands empfehlen kann. Deaktivieren Sie dies, um die Entdeckung auf öffentliche Feeds zu beschränken.",
+  "discovery.personalizedDisabled":
+    "Die personalisierte Entdeckung ist für diese Instanz deaktiviert.",
   "settings.keepHistoryForever": "Verlauf dauerhaft aufbewahren",
   "settings.historyRetentionDaysHeader": "Verlauf aufbewahren für",
   "settings.historyRetentionDaysSuffix": "Tage",

@@ -116,3 +116,56 @@ test("post-processing is grouped with Automation", () => {
 
   assert.equal(command?.groupLabel, "nav.group.automation");
 });
+
+test("maintenance-rules command appears only when experimental features are on", () => {
+  const catalogManager = user({
+    appPermissions: [APP_PERMISSIONS.manageCatalogSettings],
+  });
+
+  assert.ok(
+    buildRouteCommands({
+      t,
+      user: catalogManager,
+      experimentalFeaturesEnabled: true,
+      onNavigate: () => {},
+    }).some((command) => command.id === "settings-maintenance-rules"),
+  );
+  assert.equal(
+    buildRouteCommands({
+      t,
+      user: catalogManager,
+      experimentalFeaturesEnabled: false,
+      onNavigate: () => {},
+    }).some((command) => command.id === "settings-maintenance-rules"),
+    false,
+  );
+  // A caller that has not read the switch yet must not surface the page.
+  assert.equal(
+    buildRouteCommands({
+      t,
+      user: catalogManager,
+      onNavigate: () => {},
+    }).some((command) => command.id === "settings-maintenance-rules"),
+    false,
+  );
+});
+
+test("hiding maintenance rules leaves the rest of the catalog settings commands", () => {
+  const commands = buildRouteCommands({
+    t,
+    user: user({ appPermissions: [APP_PERMISSIONS.manageCatalogSettings] }),
+    experimentalFeaturesEnabled: false,
+    onNavigate: () => {},
+  });
+
+  for (const id of [
+    "settings-quality-profiles",
+    "settings-rules",
+    "settings-post-processing",
+  ]) {
+    assert.ok(
+      commands.some((command) => command.id === id),
+      `expected ${id} to survive the maintenance-rules gate`,
+    );
+  }
+});

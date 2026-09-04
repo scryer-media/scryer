@@ -79,6 +79,16 @@ const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<string, MaintenanceRulesSecti
   exclusions: "gates",
 };
 
+/// Which kinds of rule the Rules page offers on this instance.
+///
+/// Maintenance rules are still being finished, so they are a pane only when the
+/// instance has opted into experimental features. Scoring is always present, so
+/// a single-entry result also tells the page there is no kind to switch between
+/// and the rail can be dropped.
+export function rulesSectionsFor(experimentalFeaturesEnabled: boolean): RulesSection[] {
+  return experimentalFeaturesEnabled ? ["scoring", "maintenance"] : ["scoring"];
+}
+
 /// The `rules` settings section is the Scoring pane and `maintenanceRules` is
 /// the Maintenance pane. Which `SettingsSection` a pane maps to still decides
 /// its permissions, so the two stay distinct underneath one nav entry.

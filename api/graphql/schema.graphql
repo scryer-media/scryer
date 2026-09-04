@@ -6804,6 +6804,14 @@ General service settings, including effective image-cache limits and trusted cer
 """
 type GeneralSettingsPayload {
 	"""
+	Whether surfaces that are still being finished are shown on this instance.
+	"""
+	experimentalFeaturesEnabled: Boolean!
+	"""
+	Whether this instance sends its library context to the metadata gateway for personalized discovery.
+	"""
+	personalizedDiscoveryEnabled: Boolean!
+	"""
 	Whether import history is retained indefinitely.
 	"""
 	keepHistoryForever: Boolean!
@@ -7901,6 +7909,20 @@ type IndexerSearchResultPayload {
 	Human-readable automatic acquisition decision summary, or null when not evaluated.
 	"""
 	autoDecisionSummary: String
+}
+
+"""
+Instance-wide feature switches readable by any signed-in user.
+"""
+type InstanceFeaturesPayload {
+	"""
+	Whether surfaces that are still being finished are shown on this instance.
+	"""
+	experimentalFeaturesEnabled: Boolean!
+	"""
+	Whether this instance sends its library context to the metadata gateway for personalized discovery.
+	"""
+	personalizedDiscoveryEnabled: Boolean!
 }
 
 """
@@ -18548,6 +18570,10 @@ type QueryRoot {
 	"""
 	scryerVersion: String!
 	"""
+	Instance-wide feature switches readable by any signed-in user.
+	"""
+	instanceFeatures: InstanceFeaturesPayload!
+	"""
 	Return an SMG compatibility notice when the connected SMG version requires attention.
 	"""
 	smgVersionCompatibilityNotice: SmgVersionCompatibilityNoticePayload
@@ -23665,6 +23691,14 @@ input UpdateDownloadClientRoutingInput {
 General retention, cache, and plugin trust settings.
 """
 input UpdateGeneralSettingsInput {
+	"""
+	Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
+	"""
+	experimentalFeaturesEnabled: Boolean
+	"""
+	Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
+	"""
+	personalizedDiscoveryEnabled: Boolean
 	"""
 	Whether history is retained without expiry.
 	"""

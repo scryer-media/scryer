@@ -70,6 +70,7 @@ import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
 import { setMyUiSettingsMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import {
   useUiSettings,
   uiSettingsInputFromSettings,
@@ -603,6 +604,7 @@ function RootSidebarContent({
 }: RootSidebarProps) {
   const client = useClient();
   const t = useTranslate();
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const setGlobalStatus = useGlobalStatus();
   const { isMobile, setOpenMobile } = useSidebar();
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -732,13 +734,17 @@ function RootSidebarContent({
     () =>
       settingsEntries.filter(
         (entry) =>
-          !entry.requiredAnyAppPermission ||
-          hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
-          entry.requiredAnyLibraryPermission?.some((permission) =>
-            hasAnyLibraryPermission(user, permission),
-          ),
+          // Maintenance rules are still being finished, so the shortcut is
+          // offered only when the instance has opted in. The permission it
+          // already required still applies on top.
+          (entry.id !== "maintenanceRules" || experimentalFeaturesEnabled) &&
+          (!entry.requiredAnyAppPermission ||
+            hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
+            entry.requiredAnyLibraryPermission?.some((permission) =>
+              hasAnyLibraryPermission(user, permission),
+            )),
       ),
-    [user],
+    [experimentalFeaturesEnabled, user],
   );
   const groupedSettingsEntries = React.useMemo(() => {
     const entriesById = new Map(

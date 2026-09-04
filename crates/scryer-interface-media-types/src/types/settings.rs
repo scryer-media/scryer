@@ -110,6 +110,10 @@ pub struct PluginHttpTrustedCertificatePayload {
 #[derive(SimpleObject, Clone)]
 /// General service settings, including effective image-cache limits and trusted certificate data.
 pub struct GeneralSettingsPayload {
+    /// Whether surfaces that are still being finished are shown on this instance.
+    pub experimental_features_enabled: bool,
+    /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
+    pub personalized_discovery_enabled: bool,
     /// Whether import history is retained indefinitely.
     pub keep_history_forever: bool,
     /// History retention period in days when indefinite retention is false.
@@ -834,6 +838,10 @@ pub struct UpdateServiceSettingsInput {
 #[derive(InputObject, Clone)]
 /// General retention, cache, and plugin trust settings.
 pub struct UpdateGeneralSettingsInput {
+    /// Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
+    pub experimental_features_enabled: Option<bool>,
+    /// Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
+    pub personalized_discovery_enabled: Option<bool>,
     /// Whether history is retained without expiry.
     pub keep_history_forever: Option<bool>,
     /// History retention period in days when not retained forever.
