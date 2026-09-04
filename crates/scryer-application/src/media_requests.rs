@@ -212,11 +212,7 @@ impl AppUseCase {
         input: ListMediaRequestsInput,
     ) -> AppResult<Vec<MediaRequest>> {
         let allowed_ids = self
-            .authorized_library_ids(
-                actor,
-                input.facet.clone(),
-                LibraryPermission::ManageTitles,
-            )
+            .authorized_library_ids(actor, input.facet.clone(), LibraryPermission::ManageTitles)
             .await?;
         let allowed_ids = allowed_ids.into_iter().collect::<HashSet<_>>();
 
@@ -250,11 +246,7 @@ impl AppUseCase {
         input: ListMediaRequestsInput,
     ) -> AppResult<Vec<MediaRequest>> {
         let allowed_ids = self
-            .authorized_library_ids(
-                actor,
-                input.facet.clone(),
-                LibraryPermission::Request,
-            )
+            .authorized_library_ids(actor, input.facet.clone(), LibraryPermission::Request)
             .await?;
         let allowed_ids = allowed_ids.into_iter().collect::<HashSet<_>>();
 

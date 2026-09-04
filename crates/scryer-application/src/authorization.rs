@@ -232,9 +232,7 @@ impl AppUseCase {
         let authorization = self.authorization_for_actor(actor).await?;
         Ok(libraries
             .into_iter()
-            .filter(|library| {
-                effective_library_permission(&authorization, &library.id, permission)
-            })
+            .filter(|library| effective_library_permission(&authorization, &library.id, permission))
             .collect())
     }
 

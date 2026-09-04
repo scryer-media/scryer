@@ -2224,10 +2224,11 @@ async fn library_access_surfaces_agree_for_catalog_settings_only_users() {
         .await
         .expect("library ids should load");
     assert!(ids.contains(&library.id));
-    assert!(app
-        .has_library_permission(&user, &library.id, view)
-        .await
-        .expect("permission check should load"));
+    assert!(
+        app.has_library_permission(&user, &library.id, view)
+            .await
+            .expect("permission check should load")
+    );
     app.require_library_permission(&user, &library.id, view)
         .await
         .expect("catalog admin should read the ungranted library");
@@ -2249,17 +2250,19 @@ async fn library_access_surfaces_agree_for_catalog_settings_only_users() {
         .await
         .expect("library ids should load");
     assert!(!ids.contains(&library.id));
-    assert!(!app
-        .has_library_permission(&user, &library.id, manage)
-        .await
-        .expect("permission check should load"));
+    assert!(
+        !app.has_library_permission(&user, &library.id, manage)
+            .await
+            .expect("permission check should load")
+    );
     assert!(matches!(
         app.require_library_permission(&user, &library.id, manage)
             .await,
         Err(AppError::Unauthorized(_))
     ));
-    assert!(!app
-        .has_any_library_permission(&user, manage)
-        .await
-        .expect("permission check should load"));
+    assert!(
+        !app.has_any_library_permission(&user, manage)
+            .await
+            .expect("permission check should load")
+    );
 }

@@ -299,10 +299,7 @@ impl AppUseCase {
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?
             || self
-                .has_any_library_permission(
-                    actor,
-                    scryer_domain::LibraryPermission::ManageTitles,
-                )
+                .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageTitles)
                 .await?
         {
             return Ok(());
@@ -319,11 +316,7 @@ impl AppUseCase {
         library_ids: Option<Vec<String>>,
     ) -> AppResult<HashSet<String>> {
         let allowed = self
-            .authorized_library_ids(
-                actor,
-                None,
-                scryer_domain::LibraryPermission::ManageTitles,
-            )
+            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::ManageTitles)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
