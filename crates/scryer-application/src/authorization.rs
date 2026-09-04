@@ -27,6 +27,21 @@ fn permission_allows_app_library_override(permission: LibraryPermission) -> bool
     )
 }
 
+/// Catalog administrators can read and administer every library without an
+/// explicit per-library grant row. Grant rows are only seeded for the libraries
+/// that exist when an admin account is provisioned, so a library created later
+/// has none; the single-library check must reach the same verdict as the
+/// library listings or a title that shows up in the catalog cannot be opened.
+fn app_override_allows_library_permission(
+    authorization: &UserAuthorization,
+    permission: LibraryPermission,
+) -> bool {
+    authorization
+        .app
+        .contains(AppPermissionMask::MANAGE_CATALOG_SETTINGS)
+        && permission_allows_app_library_override(permission)
+}
+
 impl AppUseCase {
     pub async fn load_user_authorization(&self, actor: &User) -> AppResult<UserAuthorization> {
         let app = self
@@ -47,10 +62,20 @@ impl AppUseCase {
             libraries.insert(grant.library_id, grant.permissions);
         }
 
+        // An administrator who can grant library permissions holds every
+        // library permission on every library, including libraries created
+        // after the account was provisioned and therefore missing a grant
+        // row. Explicit rows still win where one exists.
+        let default_library = if app.contains(AppPermissionMask::MANAGE_PERMISSIONS) {
+            UserAuthorization::full_admin().default_library
+        } else {
+            LibraryPermissionMask::NONE
+        };
+
         Ok(UserAuthorization {
             app,
             libraries,
-            default_library: LibraryPermissionMask::NONE,
+            default_library,
             actor_capabilities: ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
             login_status: actor.login_status(),
             loaded: true,
@@ -156,7 +181,9 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let authorization = self.authorization_for_actor(actor).await?;
         let permissions = authorization.library_permissions(library_id);
-        if library_permission_matches(permissions, permission) {
+        if library_permission_matches(permissions, permission)
+            || app_override_allows_library_permission(&authorization, permission)
+        {
             Ok(())
         } else {
             Err(AppError::Unauthorized(
@@ -276,11 +303,7 @@ impl AppUseCase {
                     .collect(),
             });
         }
-        if authorization
-            .app
-            .contains(AppPermissionMask::MANAGE_CATALOG_SETTINGS)
-            && permission_allows_app_library_override(permission)
-        {
+        if app_override_allows_library_permission(&authorization, permission) {
             return Ok(libraries.into_iter().map(|library| library.id).collect());
         }
         Ok(libraries
