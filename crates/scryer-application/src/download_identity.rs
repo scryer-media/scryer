@@ -61,6 +61,7 @@ pub fn observed_download_identity(
 pub(crate) enum ObservedClientJobResolution {
     Resolved(DownloadId),
     Conflict,
+    BindingAlreadyEnded,
     Unavailable,
 }
 
@@ -249,6 +250,17 @@ pub(crate) async fn resolve_observed_client_job(
                 "conflicting canonical download identity observation"
             );
             ObservedClientJobResolution::Conflict
+        }
+        Ok(ObservationResolution::BindingAlreadyEnded) => {
+            tracing::debug!(
+                target: "download_identity_resolver",
+                token,
+                config_id,
+                client_type,
+                native_item_id,
+                "observed client job belongs to an ended binding; skipping item"
+            );
+            ObservedClientJobResolution::BindingAlreadyEnded
         }
         Err(error) => {
             tracing::warn!(

@@ -1364,7 +1364,8 @@ pub async fn begin_manual_import_selection(
         crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
             Some(download_id)
         }
-        crate::download_identity::ObservedClientJobResolution::Conflict => {
+        crate::download_identity::ObservedClientJobResolution::Conflict
+        | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
             return Err(AppError::Validation(
                 "manual import source has a conflicting canonical download identity".to_string(),
             ));
