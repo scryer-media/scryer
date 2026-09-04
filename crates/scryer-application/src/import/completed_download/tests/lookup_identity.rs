@@ -829,7 +829,8 @@ async fn completed_lookup_indexes_token_locator_and_legacy_identity_observations
                 Some(download_id)
             }
             crate::download_identity::ObservedClientJobResolution::Conflict
-            | crate::download_identity::ObservedClientJobResolution::Unavailable => {
+            | crate::download_identity::ObservedClientJobResolution::Unavailable
+            | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
                 panic!("canonical observations should resolve")
             }
         })
@@ -885,7 +886,8 @@ async fn completed_lookup_registry_failure_keeps_that_item_available_to_legacy_m
         .map(|resolution| match resolution {
             crate::download_identity::ObservedClientJobResolution::Unavailable => None,
             crate::download_identity::ObservedClientJobResolution::Resolved(_)
-            | crate::download_identity::ObservedClientJobResolution::Conflict => {
+            | crate::download_identity::ObservedClientJobResolution::Conflict
+            | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
                 panic!("registry failure should remain unavailable")
             }
         })

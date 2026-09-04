@@ -2099,7 +2099,10 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
         )
         .await
         .expect("catalog admin slug lookup should succeed in an ungranted library");
-    assert_eq!(by_slug.map(|title| title.id), Some(created.title.id.clone()));
+    assert_eq!(
+        by_slug.map(|title| title.id),
+        Some(created.title.id.clone())
+    );
 
     // A full administrator also manages titles there, through both the
     // override-aware and the grant-only checks.

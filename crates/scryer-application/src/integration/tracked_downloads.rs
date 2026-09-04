@@ -398,6 +398,9 @@ impl TrackedDownloadService {
                 );
                 return;
             }
+            crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
+                return;
+            }
             crate::download_identity::ObservedClientJobResolution::Unavailable => match app
                 .services
                 .workflow

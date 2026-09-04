@@ -150,7 +150,10 @@ pub(crate) async fn queue_item_identity_tracked_state(
         crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
             Some(download_id)
         }
-        crate::download_identity::ObservedClientJobResolution::Conflict => return None,
+        crate::download_identity::ObservedClientJobResolution::Conflict
+        | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
+            return None;
+        }
         crate::download_identity::ObservedClientJobResolution::Unavailable => None,
     };
     lookup::download_id_tracked_state(

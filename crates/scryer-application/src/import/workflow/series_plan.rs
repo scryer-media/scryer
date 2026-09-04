@@ -31,6 +31,21 @@ struct VerifiedEpisodePack {
     is_extras_release: bool,
 }
 
+impl VerifiedEpisodePack {
+    /// Whether the pack vouches for this catalog episode: a standard episode
+    /// whose season the release name declares (a pack that declares no
+    /// seasons — "Complete Series" — vouches for every standard episode).
+    /// This is the one rule for which pack members import automatically and
+    /// which Manual Import suggestions a multi-season pack keeps alive beyond
+    /// the season or set the grab was scoped to.
+    fn vouches_for(&self, episode: &scryer_domain::Episode) -> bool {
+        episode.episode_type == scryer_domain::EpisodeType::Standard
+            && self.declared_seasons.as_ref().is_none_or(|declared| {
+                catalog_episode_season(episode).is_some_and(|season| declared.contains(&season))
+            })
+    }
+}
+
 enum PlannedMemberDraft {
     Resolved(Vec<scryer_domain::Episode>),
     AmbiguousNumbering {
@@ -868,15 +883,10 @@ fn finalize_pack_member_disposition(
 ) -> PlannedEpisodeMemberDisposition {
     match draft {
         PlannedMemberDraft::Resolved(episodes) => {
-            let standard_outside_declared = pack.declared_seasons.as_ref().is_some_and(
-                |declared| {
-                    episodes.iter().any(|episode| {
-                        episode.episode_type == scryer_domain::EpisodeType::Standard
-                            && catalog_episode_season(episode)
-                                .is_none_or(|season| !declared.contains(&season))
-                    })
-                },
-            );
+            let standard_outside_declared = episodes.iter().any(|episode| {
+                episode.episode_type == scryer_domain::EpisodeType::Standard
+                    && !pack.vouches_for(episode)
+            });
             if standard_outside_declared {
                 return PlannedEpisodeMemberDisposition::Hold {
                     episodes,

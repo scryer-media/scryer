@@ -686,7 +686,8 @@ async fn find_submission_for_queue_item_by_download_id(
         crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
             Some(download_id)
         }
-        crate::download_identity::ObservedClientJobResolution::Conflict => return None,
+        crate::download_identity::ObservedClientJobResolution::Conflict
+        | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => return None,
         crate::download_identity::ObservedClientJobResolution::Unavailable => None,
     };
 
