@@ -1483,6 +1483,13 @@ async fn commit_season_pack_proposal(
                 })
                 .await;
 
+            record_grab_submission_outcome(
+                GrabTrigger::SeasonPack,
+                &title.facet,
+                Some(best_pack.source.as_str()),
+                &canonical_result,
+            );
+
             let canonical_submission = match canonical_result {
                 Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => {
                     Ok(submission)
@@ -1497,11 +1504,6 @@ async fn commit_season_pack_proposal(
                 Ok(canonical_submission) => {
                     let grab = canonical_submission.grab;
                     let download_job_id = grab.job_id.clone();
-                    let facet_label = serde_json::to_string(&title.facet)
-                        .unwrap_or_else(|_| "\"other\"".to_string())
-                        .trim_matches('"')
-                        .to_string();
-                    metrics::counter!("scryer_grabs_total", "indexer" => best_pack.source.clone(), "facet" => facet_label).increment(1);
                     app.record_indexer_grab(
                         best_pack.indexer_id.as_deref(),
                         Some(best_pack.source.as_str()),
@@ -3706,6 +3708,13 @@ async fn commit_scope_grab(
             })
             .await;
 
+        record_grab_submission_outcome(
+            GrabTrigger::Auto,
+            &title.facet,
+            Some(candidate.source.as_str()),
+            &canonical_result,
+        );
+
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
             Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
@@ -3724,13 +3733,6 @@ async fn commit_scope_grab(
                 // ── Success ─────────────────────────────────────────────────
                 if let Some(url) = source_hint.as_deref() {
                     cycle.mark_submitted(url);
-                }
-                {
-                    let facet_label = serde_json::to_string(&title.facet)
-                        .unwrap_or_else(|_| "\"other\"".to_string())
-                        .trim_matches('"')
-                        .to_string();
-                    metrics::counter!("scryer_grabs_total", "indexer" => candidate.source.clone(), "facet" => facet_label).increment(1);
                 }
                 app.record_indexer_grab(
                     candidate.indexer_id.as_deref(),
@@ -4201,8 +4203,26 @@ pub async fn start_background_acquisition_poller(
         fut: impl std::future::Future<Output = ()> + Send + 'static,
     ) {
         let t = std::time::Instant::now();
-        match tokio::spawn(fut).await {
-            Ok(()) => {}
+        let outcome = tokio::spawn(fut).await;
+        // Freshness: a counter that stops moving is indistinguishable from a
+        // scrape that never happened, so record *when* the task last ran at
+        // all (panic included) and, separately, when it last got through its
+        // body. The task future is `()`-typed, so returning at all is the only
+        // success signal available here.
+        let now = crate::metrics_support::unix_seconds(Utc::now());
+        metrics::gauge!(
+            crate::metrics_support::TASK_LAST_RUN_TIMESTAMP_SECONDS,
+            "task" => task_name
+        )
+        .set(now);
+        match outcome {
+            Ok(()) => {
+                metrics::gauge!(
+                    crate::metrics_support::TASK_LAST_SUCCESS_TIMESTAMP_SECONDS,
+                    "task" => task_name
+                )
+                .set(now);
+            }
             Err(e) => {
                 tracing::error!(
                     task = task_name,

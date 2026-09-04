@@ -36,6 +36,9 @@ unicode-normalization = "0.1"
 zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
+# Thread-local recorder for asserting emitted metric names, labels and values
+# without installing a global recorder.
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 # The in-process SSH server double, so tunnel tests prove egress really
 # travelled through a tunnel rather than merely failing to go direct.

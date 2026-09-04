@@ -24,7 +24,10 @@ use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub use nzbget::NzbgetDownloadClient;
-pub use router::{PrioritizedDownloadClientRouter, download_client_feedback_timeout};
+pub use router::{
+    PrioritizedDownloadClientRouter, describe_download_client_router_metrics,
+    download_client_feedback_timeout,
+};
 pub use sabnzbd::SabnzbdDownloadClient;
 pub use weaver::WeaverDownloadClient;
 pub use weaver_subscription::{WeaverSubscriptionBridgeClient, start_weaver_subscription_bridge};

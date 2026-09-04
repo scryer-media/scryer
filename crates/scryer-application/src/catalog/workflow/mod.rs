@@ -1,7 +1,8 @@
 use super::*;
 use crate::acquisition::acquisition::submission_blocks_wanted_item;
 use crate::acquisition::submission::{
-    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome,
+    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome, GrabTrigger,
+    record_grab_submission_outcome,
 };
 use crate::acquisition_decision_helpers::is_download_submit_unavailable_error;
 use crate::catalog_helpers::{

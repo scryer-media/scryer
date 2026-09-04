@@ -19,9 +19,9 @@
 //!   time, so [`describe_metrics`] must run *after* the recorder is installed; describing against
 //!   the no-op recorder silently loses the HELP text.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use metrics::{Unit, describe_counter, describe_gauge, describe_histogram};
+use metrics::{Unit, describe_counter, describe_gauge, describe_histogram, gauge};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use metrics_util::MetricKindMask;
 use tokio::time::MissedTickBehavior;
@@ -118,7 +118,36 @@ pub fn install_prometheus_recorder() -> Option<PrometheusHandle> {
     tracing::info!("prometheus metrics enabled at /metrics");
     // Descriptions must be registered against the installed recorder, not the no-op one.
     describe_metrics();
+    record_build_info();
     Some(handle)
+}
+
+/// Publishes the identity of this process: which build is running, and since when.
+///
+/// `scryer_build_info` follows the usual info-metric convention — the value is always 1 and the
+/// interesting content is in the labels, so dashboards join on it (`… * on(instance)
+/// scryer_build_info`) to attribute a series to a version. `scryer_process_start_time_seconds` is
+/// the standard way to compute uptime (`time() - scryer_process_start_time_seconds`) and, more
+/// usefully, to detect restarts as a step change rather than inferring them from counter resets.
+///
+/// Called once from [`install_prometheus_recorder`], so "start time" is the moment metrics came
+/// up during boot rather than the kernel's process start; the difference is milliseconds.
+///
+/// Deliberately no CPU/RSS collector here: that needs a process-collector dependency and is out
+/// of scope for this change.
+pub fn record_build_info() {
+    gauge!(
+        "scryer_build_info",
+        "version" => crate::VERSION,
+        "target_os" => std::env::consts::OS,
+        "target_arch" => std::env::consts::ARCH,
+    )
+    .set(1.0);
+
+    let start_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |since_epoch| since_epoch.as_secs_f64());
+    gauge!("scryer_process_start_time_seconds").set(start_time);
 }
 
 /// Spawns the background task that runs exporter upkeep until `shutdown` is cancelled.
@@ -150,62 +179,49 @@ pub fn spawn_upkeep(
 pub fn describe_metrics() {
     // Families owned by other crates describe themselves; call them here so every family
     // is registered against the installed recorder.
+    scryer_application::describe_acquisition_metrics();
     scryer_application::describe_domain_event_metrics();
+    scryer_application::describe_freshness_and_health_metrics();
+    scryer_application::describe_download_queue_metrics();
+    scryer_infrastructure_acquisition::describe_indexer_metrics();
+    scryer_infrastructure_acquisition::describe_download_client_router_metrics();
+    scryer_interface::describe_graphql_metrics();
+    scryer_outbound_http::describe_outbound_http_metrics();
 
-    // --- Acquisition: grabs and RSS ------------------------------------------------------
-    describe_counter!(
-        "scryer_grabs_total",
-        "Releases sent to a download client, labelled by the indexer that supplied the release and the media facet it was grabbed for."
-    );
-    describe_counter!(
-        "scryer_rss_sync_total",
-        "RSS sync cycles started, including cycles that exited early because no indexer was due."
-    );
-    describe_histogram!(
-        "scryer_rss_sync_duration_seconds",
-        Unit::Seconds,
-        "Wall-clock duration of one RSS sync cycle, including early exits."
-    );
-    describe_counter!(
-        "scryer_rss_releases_fetched_total",
-        "Releases returned by indexer RSS feeds across all completed RSS sync cycles."
-    );
-    describe_counter!(
-        "scryer_rss_releases_matched_total",
-        "Fetched RSS releases that matched a monitored title or episode."
-    );
-    describe_counter!(
-        "scryer_rss_releases_grabbed_total",
-        "Matched RSS releases that were actually grabbed."
-    );
-
-    // --- Acquisition: background workers -------------------------------------------------
-    describe_counter!(
-        "scryer_background_acquisition_title_work_total",
-        "Background title-level acquisition units of work, labelled by outcome (completed or failed)."
-    );
-    describe_counter!(
-        "scryer_background_acquisition_target_work_total",
-        "Background target-level acquisition units of work, labelled by outcome (completed or failed)."
-    );
-    describe_counter!(
-        "scryer_background_acquisition_scan_owned_yields_total",
-        "Times background acquisition yielded because a library scan owned the facet it wanted to work on."
-    );
-
-    // --- Wanted projection ---------------------------------------------------------------
-    describe_counter!(
-        "scryer_wanted_projection_cache_total",
-        "Wanted-projection cache lookups, labelled by result (hit or miss)."
-    );
-    describe_histogram!(
-        "scryer_wanted_projection_rebuild_duration_seconds",
-        Unit::Seconds,
-        "Time taken to rebuild a wanted projection, labelled by the projection kind."
+    // --- Process identity -----------------------------------------------------------------
+    describe_gauge!(
+        "scryer_build_info",
+        "Always 1; carries the running build's version, target OS and target architecture as labels so dashboards can join a series to a release."
     );
     describe_gauge!(
-        "scryer_wanted_projection_items",
-        "Number of rows in the most recently rebuilt wanted projection, labelled by the projection kind."
+        "scryer_process_start_time_seconds",
+        Unit::Seconds,
+        "Unix timestamp at which this process installed its metrics recorder during boot. Subtract from time() for uptime; a step change marks a restart."
+    );
+
+    // --- HTTP serving ---------------------------------------------------------------------
+    describe_gauge!(
+        "scryer_http_requests_in_flight",
+        "HTTP requests currently being served, across every route."
+    );
+    describe_counter!(
+        "scryer_http_requests_total",
+        "HTTP requests served, labelled by method, matched route template (or `fallback`) and response status class. Counts responses produced by middleware, such as rate-limit rejections, as well as by handlers."
+    );
+    describe_histogram!(
+        "scryer_http_request_duration_seconds",
+        Unit::Seconds,
+        "Wall-clock time to produce an HTTP response, labelled by method and matched route template. Measured at the outermost layer, so it includes rate limiting, the authless guard, CORS and compression."
+    );
+
+    // --- GraphQL WebSocket transport -------------------------------------------------------
+    describe_gauge!(
+        "scryer_ws_connections",
+        "GraphQL WebSocket connections currently established."
+    );
+    describe_counter!(
+        "scryer_ws_connections_total",
+        "GraphQL WebSocket connections established since process start."
     );
 
     // --- Scheduled tasks and polling workers ---------------------------------------------
@@ -279,72 +295,9 @@ pub fn describe_metrics() {
         "Errors raised while running the movie SMG identity backfill job."
     );
 
-    // --- Download queue ---------------------------------------------------------------------
-    describe_gauge!(
-        "scryer_download_queue_items",
-        "Items currently tracked in the download queue, labelled by queue state."
-    );
-    describe_gauge!(
-        "scryer_download_queue_snapshot_items",
-        "Items in the most recently committed download-queue snapshot."
-    );
-    describe_gauge!(
-        "scryer_download_queue_snapshot_age_seconds",
-        Unit::Seconds,
-        "Age of the download-queue snapshot that served the most recent queue page request."
-    );
-    describe_gauge!(
-        "scryer_download_queue_legacy_subscriptions",
-        "Currently open legacy (non-snapshot) download-queue subscriptions."
-    );
-    describe_counter!(
-        "scryer_download_queue_snapshot_refresh_total",
-        "Download-queue snapshot refresh attempts, labelled by result (success or error)."
-    );
-    describe_counter!(
-        "scryer_download_queue_read_model_total",
-        "Download-queue read-model builds, labelled by result (hit reuses a cached model, miss rebuilds it)."
-    );
-    describe_counter!(
-        "scryer_download_queue_cache_total",
-        "Download-queue page requests, labelled by whether a ready snapshot served the request (hit) or not (miss)."
-    );
-    describe_counter!(
-        "scryer_download_queue_revision_notifications_total",
-        "Download-queue revision notifications published to subscribers."
-    );
+    // --- Indexer strategy selection (query families live in describe_indexer_metrics) -----
     describe_histogram!(
-        "scryer_download_queue_refresh_duration_seconds",
-        Unit::Seconds,
-        "Duration of one full download-queue refresh cycle across all download clients."
-    );
-    describe_histogram!(
-        "scryer_download_queue_page_duration_seconds",
-        Unit::Seconds,
-        "Duration of serving one download-queue page request."
-    );
-    describe_histogram!(
-        "scryer_download_client_refresh_duration_seconds",
-        Unit::Seconds,
-        "Duration of refreshing queue state from a single download client."
-    );
-
-    // --- Indexer queries ---------------------------------------------------------------------
-    describe_counter!(
-        "scryer_indexer_queries_total",
-        "Indexer queries issued, labelled by indexer name, result status, and search mode."
-    );
-    describe_counter!(
-        "scryer_indexer_query_results_total",
-        "Releases returned by indexer queries, labelled by indexer name and search mode."
-    );
-    describe_histogram!(
-        "scryer_indexer_query_duration_seconds",
-        Unit::Seconds,
-        "Duration of one indexer query, labelled by indexer name and search mode."
-    );
-    describe_histogram!(
-        "scryer_indexer_auto_strategy_count",
+        "scryer_indexer_auto_strategies",
         "Number of automatic search strategies (primary plus fallback) selected for a query, labelled by indexer name and the source of its capabilities."
     );
 
@@ -363,66 +316,29 @@ pub fn describe_metrics() {
         "Import-lane permits in use at the moment a permit was acquired, labelled by lane."
     );
 
-    // --- Outbound HTTP ---------------------------------------------------------------------
+    // --- External subtitle probe ------------------------------------------------------------
     describe_counter!(
-        "scryer_outbound_http_429_total",
-        "Outbound HTTP 429 responses received, labelled by rate-limit scope, request label, and the source of the retry-after hint."
-    );
-    describe_counter!(
-        "scryer_outbound_http_rate_limited_total",
-        "Outbound HTTP requests abandoned because rate limiting exhausted the retry budget, labelled by scope, request label, and retry-after source."
-    );
-    describe_counter!(
-        "scryer_outbound_http_transport_retry_total",
-        "Outbound HTTP requests retried after a transport error, labelled by scope and request label."
-    );
-    describe_histogram!(
-        "scryer_outbound_http_transport_backoff_seconds",
-        Unit::Seconds,
-        "Backoff applied before an outbound HTTP transport retry, labelled by scope and request label."
-    );
-    describe_counter!(
-        "scryer_outbound_http_destination_cooldown_wait_total",
-        "Outbound HTTP requests delayed by a destination cooldown, labelled by destination and request label."
-    );
-    describe_histogram!(
-        "scryer_outbound_http_destination_cooldown_wait_seconds",
-        Unit::Seconds,
-        "Time an outbound HTTP request waited on a destination cooldown, labelled by destination and request label."
-    );
-    describe_counter!(
-        "scryer_outbound_http_host_rps_wait_total",
-        "Outbound HTTP requests delayed by the per-host request-rate limiter, labelled by host and request label."
-    );
-    describe_histogram!(
-        "scryer_outbound_http_host_rps_wait_seconds",
-        Unit::Seconds,
-        "Time an outbound HTTP request waited on the per-host request-rate limiter, labelled by host and request label."
-    );
-
-    // --- External subtitle probe (names are currently unprefixed) --------------------------
-    describe_counter!(
-        "subtitle_external_probe_cache_hit_total",
+        "scryer_subtitle_external_probe_cache_hit_total",
         "External subtitle probes served from the probe cache."
     );
     describe_counter!(
-        "subtitle_external_probe_cache_miss_total",
+        "scryer_subtitle_external_probe_cache_miss_total",
         "External subtitle probes that had to read the subtitle file."
     );
     describe_counter!(
-        "subtitle_external_probe_decode_failed_total",
+        "scryer_subtitle_external_probe_decode_failed_total",
         "External subtitle files that could not be decoded as text."
     );
     describe_counter!(
-        "subtitle_external_probe_skipped_non_text_total",
+        "scryer_subtitle_external_probe_skipped_non_text_total",
         "External subtitle files skipped because their contents are not text."
     );
     describe_counter!(
-        "subtitle_external_probe_skipped_size_total",
+        "scryer_subtitle_external_probe_skipped_size_total",
         "External subtitle files skipped because they exceed the probe size limit."
     );
     describe_counter!(
-        "subtitle_external_probe_unresolved_language_total",
+        "scryer_subtitle_external_probe_unresolved_language_total",
         "External subtitle files whose language could not be resolved."
     );
 }
@@ -535,6 +451,65 @@ mod tests {
         assert!(
             !help_text.is_empty(),
             "HELP text must not be empty, got: {help_line:?}"
+        );
+    }
+
+    #[test]
+    fn build_info_carries_version_and_target_labels() {
+        let recorder = prometheus_builder().build_recorder();
+        let rendered = with_local_recorder(&recorder, || {
+            record_build_info();
+            recorder.handle().render()
+        });
+
+        let line = rendered
+            .lines()
+            .find(|line| line.starts_with("scryer_build_info{"))
+            .unwrap_or_else(|| panic!("expected a scryer_build_info series, got:\n{rendered}"));
+        for label in [
+            format!("version=\"{}\"", crate::VERSION),
+            format!("target_os=\"{}\"", std::env::consts::OS),
+            format!("target_arch=\"{}\"", std::env::consts::ARCH),
+        ] {
+            assert!(
+                line.contains(&label),
+                "expected {label} in {line:?}, got:\n{rendered}"
+            );
+        }
+        let value: f64 = line
+            .rsplit(' ')
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("expected a numeric value in {line:?}"));
+        assert!(
+            (value - 1.0).abs() < f64::EPSILON,
+            "build info must always be 1, got {value}"
+        );
+    }
+
+    #[test]
+    fn process_start_time_is_a_unix_timestamp() {
+        let recorder = prometheus_builder().build_recorder();
+        let rendered = with_local_recorder(&recorder, || {
+            record_build_info();
+            recorder.handle().render()
+        });
+
+        let line = rendered
+            .lines()
+            .find(|line| line.starts_with("scryer_process_start_time_seconds "))
+            .unwrap_or_else(|| {
+                panic!("expected a scryer_process_start_time_seconds series, got:\n{rendered}")
+            });
+        let value: f64 = line
+            .rsplit(' ')
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("expected a numeric value in {line:?}"));
+        // Sanity floor: any plausible wall clock is well past 2020-01-01.
+        assert!(
+            value > 1_577_836_800.0,
+            "expected a unix timestamp, got {value}"
         );
     }
 

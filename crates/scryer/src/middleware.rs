@@ -1098,6 +1098,9 @@ pub(crate) async fn graphql_ws_handler(
         .max_frame_size(GRAPHQL_MAX_MESSAGE_BYTES)
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| async move {
+            // Held for the whole connection: every exit path drops this future, so the live
+            // gauge is balanced even when the connection dies without a clean close.
+            let _ws_connection = crate::http_metrics::WsConnectionGuard::accept();
             let app_for_init = app.clone();
             let initial_actor = initial_actor.clone();
             let proof_state = authless_web_client_proof.clone();

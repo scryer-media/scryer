@@ -7,7 +7,8 @@ use tracing::{info, warn};
 
 use crate::acquisition::seed_goals::ReleaseSeedMinimums;
 use crate::acquisition::submission::{
-    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome,
+    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome, GrabTrigger,
+    record_grab_submission_outcome,
 };
 use crate::delay_profile::DelayProfile;
 use crate::types::{
@@ -1388,6 +1389,13 @@ impl AppUseCase {
             })
             .await;
 
+        record_grab_submission_outcome(
+            GrabTrigger::Pending,
+            &title.facet,
+            pr.indexer_source.as_deref(),
+            &canonical_result,
+        );
+
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
             Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
@@ -1399,18 +1407,6 @@ impl AppUseCase {
         match canonical_submission {
             Ok(canonical_submission) => {
                 let grab = canonical_submission.grab;
-                {
-                    let facet_label = serde_json::to_string(&title.facet)
-                        .unwrap_or_else(|_| "\"other\"".to_string())
-                        .trim_matches('"')
-                        .to_string();
-                    let indexer_label = pr
-                        .indexer_source
-                        .as_deref()
-                        .unwrap_or("unknown")
-                        .to_string();
-                    metrics::counter!("scryer_grabs_total", "indexer" => indexer_label, "facet" => facet_label).increment(1);
-                }
                 self.record_indexer_grab(pr.indexer_id.as_deref(), pr.indexer_source.as_deref());
 
                 let _ = self

@@ -15,3 +15,8 @@ tracing = { workspace = true }
 metrics = { workspace = true }
 chrono = { workspace = true }
 governor = { workspace = true }
+
+[dev-dependencies]
+# Thread-local recorder for asserting emitted metric names, labels and values
+# without installing a global recorder.
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }

@@ -3236,6 +3236,7 @@ impl AppUseCase {
         run.summary_json = summary_json;
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
+        record_job_freshness_gauges(run.job_key, run.status, completed_at);
         let updated = self.services.events.job_runs.update_job_run(&run).await?;
         self.runtime
             .jobs
@@ -3278,6 +3279,7 @@ impl AppUseCase {
         run.summary_text = Some(format!("Failed: {error_text}"));
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
+        record_job_freshness_gauges(run.job_key, run.status, completed_at);
         let updated = self.services.events.job_runs.update_job_run(&run).await?;
         self.runtime
             .jobs
@@ -3296,6 +3298,19 @@ impl AppUseCase {
             ))
             .await;
         Ok(())
+    }
+}
+
+/// Records the freshness gauges for a job run that has just reached a terminal
+/// status.
+///
+/// Both terminal paths (`finish_job_run` and `fail_job_run`) go through here so
+/// "when did this job last run, and when did it last succeed" is answered the
+/// same way on both. Which statuses count as a success lives in
+/// [`crate::metrics_support::job_completion_gauge_values`].
+fn record_job_freshness_gauges(job_key: JobKey, status: JobRunStatus, completed_at: DateTime<Utc>) {
+    for (name, value) in crate::metrics_support::job_completion_gauge_values(status, completed_at) {
+        metrics::gauge!(name, "job_key" => job_key.as_str()).set(value);
     }
 }
 

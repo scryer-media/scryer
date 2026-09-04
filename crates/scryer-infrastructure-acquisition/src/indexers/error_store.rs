@@ -45,6 +45,17 @@ impl BlockingIndexerErrorRecorder {
 
 impl IndexerErrorRecorder for BlockingIndexerErrorRecorder {
     fn record(&self, error: NewIndexerError) -> AppResult<()> {
+        // Counted before persistence, and regardless of whether persistence
+        // succeeds: the classification is the operator-facing signal, and a
+        // storage failure must not also erase the evidence that the indexer
+        // failed. Every label value is a name or a bounded enum string.
+        metrics::counter!(
+            "scryer_indexer_errors_total",
+            "indexer" => error.indexer_name.clone(),
+            "operation" => error.operation.as_str(),
+            "class" => error.classification.as_str()
+        )
+        .increment(1);
         let repository = Arc::clone(&self.repository);
         let runtime = self.runtime.clone();
         let result = std::thread::scope(|scope| {
@@ -577,5 +588,88 @@ mod tests {
                 .expect("other detail")
                 .is_some()
         );
+    }
+
+    /// Stands in for a datastore that refuses the write, so the test can prove
+    /// the counter survives a persistence failure.
+    struct FailingIndexerErrorRepository;
+
+    #[async_trait]
+    impl IndexerErrorRepository for FailingIndexerErrorRepository {
+        async fn record(&self, _error: NewIndexerError) -> AppResult<()> {
+            Err(AppError::Repository("datastore is down".to_string()))
+        }
+
+        async fn list(
+            &self,
+            _indexer_id: Option<&str>,
+            _first: usize,
+            _after: Option<&str>,
+        ) -> AppResult<IndexerErrorPage> {
+            Err(AppError::Repository("datastore is down".to_string()))
+        }
+
+        async fn get_detail(&self, _id: &str) -> AppResult<Option<IndexerErrorDetail>> {
+            Err(AppError::Repository("datastore is down".to_string()))
+        }
+
+        async fn delete_older_than(&self, _cutoff: DateTime<Utc>) -> AppResult<u32> {
+            Err(AppError::Repository("datastore is down".to_string()))
+        }
+    }
+
+    #[test]
+    fn classified_errors_are_counted_even_when_persistence_fails() {
+        // A multi-thread runtime: `record` blocks on the repository future from
+        // a scoped std thread, which needs a runtime that keeps being driven.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("multi-thread runtime");
+        let _guard = runtime.enter();
+        let subject = BlockingIndexerErrorRecorder::new(Arc::new(FailingIndexerErrorRepository));
+
+        let debugging = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = debugging.snapshotter();
+        let result = metrics::with_local_recorder(&debugging, || {
+            subject.record(error_event("err-1", "idx-1", Utc::now()))
+        });
+
+        assert!(
+            result.is_err(),
+            "the stub repository must fail, otherwise the test proves nothing"
+        );
+
+        let recorded = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, _, _, _)| key.key().name() == "scryer_indexer_errors_total")
+            .map(|(key, _, _, value)| {
+                let labels = key
+                    .key()
+                    .labels()
+                    .map(|label| (label.key().to_string(), label.value().to_string()))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                (labels, value)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(recorded.len(), 1, "unexpected series: {recorded:?}");
+        let (labels, value) = &recorded[0];
+        assert_eq!(
+            labels.get("indexer").map(String::as_str),
+            Some("Example indexer")
+        );
+        assert_eq!(
+            labels.get("operation").map(String::as_str),
+            Some("interactive_search")
+        );
+        assert_eq!(
+            labels.get("class").map(String::as_str),
+            Some("http_rate_limited")
+        );
+        assert_eq!(value, &metrics_util::debugging::DebugValue::Counter(1));
     }
 }

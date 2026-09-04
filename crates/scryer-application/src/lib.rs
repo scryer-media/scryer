@@ -69,6 +69,7 @@ mod media;
 mod media_requests;
 pub mod media_server_signals;
 mod media_servers;
+mod metrics_support;
 mod notifications;
 mod null_repositories;
 mod oauth;
@@ -153,6 +154,7 @@ pub use ports::{
     UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
+pub use acquisition::submission::describe_acquisition_metrics;
 pub use api_keys::{
     API_KEY_PREFIX, ApiKeyAuthentication, ApiKeyExpiryPreset, ApiKeySummary, CreateApiKey,
     CreatedApiKey, DevelopmentApiKeySeed, parse_api_key,
@@ -165,6 +167,7 @@ pub use import::upgrade;
 pub use integration::tracked_downloads;
 pub use library::filesystem_walk;
 pub use library::recycle_bin;
+pub use metrics_support::describe_freshness_and_health_metrics;
 pub use notifications::runtime::{
     NotificationSubscriptionTargetCreate, NotificationSubscriptionTargetUpdate,
 };
@@ -187,7 +190,7 @@ pub use services::{
     DownloadClientCategoryAdmissionSnapshot, DownloadClientCategorySnapshotStore,
     DownloadQueueSync, ImportCancellation, PluginInstallInProgressError,
     PluginInstallOperationKind, PluginInstallProgressSnapshot, PluginInstallState, RuntimeFeature,
-    RuntimePerformanceClass, RuntimePerformanceSnapshot,
+    RuntimePerformanceClass, RuntimePerformanceSnapshot, describe_download_queue_metrics,
 };
 pub use types::canonicalize_jellyfin_user_id;
 pub use upstream_scheduler::{

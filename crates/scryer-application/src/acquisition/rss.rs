@@ -1,6 +1,7 @@
 use super::*;
 use crate::acquisition::submission::{
-    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome,
+    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome, GrabTrigger,
+    record_grab_submission_outcome,
 };
 use crate::acquisition_decision_helpers::is_download_submit_unavailable_error;
 use crate::acquisition_release_search::{
@@ -689,7 +690,7 @@ impl AppUseCase {
 
         if title_context_bank.is_empty() {
             debug!("RSS sync: no monitored titles, skipping");
-            metrics::counter!("scryer_rss_sync_total").increment(1);
+            metrics::counter!("scryer_rss_sync_total", "outcome" => "no_titles").increment(1);
             metrics::histogram!("scryer_rss_sync_duration_seconds")
                 .record(sync_start.elapsed().as_secs_f64());
             return Ok(RssSyncReport::default());
@@ -697,7 +698,7 @@ impl AppUseCase {
 
         if !super::acquisition_workflow::has_enabled_download_clients(self).await {
             warn!("RSS sync: no enabled download clients configured, skipping indexer search");
-            metrics::counter!("scryer_rss_sync_total").increment(1);
+            metrics::counter!("scryer_rss_sync_total", "outcome" => "no_clients").increment(1);
             metrics::histogram!("scryer_rss_sync_duration_seconds")
                 .record(sync_start.elapsed().as_secs_f64());
             return Ok(RssSyncReport::default());
@@ -1011,7 +1012,7 @@ impl AppUseCase {
             "RSS sync cycle completed"
         );
 
-        metrics::counter!("scryer_rss_sync_total").increment(1);
+        metrics::counter!("scryer_rss_sync_total", "outcome" => "completed").increment(1);
         metrics::histogram!("scryer_rss_sync_duration_seconds")
             .record(sync_start.elapsed().as_secs_f64());
         metrics::counter!("scryer_rss_releases_fetched_total")
@@ -2508,6 +2509,13 @@ impl AppUseCase {
             })
             .await;
 
+        record_grab_submission_outcome(
+            GrabTrigger::Rss,
+            &title.facet,
+            Some(best.source.as_str()),
+            &canonical_result,
+        );
+
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
             Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => return,
@@ -2516,13 +2524,6 @@ impl AppUseCase {
 
         match canonical_submission {
             Ok(_canonical_submission) => {
-                {
-                    let facet_label = serde_json::to_string(&title.facet)
-                        .unwrap_or_else(|_| "\"other\"".to_string())
-                        .trim_matches('"')
-                        .to_string();
-                    metrics::counter!("scryer_grabs_total", "indexer" => best.source.clone(), "facet" => facet_label).increment(1);
-                }
                 self.record_indexer_grab(best.indexer_id.as_deref(), Some(best.source.as_str()));
 
                 let _ = self

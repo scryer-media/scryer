@@ -1159,7 +1159,7 @@ async fn process_tracked_download_snapshot(
             "warning",
         ];
         for (label, &count) in labels.iter().zip(&counts) {
-            metrics::gauge!("scryer_download_queue_items", "state" => *label).set(count as f64);
+            metrics::gauge!(crate::services::DOWNLOAD_QUEUE_ITEMS, "state" => *label).set(count as f64);
         }
     }
 
@@ -1784,6 +1784,25 @@ pub async fn start_download_queue_poller_with_options(
                         .mark_refresh_failed(error)
                         .await;
                 }
+                // Freshness is republished every tick, viewer or not: this is
+                // the age of the snapshot currently being served, sampled at a
+                // known cadence instead of whenever someone opens the queue.
+                metrics::gauge!(crate::services::DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS).set(
+                    app.runtime
+                        .acquisition
+                        .download_queue_snapshot
+                        .snapshot()
+                        .await
+                        .updated_at
+                        .map(|updated_at| {
+                            chrono::Utc::now()
+                                .signed_duration_since(updated_at)
+                                .num_milliseconds()
+                                .max(0) as f64
+                                / 1_000.0
+                        })
+                        .unwrap_or(0.0),
+                );
                 let crate::ports::DownloadClientSnapshotOutcome {
                     items,
                     authoritative_client_ids,
@@ -1815,7 +1834,10 @@ pub async fn start_download_queue_poller_with_options(
                     "poller",
                 )
                 .await;
-                metrics::histogram!("scryer_download_client_refresh_duration_seconds")
+                // Whole-tick wall time. Per-client refresh timing is labelled
+                // and emitted by the router seam
+                // (`scryer_download_client_refresh_duration_seconds`).
+                metrics::histogram!(crate::services::DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS)
                     .record(client_refresh_started_at.elapsed().as_secs_f64());
                 reconcile_excluded_client_recent_history(
                     &app,

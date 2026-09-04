@@ -334,6 +334,95 @@ enum ArtifactFetchEgress<'a> {
 const DOWNLOAD_CLIENT_FEEDBACK_BACKOFF_INITIAL_SECS: u64 = 15;
 const DOWNLOAD_CLIENT_FEEDBACK_BACKOFF_MAX_SECS: u64 = 120;
 
+const DOWNLOAD_CLIENT_REFRESH_TOTAL: &str = "scryer_download_client_refresh_total";
+const DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS: &str =
+    "scryer_download_client_refresh_duration_seconds";
+const DOWNLOAD_CLIENT_UP: &str = "scryer_download_client_up";
+
+/// Registers HELP/UNIT metadata for the per-download-client feedback families.
+///
+/// Public because the binary's metrics setup calls it once at startup, before
+/// the first poll, so a fleet with no configured clients still scrapes as a
+/// self-describing surface.
+pub fn describe_download_client_router_metrics() {
+    metrics::describe_counter!(
+        DOWNLOAD_CLIENT_REFRESH_TOTAL,
+        "Download-client feedback reads performed by the queue poller, by client, client type, \
+         read kind (`queue`, `recent_activity`) and result (`success`, `error`)."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Wall time of one download-client feedback read, by client, client type and read kind."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_CLIENT_UP,
+        "1 when the client answered its queue read on the last poll cycle, 0 when it failed. \
+         Clients skipped by feedback backoff are not republished."
+    );
+}
+
+/// The bounded label pair every per-client family carries.
+///
+/// `client` is the operator-facing configured name (falling back to the type
+/// when a config was saved without one) and `client_type` is lowercased, so
+/// cardinality is the size of the configured fleet — never an item id, path or
+/// error string.
+fn download_client_metric_labels(config: &DownloadClientConfig) -> (String, String) {
+    let client_type = config.client_type.trim().to_ascii_lowercase();
+    let name = config.name.trim();
+    let client = if name.is_empty() {
+        client_type.clone()
+    } else {
+        name.to_string()
+    };
+    (client, client_type)
+}
+
+/// Emits the outcome and the duration of one download-client feedback read.
+///
+/// Called from both the success and the failure arm so the label set is built
+/// in exactly one place: a per-client read that fails still has a duration
+/// worth seeing (that is what a timeout looks like).
+fn record_client_read_metrics(
+    config: &DownloadClientConfig,
+    kind: DownloadFeedbackReadKind,
+    elapsed: Duration,
+    ok: bool,
+) {
+    let (client, client_type) = download_client_metric_labels(config);
+    let kind_label = PrioritizedDownloadClientRouter::feedback_read_kind_label(kind);
+    metrics::counter!(
+        DOWNLOAD_CLIENT_REFRESH_TOTAL,
+        "client" => client.clone(),
+        "client_type" => client_type.clone(),
+        "kind" => kind_label,
+        "result" => if ok { "success" } else { "error" },
+    )
+    .increment(1);
+    metrics::histogram!(
+        DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+        "client" => client,
+        "client_type" => client_type,
+        "kind" => kind_label,
+    )
+    .record(elapsed.as_secs_f64());
+}
+
+/// Publishes the per-client up/down gauge for one poll cycle.
+///
+/// Takes the already-built labels rather than the config so the queue loop can
+/// remember one small pair per client instead of cloning a whole config.
+fn record_client_up(labels: (String, String), up: bool) {
+    let (client, client_type) = labels;
+    metrics::gauge!(
+        DOWNLOAD_CLIENT_UP,
+        "client" => client,
+        "client_type" => client_type,
+    )
+    .set(if up { 1.0 } else { 0.0 });
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DownloadFeedbackReadKind {
     Queue,
@@ -4071,7 +4160,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 |client, scope| async move { client.list_queue_with_feedback_scope(&scope).await },
             )
             .await;
+        let mut queue_read_outcomes = Vec::with_capacity(queue_reads.len());
         for (config, elapsed, result) in queue_reads {
+            let read_ok = result.is_ok();
+            record_client_read_metrics(&config, DownloadFeedbackReadKind::Queue, elapsed, read_ok);
+            queue_read_outcomes.push((download_client_metric_labels(&config), read_ok));
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(&config.id, DownloadFeedbackReadKind::Queue);
@@ -4093,6 +4186,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             }
         }
+        // Republished for every polled client every cycle, so a client that
+        // stops answering shows as 0 rather than as a series that simply stops.
+        for (labels, read_ok) in queue_read_outcomes {
+            record_client_up(labels, read_ok);
+        }
 
         let mut activity_items = Vec::new();
         let mut activity_successes = HashSet::new();
@@ -4112,6 +4210,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .await;
             for (config, elapsed, result) in activity_reads {
                 client_priorities.insert(config.id.clone(), config.client_priority);
+                record_client_read_metrics(
+                    &config,
+                    DownloadFeedbackReadKind::RecentActivity,
+                    elapsed,
+                    result.is_ok(),
+                );
                 match result {
                     Ok(mut items) => {
                         self.record_feedback_read_success(
@@ -6887,6 +6991,251 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             proxy_config_id: None,
+        }
+    }
+
+    mod client_read_metrics_tests {
+        use super::super::{
+            DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS, DOWNLOAD_CLIENT_REFRESH_TOTAL,
+            DOWNLOAD_CLIENT_UP, DownloadFeedbackReadKind, describe_download_client_router_metrics,
+            download_client_metric_labels, record_client_read_metrics, record_client_up,
+        };
+        use super::test_config;
+        use metrics::with_local_recorder;
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+        use std::collections::BTreeMap;
+        use std::time::Duration;
+
+        type RecordedSeries = Vec<(String, BTreeMap<String, String>, DebugValue)>;
+
+        /// One reading per test: `Snapshotter::snapshot` drains the debugging
+        /// registry, so a second call reports every series as zero.
+        fn recorded(snapshotter: &Snapshotter) -> RecordedSeries {
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .map(|(key, _unit, _description, value)| {
+                    let labels = key
+                        .key()
+                        .labels()
+                        .map(|label| (label.key().to_string(), label.value().to_string()))
+                        .collect::<BTreeMap<_, _>>();
+                    (key.key().name().to_string(), labels, value)
+                })
+                .collect()
+        }
+
+        fn find<'a>(
+            recorded: &'a RecordedSeries,
+            name: &str,
+            labels: &[(&str, &str)],
+        ) -> Option<&'a DebugValue> {
+            let expected = labels
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect::<BTreeMap<_, _>>();
+            recorded
+                .iter()
+                .find(|(series_name, series_labels, _)| {
+                    series_name == name && *series_labels == expected
+                })
+                .map(|(_, _, value)| value)
+        }
+
+        #[test]
+        fn per_client_reads_are_labelled_by_client_kind_and_result() {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            // A mixed-case configured type proves the label is lowercased, and
+            // the two configs prove one slow client is separable from the fleet.
+            let healthy = test_config("client-1", "Attic SAB", "SABnzbd", 0);
+            let broken = test_config("client-2", "Basement NZBGet", "NzbGet", 1);
+            with_local_recorder(&recorder, || {
+                record_client_read_metrics(
+                    &healthy,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_millis(250),
+                    true,
+                );
+                record_client_read_metrics(
+                    &healthy,
+                    DownloadFeedbackReadKind::RecentActivity,
+                    Duration::from_millis(500),
+                    true,
+                );
+                record_client_read_metrics(
+                    &broken,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_secs(30),
+                    false,
+                );
+                record_client_up(download_client_metric_labels(&healthy), true);
+                record_client_up(download_client_metric_labels(&broken), false);
+            });
+
+            let recorded = recorded(&snapshotter);
+
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Attic SAB"),
+                        ("client_type", "sabnzbd"),
+                        ("kind", "queue"),
+                        ("result", "success"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Attic SAB"),
+                        ("client_type", "sabnzbd"),
+                        ("kind", "recent_activity"),
+                        ("result", "success"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Basement NZBGet"),
+                        ("client_type", "nzbget"),
+                        ("kind", "queue"),
+                        ("result", "error"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+            assert!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Basement NZBGet"),
+                        ("client_type", "nzbget"),
+                        ("kind", "queue"),
+                        ("result", "success"),
+                    ],
+                )
+                .is_none(),
+                "a failed read must not also count as a success"
+            );
+
+            // A failed read is still timed: that is what a timeout looks like.
+            let slow = find(
+                &recorded,
+                DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+                &[
+                    ("client", "Basement NZBGet"),
+                    ("client_type", "nzbget"),
+                    ("kind", "queue"),
+                ],
+            );
+            assert!(
+                matches!(slow, Some(DebugValue::Histogram(samples)) if samples.len() == 1 && *samples[0] == 30.0),
+                "expected a 30s sample, got {slow:?}"
+            );
+            let quick = find(
+                &recorded,
+                DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+                &[
+                    ("client", "Attic SAB"),
+                    ("client_type", "sabnzbd"),
+                    ("kind", "queue"),
+                ],
+            );
+            assert!(
+                matches!(quick, Some(DebugValue::Histogram(samples)) if samples.len() == 1 && *samples[0] == 0.25),
+                "expected a 250ms sample, got {quick:?}"
+            );
+
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_UP,
+                    &[("client", "Attic SAB"), ("client_type", "sabnzbd")],
+                ),
+                Some(DebugValue::Gauge(value)) if **value == 1.0
+            ));
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_UP,
+                    &[("client", "Basement NZBGet"), ("client_type", "nzbget")],
+                ),
+                Some(DebugValue::Gauge(value)) if **value == 0.0
+            ));
+        }
+
+        #[test]
+        fn a_nameless_client_falls_back_to_its_lowercased_type() {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let unnamed = test_config("client-3", "   ", "Weaver", 0);
+            with_local_recorder(&recorder, || {
+                record_client_read_metrics(
+                    &unnamed,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_millis(10),
+                    true,
+                );
+            });
+
+            assert!(matches!(
+                find(
+                    &recorded(&snapshotter),
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "weaver"),
+                        ("client_type", "weaver"),
+                        ("kind", "queue"),
+                        ("result", "success"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+        }
+
+        #[test]
+        fn describe_download_client_router_metrics_registers_every_family() {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let config = test_config("client-1", "Attic SAB", "SABnzbd", 0);
+            with_local_recorder(&recorder, || {
+                describe_download_client_router_metrics();
+                // Descriptions alone are not "seen" metrics, so touch each family.
+                record_client_read_metrics(
+                    &config,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_millis(1),
+                    true,
+                );
+                record_client_up(download_client_metric_labels(&config), true);
+            });
+
+            let described = snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .filter(|(_, _, description, _)| description.is_some())
+                .map(|(key, _, _, _)| key.key().name().to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            for family in [
+                DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+                DOWNLOAD_CLIENT_UP,
+            ] {
+                assert!(described.contains(family), "missing HELP for {family}");
+            }
         }
     }
 

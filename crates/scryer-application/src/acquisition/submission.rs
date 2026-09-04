@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::acquisition_decision_helpers::is_download_submit_unavailable_error;
 use crate::catalog::workflow::queue_item_matches_submission;
 use crate::download_identity::{
     AcceptedDownloadIdentityInput, accepted_download_submission_identity,
@@ -660,5 +661,441 @@ impl AppUseCase {
                 newly_submitted: true,
             },
         ))
+    }
+}
+
+// ── Grab submission metrics ────────────────────────────────────────────────
+//
+// Every grab in the product funnels through `submit_canonical_download`, so
+// its outcome is counted once, here, rather than at each caller. Counting only
+// successes (what the five call sites used to do inline) made a download
+// client that rejects everything look like "no grabs happened" instead of
+// "every grab failed", and let each site invent its own `indexer` label.
+//
+// Label discipline: every value is a `&'static str` from a bounded set, except
+// `indexer`, which is a configured indexer name (bounded by the configured
+// indexers) with an `unknown` fallback. Titles, URLs, ids and error text never
+// reach a label.
+
+const GRAB_SUBMISSIONS_TOTAL: &str = "scryer_grab_submissions_total";
+const GRABS_TOTAL: &str = "scryer_grabs_total";
+const RSS_SYNC_TOTAL: &str = "scryer_rss_sync_total";
+const UNKNOWN_INDEXER: &str = "unknown";
+
+const RESULT_GRABBED: &str = "grabbed";
+const RESULT_REUSED: &str = "reused";
+const RESULT_CONFLICT: &str = "conflict";
+const RESULT_DEFERRED: &str = "deferred";
+const RESULT_FAILED: &str = "failed";
+
+/// Which product loop asked for a grab. This is the *trigger*, deliberately
+/// separate from the indexer that supplied the release — conflating the two is
+/// exactly what the old `indexer="manual"` label did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GrabTrigger {
+    /// RSS sync grabbed a matched release.
+    Rss,
+    /// Background acquisition grabbed a searched candidate.
+    Auto,
+    /// Background acquisition grabbed a season pack.
+    SeasonPack,
+    /// A parked pending release came due and was grabbed.
+    Pending,
+    /// An operator or API client queued a specific release.
+    Manual,
+}
+
+impl GrabTrigger {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rss => "rss",
+            Self::Auto => "auto",
+            Self::SeasonPack => "season_pack",
+            Self::Pending => "pending",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+/// Classifies one submission outcome into the fixed `result` label set.
+///
+/// `deferred` uses the same predicate pair the RSS path uses to choose
+/// `ReleaseDownloadAttemptOutcome::Pending` over `Failed`, so the metric and
+/// the release-attempt store can never disagree about whether a release was
+/// burned.
+fn grab_submission_result_label(
+    result: &AppResult<CanonicalDownloadSubmissionOutcome>,
+) -> &'static str {
+    match result {
+        Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => {
+            if submission.newly_submitted {
+                RESULT_GRABBED
+            } else {
+                RESULT_REUSED
+            }
+        }
+        Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => RESULT_CONFLICT,
+        Err(err) => {
+            if is_download_submit_unavailable_error(err) || err.is_download_submit_ambiguous() {
+                RESULT_DEFERRED
+            } else {
+                RESULT_FAILED
+            }
+        }
+    }
+}
+
+/// Records the outcome of one `submit_canonical_download` call.
+///
+/// Call this at every grab site immediately after the submission returns and
+/// before the outcome is matched, passing the same indexer name the site hands
+/// to `record_indexer_grab`. `scryer_grabs_total` is incremented only for a
+/// genuinely new submission, and only from here.
+pub(crate) fn record_grab_submission_outcome(
+    trigger: GrabTrigger,
+    facet: &MediaFacet,
+    indexer: Option<&str>,
+    result: &AppResult<CanonicalDownloadSubmissionOutcome>,
+) {
+    let result_label = grab_submission_result_label(result);
+    metrics::counter!(
+        GRAB_SUBMISSIONS_TOTAL,
+        "trigger" => trigger.as_str(),
+        "facet" => facet.as_str(),
+        "result" => result_label,
+    )
+    .increment(1);
+
+    if result_label == RESULT_GRABBED {
+        let indexer = indexer
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(UNKNOWN_INDEXER)
+            .to_string();
+        metrics::counter!(
+            GRABS_TOTAL,
+            "indexer" => indexer,
+            "facet" => facet.as_str(),
+            "trigger" => trigger.as_str(),
+        )
+        .increment(1);
+    }
+}
+
+/// Registers HELP/UNIT metadata for the acquisition metric families this crate
+/// emits.
+///
+/// Crate-public because the binary's metrics setup calls it once at startup, so
+/// the scrape surface is self-describing even while a family is still empty.
+pub fn describe_acquisition_metrics() {
+    metrics::describe_counter!(
+        GRAB_SUBMISSIONS_TOTAL,
+        "Grab submissions attempted, labelled by trigger (rss, auto, season_pack, pending, manual), media facet, and result (grabbed, reused, conflict, deferred, failed)."
+    );
+    metrics::describe_counter!(
+        GRABS_TOTAL,
+        "Releases newly sent to a download client, labelled by the indexer that supplied the release, the media facet, and the trigger that asked for the grab."
+    );
+
+    metrics::describe_counter!(
+        RSS_SYNC_TOTAL,
+        "RSS sync cycles that finished, labelled by outcome (completed, or an early exit: no_titles, no_clients)."
+    );
+    metrics::describe_histogram!(
+        "scryer_rss_sync_duration_seconds",
+        metrics::Unit::Seconds,
+        "Wall-clock duration of one RSS sync cycle, including early exits."
+    );
+    metrics::describe_counter!(
+        "scryer_rss_releases_fetched_total",
+        "Releases returned by indexer RSS feeds across all completed RSS sync cycles."
+    );
+    metrics::describe_counter!(
+        "scryer_rss_releases_matched_total",
+        "Fetched RSS releases that matched a monitored title or episode."
+    );
+    metrics::describe_counter!(
+        "scryer_rss_releases_grabbed_total",
+        "Matched RSS releases that were actually grabbed."
+    );
+
+    metrics::describe_counter!(
+        "scryer_background_acquisition_title_work_total",
+        "Background title-level acquisition units of work, labelled by outcome (completed or failed)."
+    );
+    metrics::describe_counter!(
+        "scryer_background_acquisition_target_work_total",
+        "Background target-level acquisition units of work, labelled by outcome (completed or failed)."
+    );
+    metrics::describe_counter!(
+        "scryer_background_acquisition_scan_owned_yields_total",
+        "Times background acquisition yielded because a library scan owned the facet it wanted to work on."
+    );
+
+    metrics::describe_counter!(
+        "scryer_wanted_projection_cache_total",
+        "Wanted-projection cache lookups, labelled by result (hit or miss)."
+    );
+    metrics::describe_histogram!(
+        "scryer_wanted_projection_rebuild_duration_seconds",
+        metrics::Unit::Seconds,
+        "Time taken to rebuild a wanted projection, labelled by the projection kind."
+    );
+    metrics::describe_gauge!(
+        "scryer_wanted_projection_items",
+        "Number of rows in the most recently rebuilt wanted projection, labelled by the projection kind."
+    );
+}
+
+#[cfg(test)]
+mod grab_metrics_tests {
+    use std::collections::BTreeMap;
+
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+    use super::*;
+
+    /// One recorded counter series: name, sorted labels, value.
+    type CounterSeries = (String, BTreeMap<String, String>, u64);
+
+    fn recorded_counters(record: impl FnOnce()) -> Vec<CounterSeries> {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, record);
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _, _, value)| match value {
+                DebugValue::Counter(count) => Some((
+                    key.key().name().to_string(),
+                    key.key()
+                        .labels()
+                        .map(|label| (label.key().to_string(), label.value().to_string()))
+                        .collect::<BTreeMap<String, String>>(),
+                    count,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn series<'a>(counters: &'a [CounterSeries], name: &str) -> Vec<&'a CounterSeries> {
+        counters
+            .iter()
+            .filter(|(series_name, _, _)| series_name == name)
+            .collect()
+    }
+
+    fn grab_result() -> DownloadGrabResult {
+        DownloadGrabResult {
+            job_id: "job-1".to_string(),
+            client_id: Some("client-1".to_string()),
+            client_type: "sabnzbd".to_string(),
+            info_hash: None,
+            download_id: None,
+            seed_goals: None,
+        }
+    }
+
+    fn accepted(newly_submitted: bool) -> AppResult<CanonicalDownloadSubmissionOutcome> {
+        Ok(CanonicalDownloadSubmissionOutcome::Accepted(
+            CanonicalDownloadSubmission {
+                grab: grab_result(),
+                newly_submitted,
+            },
+        ))
+    }
+
+    fn conflict() -> AppResult<CanonicalDownloadSubmissionOutcome> {
+        Ok(CanonicalDownloadSubmissionOutcome::Conflict(
+            SubmissionScopeConflict {
+                title_id: "title-1".to_string(),
+                title_name: "Example".to_string(),
+                download_client_id: Some("client-1".to_string()),
+                download_client_type: "sabnzbd".to_string(),
+                download_client_item_id: "job-1".to_string(),
+                source_title: None,
+                source_kind: None,
+                scope: SubmissionScope::Title,
+                state: None,
+                replaceable: false,
+            },
+        ))
+    }
+
+    fn failure(error: AppError) -> AppResult<CanonicalDownloadSubmissionOutcome> {
+        Err(error)
+    }
+
+    fn result_label_for(result: &AppResult<CanonicalDownloadSubmissionOutcome>) -> String {
+        let counters = recorded_counters(|| {
+            record_grab_submission_outcome(
+                GrabTrigger::Rss,
+                &MediaFacet::Series,
+                Some("nzb"),
+                result,
+            )
+        });
+        let submissions = series(&counters, GRAB_SUBMISSIONS_TOTAL);
+        assert_eq!(
+            submissions.len(),
+            1,
+            "exactly one submission series per call: {counters:?}"
+        );
+        submissions[0]
+            .1
+            .get("result")
+            .expect("result label present")
+            .clone()
+    }
+
+    #[test]
+    fn every_submission_outcome_maps_to_its_result_label() {
+        assert_eq!(result_label_for(&accepted(true)), RESULT_GRABBED);
+        assert_eq!(result_label_for(&accepted(false)), RESULT_REUSED);
+        assert_eq!(result_label_for(&conflict()), RESULT_CONFLICT);
+        // The two deferrable failures: the client was unavailable, and the
+        // request may have been accepted with the response lost. Both are
+        // retried without burning the release, so neither may read as `failed`.
+        assert_eq!(
+            result_label_for(&failure(AppError::DownloadSubmitUnavailable(
+                "client offline".to_string()
+            ))),
+            RESULT_DEFERRED
+        );
+        assert_eq!(
+            result_label_for(&failure(AppError::DownloadSubmitFailoverExhausted(
+                "every client failed".to_string()
+            ))),
+            RESULT_DEFERRED
+        );
+        assert_eq!(
+            result_label_for(&failure(AppError::DownloadSubmitAmbiguous(
+                "response lost".to_string()
+            ))),
+            RESULT_DEFERRED
+        );
+        assert_eq!(
+            result_label_for(&failure(AppError::Validation("bad request".to_string()))),
+            RESULT_FAILED
+        );
+        assert_eq!(
+            result_label_for(&failure(AppError::DownloadSubmitRejected(
+                "client said no".to_string()
+            ))),
+            RESULT_FAILED
+        );
+    }
+
+    #[test]
+    fn submission_counter_carries_trigger_and_facet() {
+        let counters = recorded_counters(|| {
+            record_grab_submission_outcome(
+                GrabTrigger::SeasonPack,
+                &MediaFacet::Anime,
+                Some("nzbgeek"),
+                &conflict(),
+            );
+        });
+
+        let submissions = series(&counters, GRAB_SUBMISSIONS_TOTAL);
+        assert_eq!(submissions.len(), 1);
+        let (_, labels, value) = submissions[0];
+        assert_eq!(*value, 1);
+        assert_eq!(
+            labels.get("trigger").map(String::as_str),
+            Some("season_pack")
+        );
+        assert_eq!(labels.get("facet").map(String::as_str), Some("anime"));
+        assert_eq!(labels.get("result").map(String::as_str), Some("conflict"));
+    }
+
+    #[test]
+    fn grabs_total_is_emitted_only_for_a_new_submission() {
+        for result in [
+            accepted(false),
+            conflict(),
+            failure(AppError::DownloadSubmitUnavailable("offline".to_string())),
+            failure(AppError::Validation("bad".to_string())),
+        ] {
+            let counters = recorded_counters(|| {
+                record_grab_submission_outcome(
+                    GrabTrigger::Auto,
+                    &MediaFacet::Movie,
+                    Some("nzbgeek"),
+                    &result,
+                );
+            });
+            assert!(
+                series(&counters, GRABS_TOTAL).is_empty(),
+                "non-grabbed outcome must not count as a grab: {counters:?}"
+            );
+        }
+
+        let counters = recorded_counters(|| {
+            record_grab_submission_outcome(
+                GrabTrigger::Auto,
+                &MediaFacet::Movie,
+                Some("nzbgeek"),
+                &accepted(true),
+            );
+        });
+        let grabs = series(&counters, GRABS_TOTAL);
+        assert_eq!(grabs.len(), 1);
+        let (_, labels, value) = grabs[0];
+        assert_eq!(*value, 1);
+        assert_eq!(labels.get("indexer").map(String::as_str), Some("nzbgeek"));
+        assert_eq!(labels.get("facet").map(String::as_str), Some("movie"));
+        assert_eq!(labels.get("trigger").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn missing_or_blank_indexer_falls_back_to_unknown() {
+        for indexer in [None, Some(""), Some("   ")] {
+            let counters = recorded_counters(|| {
+                record_grab_submission_outcome(
+                    GrabTrigger::Manual,
+                    &MediaFacet::Movie,
+                    indexer,
+                    &accepted(true),
+                );
+            });
+            let grabs = series(&counters, GRABS_TOTAL);
+            assert_eq!(grabs.len(), 1);
+            assert_eq!(
+                grabs[0].1.get("indexer").map(String::as_str),
+                Some(UNKNOWN_INDEXER),
+                "indexer {indexer:?} should fall back to unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn trigger_labels_are_unique_snake_case() {
+        let triggers = [
+            GrabTrigger::Rss,
+            GrabTrigger::Auto,
+            GrabTrigger::SeasonPack,
+            GrabTrigger::Pending,
+            GrabTrigger::Manual,
+        ];
+        let labels: std::collections::BTreeSet<&str> =
+            triggers.iter().map(|trigger| trigger.as_str()).collect();
+        assert_eq!(
+            labels.len(),
+            triggers.len(),
+            "trigger labels must be unique"
+        );
+        for label in labels {
+            assert!(
+                !label.is_empty()
+                    && label.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    && !label.starts_with('_')
+                    && !label.ends_with('_'),
+                "trigger label {label:?} is not snake_case"
+            );
+        }
     }
 }

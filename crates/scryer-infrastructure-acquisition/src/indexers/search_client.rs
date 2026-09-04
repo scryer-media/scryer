@@ -1123,7 +1123,7 @@ impl StrategyBatchHealth {
 
         if self.any_error && !self.any_success && !self.had_rate_limit && !self.had_solver_failure {
             let backoff = backoff_tracker
-                .record_failure(indexer_id, self.retry_after)
+                .record_failure(indexer_id, indexer_name, self.retry_after)
                 .await;
             MultiIndexerSearchClient::record_indexer_system_backoff(
                 indexer_configs,
@@ -1167,12 +1167,164 @@ const INTERACTIVE_INDEXER_SEARCH_CONCURRENCY_LIMIT: usize = 24;
 const LEARNED_EMPTY_SUPPRESSION_THRESHOLD: u32 = 3;
 const LEARNED_SUPPRESSION_REPROBE_INTERVAL_DAYS: i64 = 7;
 
+/// Why an indexer never reached dispatch for one search.
+///
+/// The variants are the label domain of `scryer_indexer_skips_total`, so they
+/// stay a small bounded set: a backed-off or misrouted indexer simply stops
+/// appearing in `scryer_indexer_queries_total`, and without this counter the
+/// disappearance is invisible to an operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexerSkipReason {
+    /// Operator-disabled in the indexer config.
+    Disabled,
+    /// Config-level `disabled_until` window still open.
+    ConfigDisabled,
+    /// Persisted system backoff window still open.
+    SystemBackoff,
+    /// In-memory escalated backoff window still open.
+    Backoff,
+    /// Not enabled for this search mode (interactive / automatic / RSS).
+    ModeDisabled,
+    /// Excluded by a per-search indexer restriction.
+    SearchRestriction,
+    /// Disabled for this scope by the routing config.
+    RoutingDisabled,
+    /// RSS sync requested from an indexer without RSS capability.
+    NoRssSupport,
+    /// No supported IDs for the facet and no usable freetext query.
+    NoSupportedIds,
+    /// The provider client could not be constructed from the config.
+    ClientSetupFailed,
+    /// The candidate deadline expired while queued for admission.
+    DeadlineExpired,
+    /// Every automatic strategy was learned-suppressed.
+    StrategiesSuppressed,
+}
+
+impl IndexerSkipReason {
+    /// Bounded, snake_case metric label value.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::ConfigDisabled => "config_disabled",
+            Self::SystemBackoff => "system_backoff",
+            Self::Backoff => "backoff",
+            Self::ModeDisabled => "mode_disabled",
+            Self::SearchRestriction => "search_restriction",
+            Self::RoutingDisabled => "routing_disabled",
+            Self::NoRssSupport => "no_rss_support",
+            Self::NoSupportedIds => "no_supported_ids",
+            Self::ClientSetupFailed => "client_setup_failed",
+            Self::DeadlineExpired => "deadline_expired",
+            Self::StrategiesSuppressed => "strategies_suppressed",
+        }
+    }
+
+    /// The human-readable `reason` field kept on the existing log lines. Only
+    /// the reasons routed through [`log_indexer_skip`] are emitted today; the
+    /// rest keep their own bespoke log messages at their call sites.
+    const fn log_text(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::ConfigDisabled => "temporarily disabled (config)",
+            Self::SystemBackoff => "temporarily disabled (system backoff)",
+            Self::Backoff => "temporarily disabled (backoff)",
+            Self::ModeDisabled => "disabled for search mode",
+            Self::SearchRestriction => "excluded by per-search restriction",
+            Self::RoutingDisabled => "disabled for scope via routing config",
+            Self::NoRssSupport => "does not support RSS sync",
+            Self::NoSupportedIds => "no supported IDs for facet and no freetext",
+            Self::ClientSetupFailed => "client setup failed",
+            Self::DeadlineExpired => "candidate deadline expired while queued",
+            Self::StrategiesSuppressed => "all automatic search strategies are learned-suppressed",
+        }
+    }
+}
+
+/// Registers HELP text for every indexer metric family emitted by this crate.
+///
+/// Must be called with the target recorder already installed — `describe_*!`
+/// against the no-op recorder silently loses the text.
+pub fn describe_indexer_metrics() {
+    metrics::describe_counter!(
+        "scryer_indexer_queries_total",
+        "Outbound indexer query attempts, labelled by indexer, outcome status, the strategy tier that produced the request, and the search mode (interactive / auto / rss)."
+    );
+    metrics::describe_histogram!(
+        "scryer_indexer_query_duration_seconds",
+        metrics::Unit::Seconds,
+        "Wall-clock duration of one outbound indexer query attempt, labelled by indexer, strategy tier and search mode."
+    );
+    metrics::describe_counter!(
+        "scryer_indexer_query_results_total",
+        "Results returned by successful indexer query attempts, labelled by indexer, strategy tier and search mode."
+    );
+    metrics::describe_counter!(
+        "scryer_indexer_skips_total",
+        "Indexers dropped before any request was dispatched, labelled by indexer, bounded skip reason and search mode. A backed-off indexer stops appearing in scryer_indexer_queries_total; this is where it reappears."
+    );
+    metrics::describe_counter!(
+        "scryer_indexer_errors_total",
+        "Classified indexer errors recorded to the error history, labelled by indexer, the operation that hit them and the bounded error classification."
+    );
+    metrics::describe_gauge!(
+        "scryer_indexer_backoff_active",
+        "1 while an indexer is held out of dispatch by operational backoff, 0 once the backoff is cleared."
+    );
+    metrics::describe_gauge!(
+        "scryer_indexer_backoff_until_timestamp_seconds",
+        metrics::Unit::Seconds,
+        "Unix timestamp the current indexer backoff window expires at, 0 when no backoff is active."
+    );
+    metrics::describe_gauge!(
+        "scryer_indexer_backoff_escalation_level",
+        "Current backoff escalation level for an indexer; each consecutive failure lengthens the next window. 0 when cleared."
+    );
+}
+
+/// The real search mode behind one indexer query, as a bounded label value.
+///
+/// `SearchMode::Auto` covers both background searches and RSS sweeps; only
+/// `is_rss_request` separates them, so both inputs are needed.
+fn search_mode_label(mode: SearchMode, is_rss_request: bool) -> &'static str {
+    if is_rss_request {
+        "rss"
+    } else {
+        match mode {
+            SearchMode::Interactive => "interactive",
+            SearchMode::Auto => "auto",
+        }
+    }
+}
+
+/// Counts one pre-dispatch indexer skip.
+///
+/// Call this next to the existing log line at skip sites that keep their own
+/// bespoke message; [`log_indexer_skip`] already calls it.
+fn record_indexer_skip(
+    mode: SearchMode,
+    is_rss_request: bool,
+    indexer_name: &str,
+    reason: IndexerSkipReason,
+) {
+    metrics::counter!(
+        "scryer_indexer_skips_total",
+        "indexer" => indexer_name.to_string(),
+        "reason" => reason.as_str(),
+        "mode" => search_mode_label(mode, is_rss_request)
+    )
+    .increment(1);
+}
+
 fn log_indexer_skip(
     mode: SearchMode,
+    is_rss_request: bool,
     indexer_name: &str,
-    reason: &str,
+    reason: IndexerSkipReason,
     disabled_until: Option<chrono::DateTime<chrono::Utc>>,
 ) {
+    record_indexer_skip(mode, is_rss_request, indexer_name, reason);
+    let reason = reason.log_text();
     if matches!(mode, SearchMode::Interactive) {
         if let Some(disabled_until) = disabled_until {
             info!(
@@ -1292,9 +1444,15 @@ fn parse_indexer_published_at(value: &str) -> Option<DateTime<Utc>> {
 /// out across ID/episode strategies or run a freetext fallback tier. Keeping
 /// these counters at request granularity makes the tier labels actionable in
 /// dashboards and keeps latency tied to the specific outbound call.
+/// `strategy_label` is the strategy tier (`primary`, `fallback`, `rss_cached`,
+/// …); `mode_label` is the real search mode from [`search_mode_label`]. They
+/// are separate labels on purpose: the tier answers "which query shape ran",
+/// the mode answers "was this an interactive search, a background search, or
+/// an RSS sweep".
 fn record_strategy_metrics(
     indexer_name: &str,
-    mode_label: &str,
+    strategy_label: &str,
+    mode_label: &'static str,
     status: &str,
     elapsed: std::time::Duration,
     result_count: Option<usize>,
@@ -1303,13 +1461,15 @@ fn record_strategy_metrics(
         "scryer_indexer_queries_total",
         "indexer" => indexer_name.to_string(),
         "status" => status.to_string(),
-        "mode" => mode_label.to_string()
+        "strategy" => strategy_label.to_string(),
+        "mode" => mode_label
     )
     .increment(1);
     metrics::histogram!(
         "scryer_indexer_query_duration_seconds",
         "indexer" => indexer_name.to_string(),
-        "mode" => mode_label.to_string()
+        "strategy" => strategy_label.to_string(),
+        "mode" => mode_label
     )
     .record(elapsed.as_secs_f64());
 
@@ -1317,7 +1477,8 @@ fn record_strategy_metrics(
         metrics::counter!(
             "scryer_indexer_query_results_total",
             "indexer" => indexer_name.to_string(),
-            "mode" => mode_label.to_string()
+            "strategy" => strategy_label.to_string(),
+            "mode" => mode_label
         )
         .increment(result_count as u64);
     }
@@ -1340,7 +1501,7 @@ fn record_auto_strategy_selection(
         .collect::<Vec<_>>();
 
     metrics::histogram!(
-        "scryer_indexer_auto_strategy_count",
+        "scryer_indexer_auto_strategies",
         "indexer" => indexer_name.to_string(),
         "caps_source" => caps_source.to_string()
     )
@@ -1811,10 +1972,46 @@ const BACKOFF_PERIODS_SECS: &[u64] = &[
     60 * 60, // 1 hour
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct IndexerBackoffState {
     escalation_level: usize,
     disabled_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Last known configured name for this indexer id, carried purely so the
+    /// backoff gauges can be labelled the same way as the query metrics (which
+    /// label by name, not id). Config renames overwrite it on the next seed or
+    /// failure; the stale series ages out on the exporter's idle timeout.
+    indexer_name: String,
+}
+
+/// Publishes the backoff state of one indexer.
+///
+/// A backed-off indexer simply stops appearing in `scryer_indexer_queries_total`,
+/// so without these gauges an operator cannot tell "quiet" from "banned", nor
+/// see when the ban lifts.
+fn set_indexer_backoff_gauges(
+    indexer_name: &str,
+    disabled_until: Option<chrono::DateTime<chrono::Utc>>,
+    escalation_level: usize,
+) {
+    if indexer_name.is_empty() {
+        return;
+    }
+    let active_until = disabled_until.filter(|until| *until > chrono::Utc::now());
+    metrics::gauge!(
+        "scryer_indexer_backoff_active",
+        "indexer" => indexer_name.to_string()
+    )
+    .set(if active_until.is_some() { 1.0 } else { 0.0 });
+    metrics::gauge!(
+        "scryer_indexer_backoff_until_timestamp_seconds",
+        "indexer" => indexer_name.to_string()
+    )
+    .set(active_until.map_or(0.0, |until| until.timestamp() as f64));
+    metrics::gauge!(
+        "scryer_indexer_backoff_escalation_level",
+        "indexer" => indexer_name.to_string()
+    )
+    .set(escalation_level as f64);
 }
 
 /// In-memory indexer backoff tracker. Persistent system backoffs seed this
@@ -1831,14 +2028,19 @@ impl IndexerBackoffTracker {
         }
     }
 
-    async fn seed_persisted(&self, indexer_id: &str, backoff: &IndexerSystemBackoff) {
+    async fn seed_persisted(
+        &self,
+        indexer_id: &str,
+        indexer_name: &str,
+        backoff: &IndexerSystemBackoff,
+    ) {
         let mut map = self.state.lock().await;
         let state = map
             .entry(indexer_id.to_string())
-            .or_insert(IndexerBackoffState {
-                escalation_level: 0,
-                disabled_until: None,
-            });
+            .or_insert_with(IndexerBackoffState::default);
+        if !indexer_name.is_empty() {
+            state.indexer_name = indexer_name.to_string();
+        }
         state.escalation_level = state.escalation_level.max(backoff.escalation_level);
         if backoff.disabled_until > chrono::Utc::now()
             && state
@@ -1847,25 +2049,32 @@ impl IndexerBackoffTracker {
         {
             state.disabled_until = Some(backoff.disabled_until);
         }
+        set_indexer_backoff_gauges(
+            &state.indexer_name,
+            state.disabled_until,
+            state.escalation_level,
+        );
     }
 
     /// Record a failure and escalate the backoff level. Returns the persisted row.
     async fn record_failure(
         &self,
         indexer_id: &str,
+        indexer_name: &str,
         retry_after: Option<std::time::Duration>,
     ) -> IndexerSystemBackoff {
         let mut map = self.state.lock().await;
         let state = map
             .entry(indexer_id.to_string())
-            .or_insert(IndexerBackoffState {
-                escalation_level: 0,
-                disabled_until: None,
-            });
+            .or_insert_with(IndexerBackoffState::default);
+        if !indexer_name.is_empty() {
+            state.indexer_name = indexer_name.to_string();
+        }
 
         if let Some(until) = state.disabled_until
             && until > chrono::Utc::now()
         {
+            set_indexer_backoff_gauges(&state.indexer_name, Some(until), state.escalation_level);
             return IndexerSystemBackoff {
                 disabled_until: until,
                 escalation_level: state.escalation_level,
@@ -1881,6 +2090,7 @@ impl IndexerBackoffTracker {
 
         state.escalation_level = (state.escalation_level + 1).min(BACKOFF_PERIODS_SECS.len());
         state.disabled_until = Some(until);
+        set_indexer_backoff_gauges(&state.indexer_name, Some(until), state.escalation_level);
 
         IndexerSystemBackoff {
             disabled_until: until,
@@ -1897,6 +2107,11 @@ impl IndexerBackoffTracker {
             if state.escalation_level == 0 {
                 state.disabled_until = None;
             }
+            set_indexer_backoff_gauges(
+                &state.indexer_name,
+                state.disabled_until,
+                state.escalation_level,
+            );
             true
         } else {
             false
@@ -1906,7 +2121,14 @@ impl IndexerBackoffTracker {
     /// Forget everything held for one indexer: escalation level and disabled
     /// window alike. Returns true when there was state to drop.
     async fn clear(&self, indexer_id: &str) -> bool {
-        self.state.lock().await.remove(indexer_id).is_some()
+        let removed = self.state.lock().await.remove(indexer_id);
+        match removed {
+            Some(state) => {
+                set_indexer_backoff_gauges(&state.indexer_name, None, 0);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Check if this indexer is currently in backoff.
@@ -3329,7 +3551,13 @@ impl IndexerClient for MultiIndexerSearchClient {
         let mut enabled: Vec<(&IndexerConfig, bool)> = Vec::new();
         for c in &configs {
             if !c.is_enabled {
-                log_indexer_skip(mode, c.name.as_str(), "disabled", None);
+                log_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    c.name.as_str(),
+                    IndexerSkipReason::Disabled,
+                    None,
+                );
                 continue;
             }
             // Check persistent disabled_until from config
@@ -3338,15 +3566,18 @@ impl IndexerClient for MultiIndexerSearchClient {
             {
                 log_indexer_skip(
                     mode,
+                    is_rss_request,
                     c.name.as_str(),
-                    "temporarily disabled (config)",
+                    IndexerSkipReason::ConfigDisabled,
                     Some(until),
                 );
                 continue;
             }
             let persisted_system_backoff = system_backoffs.get(&c.id).cloned();
             if let Some(backoff) = persisted_system_backoff.as_ref() {
-                self.backoff_tracker.seed_persisted(&c.id, backoff).await;
+                self.backoff_tracker
+                    .seed_persisted(&c.id, c.name.as_str(), backoff)
+                    .await;
             }
             let had_persisted_system_backoff = persisted_system_backoff.is_some();
             // Every mode respects operational backoff, interactive included —
@@ -3360,8 +3591,9 @@ impl IndexerClient for MultiIndexerSearchClient {
             {
                 log_indexer_skip(
                     mode,
+                    is_rss_request,
                     c.name.as_str(),
-                    "temporarily disabled (system backoff)",
+                    IndexerSkipReason::SystemBackoff,
                     Some(backoff.disabled_until),
                 );
                 continue;
@@ -3370,8 +3602,9 @@ impl IndexerClient for MultiIndexerSearchClient {
             if let Some(until) = self.backoff_tracker.is_disabled(&c.id).await {
                 log_indexer_skip(
                     mode,
+                    is_rss_request,
                     c.name.as_str(),
-                    "temporarily disabled (backoff)",
+                    IndexerSkipReason::Backoff,
                     Some(until),
                 );
                 continue;
@@ -3383,7 +3616,13 @@ impl IndexerClient for MultiIndexerSearchClient {
             if mode_ok {
                 enabled.push((c, had_persisted_system_backoff));
             } else {
-                log_indexer_skip(mode, c.name.as_str(), "disabled for search mode", None);
+                log_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    c.name.as_str(),
+                    IndexerSkipReason::ModeDisabled,
+                    None,
+                );
             }
         }
 
@@ -3500,6 +3739,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             ) {
                 IndexerSearchEligibility::Eligible => {}
                 IndexerSearchEligibility::ExcludedBySearchRestriction => {
+                    record_indexer_skip(
+                        mode,
+                        is_rss_request,
+                        config.name.as_str(),
+                        IndexerSkipReason::SearchRestriction,
+                    );
                     debug!(
                         indexer = config.name.as_str(),
                         "skipping indexer: excluded by per-search restriction"
@@ -3507,6 +3752,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                     continue;
                 }
                 IndexerSearchEligibility::DisabledForScope => {
+                    record_indexer_skip(
+                        mode,
+                        is_rss_request,
+                        config.name.as_str(),
+                        IndexerSkipReason::RoutingDisabled,
+                    );
                     info!(
                         indexer = config.name.as_str(),
                         "skipping indexer: disabled for scope via routing config"
@@ -3523,6 +3774,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             let caps = resolved_caps.caps.clone();
 
             if is_rss_request && !caps.rss {
+                record_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    config.name.as_str(),
+                    IndexerSkipReason::NoRssSupport,
+                );
                 info!(
                     indexer = config.name.as_str(),
                     "skipping indexer: does not support RSS sync"
@@ -3538,6 +3795,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             let can_dispatch_text =
                 !query.trim().is_empty() && resolved_caps.text_dispatch_mode.can_dispatch();
             if !is_rss_request && !can_dispatch_id && !can_dispatch_text {
+                record_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    config.name.as_str(),
+                    IndexerSkipReason::NoSupportedIds,
+                );
                 info!(
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
@@ -3809,6 +4072,12 @@ impl IndexerClient for MultiIndexerSearchClient {
 
             // RSS-only check: skip non-RSS indexers for RSS sync requests
             if is_rss_request && !caps.rss {
+                record_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    config.name.as_str(),
+                    IndexerSkipReason::NoRssSupport,
+                );
                 info!(
                     indexer = config.name.as_str(),
                     "skipping indexer: does not support RSS sync"
@@ -3824,6 +4093,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             let can_dispatch_text =
                 !query.trim().is_empty() && resolved_caps.text_dispatch_mode.can_dispatch();
             if !is_rss_request && !can_dispatch_id && !can_dispatch_text {
+                record_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    config.name.as_str(),
+                    IndexerSkipReason::NoSupportedIds,
+                );
                 info!(
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
@@ -3872,6 +4147,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                 {
                     Ok(c) => c,
                     Err(err) => {
+                        record_indexer_skip(
+                            mode,
+                            is_rss_request,
+                            config.name.as_str(),
+                            IndexerSkipReason::ClientSetupFailed,
+                        );
                         warn!(
                             indexer = config.name.as_str(),
                             error = %err,
@@ -3937,6 +4218,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                             return Err(AppError::canceled("indexer search canceled while queued"));
                         }
                         Err(SearchPermitError::DeadlineExpired) => {
+                            record_indexer_skip(
+                                mode,
+                                is_rss_request,
+                                config.name.as_str(),
+                                IndexerSkipReason::DeadlineExpired,
+                            );
                             debug!(
                                 indexer = config.name.as_str(),
                                 "skipping indexer: candidate deadline expired while queued"
@@ -4102,8 +4389,14 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             &indexer_name,
                                         )
                                         .await;
-                                        metrics::counter!("scryer_indexer_queries_total", "indexer" => indexer_name.clone(), "status" => "success", "mode" => "rss_cached").increment(1);
-                                        metrics::histogram!("scryer_indexer_query_duration_seconds", "indexer" => indexer_name.clone(), "mode" => "rss_cached").record(elapsed.as_secs_f64());
+                                        record_strategy_metrics(
+                                            &indexer_name,
+                                            "rss_cached",
+                                            search_mode_label(mode, true),
+                                            "success",
+                                            elapsed,
+                                            None,
+                                        );
                                         for result in &mut response.results {
                                             result.indexer_id = Some(indexer_id.clone());
                                         }
@@ -4121,7 +4414,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             )
                                         {
                                             let backoff = backoff_tracker
-                                                .record_failure(&indexer_id, None)
+                                                .record_failure(&indexer_id, &indexer_name, None)
                                                 .await;
                                             Self::record_indexer_system_backoff(
                                                 &indexer_configs,
@@ -4147,7 +4440,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         warn!(indexer = indexer_name.as_str(), "RSS feed fetch timed out");
                                         stats_tracker.record_query(&indexer_id, &indexer_name, false);
                                         let backoff =
-                                            backoff_tracker.record_failure(&indexer_id, None).await;
+                                            backoff_tracker
+                                                .record_failure(&indexer_id, &indexer_name, None)
+                                                .await;
                                         Self::record_indexer_system_backoff(
                                             &indexer_configs,
                                             &indexer_id,
@@ -4318,6 +4613,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             )
             .await;
             if strategies.is_empty() && !is_rss_request {
+                record_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    config.name.as_str(),
+                    IndexerSkipReason::StrategiesSuppressed,
+                );
                 debug!(
                     indexer = config.name.as_str(),
                     title_id = learning_context
@@ -4553,6 +4854,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             record_strategy_metrics(
                                 &indexer_name,
                                 &outcome.label,
+                                search_mode_label(mode, is_rss_request),
                                 "success",
                                 outcome.elapsed,
                                 Some(response.results.len()),
@@ -4724,6 +5026,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             record_strategy_metrics(
                                 &indexer_name,
                                 &outcome.label,
+                                search_mode_label(mode, is_rss_request),
                                 "error",
                                 outcome.elapsed,
                                 None,
@@ -4882,6 +5185,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 record_strategy_metrics(
                                     &indexer_name,
                                     &outcome.label,
+                                    search_mode_label(mode, is_rss_request),
                                     "success",
                                     outcome.elapsed,
                                     Some(response.results.len()),
@@ -5018,6 +5322,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 record_strategy_metrics(
                                     &indexer_name,
                                     &outcome.label,
+                                    search_mode_label(mode, is_rss_request),
                                     "error",
                                     outcome.elapsed,
                                     None,
@@ -10189,6 +10494,7 @@ mod tests {
             IndexerBackoffState {
                 escalation_level: 1,
                 disabled_until: None,
+                indexer_name: "Indexer 1".to_string(),
             },
         );
 
@@ -10359,6 +10665,7 @@ mod tests {
             IndexerBackoffState {
                 escalation_level: 3,
                 disabled_until: Some(chrono::Utc::now() + chrono::Duration::minutes(45)),
+                indexer_name: "Indexer 1".to_string(),
             },
         );
         assert!(tracker.is_disabled("idx-1").await.is_some());
@@ -10368,7 +10675,7 @@ mod tests {
         assert!(!tracker.clear("idx-1").await, "nothing left to drop");
 
         // The next failure starts from level zero, not from where it left off.
-        let backoff = tracker.record_failure("idx-1", None).await;
+        let backoff = tracker.record_failure("idx-1", "Indexer 1", None).await;
         assert_eq!(backoff.escalation_level, 1);
     }
 
@@ -10382,10 +10689,11 @@ mod tests {
             IndexerBackoffState {
                 escalation_level: 3,
                 disabled_until: Some(disabled_until),
+                indexer_name: "Indexer 1".to_string(),
             },
         );
 
-        let returned = tracker.record_failure("idx-1", None).await;
+        let returned = tracker.record_failure("idx-1", "Indexer 1", None).await;
         assert_eq!(returned.disabled_until, disabled_until);
         assert_eq!(returned.escalation_level, 3);
 
@@ -10444,7 +10752,11 @@ mod tests {
         let tracker = IndexerBackoffTracker::new();
         let before = chrono::Utc::now();
         let backoff = tracker
-            .record_failure("idx-1", Some(std::time::Duration::from_secs(900)))
+            .record_failure(
+                "idx-1",
+                "Indexer 1",
+                Some(std::time::Duration::from_secs(900)),
+            )
             .await;
         let after = chrono::Utc::now();
 
@@ -10459,6 +10771,7 @@ mod tests {
         tracker
             .seed_persisted(
                 "idx-1",
+                "Indexer 1",
                 &IndexerSystemBackoff {
                     disabled_until: chrono::Utc::now() - chrono::Duration::minutes(1),
                     escalation_level: 3,
@@ -10467,7 +10780,7 @@ mod tests {
             .await;
 
         let before = chrono::Utc::now();
-        let backoff = tracker.record_failure("idx-1", None).await;
+        let backoff = tracker.record_failure("idx-1", "Indexer 1", None).await;
         let after = chrono::Utc::now();
 
         assert_eq!(backoff.escalation_level, 4);
@@ -11725,5 +12038,306 @@ mod tests {
         assert_eq!(strategies[0].season, Some(2));
         assert_eq!(strategies[0].episode, Some(5));
         assert_eq!(strategies[0].absolute_episode, None);
+    }
+
+    // --- Observability ------------------------------------------------------
+
+    /// One recorded metric series: kind, name, sorted labels, value.
+    type MetricSeries = (
+        metrics_util::MetricKind,
+        String,
+        std::collections::BTreeMap<String, String>,
+        metrics_util::debugging::DebugValue,
+    );
+
+    /// Runs `emit` against a thread-local debugging recorder and returns every
+    /// series it observed. Never installs a global recorder, so these tests
+    /// stay independent of each other and of the binary's exporter.
+    fn recorded_series(emit: impl FnOnce()) -> Vec<MetricSeries> {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, emit);
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(key, _unit, _description, value)| {
+                let kind = key.kind();
+                let key = key.key();
+                let labels = key
+                    .labels()
+                    .map(|label| (label.key().to_string(), label.value().to_string()))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                (kind, key.name().to_string(), labels, value)
+            })
+            .collect()
+    }
+
+    fn series_named<'a>(series: &'a [MetricSeries], name: &str) -> Vec<&'a MetricSeries> {
+        series.iter().filter(|entry| entry.1 == name).collect()
+    }
+
+    #[test]
+    fn search_mode_label_separates_rss_from_the_search_mode() {
+        assert_eq!(
+            search_mode_label(SearchMode::Interactive, false),
+            "interactive"
+        );
+        assert_eq!(search_mode_label(SearchMode::Auto, false), "auto");
+        assert_eq!(search_mode_label(SearchMode::Auto, true), "rss");
+        // An RSS request is an RSS request whatever mode carried it.
+        assert_eq!(search_mode_label(SearchMode::Interactive, true), "rss");
+    }
+
+    #[test]
+    fn strategy_metrics_carry_the_tier_and_the_real_search_mode_separately() {
+        let series = recorded_series(|| {
+            record_strategy_metrics(
+                "NZB Test",
+                "primary",
+                search_mode_label(SearchMode::Interactive, false),
+                "success",
+                std::time::Duration::from_millis(250),
+                Some(7),
+            );
+        });
+
+        let queries = series_named(&series, "scryer_indexer_queries_total");
+        assert_eq!(queries.len(), 1, "unexpected series: {series:?}");
+        let (kind, _, labels, value) = queries[0];
+        assert_eq!(*kind, metrics_util::MetricKind::Counter);
+        assert_eq!(labels.get("indexer").map(String::as_str), Some("NZB Test"));
+        assert_eq!(labels.get("status").map(String::as_str), Some("success"));
+        assert_eq!(labels.get("strategy").map(String::as_str), Some("primary"));
+        assert_eq!(labels.get("mode").map(String::as_str), Some("interactive"));
+        assert_eq!(*value, metrics_util::debugging::DebugValue::Counter(1));
+
+        let durations = series_named(&series, "scryer_indexer_query_duration_seconds");
+        assert_eq!(durations.len(), 1, "unexpected series: {series:?}");
+        assert_eq!(durations[0].0, metrics_util::MetricKind::Histogram);
+        assert_eq!(
+            durations[0].2.get("strategy").map(String::as_str),
+            Some("primary")
+        );
+        assert_eq!(
+            durations[0].2.get("mode").map(String::as_str),
+            Some("interactive")
+        );
+
+        let results = series_named(&series, "scryer_indexer_query_results_total");
+        assert_eq!(results.len(), 1, "unexpected series: {series:?}");
+        assert_eq!(
+            results[0].3,
+            metrics_util::debugging::DebugValue::Counter(7)
+        );
+        assert_eq!(
+            results[0].2.get("mode").map(String::as_str),
+            Some("interactive")
+        );
+
+        // The strategy tier must never leak back into `mode`: that mislabelling
+        // is exactly what this split fixed.
+        for (_, name, labels, _) in &series {
+            let mode = labels
+                .get("mode")
+                .unwrap_or_else(|| panic!("{name} lost its mode label"));
+            assert!(
+                ["interactive", "auto", "rss"].contains(&mode.as_str()),
+                "{name} carries a non-mode value in `mode`: {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn rss_cached_hits_keep_the_tier_on_strategy_and_report_the_rss_mode() {
+        let series = recorded_series(|| {
+            record_strategy_metrics(
+                "NZB Test",
+                "rss_cached",
+                search_mode_label(SearchMode::Auto, true),
+                "success",
+                std::time::Duration::from_millis(5),
+                None,
+            );
+        });
+
+        let queries = series_named(&series, "scryer_indexer_queries_total");
+        assert_eq!(queries.len(), 1);
+        assert_eq!(
+            queries[0].2.get("strategy").map(String::as_str),
+            Some("rss_cached")
+        );
+        assert_eq!(queries[0].2.get("mode").map(String::as_str), Some("rss"));
+        assert!(
+            series_named(&series, "scryer_indexer_query_results_total").is_empty(),
+            "a cached hit dispatched no request and counts no fresh results"
+        );
+    }
+
+    #[test]
+    fn pre_dispatch_skips_are_counted_with_their_reason_and_mode() {
+        let series = recorded_series(|| {
+            log_indexer_skip(
+                SearchMode::Auto,
+                true,
+                "NZB Test",
+                IndexerSkipReason::SystemBackoff,
+                Some(Utc::now() + Duration::minutes(30)),
+            );
+            record_indexer_skip(
+                SearchMode::Interactive,
+                false,
+                "NZB Test",
+                IndexerSkipReason::ClientSetupFailed,
+            );
+        });
+
+        let skips = series_named(&series, "scryer_indexer_skips_total");
+        assert_eq!(skips.len(), 2, "unexpected series: {series:?}");
+        let observed = skips
+            .iter()
+            .map(|(_, _, labels, value)| {
+                (
+                    labels.get("indexer").cloned().unwrap_or_default(),
+                    labels.get("reason").cloned().unwrap_or_default(),
+                    labels.get("mode").cloned().unwrap_or_default(),
+                    value,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(observed.contains(&(
+            "NZB Test".to_string(),
+            "system_backoff".to_string(),
+            "rss".to_string(),
+            &metrics_util::debugging::DebugValue::Counter(1),
+        )));
+        assert!(observed.contains(&(
+            "NZB Test".to_string(),
+            "client_setup_failed".to_string(),
+            "interactive".to_string(),
+            &metrics_util::debugging::DebugValue::Counter(1),
+        )));
+    }
+
+    #[test]
+    fn every_indexer_skip_reason_label_is_unique_snake_case() {
+        let reasons = [
+            IndexerSkipReason::Disabled,
+            IndexerSkipReason::ConfigDisabled,
+            IndexerSkipReason::SystemBackoff,
+            IndexerSkipReason::Backoff,
+            IndexerSkipReason::ModeDisabled,
+            IndexerSkipReason::SearchRestriction,
+            IndexerSkipReason::RoutingDisabled,
+            IndexerSkipReason::NoRssSupport,
+            IndexerSkipReason::NoSupportedIds,
+            IndexerSkipReason::ClientSetupFailed,
+            IndexerSkipReason::DeadlineExpired,
+            IndexerSkipReason::StrategiesSuppressed,
+        ];
+
+        let mut seen = std::collections::BTreeSet::new();
+        for reason in reasons {
+            let label = reason.as_str();
+            assert!(!label.is_empty(), "{reason:?} has an empty label");
+            assert!(
+                label
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character == '_'),
+                "{label} is not snake_case"
+            );
+            assert!(
+                !label.starts_with('_') && !label.ends_with('_'),
+                "{label} is not snake_case"
+            );
+            assert!(seen.insert(label), "duplicate skip reason label: {label}");
+            assert!(
+                !reason.log_text().is_empty(),
+                "{label} lost its human-readable log text"
+            );
+        }
+        assert_eq!(seen.len(), reasons.len());
+    }
+
+    #[test]
+    fn backoff_gauges_publish_the_window_and_zero_when_cleared() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let escalated = metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                let tracker = IndexerBackoffTracker::new();
+                let backoff = tracker.record_failure("idx-1", "NZB Test", None).await;
+                (tracker, backoff)
+            })
+        });
+        let (tracker, backoff) = escalated;
+
+        let active = snapshotter.snapshot().into_vec();
+        let gauge_value = |series: &[(
+            metrics_util::CompositeKey,
+            Option<metrics::Unit>,
+            Option<metrics::SharedString>,
+            metrics_util::debugging::DebugValue,
+        )],
+                           name: &str| {
+            series
+                .iter()
+                .find(|(key, _, _, _)| key.key().name() == name)
+                .map(|(key, _, _, value)| {
+                    let indexer = key
+                        .key()
+                        .labels()
+                        .find(|label| label.key() == "indexer")
+                        .map(|label| label.value().to_string())
+                        .unwrap_or_default();
+                    let value = match value {
+                        metrics_util::debugging::DebugValue::Gauge(value) => value.into_inner(),
+                        other => panic!("{name} is not a gauge: {other:?}"),
+                    };
+                    (indexer, value)
+                })
+                .unwrap_or_else(|| panic!("{name} was never emitted"))
+        };
+
+        assert_eq!(
+            gauge_value(&active, "scryer_indexer_backoff_active"),
+            ("NZB Test".to_string(), 1.0)
+        );
+        assert_eq!(
+            gauge_value(&active, "scryer_indexer_backoff_until_timestamp_seconds"),
+            (
+                "NZB Test".to_string(),
+                backoff.disabled_until.timestamp() as f64
+            )
+        );
+        assert_eq!(
+            gauge_value(&active, "scryer_indexer_backoff_escalation_level"),
+            ("NZB Test".to_string(), 1.0)
+        );
+
+        metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                assert!(tracker.clear("idx-1").await, "state existed to drop");
+            })
+        });
+
+        let cleared = snapshotter.snapshot().into_vec();
+        assert_eq!(
+            gauge_value(&cleared, "scryer_indexer_backoff_active"),
+            ("NZB Test".to_string(), 0.0)
+        );
+        assert_eq!(
+            gauge_value(&cleared, "scryer_indexer_backoff_until_timestamp_seconds"),
+            ("NZB Test".to_string(), 0.0)
+        );
+        assert_eq!(
+            gauge_value(&cleared, "scryer_indexer_backoff_escalation_level"),
+            ("NZB Test".to_string(), 0.0)
+        );
     }
 }

@@ -62,6 +62,7 @@ url = "2"
 scryer-rules = { path = "../scryer-rules" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 wiremock = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "http2", "gzip", "brotli", "deflate"] }
 tempfile = "3"

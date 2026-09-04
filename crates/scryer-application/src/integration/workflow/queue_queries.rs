@@ -1046,7 +1046,7 @@ impl AppUseCase {
             .filter(|model| model.revision == snapshot.revision)
             .cloned()
         {
-            metrics::counter!("scryer_download_queue_read_model_total", "result" => "hit")
+            metrics::counter!(crate::services::DOWNLOAD_QUEUE_READ_MODEL_TOTAL, "result" => "hit")
                 .increment(1);
             return Ok((snapshot, model));
         }
@@ -1066,12 +1066,12 @@ impl AppUseCase {
             .filter(|model| model.revision == snapshot.revision)
             .cloned()
         {
-            metrics::counter!("scryer_download_queue_read_model_total", "result" => "hit")
+            metrics::counter!(crate::services::DOWNLOAD_QUEUE_READ_MODEL_TOTAL, "result" => "hit")
                 .increment(1);
             return Ok((snapshot, model));
         }
 
-        metrics::counter!("scryer_download_queue_read_model_total", "result" => "miss")
+        metrics::counter!(crate::services::DOWNLOAD_QUEUE_READ_MODEL_TOTAL, "result" => "miss")
             .increment(1);
         let title_ids = snapshot
             .items
@@ -1217,9 +1217,12 @@ impl AppUseCase {
         let limit = limit.clamp(1, 200);
         let (snapshot, model) = self.current_download_queue_read_model().await?;
         let stale = snapshot.stale_at(Utc::now());
+        // Not a cache hit/miss — `ready` only says whether a snapshot has ever
+        // been committed. The real read-model cache metric is
+        // `scryer_download_queue_read_model_total`.
         metrics::counter!(
-            "scryer_download_queue_cache_total",
-            "result" => if snapshot.ready { "hit" } else { "miss" }
+            crate::services::DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+            "ready" => if snapshot.ready { "true" } else { "false" }
         )
         .increment(1);
         let normalized_client_ids = client_ids.map(|ids| {
@@ -1285,20 +1288,10 @@ impl AppUseCase {
                 .then_with(|| left.client_id.cmp(&right.client_id))
         });
         let has_more = offset.saturating_add(page_items.len()) < total_count;
-        metrics::histogram!("scryer_download_queue_page_duration_seconds")
+        metrics::histogram!(crate::services::DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS)
             .record(started_at.elapsed().as_secs_f64());
-        metrics::gauge!("scryer_download_queue_snapshot_age_seconds").set(
-            snapshot
-                .updated_at
-                .map(|updated_at| {
-                    Utc::now()
-                        .signed_duration_since(updated_at)
-                        .num_milliseconds()
-                })
-                .unwrap_or_default()
-                .max(0) as f64
-                / 1_000.0,
-        );
+        // `scryer_download_queue_snapshot_age_seconds` is no longer set here:
+        // the poller tick owns it, so it keeps moving with no viewer.
 
         Ok(DownloadQueuePage {
             items: page_items,

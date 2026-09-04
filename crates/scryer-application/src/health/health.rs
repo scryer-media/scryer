@@ -108,6 +108,84 @@ fn release_age_unknown_health_results(
     results
 }
 
+/// Every health-check source this module can emit a result for.
+///
+/// The list is explicit rather than derived from the results because a healthy
+/// source produces no result at all: without a fixed roster, "everything is
+/// fine" and "the check never ran" would look identical on the scrape. A source
+/// added to the checks above without being added here is simply not exported;
+/// the unit tests below pin the roster against the checks.
+const HEALTH_CHECK_SOURCES: [&str; 6] = [
+    "DiskSpace",
+    "DownloadClient",
+    "Indexer",
+    "RecycleBin",
+    "ReleaseAgeUnknown",
+    "RootFolder",
+];
+
+/// Statuses in increasing severity, so "worst wins" is a max over this order.
+const HEALTH_CHECK_STATUSES: [HealthCheckStatus; 3] = [
+    HealthCheckStatus::Ok,
+    HealthCheckStatus::Warning,
+    HealthCheckStatus::Error,
+];
+
+fn health_status_severity(status: &HealthCheckStatus) -> u8 {
+    match status {
+        HealthCheckStatus::Ok => 0,
+        HealthCheckStatus::Warning => 1,
+        HealthCheckStatus::Error => 2,
+    }
+}
+
+/// The `(source, status, value)` triples describing the current health state.
+///
+/// Each source contributes one row per status: `1` for the worst status any of
+/// its results reported (`Ok` when it reported nothing, which is how a passing
+/// check looks) and `0` for the others. Emitting the zeros keeps every series
+/// present, so an alert can be written as `== 1` without absent-handling, and
+/// a source that recovers visibly drops back to `Ok` instead of leaving a stale
+/// `Error` series behind.
+///
+/// Results are aggregated per source on purpose: the per-client and per-indexer
+/// detail lives in the message text, and turning client or indexer names into
+/// label values would make the series count grow with the operator's config.
+fn health_status_gauge_values(
+    results: &[HealthCheckResult],
+) -> Vec<(&'static str, &'static str, f64)> {
+    HEALTH_CHECK_SOURCES
+        .iter()
+        .flat_map(|source| {
+            // A source that reported nothing is healthy, so start at `Ok` and
+            // let the worst result it did report win.
+            let mut worst = health_status_severity(&HealthCheckStatus::Ok);
+            for result in results.iter().filter(|result| result.source == *source) {
+                worst = worst.max(health_status_severity(&result.status));
+            }
+            HEALTH_CHECK_STATUSES.into_iter().map(move |status| {
+                let value = if health_status_severity(&status) == worst {
+                    1.0
+                } else {
+                    0.0
+                };
+                (*source, status.as_str(), value)
+            })
+        })
+        .collect()
+}
+
+fn record_health_check_gauges(results: &[HealthCheckResult]) {
+    for (source, status, value) in health_status_gauge_values(results) {
+        metrics::gauge!(
+            crate::metrics_support::HEALTH_CHECK_STATUS,
+            "source" => source,
+            "status" => status
+        )
+        .set(value);
+    }
+}
+
 impl AppUseCase {
     /// Run all health checks and return results.
     pub async fn run_health_checks(&self) -> Vec<HealthCheckResult> {
@@ -118,6 +196,7 @@ impl AppUseCase {
         results.extend(self.check_recycle_bin_config().await);
         results.extend(self.check_disk_space_health().await);
         results.extend(self.check_release_age_unknown_pending().await);
+        record_health_check_gauges(&results);
         results
     }
 
@@ -410,6 +489,21 @@ impl AppUseCase {
                 let label = health_library_root_label(&root);
 
                 if let Some(space) = filesystem_space(&root.path) {
+                    // `root` is the configured root-folder path: a handful of
+                    // operator-chosen values, and the only identity under which
+                    // a capacity figure means anything. Media paths, titles and
+                    // ids never become labels.
+                    metrics::gauge!(
+                        crate::metrics_support::ROOT_FOLDER_FREE_BYTES,
+                        "root" => root.path.clone()
+                    )
+                    .set(space.available_bytes as f64);
+                    metrics::gauge!(
+                        crate::metrics_support::ROOT_FOLDER_TOTAL_BYTES,
+                        "root" => root.path.clone()
+                    )
+                    .set(space.total_bytes as f64);
+
                     let free = space.available_bytes;
                     let mb_100 = 100 * 1024 * 1024;
                     let mb_500 = 500 * 1024 * 1024;
@@ -447,6 +541,9 @@ impl AppUseCase {
 
 #[cfg(test)]
 mod tests {
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
     use super::*;
 
     fn test_library(
@@ -648,5 +745,112 @@ mod tests {
                 .message
                 .contains("/srv/downloads/complete/series overlaps /srv/downloads/complete/series")
         );
+    }
+
+    fn health_result(source: &str, status: HealthCheckStatus) -> HealthCheckResult {
+        HealthCheckResult {
+            source: source.to_string(),
+            status,
+            message: String::new(),
+        }
+    }
+
+    fn gauge_value(
+        values: &[(&'static str, &'static str, f64)],
+        source: &str,
+        status: &str,
+    ) -> Option<f64> {
+        values
+            .iter()
+            .find(|(series_source, series_status, _)| {
+                *series_source == source && *series_status == status
+            })
+            .map(|(_, _, value)| *value)
+    }
+
+    #[test]
+    fn health_gauges_report_every_source_and_status_with_exactly_one_hot() {
+        let values = health_status_gauge_values(&[]);
+
+        assert_eq!(
+            values.len(),
+            HEALTH_CHECK_SOURCES.len() * HEALTH_CHECK_STATUSES.len()
+        );
+        for source in HEALTH_CHECK_SOURCES {
+            let hot = HEALTH_CHECK_STATUSES
+                .iter()
+                .filter(|status| gauge_value(&values, source, status.as_str()) == Some(1.0))
+                .count();
+            assert_eq!(hot, 1, "{source} should have exactly one status set to 1");
+            assert_eq!(
+                gauge_value(&values, source, "ok"),
+                Some(1.0),
+                "{source} with no results is healthy"
+            );
+        }
+    }
+
+    #[test]
+    fn health_gauges_take_the_worst_status_per_source() {
+        let values = health_status_gauge_values(&[
+            health_result("Indexer", HealthCheckStatus::Warning),
+            health_result("Indexer", HealthCheckStatus::Error),
+            health_result("Indexer", HealthCheckStatus::Warning),
+            health_result("RootFolder", HealthCheckStatus::Warning),
+        ]);
+
+        assert_eq!(gauge_value(&values, "Indexer", "error"), Some(1.0));
+        assert_eq!(gauge_value(&values, "Indexer", "warning"), Some(0.0));
+        assert_eq!(gauge_value(&values, "Indexer", "ok"), Some(0.0));
+
+        assert_eq!(gauge_value(&values, "RootFolder", "warning"), Some(1.0));
+        assert_eq!(gauge_value(&values, "RootFolder", "error"), Some(0.0));
+
+        // Untouched sources stay reported, and stay healthy.
+        assert_eq!(gauge_value(&values, "DiskSpace", "ok"), Some(1.0));
+    }
+
+    #[test]
+    fn health_gauges_emit_the_recorded_series() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
+            record_health_check_gauges(&[health_result("DiskSpace", HealthCheckStatus::Error)]);
+        });
+
+        let recorded = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _unit, _description, value)| match value {
+                DebugValue::Gauge(gauge) => {
+                    let key = key.key();
+                    let labels = key
+                        .labels()
+                        .map(|label| (label.key().to_string(), label.value().to_string()))
+                        .collect::<Vec<_>>();
+                    Some((key.name().to_string(), labels, gauge.into_inner()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            recorded.len(),
+            HEALTH_CHECK_SOURCES.len() * HEALTH_CHECK_STATUSES.len()
+        );
+        assert!(
+            recorded
+                .iter()
+                .all(|(name, _, _)| name == crate::metrics_support::HEALTH_CHECK_STATUS)
+        );
+        let disk_space_error = recorded
+            .iter()
+            .find(|(_, labels, _)| {
+                labels.contains(&("source".to_string(), "DiskSpace".to_string()))
+                    && labels.contains(&("status".to_string(), "error".to_string()))
+            })
+            .map(|(_, _, value)| *value);
+        assert_eq!(disk_space_error, Some(1.0));
     }
 }

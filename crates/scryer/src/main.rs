@@ -8,6 +8,7 @@ mod base_path;
 #[cfg(any(debug_assertions, test))]
 mod dev_api_keys;
 mod http_error;
+mod http_metrics;
 mod indexer_search_routes;
 mod init;
 mod log_buffer;
@@ -1908,7 +1909,12 @@ async fn bootstrap_application(
         ))
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
-        }));
+        }))
+        // Outermost on purpose: serving metrics must observe the final status of every response,
+        // including the ones produced by the rate-limit, authless-guard and CORS layers rather
+        // than by a route handler. `Router::layer` still runs after routing, so `MatchedPath` is
+        // available and `route` stays a bounded template label.
+        .layer(axum::middleware::from_fn(http_metrics::record_http_metrics));
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {

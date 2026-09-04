@@ -853,11 +853,24 @@ impl JobRunTracker {
     pub async fn set_next_run_at(&self, job_key: JobKey, next_run_at: DateTime<Utc>) {
         let mut state = self.state.lock().await;
         state.next_run_at.insert(job_key, next_run_at);
+        metrics::gauge!(
+            crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS,
+            "job_key" => job_key.as_str()
+        )
+        .set(crate::metrics_support::unix_seconds(next_run_at));
     }
 
     pub async fn clear_next_run_at(&self, job_key: JobKey) {
         let mut state = self.state.lock().await;
         state.next_run_at.remove(&job_key);
+        // Zero rather than a removed series: an unscheduled job stays visible
+        // on the scrape, and `job_next_run == 0` is a condition PromQL can ask
+        // about without absent-handling.
+        metrics::gauge!(
+            crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS,
+            "job_key" => job_key.as_str()
+        )
+        .set(0.0);
     }
 
     pub async fn next_run_at(&self, job_key: JobKey) -> Option<DateTime<Utc>> {
@@ -1072,5 +1085,68 @@ mod tests {
             .upsert_active_run(active_after_merge[0].clone())
             .await;
         assert!(tracker.list_active().await.is_empty());
+    }
+
+    /// One gauge series as seen by the local recorder: `(name, labels, value)`.
+    type RecordedGauge = (String, Vec<(String, String)>, f64);
+
+    /// Every gauge series the local recorder saw.
+    fn recorded_gauges(snapshotter: &metrics_util::debugging::Snapshotter) -> Vec<RecordedGauge> {
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _unit, _description, value)| match value {
+                metrics_util::debugging::DebugValue::Gauge(gauge) => {
+                    let key = key.key();
+                    let labels = key
+                        .labels()
+                        .map(|label| (label.key().to_string(), label.value().to_string()))
+                        .collect::<Vec<_>>();
+                    Some((key.name().to_string(), labels, gauge.into_inner()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn next_run_registry_publishes_the_job_freshness_gauge() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime builds");
+        let tracker = JobRunTracker::new();
+        let next_run_at = DateTime::from_timestamp(1_700_000_000, 0).expect("timestamp in range");
+
+        // Thread-local recorder, driven on the runtime's single thread, so the
+        // assertion never depends on (or disturbs) a global recorder.
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let (after_set, after_clear) = metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                tracker.set_next_run_at(JobKey::RssSync, next_run_at).await;
+                let after_set = recorded_gauges(&snapshotter);
+                tracker.clear_next_run_at(JobKey::RssSync).await;
+                (after_set, recorded_gauges(&snapshotter))
+            })
+        });
+
+        let expected_labels = vec![("job_key".to_string(), "rss_sync".to_string())];
+        assert_eq!(
+            after_set,
+            vec![(
+                crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS.to_string(),
+                expected_labels.clone(),
+                1_700_000_000.0,
+            )]
+        );
+        assert_eq!(
+            after_clear,
+            vec![(
+                crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS.to_string(),
+                expected_labels,
+                0.0,
+            )]
+        );
     }
 }

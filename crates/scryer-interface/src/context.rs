@@ -1,6 +1,7 @@
 use async_graphql::Schema;
 use scryer_application::{AppUseCase, application_upgrade::InstallationAssessment};
 
+use crate::metrics_extension::GraphqlMetricsExtension;
 use crate::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 
 pub use scryer_interface_core::{
@@ -74,6 +75,8 @@ pub fn build_schema_with_log_buffer_and_restore_and_application_upgrade(
         SubscriptionRoot,
     )
     .limit_recursive_depth(GRAPHQL_RECURSIVE_DEPTH_LIMIT)
+    // Per-operation serving metrics; a no-op unless a recorder is installed.
+    .extension(GraphqlMetricsExtension)
     .data(ApiContext {
         app,
         auth_runtime,

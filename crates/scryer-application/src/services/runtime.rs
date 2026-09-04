@@ -131,6 +131,96 @@ struct PendingDownloadQueueSnapshot {
     clear_refresh_error: bool,
 }
 
+pub(crate) const DOWNLOAD_QUEUE_ITEMS: &str = "scryer_download_queue_items";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_ITEMS: &str = "scryer_download_queue_snapshot_items";
+pub(crate) const DOWNLOAD_QUEUE_READ_MODEL_TOTAL: &str = "scryer_download_queue_read_model_total";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL: &str =
+    "scryer_download_queue_snapshot_refresh_total";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS: &str =
+    "scryer_download_queue_snapshot_updated_timestamp_seconds";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS: &str =
+    "scryer_download_queue_snapshot_age_seconds";
+pub(crate) const DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL: &str =
+    "scryer_download_queue_revision_notifications_total";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL: &str =
+    "scryer_download_queue_snapshot_ready_total";
+pub(crate) const DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS: &str =
+    "scryer_download_queue_page_duration_seconds";
+pub(crate) const DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS: &str =
+    "scryer_download_queue_refresh_duration_seconds";
+pub(crate) const DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS: &str =
+    "scryer_download_queue_poll_cycle_duration_seconds";
+pub(crate) const DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS: &str =
+    "scryer_download_queue_legacy_subscriptions";
+
+/// Registers HELP/UNIT metadata for the download-queue read-model families.
+///
+/// Public because the binary's metrics setup calls it once at startup, so the
+/// scrape surface is self-describing even before the first poll has run. The
+/// per-download-client families live in the router crate and are described by
+/// `scryer_infrastructure_acquisition::describe_download_client_router_metrics`.
+pub fn describe_download_queue_metrics() {
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_ITEMS,
+        "Download-queue items currently projected, by queue state."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_READ_MODEL_TOTAL,
+        "Download-queue read-model lookups, by whether the cached projection was reused (`hit`) \
+         or rebuilt (`miss`)."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_SNAPSHOT_ITEMS,
+        "Download-queue items in the most recently staged snapshot."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+        "Download-queue snapshot refreshes, by result: `success` (every polled client answered), \
+         `partial` (the snapshot was staged while at least one client read had failed) or \
+         `error` (no client read succeeded)."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS,
+        metrics::Unit::Seconds,
+        "Unix timestamp of the download-queue snapshot currently served, set on every commit."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS,
+        metrics::Unit::Seconds,
+        "Age of the download-queue snapshot currently served, refreshed once per poller tick \
+         (it moves whether or not anyone is looking at the queue page)."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL,
+        "Download-queue revision notifications broadcast to subscribers."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+        "Download-queue page queries served, by whether the snapshot had ever been committed \
+         (`ready`)."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Time to render one download-queue page from the in-memory read model."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Time spent processing a collected download-client snapshot, excluding the client reads."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Wall time of one download-queue poller tick: every client read plus the processing that \
+         follows it."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS,
+        "Open legacy download-queue broadcast subscriptions."
+    );
+}
+
 #[derive(Clone)]
 pub struct DownloadQueueSnapshotCache {
     state: Arc<tokio::sync::RwLock<DownloadQueueSnapshot>>,
@@ -187,9 +277,15 @@ impl DownloadQueueSnapshotCache {
             updated_at: Utc::now(),
             clear_refresh_error,
         });
-        metrics::gauge!("scryer_download_queue_snapshot_items").set(item_count as f64);
-        metrics::counter!("scryer_download_queue_snapshot_refresh_total", "result" => "success")
-            .increment(1);
+        metrics::gauge!(DOWNLOAD_QUEUE_SNAPSHOT_ITEMS).set(item_count as f64);
+        // A partial stage keeps the previous refresh error standing: the poller
+        // saw *some* clients, not all of them. Reporting that as `success`
+        // made a degraded fleet look healthy on the dashboard.
+        metrics::counter!(
+            DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+            "result" => if clear_refresh_error { "success" } else { "partial" }
+        )
+        .increment(1);
         self.schedule_commit();
     }
 
@@ -326,7 +422,7 @@ impl DownloadQueueSnapshotCache {
         let changed = state.refresh_error.as_deref() != Some(error.as_str());
         if !changed {
             drop(state);
-            metrics::counter!("scryer_download_queue_snapshot_refresh_total", "result" => "error")
+            metrics::counter!(DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL, "result" => "error")
                 .increment(1);
             return;
         }
@@ -384,6 +480,11 @@ impl DownloadQueueSnapshotCache {
             state.items = Arc::from(pending.items);
         }
         state.updated_at = Some(pending.updated_at);
+        // Freshness is published from the commit, not from a page query: a
+        // gauge only a viewer moves freezes exactly when a stale snapshot most
+        // needs to be visible. Scrapers derive age as `time() - this`.
+        metrics::gauge!(DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS)
+            .set(pending.updated_at.timestamp_millis() as f64 / 1_000.0);
         state.ready = true;
         if pending.clear_refresh_error {
             state.refresh_error = None;
@@ -398,7 +499,7 @@ impl DownloadQueueSnapshotCache {
         };
         drop(state);
         self.sync_tx.send_replace(sync);
-        metrics::counter!("scryer_download_queue_revision_notifications_total").increment(1);
+        metrics::counter!(DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL).increment(1);
     }
 }
 
@@ -434,6 +535,75 @@ fn index_download_queue_items(
 #[cfg(test)]
 mod download_queue_snapshot_cache_tests {
     use super::*;
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+    use std::collections::BTreeMap;
+
+    /// Runs `body` on a private current-thread runtime with a thread-local
+    /// recorder installed, so the emitted series are observable without ever
+    /// installing a global recorder (which would make tests order-dependent).
+    fn with_recorded_metrics<T>(
+        body: impl FnOnce(&tokio::runtime::Runtime) -> T,
+    ) -> (T, Snapshotter) {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime");
+        let value = with_local_recorder(&recorder, || body(&runtime));
+        (value, snapshotter)
+    }
+
+    fn labels_of(key: &metrics::Key) -> BTreeMap<String, String> {
+        key.labels()
+            .map(|label| (label.key().to_string(), label.value().to_string()))
+            .collect()
+    }
+
+    /// One snapshot per test: `Snapshotter::snapshot` drains counter deltas, so
+    /// calling it once per assertion would report every series after the first
+    /// as zero.
+    type RecordedSeries = Vec<(String, BTreeMap<String, String>, DebugValue)>;
+
+    fn recorded(snapshotter: &Snapshotter) -> RecordedSeries {
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(key, _unit, _description, value)| {
+                (key.key().name().to_string(), labels_of(key.key()), value)
+            })
+            .collect()
+    }
+
+    fn counter_value(
+        recorded: &RecordedSeries,
+        name: &str,
+        labels: &[(&str, &str)],
+    ) -> Option<u64> {
+        let expected = labels
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<BTreeMap<_, _>>();
+        recorded
+            .iter()
+            .find_map(|(series_name, series_labels, value)| match value {
+                DebugValue::Counter(count) if series_name == name && *series_labels == expected => {
+                    Some(*count)
+                }
+                _ => None,
+            })
+    }
+
+    fn gauge_value(recorded: &RecordedSeries, name: &str) -> Option<f64> {
+        recorded
+            .iter()
+            .find_map(|(series_name, _labels, value)| match value {
+                DebugValue::Gauge(inner) if series_name == name => Some(**inner),
+                _ => None,
+            })
+    }
 
     fn item(index: usize) -> DownloadQueueItem {
         let id = format!("item-{index}");
@@ -611,6 +781,135 @@ mod download_queue_snapshot_cache_tests {
         assert_eq!(recovered.revision, 3);
         assert!(recovered.refresh_error.is_none());
         assert!(!recovered.stale_at(Utc::now()));
+    }
+
+    #[test]
+    fn partial_staging_is_reported_as_partial_not_success() {
+        let ((), snapshotter) = with_recorded_metrics(|runtime| {
+            runtime.block_on(async {
+                let cache = DownloadQueueSnapshotCache::default();
+                cache.stage_success(vec![item(1)]).await;
+                cache.stage_partial_success(vec![item(2)]).await;
+                cache.mark_refresh_failed("client unavailable").await;
+            });
+        });
+
+        let recorded = recorded(&snapshotter);
+        assert_eq!(
+            counter_value(
+                &recorded,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                &[("result", "success")]
+            ),
+            Some(1),
+            "a full refresh is the only thing that may count as success"
+        );
+        assert_eq!(
+            counter_value(
+                &recorded,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                &[("result", "partial")]
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            counter_value(
+                &recorded,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                &[("result", "error")]
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn commit_publishes_the_snapshot_updated_timestamp() {
+        let (expected, snapshotter) = with_recorded_metrics(|runtime| {
+            runtime.block_on(async {
+                let cache = DownloadQueueSnapshotCache::default();
+                cache.stage_success(vec![item(1)]).await;
+                let staged_at = cache
+                    .pending
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|pending| pending.updated_at)
+                    .expect("a staged snapshot is pending");
+                cache.commit_pending().await;
+                assert_eq!(cache.snapshot().await.updated_at, Some(staged_at));
+                staged_at
+            })
+        });
+
+        assert_eq!(
+            gauge_value(
+                &recorded(&snapshotter),
+                DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS
+            ),
+            Some(expected.timestamp_millis() as f64 / 1_000.0),
+            "freshness must be published by the commit, not by a page query"
+        );
+    }
+
+    #[test]
+    fn describe_download_queue_metrics_registers_every_family() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
+            describe_download_queue_metrics();
+            // Descriptions alone are not "seen" metrics, so touch each family.
+            for family in [
+                DOWNLOAD_QUEUE_ITEMS,
+                DOWNLOAD_QUEUE_SNAPSHOT_ITEMS,
+                DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS,
+                DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS,
+                DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS,
+            ] {
+                metrics::gauge!(family).set(0.0);
+            }
+            for family in [
+                DOWNLOAD_QUEUE_READ_MODEL_TOTAL,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL,
+                DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+            ] {
+                metrics::counter!(family).increment(0);
+            }
+            for family in [
+                DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS,
+                DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS,
+                DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS,
+            ] {
+                metrics::histogram!(family).record(0.0);
+            }
+        });
+
+        let described = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _unit, description, _value)| {
+                description.map(|description| (key.key().name().to_string(), description))
+            })
+            .map(|(name, _)| name)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for family in [
+            DOWNLOAD_QUEUE_ITEMS,
+            DOWNLOAD_QUEUE_READ_MODEL_TOTAL,
+            DOWNLOAD_QUEUE_SNAPSHOT_ITEMS,
+            DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+            DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS,
+            DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS,
+            DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL,
+            DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+            DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS,
+            DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS,
+            DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS,
+            DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS,
+        ] {
+            assert!(described.contains(family), "missing HELP for {family}");
+        }
     }
 }
 

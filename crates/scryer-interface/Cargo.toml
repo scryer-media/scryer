@@ -18,10 +18,12 @@ scryer-interface-subscription = { path = "../scryer-interface-subscription" }
 scryer-interface-system = { path = "../scryer-interface-system" }
 async-graphql = { workspace = true }
 chrono = { workspace = true }
+metrics = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 wiremock = { workspace = true }

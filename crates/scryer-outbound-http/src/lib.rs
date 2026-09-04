@@ -11,7 +11,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use governor::clock::Clock;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use metrics::{counter, histogram};
+use metrics::{counter, gauge, histogram};
 use reqwest::header::{HeaderMap, LOCATION, RETRY_AFTER};
 use reqwest::{
     Certificate, Client, RequestBuilder, Response, StatusCode, blocking::Client as BlockingClient,
@@ -19,6 +19,67 @@ use reqwest::{
 use thiserror::Error;
 use tokio::time::{Instant, sleep};
 use tracing::debug;
+
+/// Publishes when a destination's cooldown window expires.
+///
+/// There is deliberately no clearing hook: a cooldown ends by the wall clock
+/// running past it, so operators evaluate `metric > time()` rather than relying
+/// on something to zero the series. One 429 can arm a cooldown that silently
+/// blanks searches for hours, and this is the only place that becomes visible.
+fn record_destination_cooldown_until(destination: &DestinationKey, cooldown_until: DateTime<Utc>) {
+    gauge!(
+        "scryer_outbound_http_destination_cooldown_until_timestamp_seconds",
+        "destination" => destination.to_string()
+    )
+    .set(cooldown_until.timestamp() as f64);
+}
+
+/// Registers HELP text for every `scryer_outbound_http_*` family.
+///
+/// Must be called with the target recorder already installed — `describe_*!`
+/// against the no-op recorder silently loses the text.
+pub fn describe_outbound_http_metrics() {
+    metrics::describe_gauge!(
+        "scryer_outbound_http_destination_cooldown_until_timestamp_seconds",
+        metrics::Unit::Seconds,
+        "Unix timestamp the current cooldown for an outbound destination expires at. A cooldown is active while this exceeds the current time; nothing clears the series when it lapses."
+    );
+    metrics::describe_counter!(
+        "scryer_outbound_http_destination_cooldown_wait_total",
+        "Outbound requests that had to wait out a destination cooldown before dispatch, labelled by destination and request label."
+    );
+    metrics::describe_histogram!(
+        "scryer_outbound_http_destination_cooldown_wait_seconds",
+        metrics::Unit::Seconds,
+        "How long an outbound request waited for a destination cooldown to lapse before dispatch."
+    );
+    metrics::describe_counter!(
+        "scryer_outbound_http_host_rps_wait_total",
+        "Outbound requests that had to wait for a per-host requests-per-second permit, labelled by host and request label."
+    );
+    metrics::describe_histogram!(
+        "scryer_outbound_http_host_rps_wait_seconds",
+        metrics::Unit::Seconds,
+        "How long an outbound request waited for a per-host requests-per-second permit, labelled by host and request label."
+    );
+    metrics::describe_counter!(
+        "scryer_outbound_http_rate_limited_total",
+        "Outbound responses that reported an upstream rate limit, labelled by rate-limit scope, request label and the source the retry-after came from."
+    );
+    metrics::describe_counter!(
+        "scryer_outbound_http_transport_retry_total",
+        "Outbound request attempts retried after a transport-level failure, labelled by rate-limit scope and request label."
+    );
+    metrics::describe_histogram!(
+        "scryer_outbound_http_transport_backoff_seconds",
+        metrics::Unit::Seconds,
+        "Backoff slept between outbound transport retry attempts, labelled by rate-limit scope and request label."
+    );
+    metrics::describe_counter!(
+        "scryer_outbound_http_429_total",
+        "Outbound HTTP 429 responses received, labelled by rate-limit scope, request label and the source of the retry-after hint."
+    );
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RateLimitScopeKey(Arc<str>);
@@ -558,6 +619,7 @@ impl RateLimitRegistry {
                 continue;
             }
             deadlines.insert(cooldown.destination_key.clone(), now_instant + delay);
+            record_destination_cooldown_until(&cooldown.destination_key, cooldown.cooldown_until);
             metadata.insert(cooldown.destination_key.clone(), cooldown);
         }
     }
@@ -820,6 +882,7 @@ impl RateLimitRegistry {
                 message: None,
                 observed_at,
             };
+            record_destination_cooldown_until(destination, cooldown.cooldown_until);
             self.state
                 .destination_cooldowns
                 .lock()
@@ -3483,6 +3546,86 @@ mod tests {
 
         assert!(registry.active_destination_cooldown(&destination).is_some());
         assert!(registry.drain_dirty_destination_cooldowns().is_empty());
+    }
+
+    /// Reads back one gauge series recorded by `emit`, as (destination, value).
+    fn recorded_cooldown_gauges(emit: impl FnOnce()) -> Vec<(String, f64)> {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, emit);
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, _, _, _)| {
+                key.key().name()
+                    == "scryer_outbound_http_destination_cooldown_until_timestamp_seconds"
+            })
+            .map(|(key, _, _, value)| {
+                let destination = key
+                    .key()
+                    .labels()
+                    .find(|label| label.key() == "destination")
+                    .map(|label| label.value().to_string())
+                    .unwrap_or_default();
+                let value = match value {
+                    metrics_util::debugging::DebugValue::Gauge(value) => value.into_inner(),
+                    other => panic!("the cooldown deadline must be a gauge, got {other:?}"),
+                };
+                (destination, value)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recording_a_destination_cooldown_publishes_its_deadline() {
+        let registry = RateLimitRegistry::isolated();
+        let destination: DestinationKey = "example.test".into();
+
+        let before = Utc::now();
+        let recorded = recorded_cooldown_gauges(|| {
+            registry.record_destination_cooldown_blocking(
+                &destination,
+                Duration::from_secs(120),
+                RetryAfterSource::Seconds,
+            );
+        });
+
+        assert_eq!(recorded.len(), 1, "unexpected series: {recorded:?}");
+        assert_eq!(recorded[0].0, "example.test");
+        let expected = (before + chrono::Duration::seconds(120)).timestamp() as f64;
+        assert!(
+            (recorded[0].1 - expected).abs() <= 2.0,
+            "expected roughly {expected}, got {}",
+            recorded[0].1
+        );
+    }
+
+    #[test]
+    fn hydrating_a_destination_cooldown_publishes_its_deadline() {
+        let registry = RateLimitRegistry::isolated();
+        let destination: DestinationKey = "example.test".into();
+        let cooldown_until = Utc::now() + chrono::Duration::seconds(45);
+
+        let recorded = recorded_cooldown_gauges(|| {
+            registry.hydrate_destination_cooldowns([PersistedDestinationCooldown {
+                destination_key: destination.clone(),
+                cooldown_until,
+                retry_after: Some(Duration::from_secs(45)),
+                source: RetryAfterSource::ExistingCooldown,
+                status_code: Some(429),
+                message: Some("rate limited".to_string()),
+                observed_at: Utc::now(),
+            }]);
+        });
+
+        assert_eq!(
+            recorded,
+            vec![(
+                "example.test".to_string(),
+                cooldown_until.timestamp() as f64
+            )]
+        );
     }
 
     #[tokio::test]

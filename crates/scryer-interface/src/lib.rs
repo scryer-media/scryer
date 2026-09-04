@@ -7,9 +7,11 @@
 //! resolver behavior.
 
 pub mod context;
+pub mod metrics_extension;
 pub mod mutation;
 pub mod utils;
 
+pub use metrics_extension::{GraphqlMetricsExtension, describe_graphql_metrics};
 pub use scryer_interface_core::loaders::RequestLoaders;
 pub use scryer_interface_media::{mappers, types};
 pub use scryer_interface_query as query;
