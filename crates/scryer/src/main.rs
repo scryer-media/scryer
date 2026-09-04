@@ -1890,13 +1890,14 @@ async fn bootstrap_application(
         ))
         .layer(CompressionLayer::new().zstd(true).br(true).gzip(true));
 
+    // Mounted after the rate-limit and compression layers on purpose: a scraper on a fixed
+    // interval must not be throttled, and the route does its own API-key check.
     if let Some(ref handle) = metrics_handle {
-        let h = handle.clone();
         compressed_router = compressed_router.route(
             "/metrics",
-            get(move || {
-                let h = h.clone();
-                async move { h.render() }
+            get(metrics_setup::metrics_endpoint).with_state(metrics_setup::MetricsRouteState {
+                auth: auth_state.clone(),
+                handle: handle.clone(),
             }),
         );
     }

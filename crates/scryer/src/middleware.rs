@@ -2047,6 +2047,12 @@ fn graphql_request_operation_metadata(
 }
 
 impl ResolvedActor {
+    /// True when the caller authenticated with an API key rather than a session token or the
+    /// authless default actor.
+    pub(crate) fn is_api_key(&self) -> bool {
+        self.source == ResolvedActorSource::ApiKey
+    }
+
     fn requires_authless_web_client_proof(&self) -> bool {
         self.source == ResolvedActorSource::AuthlessDefault
     }

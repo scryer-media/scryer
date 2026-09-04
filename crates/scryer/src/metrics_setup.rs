@@ -21,11 +21,18 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use metrics::{Unit, describe_counter, describe_gauge, describe_histogram, gauge};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use metrics_util::MetricKindMask;
+use scryer_application::AppError;
+use scryer_domain::AppPermissionMask;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
+
+use crate::middleware::{AuthState, map_app_error, resolve_actor};
 
 /// Environment variable that gates the Prometheus recorder and the `/metrics` route.
 const METRICS_ENV: &str = "SCRYER_METRICS";
@@ -120,6 +127,42 @@ pub fn install_prometheus_recorder() -> Option<PrometheusHandle> {
     describe_metrics();
     record_build_info();
     Some(handle)
+}
+
+/// State for the `/metrics` route: the auth machinery that identifies the caller and the
+/// exporter handle that renders the payload.
+#[derive(Clone)]
+pub(crate) struct MetricsRouteState {
+    pub(crate) auth: AuthState,
+    pub(crate) handle: PrometheusHandle,
+}
+
+/// Serves the Prometheus exposition to an authorised scraper.
+///
+/// The payload names every configured indexer, download client, and library root, so it is
+/// not public. The only accepted credential is an API key presented as a bearer token whose
+/// owner holds `MANAGE_SYSTEM_SETTINGS`. A browser session, the authless default actor, and
+/// the local-IP bypass are all refused on purpose: a scraper is a machine, and a machine gets
+/// a revocable key, not a login. Anything short of a usable key answers 401, a valid key
+/// without the permission answers 403, and neither carries a body.
+pub(crate) async fn metrics_endpoint(
+    State(state): State<MetricsRouteState>,
+    headers: HeaderMap,
+) -> Response {
+    let actor = match resolve_actor(&state.auth, &headers, None).await {
+        Ok(Some(actor)) if actor.is_api_key() => actor,
+        Ok(_) | Err(AppError::Unauthorized(_)) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(error) => return map_app_error(error),
+    };
+    if !actor
+        .user
+        .authorization
+        .app
+        .contains(AppPermissionMask::MANAGE_SYSTEM_SETTINGS)
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    state.handle.render().into_response()
 }
 
 /// Publishes the identity of this process: which build is running, and since when.
@@ -525,5 +568,129 @@ mod tests {
             .await
             .expect("upkeep task did not stop within 2s after cancellation")
             .expect("upkeep task panicked");
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_requires_an_api_key_with_the_system_settings_permission() {
+        use crate::middleware::integration_test_common as common;
+        use crate::middleware::{AuthlessWebClientProofState, WebSocketOriginPolicy};
+        use crate::rate_limit::ScryerRateLimiter;
+        use axum::Router;
+        use axum::body::{Body, to_bytes};
+        use axum::http::{HeaderValue, header};
+        use axum::routing::get;
+        use scryer_application::{ApiKeyExpiryPreset, CreateApiKey};
+        use tower::ServiceExt as _;
+
+        let context = common::TestContext::new().await;
+        let admin = context
+            .app
+            .find_or_create_default_user()
+            .await
+            .expect("default administrator");
+        let ordinary = context
+            .app
+            .create_user(
+                &admin,
+                "metrics-ordinary".into(),
+                "ordinary-password".into(),
+                AppPermissionMask::NONE,
+                Vec::new(),
+            )
+            .await
+            .expect("create ordinary actor");
+        let ordinary = context
+            .app
+            .attach_user_authorization(ordinary)
+            .await
+            .expect("ordinary authorization");
+        let api_key = |actor: &scryer_domain::User| {
+            let app = context.app.clone();
+            let actor = actor.clone();
+            async move {
+                app.create_api_key(
+                    &actor,
+                    CreateApiKey {
+                        label: "prometheus".into(),
+                        expiry: ApiKeyExpiryPreset::Never,
+                    },
+                )
+                .await
+                .expect("create API key")
+                .raw_key
+            }
+        };
+        let admin_key = api_key(&admin).await;
+        let ordinary_key = api_key(&ordinary).await;
+        let admin_session = context
+            .app
+            .issue_access_token(&admin)
+            .await
+            .expect("issue administrator session token");
+
+        let recorder = prometheus_builder().build_recorder();
+        with_local_recorder(&recorder, || {
+            gauge!("scryer_metrics_route_probe").set(1.0);
+        });
+        let state = MetricsRouteState {
+            auth: AuthState {
+                app: context.app.clone(),
+                schema: context.schema.clone(),
+                // The shared fixture leaves authless local access on, which resolves a
+                // default administrator for an anonymous request everywhere else. The
+                // metrics route must still refuse it.
+                auth_runtime: context.auth_runtime.clone(),
+                rate_limiter: ScryerRateLimiter::from_env(),
+                ws_origin_policy: WebSocketOriginPolicy::default(),
+                authless_web_client_proof: AuthlessWebClientProofState::new(),
+            },
+            handle: recorder.handle(),
+        };
+        let router = Router::new()
+            .route("/metrics", get(metrics_endpoint))
+            .with_state(state);
+        let respond = |token: Option<String>| {
+            let router = router.clone();
+            async move {
+                let mut request = axum::http::Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("metrics request");
+                if let Some(token) = token {
+                    request.headers_mut().insert(
+                        header::AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {token}")).expect("authorization"),
+                    );
+                }
+                router.oneshot(request).await.expect("metrics response")
+            }
+        };
+
+        assert_eq!(respond(None).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            respond(Some("scryer_not_a_real_key".into())).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        // A logged-in administrator is not a scraper: sessions are refused even with the
+        // permission.
+        assert_eq!(
+            respond(Some(admin_session)).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            respond(Some(ordinary_key)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+
+        let response = respond(Some(admin_key)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("metrics body");
+        let body = String::from_utf8(body.to_vec()).expect("utf-8 exposition");
+        assert!(
+            body.contains("scryer_metrics_route_probe 1"),
+            "exposition should carry the recorded gauge: {body}"
+        );
     }
 }

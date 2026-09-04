@@ -1,0 +1,207 @@
+# Starter Prometheus alerting rules for Scryer.
+#
+# Load with:
+#   rule_files:
+#     - /etc/prometheus/rules/scryer-alerts.yml
+#
+# Assumes a 15-30s scrape interval. Thresholds are starting points: tune the
+# disk-space and job-overdue rules to your own cadences before relying on them.
+# See scryer-docs/deployment/prometheus-metrics.md for the metric reference.
+#
+# Every `for:` duration is well under the exporter's 24h idle-eviction window,
+# so no rule depends on a series that may have been evicted.
+
+groups:
+  - name: scryer-acquisition
+    rules:
+      - alert: ScryerIndexerBackedOff
+        expr: scryer_indexer_backoff_active == 1
+        for: 1h
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Indexer {{ $labels.indexer }} has been backed off for over an hour"
+          description: >-
+            Scryer has held {{ $labels.indexer }} out of dispatch for more than an hour.
+            A backed-off indexer stops appearing in scryer_indexer_queries_total entirely,
+            so search coverage is silently reduced. Check
+            scryer_indexer_errors_total{indexer="{{ $labels.indexer }}"} for the
+            classification and scryer_indexer_backoff_escalation_level to see whether the
+            backoff keeps escalating (a configuration problem) or is a one-off.
+
+      - alert: ScryerOutboundDestinationCooldown
+        expr: scryer_outbound_http_destination_cooldown_until_timestamp_seconds > time()
+        for: 10m
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Outbound cooldown active for {{ $labels.destination }}"
+          description: >-
+            An upstream rate limit has armed a destination-wide cooldown for
+            {{ $labels.destination }} that has been in force for 10 minutes. Requests to
+            this destination wait or are skipped while it holds, which can blank
+            interactive search. Cooldown lifts at
+            {{ $value | humanizeTimestamp }}.
+
+      - alert: ScryerNoSuccessfulRssSync
+        expr: |
+          (time() - scryer_job_last_success_timestamp_seconds{job_key="rss_sync"}) > 7200
+        for: 10m
+        labels:
+          severity: critical
+          service: scryer
+        annotations:
+          summary: "No successful RSS sync in over 2 hours"
+          description: >-
+            The rss_sync job last succeeded
+            {{ $value | humanizeDuration }} ago. New releases are not being picked up.
+            Compare scryer_job_last_run_timestamp_seconds{job_key="rss_sync"}: a fresh
+            last-run with a stale last-success means the job is running and failing.
+            Check scryer_rss_sync_total{outcome!="completed"} for silent no-ops
+            (no monitored titles, or no enabled download clients).
+
+      - alert: ScryerGrabSubmissionFailureRatio
+        expr: |
+          (
+            sum(rate(scryer_grab_submissions_total{result=~"failed|deferred"}[1h]))
+            /
+            sum(rate(scryer_grab_submissions_total[1h]))
+          ) > 0.25
+        for: 30m
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Over 25% of grab submissions are failing or deferring"
+          description: >-
+            {{ $value | humanizePercentage }} of grab submissions in the last hour ended
+            in failed or deferred. `deferred` points at an unavailable or ambiguous
+            download client (the release is parked, not burned); `failed` burns the
+            release. Break down by result and trigger, and check
+            scryer_download_client_up.
+
+  - name: scryer-downloads
+    rules:
+      - alert: ScryerDownloadClientDown
+        expr: scryer_download_client_up == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: scryer
+        annotations:
+          summary: "Download client {{ $labels.client }} is not answering"
+          description: >-
+            {{ $labels.client }} ({{ $labels.client_type }}) has failed its queue read on
+            every poll cycle for 10 minutes. Grabs sent to this client will defer and
+            nothing already queued on it will progress. Check
+            rate(scryer_download_client_refresh_total{client="{{ $labels.client }}",result="error"}[15m])
+            and the client's own logs.
+
+      - alert: ScryerDownloadQueueSnapshotStale
+        expr: scryer_download_queue_snapshot_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Download-queue snapshot is {{ $value | humanizeDuration }} old"
+          description: >-
+            The download-queue snapshot served to the UI and the import loop has not been
+            refreshed for over 5 minutes. Either the poller is stalled or every client
+            read is failing. Check
+            rate(scryer_download_queue_snapshot_refresh_total{result="error"}[15m]) and
+            scryer_download_client_up.
+
+  - name: scryer-imports
+    rules:
+      - alert: ScryerImportRejectionSpike
+        expr: |
+          sum by (skip_reason) (rate(scryer_import_rejections_total[30m])) > 0.02
+        for: 30m
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Imports are being rejected: {{ $labels.skip_reason }}"
+          description: >-
+            Imports are being rejected with skip_reason={{ $labels.skip_reason }} at
+            {{ $value | humanize }}/s over the last 30 minutes. disk_full,
+            permission_denied and password_required are operator problems;
+            unresolved_identity and unparseable_episode are matching problems. Compare
+            against rate(scryer_imports_total[30m]) to see whether anything is landing
+            at all.
+
+      - alert: ScryerRootFolderLowDiskSpace
+        expr: |
+          (
+            scryer_root_folder_free_bytes / scryer_root_folder_total_bytes
+          ) < 0.10
+        for: 15m
+        labels:
+          severity: critical
+          service: scryer
+        annotations:
+          summary: "Root folder {{ $labels.root }} is below 10% free"
+          description: >-
+            {{ $labels.root }} has {{ $value | humanizePercentage }} of its filesystem
+            free. Imports will start failing with skip_reason=disk_full, which burns
+            grabs. Free space or move the root folder before that happens; the exact
+            byte count is in scryer_root_folder_free_bytes.
+
+  - name: scryer-serving
+    rules:
+      - alert: ScryerHttpServerErrorRatio
+        expr: |
+          (
+            sum(rate(scryer_http_requests_total{status_class="5xx"}[5m]))
+            /
+            sum(rate(scryer_http_requests_total[5m]))
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          service: scryer
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of HTTP responses are 5xx"
+          description: >-
+            Scryer is returning server errors for
+            {{ $value | humanizePercentage }} of requests. Break down by route with
+            sum by (route) (rate(scryer_http_requests_total{status_class="5xx"}[5m])).
+            Note that GraphQL errors return HTTP 200 and will not appear here — check
+            rate(scryer_graphql_errors_total[5m]) as well.
+
+  - name: scryer-jobs
+    rules:
+      - alert: ScryerJobOverdue
+        expr: |
+          (
+            scryer_job_next_run_timestamp_seconds > 0
+            and
+            (time() - scryer_job_next_run_timestamp_seconds) > 3600
+          )
+        for: 15m
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Job {{ $labels.job_key }} is over an hour past its scheduled run"
+          description: >-
+            The scheduler intended to run {{ $labels.job_key }} more than an hour ago and
+            it has not started. The zero-value guard excludes jobs that are simply
+            unscheduled. Check scryer_task_panics_total and
+            scryer_background_worker_errors_total for a wedged runner.
+
+      - alert: ScryerHealthCheckError
+        expr: scryer_health_check_status{status="error"} == 1
+        for: 15m
+        labels:
+          severity: warning
+          service: scryer
+        annotations:
+          summary: "Health check {{ $labels.source }} is in error"
+          description: >-
+            Scryer's own health check for {{ $labels.source }} has reported an error state
+            for 15 minutes. This is the same signal the UI shows on the System page; the
+            gauge is one-hot, so exactly one status series per source is 1.
