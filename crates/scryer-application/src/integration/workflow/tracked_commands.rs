@@ -595,6 +595,8 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
         return Ok(FinalizeIgnoredOutcome::Finalized);
     }
 
+    reopen_scopes_released_by_ignored_submission(app, &submission).await;
+
     let title = app
         .services
         .catalog
@@ -624,6 +626,104 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
     };
     app.append_domain_event(event).await?;
     Ok(FinalizeIgnoredOutcome::Finalized)
+}
+
+/// The scope rows an operator remove or ignore releases: rows this submission
+/// covers that still say `grabbed` for *this* release. A row grabbed for a
+/// different release belongs to that other download and is left alone; a row
+/// whose recorded grab cannot be read is released, because holding it would
+/// hold it forever now that the claim has no expiry of its own.
+pub(crate) fn scope_rows_released_by_ignored_submission<'a>(
+    submission: &crate::DownloadSubmission,
+    rows: &'a [crate::AcquisitionScopeState],
+    episodes: &[scryer_domain::Episode],
+) -> Vec<&'a crate::AcquisitionScopeState> {
+    let ignored_key = submission
+        .source_title
+        .as_deref()
+        .and_then(crate::admission::release_key);
+    rows.iter()
+        .filter(|row| {
+            if row.status != crate::AcquisitionScopeStatus::Grabbed {
+                return false;
+            }
+            let episode_collection_id = row.episode_id.as_ref().and_then(|episode_id| {
+                episodes
+                    .iter()
+                    .find(|episode| &episode.id == episode_id)
+                    .and_then(|episode| episode.collection_id.as_deref())
+            });
+            if !crate::acquisition_workflow::submission_blocks_wanted_item(
+                submission,
+                row,
+                episode_collection_id,
+            ) {
+                return false;
+            }
+            let recorded_key = crate::quality::canonical_context::grabbed_release_record(row)
+                .and_then(|record| crate::admission::release_key(&record.title));
+            match (ignored_key, recorded_key) {
+                (Some(ignored), Some(recorded)) => ignored == recorded,
+                _ => true,
+            }
+        })
+        .collect()
+}
+
+/// An operator remove or ignore ends a download without an outcome, so the
+/// scopes it was claiming must stop saying `grabbed` for it. The scope row's
+/// claim never expires on its own; this transition is its release valve. The
+/// scope re-opens with its coverage pruned so it is searched again instead of
+/// waiting on a download nobody will finish.
+async fn reopen_scopes_released_by_ignored_submission(
+    app: &AppUseCase,
+    submission: &crate::DownloadSubmission,
+) {
+    let rows = match app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                title_id = %submission.title_id,
+                download_id = %submission.download_id,
+                "failed to load scope rows while releasing an ignored download's claims"
+            );
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let episodes = if rows.iter().any(|row| row.episode_id.is_some()) {
+        app.services
+            .catalog
+            .shows
+            .list_episodes_for_title(&submission.title_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    for row in scope_rows_released_by_ignored_submission(submission, &rows, &episodes) {
+        app.reopen_wanted_scope_for_acquisition(
+            row,
+            crate::acquisition::convergence::CoverageReopen::All,
+        )
+        .await;
+        tracing::info!(
+            wanted_item_id = %row.id,
+            title_id = %submission.title_id,
+            download_id = %submission.download_id,
+            release = ?submission.source_title,
+            "re-opened scope after an operator removed or ignored its download"
+        );
+    }
 }
 impl AppUseCase {
     pub async fn mark_tracked_download_failed(
@@ -3489,5 +3589,174 @@ mod poll_interval_tests {
             parse_poll_secs(Some("  3  "), DEFAULT),
             Duration::from_secs(3)
         );
+    }
+}
+
+#[cfg(test)]
+mod ignored_submission_scope_release_tests {
+    use super::scope_rows_released_by_ignored_submission;
+    use crate::{AcquisitionScopeState, AcquisitionScopeStatus, DownloadSubmission, SubmissionScope};
+
+    const SPHD: &str = "Desert.Warrior.2025.1080p.BluRay.DD+5.1.x264-SPHD";
+    const REMUX: &str = "Desert.Warrior.2025.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GRP";
+
+    fn ignored_submission(source_title: Option<&str>, scope: SubmissionScope) -> DownloadSubmission {
+        DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: "title-1".to_string(),
+            purpose: Default::default(),
+            facet: "movie".to_string(),
+            download_client_id: Some("sab".to_string()),
+            download_client_type: "sabnzbd".to_string(),
+            download_client_item_id: "nzo_1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: source_title.map(str::to_string),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope,
+        }
+    }
+
+    fn row(
+        id: &str,
+        status: AcquisitionScopeStatus,
+        grabbed_release: Option<&str>,
+        episode_id: Option<&str>,
+    ) -> AcquisitionScopeState {
+        AcquisitionScopeState {
+            id: id.to_string(),
+            title_id: "title-1".to_string(),
+            title_name: None,
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: episode_id.map(str::to_string),
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: if episode_id.is_some() { "episode" } else { "movie" }.to_string(),
+            last_search_at: None,
+            status,
+            grabbed_release: grabbed_release.map(str::to_string),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: "2026-08-29T14:00:00Z".to_string(),
+            updated_at: "2026-08-29T14:42:00Z".to_string(),
+        }
+    }
+
+    fn grabbed(title: &str) -> String {
+        format!(r#"{{"title":"{title}","score":400,"grabbed_at":"2026-08-29T14:42:00Z"}}"#)
+    }
+
+    fn released_ids(
+        submission: &DownloadSubmission,
+        rows: &[AcquisitionScopeState],
+    ) -> Vec<String> {
+        scope_rows_released_by_ignored_submission(submission, rows, &[])
+            .into_iter()
+            .map(|row| row.id.clone())
+            .collect()
+    }
+
+    /// The scope row's claim has no clock, so an operator remove or ignore is
+    /// what releases it: the row grabbed for this release goes back to wanted.
+    /// Case and separator differences between the submission's release name
+    /// and the row's recorded grab fold away.
+    #[test]
+    fn an_ignored_download_releases_the_row_grabbed_for_its_release() {
+        let submission = ignored_submission(
+            Some("desert warrior 2025 1080p bluray dd+5 1 x264-sphd"),
+            SubmissionScope::Title,
+        );
+        let rows = vec![row(
+            "scope-1",
+            AcquisitionScopeStatus::Grabbed,
+            Some(&grabbed(SPHD)),
+            None,
+        )];
+        assert_eq!(released_ids(&submission, &rows), vec!["scope-1".to_string()]);
+    }
+
+    /// A row grabbed for a *different* release belongs to that other download
+    /// (a replacement grabbed after this one) and must stay claimed.
+    #[test]
+    fn a_row_grabbed_for_another_release_stays_claimed() {
+        let submission = ignored_submission(Some(SPHD), SubmissionScope::Title);
+        let rows = vec![row(
+            "scope-1",
+            AcquisitionScopeStatus::Grabbed,
+            Some(&grabbed(REMUX)),
+            None,
+        )];
+        assert!(released_ids(&submission, &rows).is_empty());
+    }
+
+    /// Only a `grabbed` row is released: a completed scope already has its
+    /// file, a wanted one has nothing to release.
+    #[test]
+    fn only_grabbed_rows_are_released() {
+        let submission = ignored_submission(Some(SPHD), SubmissionScope::Title);
+        for status in [
+            AcquisitionScopeStatus::Wanted,
+            AcquisitionScopeStatus::Paused,
+            AcquisitionScopeStatus::Completed,
+        ] {
+            let rows = vec![row("scope-1", status, Some(&grabbed(SPHD)), None)];
+            assert!(released_ids(&submission, &rows).is_empty(), "{status:?}");
+        }
+    }
+
+    /// When the release cannot be compared (no recorded grab, or a submission
+    /// with no release name) the row is released rather than held forever.
+    #[test]
+    fn an_unreadable_comparison_releases_rather_than_holds() {
+        let rows = vec![row("scope-1", AcquisitionScopeStatus::Grabbed, None, None)];
+        let submission = ignored_submission(Some(SPHD), SubmissionScope::Title);
+        assert_eq!(released_ids(&submission, &rows), vec!["scope-1".to_string()]);
+
+        let rows = vec![row(
+            "scope-1",
+            AcquisitionScopeStatus::Grabbed,
+            Some(&grabbed(REMUX)),
+            None,
+        )];
+        let submission = ignored_submission(None, SubmissionScope::Title);
+        assert_eq!(released_ids(&submission, &rows), vec!["scope-1".to_string()]);
+    }
+
+    /// Scope membership still applies: an episode download releases its own
+    /// episode's row and leaves its siblings alone.
+    #[test]
+    fn an_episode_download_releases_only_its_own_episode_row() {
+        let submission = ignored_submission(
+            Some("Show.S01E01.1080p.WEB-DL-GRP"),
+            SubmissionScope::Episode {
+                episode_id: "ep-1".to_string(),
+            },
+        );
+        let rows = vec![
+            row(
+                "scope-ep-1",
+                AcquisitionScopeStatus::Grabbed,
+                Some(&grabbed("Show.S01E01.1080p.WEB-DL-GRP")),
+                Some("ep-1"),
+            ),
+            row(
+                "scope-ep-2",
+                AcquisitionScopeStatus::Grabbed,
+                Some(&grabbed("Show.S01E02.1080p.WEB-DL-GRP")),
+                Some("ep-2"),
+            ),
+        ];
+        assert_eq!(released_ids(&submission, &rows), vec!["scope-ep-1".to_string()]);
     }
 }

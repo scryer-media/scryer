@@ -738,9 +738,11 @@ impl AppUseCase {
     /// view says "nothing in flight" while Scryer's own scope row still says
     /// `grabbed` and names the release. Sonarr's `HistorySpecification`
     /// closes the same gap from its grab history; here the scope row is that
-    /// history. The claim lapses after [`GRABBED_RELEASE_CLAIM_HORIZON_SECONDS`]
-    /// or as soon as an outcome moves the scope out of `grabbed`, so a job the
-    /// client silently lost cannot hold a scope forever.
+    /// history. The claim lasts exactly as long as the row stays `grabbed`:
+    /// an import, a failure, a blocklist, or an operator remove/ignore moves
+    /// it out, and nothing else does. A job the client lost without a trace
+    /// is failed by absence reconciliation, which is the release valve; the
+    /// claim itself never expires on a clock.
     pub(crate) async fn grabbed_release_claims_for_scope(
         &self,
         title: &Title,
@@ -766,7 +768,6 @@ impl AppUseCase {
                 return Vec::new();
             }
         };
-        let now = chrono::Utc::now();
         states
             .iter()
             .filter(|state| {
@@ -776,7 +777,7 @@ impl AppUseCase {
                 )
             })
             .filter_map(|state| {
-                let record = grabbed_release_record(state, now)?;
+                let record = grabbed_release_record(state)?;
                 let facts = score_parked_release_title(
                     title,
                     &record.title,
@@ -894,12 +895,6 @@ pub(crate) struct IncumbentFacts {
     pub revision: i32,
 }
 
-/// How long a scope row's recorded grab keeps claiming the scope after the
-/// download client stops showing the job. Long enough to outlast any
-/// post-processing or poller lag; short enough that a job the client lost
-/// without a trace frees the scope by the next day.
-pub(crate) const GRABBED_RELEASE_CLAIM_HORIZON_SECONDS: i64 = 24 * 60 * 60;
-
 /// What a scope row remembers about its last grab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GrabbedReleaseRecord {
@@ -928,13 +923,12 @@ pub(crate) fn submission_scope_for_acquisition_scope_state(
     }
 }
 
-/// The grab a scope row still stands behind at `now`: the row is `grabbed`,
-/// names a release, and the grab is younger than
-/// [`GRABBED_RELEASE_CLAIM_HORIZON_SECONDS`]. A row without a grab timestamp
-/// falls back to its `updated_at`; a row with neither parseable claims nothing.
+/// The grab a scope row still stands behind: the row is `grabbed` and names a
+/// release. There is no age bound; a release is never fetched again until the
+/// row leaves `grabbed`. A row without a grab timestamp falls back to its
+/// `updated_at`; a row with neither parseable claims nothing.
 pub(crate) fn grabbed_release_record(
     state: &crate::AcquisitionScopeState,
-    now: chrono::DateTime<chrono::Utc>,
 ) -> Option<GrabbedReleaseRecord> {
     if state.status != crate::AcquisitionScopeStatus::Grabbed {
         return None;
@@ -957,10 +951,6 @@ pub(crate) fn grabbed_release_record(
         .and_then(serde_json::Value::as_str)
         .and_then(crate::quality_profile::parse_published_at)
         .or_else(|| crate::quality_profile::parse_published_at(&state.updated_at))?;
-    let age = now.signed_duration_since(grabbed_at).num_seconds();
-    if age > GRABBED_RELEASE_CLAIM_HORIZON_SECONDS {
-        return None;
-    }
     Some(GrabbedReleaseRecord {
         title,
         score,
@@ -1020,25 +1010,26 @@ mod grabbed_release_claim_tests {
                 r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-29T14:42:00Z","source":"rss_sync"}}"#
             )),
         );
-        let record = grabbed_release_record(&row, at("2026-08-29T16:49:00Z"))
-            .expect("a recent grab claims the scope");
+        let record = grabbed_release_record(&row).expect("a recent grab claims the scope");
         assert_eq!(record.title, REMUX);
         assert_eq!(record.score, 497);
         assert_eq!(record.grabbed_at, at("2026-08-29T14:42:00Z"));
     }
 
-    /// The claim is bounded: a job the client lost without telling anyone
-    /// frees the scope after the horizon instead of holding it forever.
+    /// The claim has no clock: a grab from days ago still claims the scope as
+    /// long as the row says `grabbed`. Only an outcome (import, failure,
+    /// blocklist, operator remove/ignore) releases it, never elapsed time.
     #[test]
-    fn a_grab_older_than_the_horizon_claims_nothing() {
+    fn a_grab_claims_for_as_long_as_the_row_stays_grabbed() {
         let row = state(
             AcquisitionScopeStatus::Grabbed,
             Some(&format!(
-                r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-29T14:42:00Z"}}"#
+                r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-01T14:42:00Z"}}"#
             )),
         );
-        assert!(grabbed_release_record(&row, at("2026-08-30T14:41:00Z")).is_some());
-        assert!(grabbed_release_record(&row, at("2026-08-30T14:43:00Z")).is_none());
+        let record = grabbed_release_record(&row).expect("an old grab still claims");
+        assert_eq!(record.title, REMUX);
+        assert_eq!(record.grabbed_at, at("2026-08-01T14:42:00Z"));
     }
 
     /// Any outcome that moves the row out of `grabbed` (import, failure,
@@ -1054,7 +1045,7 @@ mod grabbed_release_claim_tests {
         ] {
             let row = state(status, Some(&json));
             assert!(
-                grabbed_release_record(&row, at("2026-08-29T15:00:00Z")).is_none(),
+                grabbed_release_record(&row).is_none(),
                 "{status:?} must not claim"
             );
         }
@@ -1068,8 +1059,7 @@ mod grabbed_release_claim_tests {
             AcquisitionScopeStatus::Grabbed,
             Some(&format!(r#"{{"title":"{REMUX}","score":497}}"#)),
         );
-        let record = grabbed_release_record(&row, at("2026-08-29T15:00:00Z"))
-            .expect("updated_at stands in for grabbed_at");
+        let record = grabbed_release_record(&row).expect("updated_at stands in for grabbed_at");
         assert_eq!(record.grabbed_at, at("2026-08-29T14:42:00Z"));
 
         for raw in [
@@ -1080,7 +1070,7 @@ mod grabbed_release_claim_tests {
         ] {
             let row = state(AcquisitionScopeStatus::Grabbed, raw);
             assert!(
-                grabbed_release_record(&row, at("2026-08-29T15:00:00Z")).is_none(),
+                grabbed_release_record(&row).is_none(),
                 "{raw:?} carries no release to claim"
             );
         }
