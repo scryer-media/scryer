@@ -546,6 +546,9 @@ async fn active_binding_reconcile_query_is_client_scoped_recency_filtered_and_bo
         ObservationResolution::Conflict { .. } => {
             panic!("eligible observation should not conflict")
         }
+        ObservationResolution::BindingAlreadyEnded => {
+            panic!("eligible observation should not use an ended binding")
+        }
     };
     let recently_seen = match registry
         .resolve_observation(&observe("client-one", "recently-seen"))
@@ -554,6 +557,9 @@ async fn active_binding_reconcile_query_is_client_scoped_recency_filtered_and_bo
     {
         ObservationResolution::Resolved { download_id, .. } => download_id,
         ObservationResolution::Conflict { .. } => panic!("recent observation should not conflict"),
+        ObservationResolution::BindingAlreadyEnded => {
+            panic!("recent observation should not use an ended binding")
+        }
     };
     let other_client = match registry
         .resolve_observation(&observe("client-two", "other-client"))
@@ -564,6 +570,9 @@ async fn active_binding_reconcile_query_is_client_scoped_recency_filtered_and_bo
         ObservationResolution::Conflict { .. } => {
             panic!("other-client observation should not conflict")
         }
+        ObservationResolution::BindingAlreadyEnded => {
+            panic!("other-client observation should not use an ended binding")
+        }
     };
     let ended = match registry
         .resolve_observation(&observe("client-one", "already-ended"))
@@ -572,6 +581,9 @@ async fn active_binding_reconcile_query_is_client_scoped_recency_filtered_and_bo
     {
         ObservationResolution::Resolved { download_id, .. } => download_id,
         ObservationResolution::Conflict { .. } => panic!("ended observation should not conflict"),
+        ObservationResolution::BindingAlreadyEnded => {
+            panic!("ended observation should resolve before its binding ends")
+        }
     };
     registry
         .end_binding(&ended)

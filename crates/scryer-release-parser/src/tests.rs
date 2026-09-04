@@ -1296,7 +1296,10 @@ fn season_runs_without_range_hyphens_and_chained_ranges_declare_every_season() {
 
     // Non-consecutive bare seasons are not a range.
     let (seasons, is_series_pack, _, _) = pack_seasons("Quiet Meridian S01 S03 1080p WEB-DL");
-    assert!(!is_series_pack, "S01 S03 must not declare a pack: {seasons:?}");
+    assert!(
+        !is_series_pack,
+        "S01 S03 must not declare a pack: {seasons:?}"
+    );
 }
 
 #[test]
