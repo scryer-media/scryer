@@ -10,12 +10,12 @@ use scryer_application::challenge_solver as solver;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest,
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
-    DownloadClientFeedbackScope, DownloadClientPluginProvider, DownloadClientRemotePathMapping,
-    DownloadClientSnapshotOutcome, DownloadClientStatus, DownloadGrabResult, DownloadSourceKind,
-    IndexerConfigRepository, IndexerProxyConfigRepository, PersistedSeedGoals,
-    RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
-    SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
-    accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
+    DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
+    DownloadClientRemotePathMapping, DownloadClientSnapshotOutcome, DownloadClientStatus,
+    DownloadGrabResult, DownloadSourceKind, IndexerConfigRepository, IndexerProxyConfigRepository,
+    PersistedSeedGoals, RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals,
+    SeedGoalRequest, SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef,
+    StagedNzbStore, accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
     apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
     normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
 };
@@ -455,6 +455,11 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
         self.run_feedback_read(self.inner.list_queue()).await
     }
 
+    async fn list_queue_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.run_feedback_read(self.inner.list_queue_with_read_report())
+            .await
+    }
+
     async fn list_queue_with_feedback_scope(
         &self,
         scope: &DownloadClientFeedbackScope,
@@ -482,6 +487,11 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
         self.run_feedback_read(self.inner.list_history()).await
+    }
+
+    async fn list_history_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.run_feedback_read(self.inner.list_history_with_read_report())
+            .await
     }
 
     async fn list_history_with_feedback_scope(
@@ -993,7 +1003,33 @@ impl PrioritizedDownloadClientRouter {
         F: Fn(Arc<dyn DownloadClient>, DownloadClientFeedbackScope) -> Fut + Sync,
         Fut: Future<Output = AppResult<T>> + Send,
     {
+        self.poll_feedback_clients_with_skips(clients, read_kind, operation, read)
+            .await
+            .0
+    }
+
+    /// Runs one feedback read against every client, returning the per-client
+    /// results plus the ids of clients that were never asked (feedback backoff
+    /// or a client that could not be built from its config). Callers deciding
+    /// whether a download is *gone* need the skipped set: a client nobody
+    /// asked has not said "no".
+    async fn poll_feedback_clients_with_skips<T, F, Fut>(
+        &self,
+        clients: Vec<DownloadClientConfig>,
+        read_kind: DownloadFeedbackReadKind,
+        operation: &'static str,
+        read: F,
+    ) -> (
+        Vec<(DownloadClientConfig, Duration, AppResult<T>)>,
+        Vec<String>,
+    )
+    where
+        T: Send,
+        F: Fn(Arc<dyn DownloadClient>, DownloadClientFeedbackScope) -> Fut + Sync,
+        Fut: Future<Output = AppResult<T>> + Send,
+    {
         let category_snapshot = self.category_snapshot_store.snapshot().await;
+        let mut skipped_client_ids = Vec::new();
         let reads = clients
             .into_iter()
             .enumerate()
@@ -1006,6 +1042,7 @@ impl PrioritizedDownloadClientRouter {
                         remaining_ms = remaining.as_millis(),
                         "skipping download client feedback read during backoff"
                     );
+                    skipped_client_ids.push(config.id.clone());
                     return None;
                 }
 
@@ -1024,6 +1061,7 @@ impl PrioritizedDownloadClientRouter {
                             operation,
                             "skipping client for feedback read"
                         );
+                        skipped_client_ids.push(config.id.clone());
                         return None;
                     }
                 };
@@ -1044,10 +1082,99 @@ impl PrioritizedDownloadClientRouter {
             .collect::<Vec<_>>()
             .await;
         reads.sort_unstable_by_key(|(index, ..)| *index);
-        reads
+        let reads = reads
             .into_iter()
             .map(|(_, config, elapsed, result)| (config, elapsed, result))
-            .collect()
+            .collect();
+        (reads, skipped_client_ids)
+    }
+
+    /// The shared body of the aggregate queue/history reads: poll every
+    /// client, stamp items with the owning client, and report which clients
+    /// did not answer. Only an all-clients timeout is an error; every other
+    /// failure degrades that client to an empty contribution, so the
+    /// `unreadable_client_ids` in the listing are the only trace of it.
+    async fn poll_feedback_listing<F, Fut>(
+        &self,
+        clients: Vec<DownloadClientConfig>,
+        read_kind: DownloadFeedbackReadKind,
+        operation: &'static str,
+        read: F,
+    ) -> AppResult<DownloadClientListing>
+    where
+        F: Fn(Arc<dyn DownloadClient>, DownloadClientFeedbackScope) -> Fut + Sync,
+        Fut: Future<Output = AppResult<Vec<DownloadQueueItem>>> + Send,
+    {
+        let mut listing = DownloadClientListing {
+            polled_client_count: clients.len(),
+            ..DownloadClientListing::default()
+        };
+        if clients.is_empty() {
+            return Ok(listing);
+        }
+        let mut read_summary = FeedbackReadSummary::default();
+        let (reads, skipped_client_ids) = self
+            .poll_feedback_clients_with_skips(clients, read_kind, operation, read)
+            .await;
+        listing.unreadable_client_ids.extend(skipped_client_ids);
+        for (config, elapsed, result) in reads {
+            match result {
+                Ok(mut items) => {
+                    self.record_feedback_read_success(&config.id, read_kind);
+                    read_summary.record_success();
+                    for item in &mut items {
+                        item.client_id = config.id.clone();
+                        item.client_name = config.name.clone();
+                    }
+                    listing.items.extend(items);
+                }
+                Err(error) => {
+                    self.record_feedback_read_failure(&config.id, read_kind, elapsed);
+                    read_summary.record_error(&error);
+                    listing.unreadable_client_ids.push(config.id.clone());
+                    match read_kind {
+                        DownloadFeedbackReadKind::Queue => {
+                            tracing::warn!(client_id = %config.id, error = %error, "failed to list queue");
+                        }
+                        DownloadFeedbackReadKind::History => {
+                            tracing::warn!(client_id = %config.id, error = %error, "failed to list history");
+                        }
+                        _ => {
+                            tracing::warn!(client_id = %config.id, error = %error, operation, "download client feedback read failed");
+                        }
+                    }
+                }
+            }
+        }
+        read_summary.finish()?;
+        Ok(listing)
+    }
+
+    async fn queue_listing_excluding_client_types(
+        &self,
+        excluded_client_types: &[&str],
+    ) -> AppResult<DownloadClientListing> {
+        let clients = self
+            .list_enabled_clients_by_priority_excluding(excluded_client_types)
+            .await?;
+        self.poll_feedback_listing(
+            clients,
+            DownloadFeedbackReadKind::Queue,
+            "queue listing",
+            |client, scope| async move { client.list_queue_with_feedback_scope(&scope).await },
+        )
+        .await
+    }
+
+    async fn history_listing(&self) -> AppResult<DownloadClientListing> {
+        let clients = self.list_enabled_clients_by_priority().await?;
+        self.poll_feedback_listing(
+            clients,
+            DownloadFeedbackReadKind::History,
+            "history listing",
+            |client, scope| async move { client.list_history_with_feedback_scope(&scope).await },
+        )
+        .await
     }
 
     fn record_feedback_read_success(&self, client_id: &str, kind: DownloadFeedbackReadKind) {
@@ -3424,46 +3551,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         &self,
         excluded_client_types: &[&str],
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        let clients = self
-            .list_enabled_clients_by_priority_excluding(excluded_client_types)
-            .await?;
-        if clients.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut all_items = Vec::new();
-        let mut read_summary = FeedbackReadSummary::default();
-        let reads = self
-            .poll_feedback_clients(
-                clients,
-                DownloadFeedbackReadKind::Queue,
-                "queue listing",
-                |client, scope| async move { client.list_queue_with_feedback_scope(&scope).await },
-            )
-            .await;
-        for (config, elapsed, result) in reads {
-            match result {
-                Ok(mut items) => {
-                    self.record_feedback_read_success(&config.id, DownloadFeedbackReadKind::Queue);
-                    read_summary.record_success();
-                    for item in &mut items {
-                        item.client_id = config.id.clone();
-                        item.client_name = config.name.clone();
-                    }
-                    all_items.extend(items);
-                }
-                Err(error) => {
-                    self.record_feedback_read_failure(
-                        &config.id,
-                        DownloadFeedbackReadKind::Queue,
-                        elapsed,
-                    );
-                    read_summary.record_error(&error);
-                    tracing::warn!(client_id = %config.id, error = %error, "failed to list queue");
-                }
-            }
-        }
-        read_summary.finish()?;
-        Ok(all_items)
+        Ok(self
+            .queue_listing_excluding_client_types(excluded_client_types)
+            .await?
+            .items)
+    }
+
+    async fn list_queue_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.queue_listing_excluding_client_types(&[]).await
     }
 
     async fn list_queue_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadQueueItem>> {
@@ -3515,49 +3610,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let clients = self.list_enabled_clients_by_priority().await?;
-        if clients.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut all_items = Vec::new();
-        let mut read_summary = FeedbackReadSummary::default();
-        let reads = self
-            .poll_feedback_clients(
-                clients,
-                DownloadFeedbackReadKind::History,
-                "history listing",
-                |client, scope| async move {
-                    client.list_history_with_feedback_scope(&scope).await
-                },
-            )
-            .await;
-        for (config, elapsed, result) in reads {
-            match result {
-                Ok(mut items) => {
-                    self.record_feedback_read_success(
-                        &config.id,
-                        DownloadFeedbackReadKind::History,
-                    );
-                    read_summary.record_success();
-                    for item in &mut items {
-                        item.client_id = config.id.clone();
-                        item.client_name = config.name.clone();
-                    }
-                    all_items.extend(items);
-                }
-                Err(error) => {
-                    self.record_feedback_read_failure(
-                        &config.id,
-                        DownloadFeedbackReadKind::History,
-                        elapsed,
-                    );
-                    read_summary.record_error(&error);
-                    tracing::warn!(client_id = %config.id, error = %error, "failed to list history");
-                }
-            }
-        }
-        read_summary.finish()?;
-        Ok(all_items)
+        Ok(self.history_listing().await?.items)
+    }
+
+    async fn list_history_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.history_listing().await
     }
 
     async fn list_recent_activity(&self, limit: usize) -> AppResult<Vec<DownloadQueueItem>> {
@@ -9760,6 +9817,94 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(first[0].download_client_item_id, "fast");
         assert_eq!(second[0].download_client_item_id, "fast");
+    }
+
+    /// The aggregate read degrades a failing client to an empty contribution
+    /// so one dead client cannot blind the others, which leaves the report as
+    /// the only trace of it: a client that errored and a client skipped while
+    /// in feedback backoff are both named as unreadable.
+    #[tokio::test]
+    async fn read_report_names_failing_and_backed_off_clients() {
+        let failing_client = Arc::new(FailingQueueDownloadClient::default());
+        let healthy_client = Arc::new(MockDownloadClient::default());
+
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![
+                    ("failing".to_string(), failing_client.clone()),
+                    ("healthy".to_string(), healthy_client.clone()),
+                ],
+            });
+
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("failing", "Failing", "qbittorrent", 0),
+                    test_config("healthy", "Healthy", "qbittorrent", 10),
+                ],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let queue = router
+            .list_queue_with_read_report()
+            .await
+            .expect("a partial read is not an error");
+        assert_eq!(queue.polled_client_count, 2);
+        assert_eq!(queue.unreadable_client_ids, vec!["failing".to_string()]);
+        assert!(!queue.all_unreadable());
+
+        // The failure armed backoff: the next read skips the client without
+        // asking it, and it is still reported as unreadable.
+        let queue = router.list_queue_with_read_report().await.unwrap();
+        assert_eq!(queue.unreadable_client_ids, vec!["failing".to_string()]);
+        assert_eq!(failing_client.list_queue_call_count(), 1);
+
+        // History: the failing client has no history read at all.
+        let history = router.list_history_with_read_report().await.unwrap();
+        assert_eq!(history.polled_client_count, 2);
+        assert_eq!(history.unreadable_client_ids, vec!["failing".to_string()]);
+    }
+
+    /// A read nobody answered is reported as such without becoming an error:
+    /// the plain listing keeps its "empty, not Err" shape for every caller
+    /// that never asked for the report.
+    #[tokio::test]
+    async fn read_report_marks_a_read_nobody_answered_without_erroring() {
+        let failing_client = Arc::new(FailingQueueDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("failing".to_string(), failing_client.clone())],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("failing", "Failing", "qbittorrent", 0)],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let queue = router
+            .list_queue_with_read_report()
+            .await
+            .expect("non-timeout failures degrade instead of erroring");
+        assert!(queue.all_unreadable());
+        assert!(queue.items.is_empty());
+        assert!(router.list_queue().await.unwrap().is_empty());
+        assert!(
+            router
+                .list_history_with_read_report()
+                .await
+                .unwrap()
+                .all_unreadable()
+        );
     }
 
     #[tokio::test]

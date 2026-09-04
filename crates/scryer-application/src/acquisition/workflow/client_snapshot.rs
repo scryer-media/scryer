@@ -46,7 +46,43 @@ pub(crate) struct DownloadClientSnapshot {
     /// detection reads only history, so an unobservable history simply yields
     /// no failures rather than acting on an empty map.
     history_listing_failed: bool,
+    /// Download client IDs whose queue or history could not be read this
+    /// cycle: the read errored, timed out, or was skipped during feedback
+    /// backoff. A submission on such a client cannot be proven gone, so it
+    /// keeps its claim on the scope until the client answers again or the
+    /// tracked ledger settles it.
+    unreadable_client_ids: std::collections::HashSet<String>,
 }
+
+/// Folds one leg's read report into the snapshot: every client that did not
+/// answer is remembered, and a leg nobody answered is marked failed exactly
+/// like a hard listing error. Returns the items that were read.
+fn note_unreadable_clients(
+    listing: crate::DownloadClientListing,
+    leg: &'static str,
+    unreadable_client_ids: &mut std::collections::HashSet<String>,
+    listing_failed: &mut bool,
+) -> Vec<scryer_domain::DownloadQueueItem> {
+    if !listing.unreadable_client_ids.is_empty() {
+        if listing.all_unreadable() {
+            *listing_failed = true;
+            warn!(
+                leg,
+                clients = ?listing.unreadable_client_ids,
+                "download client snapshot: no download client answered; treating the listing as unobservable"
+            );
+        } else {
+            warn!(
+                leg,
+                clients = ?listing.unreadable_client_ids,
+                "download client snapshot: some download clients did not answer; their downloads keep their claims"
+            );
+        }
+        unreadable_client_ids.extend(listing.unreadable_client_ids);
+    }
+    listing.items
+}
+
 fn download_client_item_identity(client_id: Option<&str>, item_id: &str) -> String {
     let client_id = client_id
         .map(str::trim)
@@ -307,11 +343,24 @@ impl DownloadClientSnapshot {
         let mut failed_by_download_id = std::collections::HashMap::new();
         let mut queue_listing_failed = false;
         let mut history_listing_failed = false;
+        let mut unreadable_client_ids = std::collections::HashSet::new();
         let now = chrono::Utc::now();
 
         // Fetch current queue
-        match app.services.integrations.download_client.list_queue().await {
-            Ok(queue) => {
+        match app
+            .services
+            .integrations
+            .download_client
+            .list_queue_with_read_report()
+            .await
+        {
+            Ok(listing) => {
+                let queue = note_unreadable_clients(
+                    listing,
+                    "queue",
+                    &mut unreadable_client_ids,
+                    &mut queue_listing_failed,
+                );
                 for item in &queue {
                     match item.state {
                         DownloadQueueState::Queued
@@ -398,10 +447,16 @@ impl DownloadClientSnapshot {
             .services
             .integrations
             .download_client
-            .list_history()
+            .list_history_with_read_report()
             .await
         {
-            Ok(history) => {
+            Ok(listing) => {
+                let history = note_unreadable_clients(
+                    listing,
+                    "history",
+                    &mut unreadable_client_ids,
+                    &mut history_listing_failed,
+                );
                 for item in &history {
                     if item.state == DownloadQueueState::Completed {
                         note_completed_item(
@@ -478,6 +533,17 @@ impl DownloadClientSnapshot {
             failed_by_download_id,
             queue_listing_failed,
             history_listing_failed,
+            unreadable_client_ids,
+        }
+    }
+
+    /// Whether the client holding this submission could not be read this
+    /// cycle. A submission that names no client is judged against every
+    /// client, so any unreadable client makes its absence unprovable.
+    pub(crate) fn client_unreadable(&self, client_id: Option<&str>) -> bool {
+        match client_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(client_id) => self.unreadable_client_ids.contains(client_id),
+            None => !self.unreadable_client_ids.is_empty(),
         }
     }
 
@@ -627,6 +693,11 @@ fn submission_is_completed(
 /// still downloading: the bytes exist and are on their way to becoming the
 /// file. Without the completed leg, every scope is unprotected for the whole
 /// import window and an automatic search grabs a second copy beside it.
+///
+/// The same holds when the submission's client could not be read at all: the
+/// aggregate router degrades a dead or backed-off client to an empty view, so
+/// "not in the queue and not in history" is only evidence of absence when the
+/// client actually answered. An unreadable client keeps its claims.
 pub(crate) fn submission_is_live_claim(
     submission: &DownloadSubmission,
     tracked_state: Option<scryer_domain::TrackedDownloadState>,
@@ -635,7 +706,8 @@ pub(crate) fn submission_is_live_claim(
     submission_is_queued(
         tracked_state,
         submission_is_active(submission, dl_snapshot)
-            || submission_is_completed(submission, dl_snapshot),
+            || submission_is_completed(submission, dl_snapshot)
+            || dl_snapshot.client_unreadable(submission.download_client_id.as_deref()),
     )
 }
 /// Check grabbed wanted items against the download client. If a grabbed
@@ -1925,6 +1997,7 @@ mod client_snapshot_tests {
             failed_by_download_id: std::collections::HashMap::new(),
             queue_listing_failed,
             history_listing_failed,
+            unreadable_client_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -2269,5 +2342,68 @@ mod client_snapshot_tests {
         assert_eq!(strip_nzb_suffix("Show.nzb.nzb"), "Show.nzb");
         assert_eq!(strip_nzb_suffix(".nzb"), "");
         assert_eq!(strip_nzb_suffix("nzb"), "nzb");
+    }
+
+    /// **Unreadable client.** The aggregate router degrades a dead client to
+    /// an empty listing rather than an error, so "absent from queue and
+    /// history" is only proof of absence when that client actually answered.
+    /// A submission on a client that did not answer keeps its claim; one on a
+    /// client that did answer is judged on what it said.
+    #[test]
+    fn a_submission_on_an_unreadable_client_keeps_its_claim() {
+        use scryer_domain::TrackedDownloadState as State;
+
+        let submission = live_claim_submission("nzo_1");
+        let mut snap = snapshot(false, false);
+        assert!(!submission_is_live_claim(&submission, None, &snap));
+
+        snap.unreadable_client_ids.insert("client-1".to_string());
+        assert!(snap.client_unreadable(Some("client-1")));
+        assert!(!snap.client_unreadable(Some("client-2")));
+        // A submission that names no client is judged against every client.
+        assert!(snap.client_unreadable(None));
+        assert!(submission_is_live_claim(&submission, None, &snap));
+
+        let mut other_client = live_claim_submission("nzo_2");
+        other_client.download_client_id = Some("client-2".to_string());
+        assert!(!submission_is_live_claim(&other_client, None, &snap));
+
+        // The tracked ledger still settles it: a terminal state releases the
+        // claim even while the client stays unreadable.
+        for state in [State::Imported, State::Failed, State::Ignored] {
+            assert!(!submission_is_live_claim(&submission, Some(state), &snap));
+        }
+    }
+
+    /// A leg nobody answered is as blind as a hard listing error; a leg some
+    /// clients answered stays observable but remembers who did not.
+    #[test]
+    fn read_reports_fold_into_listing_failure_and_unreadable_clients() {
+        fn listing(unreadable: &[&str], polled: usize) -> crate::DownloadClientListing {
+            crate::DownloadClientListing {
+                items: Vec::new(),
+                unreadable_client_ids: unreadable.iter().map(|id| id.to_string()).collect(),
+                polled_client_count: polled,
+            }
+        }
+
+        let mut unreadable = std::collections::HashSet::new();
+        let mut failed = false;
+        let items = note_unreadable_clients(listing(&["sab"], 1), "history", &mut unreadable, &mut failed);
+        assert!(items.is_empty());
+        assert!(failed, "a leg nobody answered is unobservable");
+        assert!(unreadable.contains("sab"));
+
+        let mut unreadable = std::collections::HashSet::new();
+        let mut failed = false;
+        note_unreadable_clients(listing(&["sab"], 2), "queue", &mut unreadable, &mut failed);
+        assert!(!failed, "one answering client keeps the leg observable");
+        assert!(unreadable.contains("sab"));
+
+        let mut unreadable = std::collections::HashSet::new();
+        let mut failed = false;
+        note_unreadable_clients(listing(&[], 0), "queue", &mut unreadable, &mut failed);
+        assert!(!failed, "no configured client is nothing to be blind about");
+        assert!(unreadable.is_empty());
     }
 }

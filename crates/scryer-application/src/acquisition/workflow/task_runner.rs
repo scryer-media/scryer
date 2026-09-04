@@ -4384,6 +4384,7 @@ mod task_runner_tests {
             failed_by_download_id: Default::default(),
             queue_listing_failed: false,
             history_listing_failed: false,
+            unreadable_client_ids: Default::default(),
         };
         if completed {
             snapshot.completed_client_ids.insert(key);
@@ -4406,6 +4407,7 @@ mod task_runner_tests {
             failed_by_download_id: Default::default(),
             queue_listing_failed: true,
             history_listing_failed: false,
+            unreadable_client_ids: Default::default(),
         }
     }
 
