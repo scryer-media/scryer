@@ -41,6 +41,7 @@ pub(crate) struct PluginHttpHost {
 struct PluginHttpHostState {
     runtime: PluginHttpRuntime,
     allowed_hosts: Option<Vec<String>>,
+    egress_policy: scryer_outbound_http::PluginEgressPolicy,
     proxy_policy: Option<ProxyPolicy>,
     destination_cooldown_key: Option<scryer_outbound_http::DestinationKey>,
     max_http_response_bytes: Option<u64>,
@@ -200,6 +201,7 @@ impl PluginHttpWorkerRuntime {
         &mut self,
         runtime: &PluginHttpRuntime,
         request_url: &str,
+        egress_policy: &scryer_outbound_http::PluginEgressPolicy,
     ) -> HostResult<Client> {
         let key = plugin_http_request_client_key(request_url)?;
         let extra_ca_bundle_pem = self.sync_trust_bundle(runtime)?;
@@ -209,10 +211,11 @@ impl PluginHttpWorkerRuntime {
             return Ok(cached.client.clone());
         }
 
-        let client = scryer_outbound_http::prepare_plugin_blocking_http_target(
+        let client = scryer_outbound_http::prepare_plugin_blocking_http_target_with_policy(
             request_url,
             &extra_ca_bundle_pem,
             "plugin HTTP",
+            egress_policy,
         )
         .map(scryer_outbound_http::PinnedPluginBlockingHttpTarget::into_client)
         .map_err(|error| error.to_string())?;
@@ -293,6 +296,7 @@ fn worker_response_timeout(timeout: Duration) -> Duration {
 impl PluginHttpHost {
     pub(crate) fn new(
         allowed_hosts: Vec<String>,
+        egress_policy: scryer_outbound_http::PluginEgressPolicy,
         proxy_policy: Option<ProxyPolicy>,
         destination_cooldown_key: Option<String>,
         max_http_response_bytes: Option<u64>,
@@ -301,6 +305,7 @@ impl PluginHttpHost {
             state: Arc::new(Mutex::new(PluginHttpHostState {
                 runtime: shared_plugin_http_runtime(),
                 allowed_hosts: Some(allowed_hosts),
+                egress_policy,
                 proxy_policy,
                 destination_cooldown_key: destination_cooldown_key
                     .map(scryer_outbound_http::DestinationKey::from),
@@ -502,6 +507,7 @@ impl PluginHttpHost {
         let (
             runtime,
             allowed_hosts,
+            egress_policy,
             proxy_policy,
             destination_cooldown_key,
             max_http_response_bytes,
@@ -515,6 +521,7 @@ impl PluginHttpHost {
             (
                 host_state.runtime.clone(),
                 host_state.allowed_hosts.clone(),
+                host_state.egress_policy.clone(),
                 host_state.proxy_policy.clone(),
                 host_state.destination_cooldown_key.clone(),
                 host_state.max_http_response_bytes,
@@ -559,7 +566,15 @@ impl PluginHttpHost {
             worker_runtime
                 .lock()
                 .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-                .pinned_request_client(&runtime, &request.url)?
+                .pinned_request_client(&runtime, &request.url, &egress_policy)
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        plugin = plugin_id,
+                        url = %solver::sanitized_url_for_log(&request.url),
+                        error = %error,
+                        "plugin HTTP destination rejected"
+                    );
+                })?
         };
         let started_at = Instant::now();
         let request_is_get = request
@@ -1461,6 +1476,7 @@ mod tests {
         let body = tokio::task::spawn_blocking(move || {
             let host = PluginHttpHost::new(
                 vec!["indexer.example".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
                 Some(policy),
                 None,
                 Some(64 * 1024),
@@ -1512,6 +1528,7 @@ mod tests {
         let error = tokio::task::spawn_blocking(move || {
             let host = PluginHttpHost::new(
                 vec!["indexer.example".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
                 Some(policy),
                 None,
                 Some(64 * 1024),
@@ -1571,6 +1588,7 @@ mod tests {
         let response = tokio::task::spawn_blocking(move || {
             let host = PluginHttpHost::new(
                 vec!["127.0.0.1".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
                 Some(policy),
                 None,
                 Some(64 * 1024),
@@ -1640,6 +1658,7 @@ mod tests {
             // a name only the tunnel can resolve.
             let host = PluginHttpHost::new(
                 vec!["origin.tunnel.test".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
                 Some(policy),
                 None,
                 Some(64 * 1024),
@@ -1709,6 +1728,7 @@ mod tests {
         let error = tokio::task::spawn_blocking(move || {
             let host = PluginHttpHost::new(
                 vec!["127.0.0.1".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
                 Some(policy),
                 None,
                 Some(64 * 1024),
@@ -1859,7 +1879,13 @@ mod tests {
 
         let server = MockServer::start().await;
         let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
-        let host = PluginHttpHost::new(vec!["127.0.0.1".to_string()], None, None, Some(64 * 1024));
+        let host = PluginHttpHost::new(
+            vec!["127.0.0.1".to_string()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
         let context = || IndexerErrorCaptureContext {
             indexer_id: "indexer-1".to_string(),
             indexer_name: "Test indexer".to_string(),
@@ -1947,7 +1973,13 @@ mod tests {
     #[test]
     fn capture_scope_records_failed_operations_without_an_http_response() {
         let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
-        let host = PluginHttpHost::new(vec![], None, None, Some(64 * 1024));
+        let host = PluginHttpHost::new(
+            vec![],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
         host.begin_indexer_error_capture(IndexerErrorCaptureContext {
             indexer_id: "indexer-1".to_string(),
             indexer_name: "Test indexer".to_string(),
@@ -2025,6 +2057,7 @@ mod tests {
             for child in 0..11 {
                 let host = PluginHttpHost::new(
                     vec!["127.0.0.1".to_string()],
+                    scryer_outbound_http::PluginEgressPolicy::default(),
                     None,
                     Some(format!("managed-indexer:parent:{child}")),
                     Some(64 * 1024),
@@ -2070,7 +2103,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let host = PluginHttpHost::new(vec!["127.0.0.1".to_string()], None, None, Some(64 * 1024));
+        let host = PluginHttpHost::new(
+            vec!["127.0.0.1".to_string()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            None,
+            None,
+            Some(64 * 1024),
+        );
         for query in ["first", "second"] {
             let body = host
                 .request(

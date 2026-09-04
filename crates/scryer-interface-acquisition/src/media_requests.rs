@@ -2,7 +2,7 @@ use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_domain::{ExternalId, TitleExternalRating, TitleRatingSummary};
 
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, to_gql_error};
-use scryer_interface_media::mappers::from_media_request;
+use scryer_interface_media::mappers::{from_media_request, monitor_selection_from_input};
 use scryer_interface_media::types::{
     ApproveMediaRequestInput, ApproveMediaRequestPayload, MediaRequestActionPayload,
     MediaRequestPayload, SubmitMediaRequestInput, SubmitMediaRequestPayload,
@@ -62,6 +62,9 @@ impl MediaRequestMutations {
                     requested_monitor_type: input
                         .requested_monitor_type
                         .map(|value| value.as_tag_value().to_string()),
+                    requested_monitor_selection: input
+                        .requested_monitor_selection
+                        .map(monitor_selection_from_input),
                     external_ids: input
                         .external_ids
                         .into_iter()
@@ -98,6 +101,7 @@ impl MediaRequestMutations {
                 input
                     .monitor_type
                     .map(|value| value.as_tag_value().to_string()),
+                input.monitor_selection.map(monitor_selection_from_input),
             )
             .await
             .map_err(to_gql_error)?;
@@ -149,6 +153,9 @@ impl MediaRequestMutations {
                     requested_monitor_type: input
                         .requested_monitor_type
                         .map(|value| value.as_tag_value().to_string()),
+                    requested_monitor_selection: input
+                        .requested_monitor_selection
+                        .map(monitor_selection_from_input),
                 },
             )
             .await

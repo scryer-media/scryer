@@ -73,6 +73,7 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
             redirectUris
             enabled
             source
+            kind
           }
         }
         "#,
@@ -90,18 +91,57 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
     assert_eq!(client["redirectUris"], json!([REDIRECT_URI]));
     assert_eq!(client["enabled"], true);
     assert_eq!(client["source"], "CUSTOM");
+    // An omitted kind registers a generic application, never the Jellyfin plugin.
+    assert_eq!(client["kind"], "CUSTOM");
+
+    // The plugin identifies itself at registration; nothing downstream infers it from the callback.
+    let plugin = schema_exec(
+        &ctx,
+        r#"
+        mutation CreateJellyfinPluginOAuthClientRegistration {
+          createOauthClientRegistration(input: {
+            displayName: "Jellyfin Scryer plugin"
+            redirectUris: ["https://jellyfin.example.test/Scryer/Auth/Callback"]
+            kind: JELLYFIN_PLUGIN
+          }) {
+            clientId
+            kind
+          }
+        }
+        "#,
+        Some(admin.clone()),
+    )
+    .await;
+    assert_no_errors(&plugin);
+    let plugin_client_id = plugin["data"]["createOauthClientRegistration"]["clientId"]
+        .as_str()
+        .expect("generated plugin OAuth client ID")
+        .to_string();
+    assert_eq!(
+        plugin["data"]["createOauthClientRegistration"]["kind"],
+        "JELLYFIN_PLUGIN"
+    );
 
     let listed = schema_exec(
         &ctx,
         r#"
         query OAuthClientRegistrations {
-          oauthClientRegistrations { clientId source }
+          oauthClientRegistrations { clientId source kind }
         }
         "#,
         Some(admin.clone()),
     )
     .await;
     assert_no_errors(&listed);
+    // The stored kind survives the round trip through the registration table.
+    assert!(
+        listed["data"]["oauthClientRegistrations"]
+            .as_array()
+            .expect("OAuth client registration list")
+            .iter()
+            .any(|client| client["clientId"] == plugin_client_id.as_str()
+                && client["kind"] == "JELLYFIN_PLUGIN")
+    );
     let auth_session_version = ctx
         .app
         .current_actor_auth_session_version(&admin)

@@ -1135,6 +1135,20 @@ export const deleteMediaFilePreviewQuery = `query DeleteMediaFilePreview($fileId
   }
 }`;
 
+export const deleteEpisodeFilesPreviewQuery = `query DeleteEpisodeFilesPreview($input: DeleteEpisodeFilesPreviewInput!) {
+  deleteEpisodeFilesPreview(input: $input) {
+    preview {${DELETE_PREVIEW_FIELDS}
+    }
+    items {
+      fileId
+      episodeId
+      error
+    }
+    fileCount
+    failedCount
+  }
+}`;
+
 export const deleteExternalSubtitlePreviewQuery = `query DeleteExternalSubtitlePreview($externalSubtitleId: ID!) {
   deleteExternalSubtitlePreview(externalSubtitleId: $externalSubtitleId) {${DELETE_PREVIEW_FIELDS}
   }
@@ -2740,6 +2754,7 @@ export const oauthClientRegistrationsQuery = `query OAuthClientRegistrations {
     redirectUris
     enabled
     source
+    kind
   }
 }`;
 
@@ -3813,6 +3828,17 @@ export const metadataSeriesQuery = `query MetadataSeries($input: MetadataSeriesI
       label
       episodeType
     }
+    animeMovies {
+      name
+      year
+      associationConfidence
+      continuityStatus
+      placement
+      externalIds {
+        source
+        value
+      }
+    }
     episodes {
       tvdbId
       episodeNumber
@@ -3991,6 +4017,7 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     sortTitle
     slug
     posterUrl
+    backgroundUrl
     year
     overview
     runtimeMinutes
@@ -4009,6 +4036,16 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     requestedQualityProfileId
     requestedQualityProfileName
     requestedMonitorType
+    requestedMonitorSelection {
+      seasonNumbers
+      seriesMovies {
+        name
+        externalIds {
+          source
+          value
+        }
+      }
+    }
     resolvedByUserId
     resolvedAt
     createdTitleId
@@ -4041,6 +4078,7 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     sortTitle
     slug
     posterUrl
+    backgroundUrl
     year
     overview
     runtimeMinutes
@@ -4059,6 +4097,16 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     requestedQualityProfileId
     requestedQualityProfileName
     requestedMonitorType
+    requestedMonitorSelection {
+      seasonNumbers
+      seriesMovies {
+        name
+        externalIds {
+          source
+          value
+        }
+      }
+    }
     resolvedByUserId
     resolvedAt
     createdTitleId

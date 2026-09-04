@@ -425,7 +425,8 @@ pub(crate) fn disposition_for(
         Reason::NotAnUpgrade { .. }
         | Reason::LowerQualityTier
         | Reason::LowerRevision { .. }
-        | Reason::QueuedEqualOrBetter { .. } => RejectionDisposition::Skip,
+        | Reason::QueuedEqualOrBetter { .. }
+        | Reason::QueuedSameRelease { .. } => RejectionDisposition::Skip,
         // Reopening a scope whose profile forbids upgrades is pure churn: the
         // search would find candidates the same guard refuses.
         Reason::UpgradesDisabled
@@ -522,7 +523,7 @@ pub(crate) fn admission_rejection_to_import(
                  profile disallows upgrades"
             ),
         ),
-        Reason::QueuedEqualOrBetter { .. } => (
+        Reason::QueuedEqualOrBetter { .. } | Reason::QueuedSameRelease { .. } => (
             "already_imported",
             ImportSkipReason::AlreadyImported,
             rejection.message.clone(),

@@ -14,6 +14,7 @@ pub(crate) struct ResolvedTitleOptionsInput {
     pub inter_season_movies: Option<Option<bool>>,
     pub filler_policy: Option<Option<String>>,
     pub recap_policy: Option<Option<String>>,
+    pub monitor_selection: Option<Option<scryer_domain::MonitorSelection>>,
 }
 
 impl ResolvedTitleOptionsInput {
@@ -27,6 +28,7 @@ impl ResolvedTitleOptionsInput {
             inter_season_movies: self.inter_season_movies,
             filler_policy: self.filler_policy.clone(),
             recap_policy: self.recap_policy.clone(),
+            monitor_selection: self.monitor_selection.clone(),
         }
     }
 }

@@ -123,6 +123,7 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
             display_name: "Disabled client".to_string(),
             redirect_uris: vec!["https://example.test/oauth/callback".to_string()],
             enabled: false,
+            kind: scryer_application::OAuthClientKind::Custom,
             created_at: now,
             updated_at: now,
         })
@@ -279,6 +280,7 @@ async fn authorization_code_exchange_rechecks_the_registered_redirect_uri() {
             display_name: "Redirect-changing client".to_string(),
             redirect_uris: vec![approved_redirect.to_string()],
             enabled: true,
+            kind: scryer_application::OAuthClientKind::Custom,
             created_at: now,
             updated_at: now,
         })
@@ -316,6 +318,7 @@ async fn authorization_code_exchange_rechecks_the_registered_redirect_uri() {
                 display_name: "Redirect-changing client".to_string(),
                 redirect_uris: vec!["https://example.test/new-callback".to_string()],
                 enabled: true,
+                kind: scryer_application::OAuthClientKind::Custom,
                 created_at: now,
                 updated_at: now + chrono::Duration::seconds(1),
             },

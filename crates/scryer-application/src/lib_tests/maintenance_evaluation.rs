@@ -1286,6 +1286,8 @@ async fn provenance_app() -> (EvaluationFixture, Arc<MockMediaRequestRepo>) {
 fn approved_request(title_id: &str, submitter: &str, seconder: &str) -> MediaRequest {
     let now = Utc::now();
     MediaRequest {
+        background_url: None,
+        requested_monitor_selection: None,
         rating_summary: scryer_domain::TitleRatingSummary::default(),
         id: Id::new().0,
         library_id: "library-1".to_string(),

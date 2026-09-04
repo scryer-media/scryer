@@ -100,9 +100,9 @@ pub(crate) use acquisition::release_search as acquisition_release_search;
 pub(crate) use acquisition::rss as app_usecase_rss;
 pub(crate) use acquisition::search_queries as acquisition_search_queries;
 pub(crate) use catalog::catalog as catalog_workflow;
-pub(crate) use catalog::discovery as app_usecase_discovery;
 pub(crate) use catalog::facets::handler as facet_handler;
 pub(crate) use catalog::helpers as catalog_helpers;
+pub(crate) use catalog::release_search as app_usecase_discovery;
 pub(crate) use events::activity;
 pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
@@ -170,8 +170,8 @@ pub use notifications::runtime::{
 pub use oauth::{
     CreateOAuthClientRegistration, OAUTH_E2E_CLIENT_ENV, OAUTH_E2E_CLIENT_ID,
     OAUTH_GENERIC_NATIVE_CLIENT_ID, OAUTH_JELLYFIN_LINK_SCOPE, OAUTH_LIBRARY_SCOPE,
-    OAuthClientInfo, OAuthClientSource, OAuthConnectedAppSummary, OAuthIssuedCode, OAuthTokenPair,
-    UpdateOAuthClientRegistration,
+    OAuthClientInfo, OAuthClientKind, OAuthClientSource, OAuthConnectedAppSummary, OAuthIssuedCode,
+    OAuthTokenPair, UpdateOAuthClientRegistration,
 };
 pub use plugins::catalog::blake3_digest as plugin_wasm_blake3_digest;
 pub use plugins::catalog::decompress_zstd as plugin_wasm_decompress_zstd;
@@ -258,7 +258,6 @@ pub(crate) use audio_requirements::{
     required_audio_languages_match, resolve_required_audio_requirements,
     title_audio_language_context,
 };
-pub use catalog::discovery::release_candidate_fingerprint;
 pub use catalog::facets::handler::{
     FacetHandler, HydrationResult, movie_to_hydration_result, series_to_hydration_result,
 };
@@ -271,9 +270,13 @@ pub use catalog::interactive_release_search::{
     InteractiveReleaseSearchState, InteractiveSearchArtifactBundle,
     InteractiveSearchArtifactTarget, InteractiveSearchKind, QueueUnlinkedReleaseOutcome,
 };
+pub use catalog::release_search::release_candidate_fingerprint;
 pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;
-pub use catalog::workflow::{DeleteTitlesJobAccepted, DeleteTitlesJobItem, DeleteTitlesJobRequest};
+pub use catalog::workflow::{
+    DeleteEpisodeFilesJobAccepted, DeleteTitlesJobAccepted, DeleteTitlesJobItem,
+    DeleteTitlesJobRequest,
+};
 pub use contracts::{
     AcquisitionScopeStatesQuery, ActivityWindowCounts, AudioStreamDetail,
     CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator, CollectionUpdate,
@@ -284,15 +287,16 @@ pub use contracts::{
     EpisodeUpdate, ImportArtifact, IndexerConfigSyncResult, IndexerConfigUpdate,
     IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
     IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
-    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult,
-    InsertMediaFileInput, ManagedIndexerChildPlan, ManagedIndexerRoutingScope,
-    MediaAnalysisOutcome, MediaFileAnalysis, MediaFileCatalogDisposition, MediaFileRole,
-    NewBlocklistEntry, NewProxyConfig, NewSeedingProfile, NotificationScopeIdUpdate,
-    ObservationResolution, ObservedClientJob, PendingReleasePageSort, PendingReleasesPageQuery,
-    PendingStagedNzb, PersistedSeedGoals, ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome,
-    QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery,
-    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StorageRootUsage,
-    SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
+    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
+    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
+    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
+    NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
+    PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
+    ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome, QueuedDownloadResult,
+    QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery, ResolvedDownloadArtifact,
+    SearchMode, SeedingProfileUpdate, StagedNzbRef, StorageRootUsage, SubmissionConflictPolicy,
+    SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
     SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
     SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
     WantedSearchOutcome, indexer_search_eligibility,
@@ -414,7 +418,10 @@ pub use jobs::definitions::{
     JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
     MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
 };
-pub use library::user_delete::{DeletePreview, DeleteTitlesPreview, PolicyDeleteAuthorization};
+pub use library::user_delete::{
+    DeleteEpisodeFilePreviewResult, DeleteEpisodeFilesPreview, DeletePreview, DeleteTitlesPreview,
+    PolicyDeleteAuthorization,
+};
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkArtworkUrlResult, BulkMetadataResult,
     DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,
@@ -467,18 +474,19 @@ pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
     ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
     DatastoreInfo, DomainEventRepository, DownloadClient, DownloadClientConfigRepository,
-    DownloadClientFeedbackScope, DownloadClientPluginProvider, DownloadClientSnapshotOutcome,
-    DownloadQueueCommandRepository, DownloadRegistryRepository, DownloadSubmissionRepository,
-    EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
-    EmbyConnectIdentityVerification, EmbyConnectServer, EmbyConnectUserType, EmbyServerIdentity,
-    EmbyServerUser, ExternalIdentityVerifier, ExternalImportMonitorSnapshotRepository,
-    ExternalImportSetupInstanceApiKeyDraft, ExternalImportSetupSecretDraft,
-    ExternalImportSetupSecretDraftInput, ExternalImportSetupSecretDraftRepository,
-    ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus,
-    ExternalImportSetupSecretInstanceKind, ExternalImportSetupSecretOverrideDraft,
-    ExternalPluginWasm, FileImporter, HousekeepingMediaFileRootRow, HousekeepingRepository,
-    IdentityTrackedStateTarget, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyKind,
-    ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
+    DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
+    DownloadClientSnapshotOutcome, DownloadQueueCommandRepository, DownloadRegistryRepository,
+    DownloadSubmissionRepository, EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar,
+    EmbyConnectAddressStatus, EmbyConnectIdentityVerification, EmbyConnectServer,
+    EmbyConnectUserType, EmbyServerIdentity, EmbyServerUser, ExternalIdentityVerifier,
+    ExternalImportMonitorSnapshotRepository, ExternalImportSetupInstanceApiKeyDraft,
+    ExternalImportSetupSecretDraft, ExternalImportSetupSecretDraftInput,
+    ExternalImportSetupSecretDraftRepository, ExternalImportSetupSecretDraftSaveResult,
+    ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
+    ExternalImportSetupSecretOverrideDraft, ExternalPluginWasm, FileImporter,
+    HousekeepingMediaFileRootRow, HousekeepingRepository, IdentityTrackedStateTarget,
+    ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyKind, ImageProxyRegistration,
+    ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
     ImportFileExecutionContext, ImportFilePermissions, ImportFileTransferProgress,
     ImportFileTransferProgressSender, ImportRepository, IndexerCapsSnapshotRefresher,
     IndexerClient, IndexerConfigRepository, IndexerManagementClient, IndexerPluginProvider,

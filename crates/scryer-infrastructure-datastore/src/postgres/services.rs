@@ -1283,7 +1283,7 @@ mod tests {
             // Seeding profile assignment (migrations 0163/0164).
             "seeding_profile_id".to_string(),
         ]);
-        // Proxy assignment for the second consumer family (migration 0213).
+        // Proxy assignment for the second consumer family (migration 0216).
         columns
             .entry("download_clients".to_string())
             .or_default()

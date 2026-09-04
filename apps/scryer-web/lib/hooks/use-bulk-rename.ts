@@ -8,6 +8,7 @@ import {
 import type { MediaRenamePlan } from "@/components/common/media-rename-plan-panel";
 import type { JobRun, TitleRecord } from "@/lib/types";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { selectedTitleIdsKey } from "@/lib/utils/title-selection";
 import type { Translate } from "@/components/root/types";
 import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 
@@ -68,12 +69,27 @@ export function useBulkRename({
     setBulkRenamePlansByTitleId({});
   }, []);
 
+  // Catalog refreshes rebuild the titles array without changing the selection,
+  // so the preview effect keys on the selected id set and reads the current
+  // records through a ref. Depending on the array itself would clear the plans
+  // and restart every facet preview on each background scan tick.
+  const selectedTitlesKey = React.useMemo(
+    () => selectedTitleIdsKey(selectedTitles),
+    [selectedTitles],
+  );
+  const selectedTitlesRef = React.useRef(selectedTitles);
+  // Declared before the preview effect so the ref is already current when the
+  // preview effect below runs for a changed id set.
+  React.useEffect(() => {
+    selectedTitlesRef.current = selectedTitles;
+  }, [selectedTitles]);
+
   React.useEffect(() => {
     if (!bulkRenameDialogOpen) {
       return;
     }
 
-    const targets = [...selectedTitles];
+    const targets = [...selectedTitlesRef.current];
     if (targets.length === 0) {
       setBulkRenamePreviewLoading(false);
       setBulkRenamePreviewError(null);
@@ -234,7 +250,7 @@ export function useBulkRename({
     batchFailureDetail,
     bulkRenameDialogOpen,
     client,
-    selectedTitles,
+    selectedTitlesKey,
     t,
     withFailureDetail,
   ]);

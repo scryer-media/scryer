@@ -516,6 +516,9 @@ function PluginTable({
                   {plugin.status === "beta" && (
                     <Badge tone="warning">{t("settings.pluginBeta")}</Badge>
                   )}
+                  {plugin.status === "deprecated" && (
+                    <Badge tone="negative">{t("settings.pluginDeprecated")}</Badge>
+                  )}
                   {isDownloadedBuiltinOverride(plugin) && (
                     <Badge tone="warning">{t("settings.pluginOverride")}</Badge>
                   )}

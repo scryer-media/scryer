@@ -2557,6 +2557,7 @@ const ru: LocaleDictionary = {
     "settings.pluginVerifiedCommunity": "Проверенный сообществом",
     "settings.pluginUnverified": "Непроверенный",
     "settings.pluginBeta": "Бета",
+    "settings.pluginDeprecated": "Устаревший",
     "settings.pluginSource": "Источник",
     "settings.pluginDocs": "Документация",
     "settings.pluginInstallManually": "Установить вручную",

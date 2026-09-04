@@ -469,6 +469,7 @@ mod component_routing_tests {
             descriptor.id.clone(),
             std::collections::BTreeMap::new(),
             Vec::new(),
+            scryer_outbound_http::PluginEgressPolicy::default(),
             NOTIFICATION_PLUGIN_TIMEOUT,
             None,
             None,

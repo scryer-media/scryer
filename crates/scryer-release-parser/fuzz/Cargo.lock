@@ -255,7 +255,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.19.7"
+version = "0.19.9"
 dependencies = [
  "aho-corasick",
  "chrono",

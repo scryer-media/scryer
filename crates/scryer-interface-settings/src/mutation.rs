@@ -20,7 +20,7 @@ use scryer_application::{
 
 use super::{
     from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_ui_settings, from_verification_settings, to_verification_depth,
+    from_ui_settings, from_verification_settings, into_oauth_client_kind, to_verification_depth,
     ui_settings_update_from_input,
 };
 use scryer_interface_core::{
@@ -1145,6 +1145,7 @@ impl SettingsMutations {
             CreateOAuthClientRegistration {
                 display_name: input.display_name,
                 redirect_uris: input.redirect_uris,
+                kind: into_oauth_client_kind(input.kind),
             },
         )
         .await

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
-    MaintenanceRuleRevision, MaintenanceRuleSet, PersistedPluginWasmPayload,
+    MaintenanceRuleRevision, MaintenanceRuleSet, MonitorSelection, PersistedPluginWasmPayload,
     title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
@@ -45,6 +45,9 @@ pub struct TitleOptionsPatch {
     pub inter_season_movies: Option<Option<bool>>,
     pub filler_policy: Option<Option<String>>,
     pub recap_policy: Option<Option<String>>,
+    /// Explicit season/series-movie picks for the `advanced` monitor type.
+    /// `Some(None)` clears the stored selection.
+    pub monitor_selection: Option<Option<MonitorSelection>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1200,6 +1203,22 @@ pub trait TitleRepository: Send + Sync {
                 })
             }))
     }
+    /// Replace the title's advanced-monitoring selection. `None` deletes it.
+    /// Defaulted so null/in-memory repositories keep compiling; the SQL store
+    /// overrides both halves.
+    async fn replace_title_monitor_selection(
+        &self,
+        _title_id: &str,
+        _selection: Option<MonitorSelection>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn get_title_monitor_selection(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<MonitorSelection>> {
+        Ok(None)
+    }
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome>;
     async fn create_or_get_existing_with_options_patch(
         &self,
@@ -1687,6 +1706,7 @@ pub struct NewMediaRequest {
     pub sort_title: Option<String>,
     pub slug: Option<String>,
     pub poster_url: Option<String>,
+    pub background_url: Option<String>,
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub runtime_minutes: Option<i32>,
@@ -1696,6 +1716,8 @@ pub struct NewMediaRequest {
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,
+    /// Season/series-movie picks captured for the `advanced` monitor type.
+    pub requested_monitor_selection: Option<MonitorSelection>,
     pub external_ids: Vec<ExternalId>,
     pub created_by_user_id: String,
 }
@@ -1774,6 +1796,7 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_id: String,
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
+        requested_monitor_selection: Option<MonitorSelection>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
 
@@ -4432,7 +4455,7 @@ pub struct LocationOperationProgress {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-/// Persistence for location operations (D5, migration 0206): the operation row,
+/// Persistence for location operations (D5, migration 0215): the operation row,
 /// its per-title checkpoints, its per-file verification records, and the
 /// ownership registry the concurrency guard reads.
 ///
@@ -7242,6 +7265,38 @@ pub struct DownloadClientSnapshotOutcome {
     pub any_client_read_succeeded: bool,
 }
 
+/// A queue or history listing together with the clients whose view could not
+/// be read this cycle. The aggregate router degrades a failing client to an
+/// empty contribution so one broken client cannot blind the others; callers
+/// that decide "is this download still there?" need to know which clients
+/// were actually consulted before treating absence as proof.
+#[derive(Clone, Debug, Default)]
+pub struct DownloadClientListing {
+    pub items: Vec<DownloadQueueItem>,
+    /// Clients configured for this read that contributed nothing: the read
+    /// errored, timed out, was skipped during failure backoff, or the client
+    /// could not be constructed from its config.
+    pub unreadable_client_ids: Vec<String>,
+    /// Number of clients this read was meant to cover.
+    pub polled_client_count: usize,
+}
+
+impl DownloadClientListing {
+    /// A listing from a single client that answered.
+    pub fn from_items(items: Vec<DownloadQueueItem>) -> Self {
+        Self {
+            items,
+            unreadable_client_ids: Vec::new(),
+            polled_client_count: 1,
+        }
+    }
+
+    /// True when at least one client was polled and none of them answered.
+    pub fn all_unreadable(&self) -> bool {
+        self.polled_client_count > 0 && self.unreadable_client_ids.len() >= self.polled_client_count
+    }
+}
+
 #[async_trait]
 pub trait DownloadClient: Send + Sync {
     async fn submit_download(
@@ -7291,6 +7346,14 @@ pub trait DownloadClient: Send + Sync {
         ))
     }
 
+    /// `list_queue` plus the set of clients that could not be read. Single
+    /// clients answer for themselves; the aggregate router reports per client.
+    async fn list_queue_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.list_queue()
+            .await
+            .map(DownloadClientListing::from_items)
+    }
+
     async fn list_queue_with_feedback_scope(
         &self,
         _scope: &DownloadClientFeedbackScope,
@@ -7333,6 +7396,13 @@ pub trait DownloadClient: Send + Sync {
         Err(AppError::Repository(
             "download history listing is not supported for this client".to_string(),
         ))
+    }
+
+    /// `list_history` plus the set of clients that could not be read.
+    async fn list_history_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.list_history()
+            .await
+            .map(DownloadClientListing::from_items)
     }
 
     async fn list_history_with_feedback_scope(

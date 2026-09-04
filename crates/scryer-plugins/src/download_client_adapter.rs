@@ -2615,6 +2615,7 @@ mod component_routing_tests {
             "fixture-download-client".to_string(),
             std::collections::BTreeMap::new(),
             Vec::new(),
+            scryer_outbound_http::PluginEgressPolicy::default(),
             DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             None,
             None,

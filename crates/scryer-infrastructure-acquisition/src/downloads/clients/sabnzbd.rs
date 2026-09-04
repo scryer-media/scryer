@@ -1209,20 +1209,106 @@ impl DownloadClient for SabnzbdDownloadClient {
     }
 
     /// A history delete includes `del_files=1` only when `remove_data` is
-    /// requested. Queue deletes continue to include `del_files=1` regardless.
+    /// requested, alongside nzbdav's non-standard `del_completed_files=1`
+    /// (see `send_delete`). Queue deletes continue to include `del_files=1`
+    /// regardless.
+    ///
+    /// `is_history` is only a hint: the caller derives it from the last polled
+    /// state, and SAB moves a job into history the moment post-processing
+    /// starts. A queue delete for an id that only lives in history answers
+    /// `{"status": false, "nzo_ids": []}` — nothing removed, no error text
+    /// (`sabnzbd/api.py::_api_queue_delete`) — and a history delete answers a
+    /// bare `{"status": true}` whether or not the id existed
+    /// (`_api_history_delete`). So a wrong hint in either direction has to
+    /// fall through to the other mode or the row silently comes back on the
+    /// next poll.
     async fn delete_queue_item(
         &self,
         id: &str,
         is_history: bool,
         remove_data: bool,
     ) -> AppResult<()> {
+        let response = self.send_delete(id, is_history, remove_data).await?;
+
+        match sab_delete_removed_hinted_id(&response, id) {
+            // The backend reported which ids it removed and ours was there.
+            Some(true) => Ok(()),
+            // The backend reported its removals and ours was not among them,
+            // so the item lives in the other list.
+            Some(false) => {
+                debug!(
+                    nzo_id = id,
+                    hinted_history = is_history,
+                    "sabnzbd delete removed nothing; retrying in the other mode"
+                );
+                self.send_delete(id, !is_history, remove_data).await?;
+                Ok(())
+            }
+            // No `nzo_ids` at all: real SAB history deletes never report them,
+            // and SAB-compatible backends (altmount, nzbdav, decypharr) report
+            // them for neither mode. Probe instead of guessing.
+            None => match self.queue_contains_nzo_id(id).await {
+                // `in_queue == is_history` is the contradiction: still queued
+                // after a history-hinted delete, or already gone from the
+                // queue after a queue-hinted delete that reported nothing.
+                Ok(in_queue) if in_queue == is_history => {
+                    debug!(
+                        nzo_id = id,
+                        hinted_history = is_history,
+                        in_queue,
+                        "sabnzbd queue probe contradicts the delete hint; retrying in the other mode"
+                    );
+                    // The probe cannot tell "removed by the hinted delete"
+                    // from "never in that list", so this second delete is
+                    // best effort: backends that answer an unknown id with an
+                    // error (decypharr) must not turn a delete that already
+                    // landed into a failure.
+                    if let Err(error) = self.send_delete(id, !is_history, remove_data).await {
+                        debug!(
+                            nzo_id = id,
+                            hinted_history = is_history,
+                            error = %error,
+                            "sabnzbd fallback delete after queue probe failed; keeping the hinted delete"
+                        );
+                    }
+                    Ok(())
+                }
+                Ok(_) => Ok(()),
+                Err(error) => {
+                    // The hinted delete already went through; a probe that
+                    // cannot run is no reason to fail the removal.
+                    debug!(
+                        nzo_id = id,
+                        hinted_history = is_history,
+                        error = %error,
+                        "sabnzbd queue probe failed; keeping the hinted delete"
+                    );
+                    Ok(())
+                }
+            },
+        }
+    }
+}
+
+impl SabnzbdDownloadClient {
+    /// Issue one delete in the requested mode and hand back the raw response so
+    /// the caller can tell whether anything was actually removed.
+    async fn send_delete(&self, id: &str, is_history: bool, remove_data: bool) -> AppResult<Value> {
         if is_history {
             let mut params = vec![("mode", "history"), ("name", "delete"), ("value", id)];
             if remove_data {
                 params.push(("del_files", "1"));
+                // nzbdav ignores `del_files` on history deletes and only drops
+                // a completed job's mounted files for its own
+                // `del_completed_files` flag
+                // (backend/Api/SabControllers/RemoveFromHistory). Real SAB
+                // reads just `del_files` (`api.py::_api_history_delete`) and
+                // altmount/decypharr read neither, so the extra param is inert
+                // everywhere else.
+                params.push(("del_completed_files", "1"));
             }
             self.api_get_mutation(&params, "sabnzbd_delete_history_item")
-                .await?;
+                .await
         } else {
             self.api_get_mutation(
                 &[
@@ -1233,13 +1319,30 @@ impl DownloadClient for SabnzbdDownloadClient {
                 ],
                 "sabnzbd_delete_queue_item",
             )
-            .await?;
+            .await
         }
-        Ok(())
     }
-}
 
-impl SabnzbdDownloadClient {
+    /// Whether `id` is still in the active queue.
+    ///
+    /// Reads the same `mode=queue` listing `list_queue` uses and matches
+    /// client-side. Asking SAB to filter by `nzo_ids` would be cheaper but
+    /// SAB-compatible backends ignore unknown filters and answer with the whole
+    /// queue, which a server-side check would read as a match for anything.
+    async fn queue_contains_nzo_id(&self, id: &str) -> AppResult<bool> {
+        let json = self.api_get(&[("mode", "queue")]).await?;
+        let slots = json
+            .get("queue")
+            .and_then(slots_from_api_section)
+            .or_else(|| json.get("slots").and_then(Value::as_array));
+
+        Ok(slots.is_some_and(|slots| {
+            slots
+                .iter()
+                .any(|slot| slot.get("nzo_id").and_then(Value::as_str) == Some(id))
+        }))
+    }
+
     fn read_policy(&self, request_label: &'static str) -> RequestPolicy {
         RequestPolicy::safe_read(format!("sabnzbd:{}", self.base_url), request_label)
             .with_max_retries(2)
@@ -1633,7 +1736,7 @@ fn evaluate_sab_api_response(
         )));
     }
 
-    if sab_api_status_is_false(&json) {
+    if sab_api_status_is_false(&json) && !sab_api_reports_empty_removal(&json) {
         let error_msg = sab_api_error_message(&json).unwrap_or("unknown error");
         return SabApiResponseEvaluation::Failure(map_sabnzbd_api_error(
             operation,
@@ -1643,6 +1746,15 @@ fn evaluate_sab_api_response(
     }
 
     SabApiResponseEvaluation::Success(json)
+}
+
+/// SAB's queue delete answers `{"status": bool(removed), "nzo_ids": removed}`
+/// (`sabnzbd/api.py::_api_queue_delete`), so a delete that matched nothing is
+/// `status: false` with an empty `nzo_ids` and no error text. That is an
+/// answer, not a failure: the caller reads `nzo_ids` to learn nothing was
+/// removed and tries the other list.
+fn sab_api_reports_empty_removal(json: &Value) -> bool {
+    sab_api_error_message(json).is_none() && json.get("nzo_ids").is_some_and(Value::is_array)
 }
 
 /// Classification of a fully-received SABnzbd addfile HTTP response.
@@ -1785,6 +1897,18 @@ fn sab_api_mode_matches_response(request_mode: Option<&str>, json: &Value) -> bo
         }
         _ => true,
     }
+}
+
+/// Whether a delete response says it removed `id`.
+///
+/// SAB reports the ids a queue delete actually removed in `nzo_ids`, so an
+/// empty or non-matching array is a delete that succeeded without removing
+/// anything. `None` means the backend reported no `nzo_ids` field at all —
+/// real SAB history deletes and some SAB-compatible backends — in which case
+/// the response says nothing either way and only a probe can tell.
+fn sab_delete_removed_hinted_id(response: &Value, id: &str) -> Option<bool> {
+    let reported = response.get("nzo_ids")?.as_array()?;
+    Some(reported.iter().any(|value| value.as_str() == Some(id)))
 }
 
 fn slots_from_api_section(section: &Value) -> Option<&Vec<Value>> {
@@ -2195,8 +2319,8 @@ mod tests {
         SabnzbdDownloadClient, build_sab_api_urls, completed_downloads_from_sab_slots,
         evaluate_sab_addfile_response, evaluate_sab_api_response, extract_sabnzbd_category,
         map_sabnzbd_outbound_error, normalize_sab_job_name, redact_sab_secret_values,
-        sab_addfile_query_params, sab_api_mode_matches_response, sab_reconcile_slot_nzo_id,
-        sabnzbd_history_state, sabnzbd_queue_state,
+        sab_addfile_query_params, sab_api_mode_matches_response, sab_delete_removed_hinted_id,
+        sab_reconcile_slot_nzo_id, sabnzbd_history_state, sabnzbd_queue_state,
     };
     use chrono::Utc;
     use reqwest::StatusCode;
@@ -2210,7 +2334,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Semaphore;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
@@ -2791,6 +2915,18 @@ mod tests {
             .expect(2)
             .mount(&server)
             .await;
+        // A history delete reports no `nzo_ids`, so the client probes the queue
+        // to confirm the hint. An empty queue confirms it.
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "queue"))
+            .and(query_param_is_missing("name"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "queue": { "slots": [] } })),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
 
         let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
         client
@@ -2819,7 +2955,7 @@ mod tests {
             !keep_data_request
                 .url
                 .query_pairs()
-                .any(|(key, _)| key == "del_files")
+                .any(|(key, _)| key == "del_files" || key == "del_completed_files")
         );
 
         let delete_data_request = requests
@@ -2837,5 +2973,318 @@ mod tests {
                 .query_pairs()
                 .any(|(key, value)| key == "del_files" && value == "1")
         );
+        // nzbdav only honours its own flag; real SAB ignores it.
+        assert!(
+            delete_data_request
+                .url
+                .query_pairs()
+                .any(|(key, value)| key == "del_completed_files" && value == "1")
+        );
+    }
+
+    #[test]
+    fn sab_delete_removed_hinted_id_reads_reported_removals() {
+        assert_eq!(
+            sab_delete_removed_hinted_id(
+                &json!({ "status": true, "nzo_ids": ["SABnzbd_nzo_1"] }),
+                "SABnzbd_nzo_1"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            sab_delete_removed_hinted_id(
+                &json!({ "status": true, "nzo_ids": [] }),
+                "SABnzbd_nzo_1"
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            sab_delete_removed_hinted_id(
+                &json!({ "status": true, "nzo_ids": ["SABnzbd_nzo_2"] }),
+                "SABnzbd_nzo_1"
+            ),
+            Some(false)
+        );
+        // No report at all (history deletes, SAB-compatible backends): unknown.
+        assert_eq!(
+            sab_delete_removed_hinted_id(&json!({ "status": true }), "SABnzbd_nzo_1"),
+            None
+        );
+        assert_eq!(
+            sab_delete_removed_hinted_id(
+                &json!({ "status": true, "nzo_ids": "x" }),
+                "SABnzbd_nzo_1"
+            ),
+            None
+        );
+    }
+
+    async fn mount_sab_delete(
+        server: &MockServer,
+        mode: &str,
+        nzo_id: &str,
+        body: serde_json::Value,
+        expected: u64,
+    ) {
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", mode))
+            .and(query_param("name", "delete"))
+            .and(query_param("value", nzo_id))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_sab_queue_listing(server: &MockServer, slots: serde_json::Value, expected: u64) {
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "queue"))
+            .and(query_param_is_missing("name"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "queue": { "slots": slots } })),
+            )
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+
+    #[test]
+    fn evaluate_sab_api_response_accepts_empty_removal_report() {
+        // Real SAB: `_api_queue_delete` answers status=false when no id matched.
+        let outcome = evaluate_sab_api_response(
+            "sabnzbd api",
+            Some("queue"),
+            StatusCode::OK,
+            r#"{"status": false, "nzo_ids": []}"#,
+        );
+        assert!(matches!(outcome, SabApiResponseEvaluation::Success(_)));
+
+        // A status=false that carries an error is still a failure.
+        let outcome = evaluate_sab_api_response(
+            "sabnzbd api",
+            Some("queue"),
+            StatusCode::OK,
+            r#"{"status": false, "nzo_ids": [], "error": "API Key Incorrect"}"#,
+        );
+        assert!(matches!(outcome, SabApiResponseEvaluation::Failure(_)));
+    }
+
+    // The manual-import case: the UI believes the job is queued, but SAB has
+    // already moved it to history. Real SAB answers the queue delete with
+    // `status: false` and an empty `nzo_ids` (see `_api_queue_delete`), so the
+    // client must fall through to a history delete instead of failing or
+    // reporting success and letting the next poll re-adopt the job.
+    #[tokio::test]
+    async fn delete_queue_hint_falls_through_to_history_when_nothing_was_removed() {
+        let server = MockServer::start().await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "SABnzbd_nzo_hist",
+            json!({ "status": false, "nzo_ids": [] }),
+            1,
+        )
+        .await;
+        mount_sab_delete(
+            &server,
+            "history",
+            "SABnzbd_nzo_hist",
+            json!({ "status": true }),
+            1,
+        )
+        .await;
+        // The queue delete reported its removals, so no probe is needed.
+        mount_sab_queue_listing(&server, json!([]), 0).await;
+
+        let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
+        client
+            .delete_queue_item("SABnzbd_nzo_hist", false, true)
+            .await
+            .expect("history fallback should succeed");
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("requests should be recorded");
+        let history_delete = requests
+            .iter()
+            .find(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .any(|(key, value)| key == "mode" && value == "history")
+            })
+            .expect("history delete should be requested");
+        // `remove_data` carries over to the fallback delete.
+        assert!(
+            history_delete
+                .url
+                .query_pairs()
+                .any(|(key, value)| key == "del_files" && value == "1")
+        );
+    }
+
+    // The reverse mistake: hinted as history while the job is still queued.
+    // History deletes never report `nzo_ids`, so the client probes the queue,
+    // finds the job, and issues the queue delete.
+    #[tokio::test]
+    async fn delete_history_hint_falls_through_to_queue_when_still_queued() {
+        let server = MockServer::start().await;
+        mount_sab_delete(
+            &server,
+            "history",
+            "SABnzbd_nzo_q",
+            json!({ "status": true }),
+            1,
+        )
+        .await;
+        mount_sab_queue_listing(
+            &server,
+            json!([{ "nzo_id": "SABnzbd_nzo_other" }, { "nzo_id": "SABnzbd_nzo_q" }]),
+            1,
+        )
+        .await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "SABnzbd_nzo_q",
+            json!({ "status": true, "nzo_ids": ["SABnzbd_nzo_q"] }),
+            1,
+        )
+        .await;
+
+        let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
+        client
+            .delete_queue_item("SABnzbd_nzo_q", true, false)
+            .await
+            .expect("queue fallback should succeed");
+    }
+
+    // A correct queue hint on real SAB: one request, no probe, no fallback.
+    #[tokio::test]
+    async fn delete_with_confirmed_removal_issues_exactly_one_request() {
+        let server = MockServer::start().await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "SABnzbd_nzo_q",
+            json!({ "status": true, "nzo_ids": ["SABnzbd_nzo_q"] }),
+            1,
+        )
+        .await;
+        mount_sab_delete(
+            &server,
+            "history",
+            "SABnzbd_nzo_q",
+            json!({ "status": true }),
+            0,
+        )
+        .await;
+        mount_sab_queue_listing(&server, json!([]), 0).await;
+
+        let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
+        client
+            .delete_queue_item("SABnzbd_nzo_q", false, false)
+            .await
+            .expect("confirmed queue delete should succeed");
+    }
+
+    // SAB-compatible backends may not report `nzo_ids` for queue deletes. The
+    // probe cannot tell "removed" from "never queued", so the client also
+    // issues the history delete: harmless when the job is gone, and the only
+    // way to remove it when the hint was wrong.
+    #[tokio::test]
+    async fn delete_queue_hint_without_removal_report_probes_and_covers_history() {
+        let server = MockServer::start().await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "SABnzbd_nzo_c",
+            json!({ "status": true }),
+            1,
+        )
+        .await;
+        mount_sab_queue_listing(&server, json!([]), 1).await;
+        mount_sab_delete(
+            &server,
+            "history",
+            "SABnzbd_nzo_c",
+            json!({ "status": true }),
+            1,
+        )
+        .await;
+
+        let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
+        client
+            .delete_queue_item("SABnzbd_nzo_c", false, false)
+            .await
+            .expect("compat queue delete should succeed");
+    }
+
+    // decypharr keeps one store for queue and history: any delete removes the
+    // item and answers `{"status": true, "error": ""}` with no `nzo_ids`, and
+    // a delete for an id it no longer knows answers HTTP 500 with
+    // `status: false`. The probe then finds the item gone and the best-effort
+    // history delete is rejected; that must not fail a delete that landed.
+    #[tokio::test]
+    async fn delete_queue_hint_tolerates_rejected_fallback_after_probe() {
+        let server = MockServer::start().await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "decypharr-1",
+            json!({ "status": true, "error": "" }),
+            1,
+        )
+        .await;
+        mount_sab_queue_listing(&server, json!([]), 1).await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "history"))
+            .and(query_param("name", "delete"))
+            .and(query_param("value", "decypharr-1"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+                "status": false,
+                "error": "All deletions failed: Failed to delete decypharr-1: not found",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
+        client
+            .delete_queue_item("decypharr-1", false, false)
+            .await
+            .expect("a rejected best-effort fallback must not fail the landed delete");
+    }
+
+    // A probe that cannot run must not turn an already-issued delete into a
+    // failure the poller would log and ignore anyway.
+    #[tokio::test]
+    async fn delete_keeps_hinted_result_when_probe_fails() {
+        let server = MockServer::start().await;
+        mount_sab_delete(
+            &server,
+            "history",
+            "SABnzbd_nzo_p",
+            json!({ "status": true }),
+            1,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("mode", "queue"))
+            .and(query_param_is_missing("name"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let client = SabnzbdDownloadClient::new(server.uri(), "api-key".to_string());
+        client
+            .delete_queue_item("SABnzbd_nzo_p", true, false)
+            .await
+            .expect("probe failure should not fail the delete");
     }
 }

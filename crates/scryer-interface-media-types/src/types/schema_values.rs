@@ -352,6 +352,8 @@ pub enum MonitorTypeValue {
     MissingAndFutureEpisodes,
     /// Monitor every episode, including already released episodes.
     AllEpisodes,
+    /// Monitor exactly the seasons and canon series movies the user selected.
+    Advanced,
     /// Explicitly select no episodes; exposed as `NONE` in GraphQL.
     #[graphql(name = "NONE")]
     NoneSelected,
@@ -365,6 +367,7 @@ impl MonitorTypeValue {
             Self::FutureEpisodes => "futureepisodes",
             Self::MissingAndFutureEpisodes => "missingandfutureepisodes",
             Self::AllEpisodes => "allepisodes",
+            Self::Advanced => "advanced",
             Self::NoneSelected => "none",
         }
     }
@@ -378,6 +381,7 @@ impl MonitorTypeValue {
                 Some(Self::MissingAndFutureEpisodes)
             }
             "allepisodes" | "allEpisodes" => Some(Self::AllEpisodes),
+            "advanced" => Some(Self::Advanced),
             "none" => Some(Self::NoneSelected),
             _ => None,
         }

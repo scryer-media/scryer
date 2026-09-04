@@ -606,7 +606,7 @@ mod tests {
     }
 
     /// The post-0211 SQLite shape, copied from
-    /// `migrations/0213_first_class_proxies.sql`, so the round-trip below
+    /// `migrations/0216_first_class_proxies.sql`, so the round-trip below
     /// exercises the real columns rather than a hand-rolled subset.
     async fn proxy_store() -> (ProxyConfigStore, sqlx::SqlitePool) {
         let pool = SqlitePoolOptions::new()

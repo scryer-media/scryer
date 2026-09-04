@@ -1323,6 +1323,7 @@ async fn requester_can_update_pending_request_preferences() {
                 request_id,
                 requested_quality_profile_id: "1080p".to_string(),
                 requested_monitor_type: Some("allEpisodes".to_string()),
+                requested_monitor_selection: None,
             },
         )
         .await
@@ -1405,6 +1406,7 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
                 request_id: request_id.clone(),
                 requested_quality_profile_id: "1080p".to_string(),
                 requested_monitor_type: None,
+                requested_monitor_selection: None,
             },
         )
         .await
@@ -1445,7 +1447,7 @@ async fn approve_media_request_creates_title_and_resolves_overlapping_pending_re
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request_id, "1080p", None)
+        .approve_media_request(&harness.manager, &request_id, "1080p", None, None)
         .await
         .expect("approval should create the title");
 
@@ -1520,7 +1522,7 @@ async fn approve_media_request_accepts_legacy_case_profile_id_and_persists_canon
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request_id, "wizard-series", None)
+        .approve_media_request(&harness.manager, &request_id, "wizard-series", None, None)
         .await
         .expect("approval should resolve profile ids case-insensitively");
 
@@ -1559,7 +1561,7 @@ async fn approve_series_media_request_applies_requested_monitor_type() {
 
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request.id, "1080p", None)
+        .approve_media_request(&harness.manager, &request.id, "1080p", None, None)
         .await
         .expect("approval should create the series title");
 
@@ -1599,6 +1601,7 @@ async fn approve_series_media_request_can_override_requested_monitor_type() {
             &request.id,
             "1080p",
             Some("none".to_string()),
+            None,
         )
         .await
         .expect("approval should create the series title");
@@ -1761,4 +1764,194 @@ async fn media_request_admin_surfaces_require_manage_titles_library_permission()
         .await
         .expect("manager request events should load");
     assert_eq!(manager_events.len(), 1);
+}
+
+fn advanced_monitor_selection() -> scryer_domain::MonitorSelection {
+    scryer_domain::MonitorSelection {
+        seasons: vec![2, 1],
+        series_movies: vec![scryer_domain::MonitorSelectionMovie {
+            name: "Harbor Movie".to_string(),
+            external_ids: vec![ExternalId {
+                source: "tvdb".to_string(),
+                value: "555".to_string(),
+            }],
+        }],
+    }
+}
+
+#[tokio::test]
+async fn submit_advanced_series_request_persists_the_monitor_selection() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9060);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("advanced series request should succeed");
+
+    let request = harness.media_requests.requests.lock().await[0].clone();
+    assert_eq!(request.requested_monitor_type.as_deref(), Some("advanced"));
+    let selection = request
+        .requested_monitor_selection
+        .expect("advanced request should keep its selection");
+    // Stored normalized: seasons sorted and de-duplicated.
+    assert_eq!(selection.seasons, vec![1, 2]);
+    assert_eq!(selection.series_movies.len(), 1);
+    assert_eq!(selection.series_movies[0].name, "Harbor Movie");
+}
+
+#[tokio::test]
+async fn submit_advanced_series_request_without_a_selection_is_rejected() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9061);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".to_string());
+
+    let error = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect_err("advanced without a selection is a validation error");
+    assert!(
+        matches!(&error, AppError::Validation(message) if message.contains("advanced monitoring")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn submit_movie_request_rejects_the_advanced_monitor_type() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9062);
+    input.requested_monitor_type = Some("advanced".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    let error = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect_err("advanced monitoring is series-only");
+    assert!(
+        matches!(&error, AppError::Validation(message) if message.contains("series and anime")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn submit_non_advanced_series_request_drops_a_supplied_monitor_selection() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9063);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("allEpisodes".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("request should succeed");
+
+    let request = harness.media_requests.requests.lock().await[0].clone();
+    assert_eq!(
+        request.requested_monitor_type.as_deref(),
+        Some("allepisodes")
+    );
+    assert!(request.requested_monitor_selection.is_none());
+}
+
+#[tokio::test]
+async fn approve_advanced_series_request_applies_the_selection_to_the_created_title() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9064);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("advanced series request should succeed");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+
+    let outcome = harness
+        .app
+        .approve_media_request(&harness.manager, &request_id, "1080p", None, None)
+        .await
+        .expect("approval should create the title");
+
+    let titles = harness.titles.store.lock().await;
+    let title = titles
+        .iter()
+        .find(|title| title.id == outcome.title_id)
+        .expect("approved title should exist");
+    assert!(
+        title
+            .tags
+            .iter()
+            .any(|tag| tag == "scryer:monitor-type:advanced")
+    );
+    drop(titles);
+
+    let selection = harness
+        .titles
+        .monitor_selections
+        .lock()
+        .await
+        .get(&outcome.title_id)
+        .cloned()
+        .expect("approved title should carry the requested selection");
+    assert_eq!(selection.seasons, vec![1, 2]);
+    assert_eq!(selection.series_movies.len(), 1);
+}
+
+#[tokio::test]
+async fn approve_advanced_series_request_honours_an_approver_selection_override() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, 9065);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = Some("advanced".to_string());
+    input.requested_monitor_selection = Some(advanced_monitor_selection());
+
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("advanced series request should succeed");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+
+    let outcome = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            Some(scryer_domain::MonitorSelection {
+                seasons: vec![0, 3],
+                series_movies: vec![],
+            }),
+        )
+        .await
+        .expect("approval should create the title");
+
+    let selection = harness
+        .titles
+        .monitor_selections
+        .lock()
+        .await
+        .get(&outcome.title_id)
+        .cloned()
+        .expect("approver override should be stored");
+    assert_eq!(selection.seasons, vec![0, 3]);
+    assert!(selection.series_movies.is_empty());
 }

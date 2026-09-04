@@ -1,4 +1,4 @@
-//! Migration 0210 — synthetic stable root ids (FR-078, plan D1).
+//! Migration 0213 — synthetic stable root ids (FR-078, plan D1).
 //!
 //! Until now a root's id *was* its path: `root_folder_id_for_path` hashed the
 //! platform-normalized path, and every root write recomputed it. Changing a
@@ -300,7 +300,7 @@ fn assert_no_path_derived_root_ids(roots: &[RootRow]) -> AppResult<()> {
         let normalized_path = effective_normalized_path(root);
         if root.id == root_folder_id_for_normalized_path(&normalized_path) {
             return Err(AppError::Repository(format!(
-                "library root {} still carries a path-derived id after migration 0210",
+                "library root {} still carries a path-derived id after migration 0213",
                 root.id
             )));
         }

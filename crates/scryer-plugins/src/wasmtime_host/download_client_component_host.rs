@@ -801,6 +801,7 @@ pub(crate) mod tests {
             "fixture-download-client".to_string(),
             BTreeMap::new(),
             Vec::new(),
+            scryer_outbound_http::PluginEgressPolicy::default(),
             Duration::from_secs(30),
             None,
             None,

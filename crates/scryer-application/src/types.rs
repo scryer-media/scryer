@@ -2790,6 +2790,8 @@ pub struct OAuthClientRegistrationRecord {
     pub display_name: String,
     pub redirect_uris: Vec<String>,
     pub enabled: bool,
+    /// Set at creation and never updated afterwards.
+    pub kind: crate::oauth::OAuthClientKind,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }

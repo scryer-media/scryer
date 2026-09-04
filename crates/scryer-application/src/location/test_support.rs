@@ -1,7 +1,7 @@
 //! In-memory stand-ins for the location subsystem's persistence, shared by the
 //! module tests that need a real store rather than a null one.
 //!
-//! This mirrors migration 0206's behaviour closely enough for the runner's
+//! This mirrors migration 0215's behaviour closely enough for the runner's
 //! contracts to be asserted end-to-end: checkpoints survive between runs,
 //! verification records are idempotent on (operation, destination path) — which
 //! is what makes "resume never repeats verified work" testable — and ownership

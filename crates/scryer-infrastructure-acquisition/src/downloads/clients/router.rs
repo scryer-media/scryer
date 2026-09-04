@@ -12,20 +12,21 @@ use scryer_application::transport_proxy;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest,
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
-    DownloadClientFeedbackScope, DownloadClientPluginProvider, DownloadClientRemotePathMapping,
-    DownloadClientSnapshotOutcome, DownloadClientStatus, DownloadGrabResult, DownloadSourceKind,
-    IndexerConfigRepository, IndexerPluginProvider, PersistedSeedGoals, ProxyConfigRepository,
-    RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
-    SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
-    accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
-    apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
-    normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
+    DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
+    DownloadClientRemotePathMapping, DownloadClientSnapshotOutcome, DownloadClientStatus,
+    DownloadGrabResult, DownloadSourceKind, IndexerConfigRepository, IndexerPluginProvider,
+    PersistedSeedGoals, ProxyConfigRepository, RateLimitCooldownAction, ResolvedDownloadArtifact,
+    ResolvedSeedGoals, SeedGoalRequest, SeedGoalResolver, SeedingProfileRepository,
+    SettingsRepository, StagedNzbRef, StagedNzbStore, accepted_inputs_for_client,
+    apply_remote_path_mappings_to_completed_download, apply_remote_path_mappings_to_status,
+    extract_magnet_info_hash, is_valid_magnet_uri, normalize_torrent_info_hash,
+    parse_download_client_remote_path_mappings,
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet, ProxyConfig};
 use scryer_outbound_http::{
-    AsyncOutboundHttpError, OutboundHttpClient, RateLimitRegistry, generic_reqwest_client,
-    prepare_plugin_http_target, prepare_plugin_http_target_from_url, proxy_reqwest_client,
-    send_reqwest_request_with_cooldown_budget,
+    AsyncOutboundHttpError, OutboundHttpClient, PluginEgressPolicy, RateLimitRegistry,
+    generic_reqwest_client, prepare_plugin_http_target, prepare_plugin_http_target_from_url,
+    proxy_reqwest_client, send_reqwest_request_with_cooldown_budget,
 };
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -478,6 +479,11 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
         self.run_feedback_read(self.inner.list_queue()).await
     }
 
+    async fn list_queue_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.run_feedback_read(self.inner.list_queue_with_read_report())
+            .await
+    }
+
     async fn list_queue_with_feedback_scope(
         &self,
         scope: &DownloadClientFeedbackScope,
@@ -505,6 +511,11 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
         self.run_feedback_read(self.inner.list_history()).await
+    }
+
+    async fn list_history_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.run_feedback_read(self.inner.list_history_with_read_report())
+            .await
     }
 
     async fn list_history_with_feedback_scope(
@@ -1028,6 +1039,31 @@ impl PrioritizedDownloadClientRouter {
         F: Fn(Arc<dyn DownloadClient>, DownloadClientFeedbackScope) -> Fut + Sync,
         Fut: Future<Output = AppResult<T>> + Send,
     {
+        self.poll_feedback_clients_with_skips(clients, read_kind, operation, read)
+            .await
+            .0
+    }
+
+    /// Runs one feedback read against every client, returning the per-client
+    /// results plus the ids of clients that were never asked (feedback backoff
+    /// or a client that could not be built from its config). Callers deciding
+    /// whether a download is *gone* need the skipped set: a client nobody
+    /// asked has not said "no".
+    async fn poll_feedback_clients_with_skips<T, F, Fut>(
+        &self,
+        clients: Vec<DownloadClientConfig>,
+        read_kind: DownloadFeedbackReadKind,
+        operation: &'static str,
+        read: F,
+    ) -> (
+        Vec<(DownloadClientConfig, Duration, AppResult<T>)>,
+        Vec<String>,
+    )
+    where
+        T: Send,
+        F: Fn(Arc<dyn DownloadClient>, DownloadClientFeedbackScope) -> Fut + Sync,
+        Fut: Future<Output = AppResult<T>> + Send,
+    {
         let category_snapshot = self.category_snapshot_store.snapshot().await;
         // Proxy assignments are resolved up front: the client build below runs
         // inside a synchronous closure and cannot await, and an unresolvable
@@ -1040,6 +1076,7 @@ impl PrioritizedDownloadClientRouter {
                 self.proxy_for_download_client(config).await,
             );
         }
+        let mut skipped_client_ids = Vec::new();
         let reads = clients
             .into_iter()
             .enumerate()
@@ -1052,6 +1089,7 @@ impl PrioritizedDownloadClientRouter {
                         remaining_ms = remaining.as_millis(),
                         "skipping download client feedback read during backoff"
                     );
+                    skipped_client_ids.push(config.id.clone());
                     return None;
                 }
 
@@ -1084,6 +1122,7 @@ impl PrioritizedDownloadClientRouter {
                             operation,
                             "skipping client for feedback read"
                         );
+                        skipped_client_ids.push(config.id.clone());
                         return None;
                     }
                 };
@@ -1104,10 +1143,99 @@ impl PrioritizedDownloadClientRouter {
             .collect::<Vec<_>>()
             .await;
         reads.sort_unstable_by_key(|(index, ..)| *index);
-        reads
+        let reads = reads
             .into_iter()
             .map(|(_, config, elapsed, result)| (config, elapsed, result))
-            .collect()
+            .collect();
+        (reads, skipped_client_ids)
+    }
+
+    /// The shared body of the aggregate queue/history reads: poll every
+    /// client, stamp items with the owning client, and report which clients
+    /// did not answer. Only an all-clients timeout is an error; every other
+    /// failure degrades that client to an empty contribution, so the
+    /// `unreadable_client_ids` in the listing are the only trace of it.
+    async fn poll_feedback_listing<F, Fut>(
+        &self,
+        clients: Vec<DownloadClientConfig>,
+        read_kind: DownloadFeedbackReadKind,
+        operation: &'static str,
+        read: F,
+    ) -> AppResult<DownloadClientListing>
+    where
+        F: Fn(Arc<dyn DownloadClient>, DownloadClientFeedbackScope) -> Fut + Sync,
+        Fut: Future<Output = AppResult<Vec<DownloadQueueItem>>> + Send,
+    {
+        let mut listing = DownloadClientListing {
+            polled_client_count: clients.len(),
+            ..DownloadClientListing::default()
+        };
+        if clients.is_empty() {
+            return Ok(listing);
+        }
+        let mut read_summary = FeedbackReadSummary::default();
+        let (reads, skipped_client_ids) = self
+            .poll_feedback_clients_with_skips(clients, read_kind, operation, read)
+            .await;
+        listing.unreadable_client_ids.extend(skipped_client_ids);
+        for (config, elapsed, result) in reads {
+            match result {
+                Ok(mut items) => {
+                    self.record_feedback_read_success(&config.id, read_kind);
+                    read_summary.record_success();
+                    for item in &mut items {
+                        item.client_id = config.id.clone();
+                        item.client_name = config.name.clone();
+                    }
+                    listing.items.extend(items);
+                }
+                Err(error) => {
+                    self.record_feedback_read_failure(&config.id, read_kind, elapsed);
+                    read_summary.record_error(&error);
+                    listing.unreadable_client_ids.push(config.id.clone());
+                    match read_kind {
+                        DownloadFeedbackReadKind::Queue => {
+                            tracing::warn!(client_id = %config.id, error = %error, "failed to list queue");
+                        }
+                        DownloadFeedbackReadKind::History => {
+                            tracing::warn!(client_id = %config.id, error = %error, "failed to list history");
+                        }
+                        _ => {
+                            tracing::warn!(client_id = %config.id, error = %error, operation, "download client feedback read failed");
+                        }
+                    }
+                }
+            }
+        }
+        read_summary.finish()?;
+        Ok(listing)
+    }
+
+    async fn queue_listing_excluding_client_types(
+        &self,
+        excluded_client_types: &[&str],
+    ) -> AppResult<DownloadClientListing> {
+        let clients = self
+            .list_enabled_clients_by_priority_excluding(excluded_client_types)
+            .await?;
+        self.poll_feedback_listing(
+            clients,
+            DownloadFeedbackReadKind::Queue,
+            "queue listing",
+            |client, scope| async move { client.list_queue_with_feedback_scope(&scope).await },
+        )
+        .await
+    }
+
+    async fn history_listing(&self) -> AppResult<DownloadClientListing> {
+        let clients = self.list_enabled_clients_by_priority().await?;
+        self.poll_feedback_listing(
+            clients,
+            DownloadFeedbackReadKind::History,
+            "history listing",
+            |client, scope| async move { client.list_history_with_feedback_scope(&scope).await },
+        )
+        .await
     }
 
     fn record_feedback_read_success(&self, client_id: &str, kind: DownloadFeedbackReadKind) {
@@ -1378,6 +1506,11 @@ impl PrioritizedDownloadClientRouter {
         {
             return Ok(request.clone());
         }
+        // The operator typed the indexer's base URL, so an artifact served from
+        // that exact origin may sit on a rootless container's host bridge.
+        let egress_policy = indexer
+            .map(|indexer| PluginEgressPolicy::for_operator_configured_url(&indexer.base_url))
+            .unwrap_or_default();
         // Resolve the assigned solver's proxy first: both the origin guard and
         // the indexer-owned grab below need it, and a misconfigured proxy must
         // fail the same way whichever path ends up resolving the artifact.
@@ -1440,6 +1573,7 @@ impl PrioritizedDownloadClientRouter {
                     download_url,
                     &[],
                     scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
+                    &egress_policy,
                 )
                 .await?;
             return self.prepare_resolved_request(
@@ -1463,6 +1597,7 @@ impl PrioritizedDownloadClientRouter {
                 &proxy_config,
                 download_url,
                 request.info_hash_hint.clone(),
+                &egress_policy,
             )
             .await
         } else {
@@ -1470,6 +1605,7 @@ impl PrioritizedDownloadClientRouter {
                 &proxy_config,
                 download_url,
                 request.info_hash_hint.clone(),
+                &egress_policy,
             )
             .await
         };
@@ -1489,6 +1625,7 @@ impl PrioritizedDownloadClientRouter {
         proxy_config: &ProxyConfig,
         download_url: &str,
         info_hash_hint: Option<String>,
+        egress_policy: &PluginEgressPolicy,
     ) -> AppResult<ResolvedDownloadArtifact> {
         let provider_name = solver::solver_provider_name(proxy_config.provider_type);
         let fetched = self
@@ -1499,6 +1636,7 @@ impl PrioritizedDownloadClientRouter {
                 scryer_outbound_http::effective_proxy_request_timeout(
                     proxy_config.request_timeout_seconds,
                 ),
+                egress_policy,
                 ArtifactFetchEgress::TransportProxy(proxy_config),
             )
             .await?;
@@ -1546,6 +1684,7 @@ impl PrioritizedDownloadClientRouter {
         proxy_config: &ProxyConfig,
         download_url: &str,
         info_hash_hint: Option<String>,
+        egress_policy: &PluginEgressPolicy,
     ) -> AppResult<ResolvedDownloadArtifact> {
         let provider = proxy_config.provider_type;
         let provider_name = solver::solver_provider_name(provider);
@@ -1554,7 +1693,7 @@ impl PrioritizedDownloadClientRouter {
         // retry. Otherwise the solver itself becomes a deputy for blocked
         // link-local or cloud-metadata destinations.
         drop(
-            prepare_plugin_http_target(download_url, "indexer download artifact")
+            prepare_plugin_http_target(download_url, "indexer download artifact", egress_policy)
                 .await
                 .map_err(|error| {
                     warn!(error = %error, "blocked unsafe indexer download artifact URL");
@@ -1579,6 +1718,7 @@ impl PrioritizedDownloadClientRouter {
                 scryer_outbound_http::effective_proxy_request_timeout(
                     proxy_config.request_timeout_seconds,
                 ),
+                egress_policy,
             )
             .await
         {
@@ -1742,6 +1882,7 @@ impl PrioritizedDownloadClientRouter {
                     scryer_outbound_http::effective_proxy_request_timeout(
                         proxy_config.request_timeout_seconds,
                     ),
+                    egress_policy,
                 )
                 .await?;
             solver::SolvedSessionCache::shared().store_solution(
@@ -1776,6 +1917,7 @@ impl PrioritizedDownloadClientRouter {
                     scryer_outbound_http::effective_proxy_request_timeout(
                         proxy_config.request_timeout_seconds,
                     ),
+                    egress_policy,
                 )
                 .await?;
             return Self::classify_resolved_download_artifact(
@@ -1811,6 +1953,7 @@ impl PrioritizedDownloadClientRouter {
                         scryer_outbound_http::effective_proxy_request_timeout(
                             proxy_config.request_timeout_seconds,
                         ),
+                        egress_policy,
                     )
                     .await?;
                 Self::classify_resolved_download_artifact(
@@ -1853,12 +1996,14 @@ impl PrioritizedDownloadClientRouter {
         download_url: &str,
         session_headers: &[(String, String)],
         request_timeout: Duration,
+        egress_policy: &PluginEgressPolicy,
     ) -> AppResult<FetchedDownloadArtifact> {
         self.fetch_download_artifact(
             provider_name,
             download_url,
             session_headers,
             request_timeout,
+            egress_policy,
             ArtifactFetchEgress::Direct,
         )
         .await
@@ -1878,6 +2023,7 @@ impl PrioritizedDownloadClientRouter {
         download_url: &str,
         session_headers: &[(String, String)],
         request_timeout: Duration,
+        egress_policy: &PluginEgressPolicy,
         egress: ArtifactFetchEgress<'_>,
     ) -> AppResult<FetchedDownloadArtifact> {
         let original = url::Url::parse(download_url)
@@ -1916,6 +2062,7 @@ impl PrioritizedDownloadClientRouter {
                         prepare_plugin_http_target_from_url(
                             current.clone(),
                             "indexer download artifact",
+                            egress_policy,
                         ),
                     )
                     .await
@@ -3759,46 +3906,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         &self,
         excluded_client_types: &[&str],
     ) -> AppResult<Vec<DownloadQueueItem>> {
-        let clients = self
-            .list_enabled_clients_by_priority_excluding(excluded_client_types)
-            .await?;
-        if clients.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut all_items = Vec::new();
-        let mut read_summary = FeedbackReadSummary::default();
-        let reads = self
-            .poll_feedback_clients(
-                clients,
-                DownloadFeedbackReadKind::Queue,
-                "queue listing",
-                |client, scope| async move { client.list_queue_with_feedback_scope(&scope).await },
-            )
-            .await;
-        for (config, elapsed, result) in reads {
-            match result {
-                Ok(mut items) => {
-                    self.record_feedback_read_success(&config.id, DownloadFeedbackReadKind::Queue);
-                    read_summary.record_success();
-                    for item in &mut items {
-                        item.client_id = config.id.clone();
-                        item.client_name = config.name.clone();
-                    }
-                    all_items.extend(items);
-                }
-                Err(error) => {
-                    self.record_feedback_read_failure(
-                        &config.id,
-                        DownloadFeedbackReadKind::Queue,
-                        elapsed,
-                    );
-                    read_summary.record_error(&error);
-                    tracing::warn!(client_id = %config.id, error = %error, "failed to list queue");
-                }
-            }
-        }
-        read_summary.finish()?;
-        Ok(all_items)
+        Ok(self
+            .queue_listing_excluding_client_types(excluded_client_types)
+            .await?
+            .items)
+    }
+
+    async fn list_queue_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.queue_listing_excluding_client_types(&[]).await
     }
 
     async fn list_queue_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadQueueItem>> {
@@ -3850,49 +3965,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        let clients = self.list_enabled_clients_by_priority().await?;
-        if clients.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut all_items = Vec::new();
-        let mut read_summary = FeedbackReadSummary::default();
-        let reads = self
-            .poll_feedback_clients(
-                clients,
-                DownloadFeedbackReadKind::History,
-                "history listing",
-                |client, scope| async move {
-                    client.list_history_with_feedback_scope(&scope).await
-                },
-            )
-            .await;
-        for (config, elapsed, result) in reads {
-            match result {
-                Ok(mut items) => {
-                    self.record_feedback_read_success(
-                        &config.id,
-                        DownloadFeedbackReadKind::History,
-                    );
-                    read_summary.record_success();
-                    for item in &mut items {
-                        item.client_id = config.id.clone();
-                        item.client_name = config.name.clone();
-                    }
-                    all_items.extend(items);
-                }
-                Err(error) => {
-                    self.record_feedback_read_failure(
-                        &config.id,
-                        DownloadFeedbackReadKind::History,
-                        elapsed,
-                    );
-                    read_summary.record_error(&error);
-                    tracing::warn!(client_id = %config.id, error = %error, "failed to list history");
-                }
-            }
-        }
-        read_summary.finish()?;
-        Ok(all_items)
+        Ok(self.history_listing().await?.items)
+    }
+
+    async fn list_history_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.history_listing().await
     }
 
     async fn list_recent_activity(&self, limit: usize) -> AppResult<Vec<DownloadQueueItem>> {
@@ -5058,6 +5135,7 @@ mod tests {
                 // Deliberately unresolvable: only the proxy can reach it.
                 "http://indexer.example/download?id=1",
                 None,
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("the proxied artifact fetch should resolve");
@@ -5087,6 +5165,7 @@ mod tests {
                 &proxy_config,
                 "http://indexer.example/download?id=1",
                 None,
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect_err("an unreachable proxy must fail the fetch");
@@ -5127,6 +5206,7 @@ mod tests {
                 &proxy_config,
                 &format!("http://{}/download?id=1", origin.addr()),
                 None,
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("the tunnel must carry the artifact fetch");
@@ -5183,6 +5263,7 @@ mod tests {
                 &proxy_config,
                 &format!("{}/download?id=1", origin.uri()),
                 None,
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect_err("an unreachable tunnel must fail the fetch");
@@ -5233,6 +5314,7 @@ mod tests {
                 &format!("{}/start", server.uri()),
                 &[("x-indexer-session".to_string(), "secret".to_string())],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("relative redirect should resolve");
@@ -5279,6 +5361,7 @@ mod tests {
                 &format!("{}/start", origin.uri()),
                 &[("x-indexer-session".to_string(), "secret".to_string())],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("cross-origin redirect should resolve without credentials");
@@ -5312,6 +5395,7 @@ mod tests {
                 &format!("{}/magnet", server.uri()),
                 &[],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect("magnet redirect should resolve");
@@ -5323,6 +5407,7 @@ mod tests {
                 &format!("{}/loop", server.uri()),
                 &[],
                 Duration::from_secs(5),
+                &PluginEgressPolicy::default(),
             )
             .await
             .expect_err("redirect loops must fail");
@@ -5585,7 +5670,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("Trawl should resolve embedded NZB content");
 
@@ -5657,7 +5747,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("direct artifact should bypass Trawl");
 
@@ -5745,7 +5840,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("Trawl should refetch binary torrent content");
 
@@ -5828,7 +5928,12 @@ mod tests {
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect("Byparr should refetch the NZB with its clearance session");
 
@@ -5898,7 +6003,12 @@ mod tests {
         };
 
         let error = no_client_router()
-            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(
+                &proxy,
+                &download_url,
+                None,
+                &PluginEgressPolicy::default(),
+            )
             .await
             .expect_err("Trawl server errors must fail as solver unavailable");
 
@@ -5988,6 +6098,7 @@ mod tests {
                         target,
                         &[],
                         Duration::from_secs(1),
+                        &PluginEgressPolicy::default(),
                     )
                     .await
                 {
@@ -6001,7 +6112,12 @@ mod tests {
                 );
 
                 let error = match router
-                    .resolve_download_artifact_via_proxy(&proxy, target, None)
+                    .resolve_download_artifact_via_proxy(
+                        &proxy,
+                        target,
+                        None,
+                        &PluginEgressPolicy::default(),
+                    )
                     .await
                 {
                     Ok(_) => panic!("metadata destination must not be delegated to the solver"),
@@ -10695,6 +10811,94 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(first[0].download_client_item_id, "fast");
         assert_eq!(second[0].download_client_item_id, "fast");
+    }
+
+    /// The aggregate read degrades a failing client to an empty contribution
+    /// so one dead client cannot blind the others, which leaves the report as
+    /// the only trace of it: a client that errored and a client skipped while
+    /// in feedback backoff are both named as unreadable.
+    #[tokio::test]
+    async fn read_report_names_failing_and_backed_off_clients() {
+        let failing_client = Arc::new(FailingQueueDownloadClient::default());
+        let healthy_client = Arc::new(MockDownloadClient::default());
+
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![
+                    ("failing".to_string(), failing_client.clone()),
+                    ("healthy".to_string(), healthy_client.clone()),
+                ],
+            });
+
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("failing", "Failing", "qbittorrent", 0),
+                    test_config("healthy", "Healthy", "qbittorrent", 10),
+                ],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let queue = router
+            .list_queue_with_read_report()
+            .await
+            .expect("a partial read is not an error");
+        assert_eq!(queue.polled_client_count, 2);
+        assert_eq!(queue.unreadable_client_ids, vec!["failing".to_string()]);
+        assert!(!queue.all_unreadable());
+
+        // The failure armed backoff: the next read skips the client without
+        // asking it, and it is still reported as unreadable.
+        let queue = router.list_queue_with_read_report().await.unwrap();
+        assert_eq!(queue.unreadable_client_ids, vec!["failing".to_string()]);
+        assert_eq!(failing_client.list_queue_call_count(), 1);
+
+        // History: the failing client has no history read at all.
+        let history = router.list_history_with_read_report().await.unwrap();
+        assert_eq!(history.polled_client_count, 2);
+        assert_eq!(history.unreadable_client_ids, vec!["failing".to_string()]);
+    }
+
+    /// A read nobody answered is reported as such without becoming an error:
+    /// the plain listing keeps its "empty, not Err" shape for every caller
+    /// that never asked for the report.
+    #[tokio::test]
+    async fn read_report_marks_a_read_nobody_answered_without_erroring() {
+        let failing_client = Arc::new(FailingQueueDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("failing".to_string(), failing_client.clone())],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("failing", "Failing", "qbittorrent", 0)],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let queue = router
+            .list_queue_with_read_report()
+            .await
+            .expect("non-timeout failures degrade instead of erroring");
+        assert!(queue.all_unreadable());
+        assert!(queue.items.is_empty());
+        assert!(router.list_queue().await.unwrap().is_empty());
+        assert!(
+            router
+                .list_history_with_read_report()
+                .await
+                .unwrap()
+                .all_unreadable()
+        );
     }
 
     #[tokio::test]

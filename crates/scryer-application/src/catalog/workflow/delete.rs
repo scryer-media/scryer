@@ -28,6 +28,65 @@ pub struct DeleteMediaFileJobAccepted {
     pub job_run: JobRun,
 }
 
+/// How the on-disk half of a media-file delete is authorized.
+#[derive(Clone, Debug)]
+pub(crate) enum MediaFileDiskDeletion {
+    /// Leave the files on disk; only catalog rows are removed.
+    Keep,
+    /// Delete from disk after validating this file's own preview fingerprint.
+    DeleteConfirmed(DeleteExecutionConfirmation),
+    /// Delete from disk; an aggregate preview covering this file was already
+    /// validated by the caller.
+    DeletePreapproved,
+}
+
+/// One media file that could not be deleted during a batch episode-file delete.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeleteEpisodeFileFailure {
+    file_id: String,
+    error: String,
+}
+
+/// Outcome of the batch episode-file deletion run loop. Internal to the job;
+/// it is persisted as the run's `summary_json` rather than returned to callers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DeleteEpisodeFilesOutcome {
+    deleted_file_ids: Vec<String>,
+    failed: Vec<DeleteEpisodeFileFailure>,
+}
+
+/// Accepted batch episode-file deletion: the background run plus the media
+/// files it will work through.
+#[derive(Clone, Debug)]
+pub struct DeleteEpisodeFilesJobAccepted {
+    pub job_run: JobRun,
+    pub accepted_file_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeFileDeletionProgress {
+    status: String,
+    phase: String,
+    title_id: String,
+    delete_from_disk: bool,
+    total: usize,
+    processed: usize,
+    deleted: usize,
+    failed: usize,
+    current_file_id: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeFileDeletionSummary {
+    title_id: String,
+    delete_from_disk: bool,
+    deleted_file_ids: Vec<String>,
+    failed: Vec<DeleteEpisodeFileFailure>,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TitleDeletionProgress {
@@ -874,6 +933,31 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        let disk_deletion = if delete_from_disk {
+            MediaFileDiskDeletion::DeleteConfirmed(delete_confirmation.ok_or_else(|| {
+                AppError::Validation(
+                    "delete preview confirmation is required before deleting files on disk".into(),
+                )
+            })?)
+        } else {
+            MediaFileDiskDeletion::Keep
+        };
+        self.delete_media_file_authorized(actor, media_file, disk_deletion)
+            .await
+    }
+
+    /// Delete one media file's disk paths (per `disk_deletion`), catalog row,
+    /// dependents, and any movie collection that pointed at it. The caller is
+    /// responsible for the `ManageTitles` permission check.
+    pub(crate) async fn delete_media_file_authorized(
+        &self,
+        actor: &User,
+        media_file: TitleMediaFile,
+        disk_deletion: MediaFileDiskDeletion,
+    ) -> AppResult<()> {
+        let owned_file_id = media_file.id.clone();
+        let file_id = owned_file_id.as_str();
+        let delete_from_disk = !matches!(disk_deletion, MediaFileDiskDeletion::Keep);
         // Removing a file (or its disk copy) under an in-flight move would
         // invalidate the plan the operation is executing (FR-084). The bulk
         // deletion job routes through here too.
@@ -901,22 +985,22 @@ impl AppUseCase {
             })
             .collect::<Vec<_>>();
 
-        if delete_from_disk {
-            let delete_confirmation = delete_confirmation.ok_or_else(|| {
-                AppError::Validation(
-                    "delete preview confirmation is required before deleting files on disk".into(),
-                )
-            })?;
-            let DeleteExecutionConfirmation {
+        match disk_deletion {
+            MediaFileDiskDeletion::Keep => {}
+            MediaFileDiskDeletion::DeleteConfirmed(DeleteExecutionConfirmation {
                 preview_fingerprint,
                 typed_confirmation,
-            } = delete_confirmation;
-            self.execute_delete_media_file(
-                file_id,
-                &preview_fingerprint,
-                typed_confirmation.as_deref(),
-            )
-            .await?;
+            }) => {
+                self.execute_delete_media_file(
+                    file_id,
+                    &preview_fingerprint,
+                    typed_confirmation.as_deref(),
+                )
+                .await?;
+            }
+            MediaFileDiskDeletion::DeletePreapproved => {
+                self.execute_delete_media_file_preapproved(file_id).await?;
+            }
         }
 
         self.delete_media_file_record_with_dependents(file_id).await?;
@@ -968,6 +1052,370 @@ impl AppUseCase {
         }
 
         Ok(())
+    }
+
+    /// Start a background job deleting every media file linked to `episode_ids`
+    /// on `title_id`.
+    ///
+    /// Everything that can fail as a whole is validated here, before the run
+    /// exists, so the caller sees it as a plain error: the targets are resolved
+    /// (which re-checks `ManageTitles` on the title's library and rejects an
+    /// empty selection), the aggregate preview is recomputed, and when
+    /// `delete_from_disk` is set its fingerprint must still match what the
+    /// client confirmed. The per-file interactive guards are also taken up front
+    /// for every accepted file and held for the lifetime of the run, so a batch
+    /// cannot race a single-file deletion job over the same media file.
+    ///
+    /// Files whose preview could not be built are still accepted and recorded as
+    /// failures while the run works through the rest.
+    pub async fn start_delete_episode_files_job(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &[String],
+        delete_from_disk: bool,
+        delete_confirmation: Option<DeleteExecutionConfirmation>,
+    ) -> AppResult<DeleteEpisodeFilesJobAccepted> {
+        let preview = self
+            .preview_delete_episode_files(actor, title_id, episode_ids)
+            .await?;
+
+        if delete_from_disk {
+            let DeleteExecutionConfirmation {
+                preview_fingerprint,
+                typed_confirmation,
+            } = delete_confirmation.ok_or_else(|| {
+                AppError::Validation(
+                    "delete preview confirmation is required before deleting files on disk".into(),
+                )
+            })?;
+            crate::library::user_delete::ensure_aggregate_delete_confirmation(
+                &preview.preview,
+                &preview_fingerprint,
+                typed_confirmation.as_deref(),
+            )?;
+        }
+
+        let library_id = self
+            .services
+            .catalog
+            .libraries
+            .title_library_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+
+        // Take every per-file guard before the run is created. A busy file aborts
+        // the whole request and the guards taken so far are dropped here, so a
+        // rejected batch leaves nothing locked.
+        let mut deletion_guards = Vec::with_capacity(preview.items.len());
+        for item in &preview.items {
+            let guard = self
+                .runtime
+                .jobs
+                .interactive_operation_guards
+                .try_acquire(&format!("media-file:{}", item.file_id))
+                .await
+                .ok_or_else(|| {
+                    AppError::Validation(format!(
+                        "a media file deletion is already running for {}",
+                        item.file_id
+                    ))
+                })?;
+            deletion_guards.push(guard);
+        }
+
+        let accepted_file_ids = preview
+            .items
+            .iter()
+            .map(|item| item.file_id.clone())
+            .collect::<Vec<_>>();
+        let total = accepted_file_ids.len();
+        let now = chrono::Utc::now();
+        let mut run = JobRunRecord {
+            id: Id::new().0,
+            job_key: JobKey::MediaFileDeletion,
+            operation_type: format!("media_file_deletion:{library_id}:episodes:{total}"),
+            status: JobRunStatus::Running,
+            trigger_source: JobTriggerSource::Manual,
+            actor_user_id: Some(actor.id.clone()),
+            progress_json: serde_json::to_string(&EpisodeFileDeletionProgress {
+                status: JobRunStatus::Running.as_str().to_string(),
+                phase: "queued".to_string(),
+                title_id: title_id.to_string(),
+                delete_from_disk,
+                total,
+                processed: 0,
+                deleted: 0,
+                failed: 0,
+                current_file_id: None,
+            })
+            .ok(),
+            summary_json: None,
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        run = self.services.events.job_runs.create_job_run(&run).await?;
+        let job_run = JobRun::from_record(&run, None);
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(job_run.clone())
+            .await;
+        let actor_event = DomainEventActor::from(actor);
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor_event.clone(),
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
+            .await;
+
+        let app = self.clone();
+        let actor = actor.clone();
+        let title_id = title_id.to_string();
+        let items = preview.items;
+        tokio::spawn(async move {
+            app.run_delete_episode_files_job(
+                run,
+                actor_event,
+                actor,
+                title_id,
+                items,
+                delete_from_disk,
+                deletion_guards,
+            )
+            .await;
+        });
+
+        Ok(DeleteEpisodeFilesJobAccepted {
+            job_run,
+            accepted_file_ids,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)] // The spawned job boundary owns its inputs explicitly.
+    async fn run_delete_episode_files_job(
+        &self,
+        mut run: JobRunRecord,
+        actor_event: DomainEventActor,
+        actor: User,
+        title_id: String,
+        items: Vec<crate::library::user_delete::DeleteEpisodeFilePreviewResult>,
+        delete_from_disk: bool,
+        _deletion_guards: Vec<tokio::sync::OwnedMutexGuard<()>>,
+    ) {
+        let total = items.len();
+        let mut outcome = DeleteEpisodeFilesOutcome::default();
+
+        for item in &items {
+            let _ = self
+                .update_episode_file_deletion_progress(
+                    &mut run,
+                    EpisodeFileDeletionProgress {
+                        status: JobRunStatus::Running.as_str().to_string(),
+                        phase: if delete_from_disk {
+                            "deleting_files".to_string()
+                        } else {
+                            "cleaning_catalog".to_string()
+                        },
+                        title_id: title_id.clone(),
+                        delete_from_disk,
+                        total,
+                        processed: outcome.deleted_file_ids.len() + outcome.failed.len(),
+                        deleted: outcome.deleted_file_ids.len(),
+                        failed: outcome.failed.len(),
+                        current_file_id: Some(item.file_id.clone()),
+                    },
+                )
+                .await;
+
+            if let Some(error) = item.error.as_deref() {
+                outcome.failed.push(DeleteEpisodeFileFailure {
+                    file_id: item.file_id.clone(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+            match self
+                .delete_preapproved_media_file(&actor, &item.file_id, delete_from_disk)
+                .await
+            {
+                Ok(()) => outcome.deleted_file_ids.push(item.file_id.clone()),
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        title_id = %title_id,
+                        file_id = %item.file_id,
+                        episode_id = %item.episode_id,
+                        "failed to delete episode media file in batch"
+                    );
+                    outcome.failed.push(DeleteEpisodeFileFailure {
+                        file_id: item.file_id.clone(),
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+
+        info!(
+            title_id = %title_id,
+            deleted = outcome.deleted_file_ids.len(),
+            failed = outcome.failed.len(),
+            delete_from_disk = %delete_from_disk,
+            "episode media files deleted"
+        );
+
+        let summary = EpisodeFileDeletionSummary {
+            title_id: title_id.clone(),
+            delete_from_disk,
+            deleted_file_ids: outcome.deleted_file_ids,
+            failed: outcome.failed,
+        };
+        // Same ladder as the title-deletion job: a run that deleted nothing is
+        // a failure, a partial batch is a warning.
+        let status = if summary.failed.is_empty() {
+            JobRunStatus::Completed
+        } else if summary.deleted_file_ids.is_empty() {
+            JobRunStatus::Failed
+        } else {
+            JobRunStatus::Warning
+        };
+        let summary_text = format!(
+            "Deleted {} of {total} episode files",
+            summary.deleted_file_ids.len()
+        );
+        let error_text = (!summary.failed.is_empty()).then(|| {
+            summary
+                .failed
+                .iter()
+                .map(|failure| format!("{}: {}", failure.file_id, failure.error))
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        if let Err(error) = self
+            .finish_episode_file_deletion_job(
+                run,
+                actor_event,
+                status,
+                total,
+                summary_text,
+                error_text,
+                summary,
+            )
+            .await
+        {
+            warn!(error = %error, title_id = %title_id, "failed to finish episode file deletion job");
+        }
+    }
+
+    async fn update_episode_file_deletion_progress(
+        &self,
+        run: &mut JobRunRecord,
+        progress: EpisodeFileDeletionProgress,
+    ) -> AppResult<()> {
+        run.progress_json = serde_json::to_string(&progress).ok();
+        run.updated_at = chrono::Utc::now();
+        let updated = self.services.events.job_runs.update_job_run(run).await?;
+        *run = updated.clone();
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&updated, None))
+            .await;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)] // Completion fields are persisted as one job outcome.
+    async fn finish_episode_file_deletion_job(
+        &self,
+        mut run: JobRunRecord,
+        actor: DomainEventActor,
+        status: JobRunStatus,
+        total: usize,
+        summary_text: String,
+        error_text: Option<String>,
+        summary: EpisodeFileDeletionSummary,
+    ) -> AppResult<()> {
+        let completed_at = chrono::Utc::now();
+        run.status = status;
+        run.progress_json = serde_json::to_string(&EpisodeFileDeletionProgress {
+            status: status.as_str().to_string(),
+            phase: "completed".to_string(),
+            title_id: summary.title_id.clone(),
+            delete_from_disk: summary.delete_from_disk,
+            total,
+            processed: total,
+            deleted: summary.deleted_file_ids.len(),
+            failed: summary.failed.len(),
+            current_file_id: None,
+        })
+        .ok();
+        run.summary_text = Some(summary_text);
+        run.summary_json = serde_json::to_string(&summary).ok();
+        run.error_text = error_text;
+        run.completed_at = Some(completed_at);
+        run.updated_at = completed_at;
+        let updated = self.services.events.job_runs.update_job_run(&run).await?;
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&updated, None))
+            .await;
+        let payload = if status == JobRunStatus::Failed {
+            DomainEventPayload::JobRunFailed(JobRunFailedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                error_text: updated.error_text.clone(),
+            })
+        } else {
+            DomainEventPayload::JobRunCompleted(JobRunCompletedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                summary_text: updated.summary_text.clone(),
+            })
+        };
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor,
+                updated.id.clone(),
+                payload,
+            ))
+            .await;
+        Ok(())
+    }
+
+    /// Delete one media file whose disk removal was already authorized by an
+    /// aggregate preview. The caller holds this file's interactive guard for the
+    /// lifetime of the batch job, so no guard is taken here.
+    async fn delete_preapproved_media_file(
+        &self,
+        actor: &User,
+        file_id: &str,
+        delete_from_disk: bool,
+    ) -> AppResult<()> {
+        let media_file = self
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(file_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        let disk_deletion = if delete_from_disk {
+            MediaFileDiskDeletion::DeletePreapproved
+        } else {
+            MediaFileDiskDeletion::Keep
+        };
+        self.delete_media_file_authorized(actor, media_file, disk_deletion)
+            .await
     }
 
     pub(crate) async fn cleanup_media_file_subtitle_state(&self, file_id: &str) -> AppResult<()> {

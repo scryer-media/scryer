@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   TableActionsCell,
   TableCell,
@@ -28,6 +29,7 @@ import {
   seriesOverviewEpisodeAutoSearchId,
   seriesOverviewEpisodeInteractiveSearchId,
   seriesOverviewEpisodeRowId,
+  seriesOverviewEpisodeSelectId,
 } from "@/lib/utils/dom-ids";
 import { episodeAvailabilityPill } from "@/lib/utils/episode-media-availability";
 import type {
@@ -139,6 +141,11 @@ export type EpisodeRowProps = {
   onRefreshSubtitles?: () => Promise<void> | void;
   onRunEpisodeSearch?: (episode: CollectionEpisode) => void;
   onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
+  /** Present only when the viewer can manage the title; enables the delete-selection checkbox. */
+  onToggleSelected?: (episodeId: string) => void;
+  selected?: boolean;
+  /** True while a deletion job is working through this episode's media files. */
+  selectionPending?: boolean;
   queueItem?: DownloadQueueItem;
   releaseBlocklistEntries: TitleReleaseBlocklistEntry[];
   searchBlocked: boolean;
@@ -171,6 +178,9 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   onRefreshSubtitles,
   onRunEpisodeSearch,
   onSetEpisodeMonitored,
+  onToggleSelected,
+  selected = false,
+  selectionPending = false,
   queueItem,
   releaseBlocklistEntries,
   searchBlocked,
@@ -306,6 +316,21 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   const episodeTypeBadges = renderEpisodeTypeBadges(episode, t);
   const qualityCell = renderEpisodeQualityCell(episode, queueItem, t);
 
+  const episodeSelectLabel = t("seriesOverview.selectEpisodeForDelete", {
+    name: episode.title || episode.episodeLabel || String(episode.episodeNumber ?? ""),
+  });
+  const selectionCheckbox = onToggleSelected ? (
+    <Checkbox
+      id={seriesOverviewEpisodeSelectId(episode.id)}
+      size="table"
+      checked={selected}
+      disabled={selectionPending}
+      aria-label={episodeSelectLabel}
+      onClick={(event) => event.stopPropagation()}
+      onCheckedChange={() => onToggleSelected(episode.id)}
+    />
+  ) : null;
+
   if (isMobile) {
     return (
       <div
@@ -317,6 +342,9 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         )}
       >
         <div className="flex items-start gap-3">
+          {selectionCheckbox ? (
+            <div className="mt-1 shrink-0">{selectionCheckbox}</div>
+          ) : null}
           <button
             id={selectorId("series-overview-episode-monitor", episode.id)}
             type="button"
@@ -434,6 +462,11 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         data-episode-id={episode.id}
         className={`cv-auto-row-sm${episode.monitored ? "" : " opacity-50"}`}
       >
+        {selectionCheckbox ? (
+          <TableCell className="px-2 text-center align-middle">
+            <div className="flex items-center justify-center">{selectionCheckbox}</div>
+          </TableCell>
+        ) : null}
         <TableCell className="px-2 text-center align-middle">
           <div className="flex items-center justify-center">
             <button
@@ -544,7 +577,10 @@ export const EpisodeRow = React.memo(function EpisodeRow({
       </TableRow>
       {isPanelOpen ? (
         <TableRow id={selectorId("series-overview-episode-panel", episode.id)}>
-          <TableCell colSpan={6} className="border-t border-border bg-background/40 p-0">
+          <TableCell
+            colSpan={selectionCheckbox ? 7 : 6}
+            className="border-t border-border bg-background/40 p-0"
+          >
             <div className="px-4 py-3">
               {panelContent}
             </div>

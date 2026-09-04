@@ -287,6 +287,11 @@ export function SetupPluginsView({
                                       {t("settings.pluginBeta")}
                                     </Badge>
                                   ) : null}
+                                  {plugin.status === "deprecated" ? (
+                                    <Badge tone="negative">
+                                      {t("settings.pluginDeprecated")}
+                                    </Badge>
+                                  ) : null}
                                   {bytesLabel ? (
                                     <Badge
                                       tone="outline"

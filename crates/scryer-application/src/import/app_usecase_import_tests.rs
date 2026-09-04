@@ -114,7 +114,7 @@ fn titled(facet: MediaFacet, name: &str, year: Option<i32>) -> Title {
     title
 }
 
-/// The grab-time parse of `release_title` for `title`: what `discovery.rs`
+/// The grab-time parse of `release_title` for `title`: what `catalog/release_search.rs`
 /// scores a candidate against.
 fn grab_time_parse(release_title: &str, title: &Title) -> crate::ParsedReleaseMetadata {
     let evidence = crate::acquisition_release_search::canonical_title_evidence(title);

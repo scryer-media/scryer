@@ -7,6 +7,7 @@ use scryer_domain::{
 };
 use std::collections::{HashMap, HashSet};
 
+use crate::media::monitor_selections::delete_monitor_selections_for_library_tx;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 const LIBRARY_ROOT_COLUMNS: &str = "libraries.id, libraries.facet, libraries.name, libraries.slug,
@@ -106,6 +107,7 @@ impl LibraryRepository for LibraryStore {
         SqlRuntime::run_in_transaction(&self.datastore, "delete_library", move |tx| {
             let library_id = library_id.clone();
             Box::pin(async move {
+                delete_monitor_selections_for_library_tx(tx, &library_id).await?;
                 tx.execute(
                     "DELETE FROM libraries WHERE id = {}",
                     &[SqlArg::Text(library_id)],

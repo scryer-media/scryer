@@ -302,6 +302,18 @@ impl MetadataQueries {
                 })
                 .collect(),
             episodes,
+            anime_movies: series
+                .anime_movies
+                .into_iter()
+                .map(|movie| MetadataAnimeMoviePayload {
+                    external_ids: metadata_anime_movie_external_ids(&movie),
+                    name: movie.name,
+                    year: movie.year,
+                    association_confidence: movie.association_confidence,
+                    continuity_status: movie.continuity_status,
+                    placement: movie.placement,
+                })
+                .collect(),
         })
     }
 
@@ -393,4 +405,27 @@ impl MetadataQueries {
         }
         Ok(payloads)
     }
+}
+
+/// Provider identifiers for a companion anime movie, in the same source order
+/// the domain uses to derive a movie's canonical selection key.
+fn metadata_anime_movie_external_ids(
+    movie: &scryer_application::AnimeMovie,
+) -> Vec<ExternalIdPayload> {
+    [
+        ("tvdb", movie.movie_tvdb_id.map(|id| id.to_string())),
+        ("tmdb", movie.movie_tmdb_id.map(|id| id.to_string())),
+        ("imdb", movie.movie_imdb_id.clone()),
+        ("anidb", movie.movie_anidb_id.map(|id| id.to_string())),
+        ("mal", movie.movie_mal_id.map(|id| id.to_string())),
+    ]
+    .into_iter()
+    .filter_map(|(source, value)| {
+        let value = value?.trim().to_string();
+        (!value.is_empty()).then(|| ExternalIdPayload {
+            source: source.to_string(),
+            value,
+        })
+    })
+    .collect()
 }

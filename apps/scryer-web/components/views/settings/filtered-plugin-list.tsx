@@ -212,7 +212,8 @@ export function FilteredPluginList({
                 plugin.official ||
                 plugin.supportTier === "verified_community" ||
                 plugin.supportTier === "unverified" ||
-                plugin.status === "beta";
+                plugin.status === "beta" ||
+                plugin.status === "deprecated";
               return (
                 <div
                   key={plugin.id}
@@ -264,6 +265,11 @@ export function FilteredPluginList({
                             ) : null}
                             {plugin.status === "beta" ? (
                               <Badge tone="warning">{t("settings.pluginBeta")}</Badge>
+                            ) : null}
+                            {plugin.status === "deprecated" ? (
+                              <Badge tone="negative">
+                                {t("settings.pluginDeprecated")}
+                              </Badge>
                             ) : null}
                             {plugin.builtin && plugin.sourceKind === "downloaded" ? (
                               <Badge tone="warning">

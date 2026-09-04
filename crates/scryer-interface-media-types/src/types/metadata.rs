@@ -148,6 +148,25 @@ pub struct MetadataSeriesPayload {
     pub seasons: Vec<MetadataSeasonPayload>,
     /// Episode metadata; empty when not requested or unavailable.
     pub episodes: Vec<MetadataEpisodePayload>,
+    /// Companion movies reported for an anime series; empty for other series.
+    pub anime_movies: Vec<MetadataAnimeMoviePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Metadata gateway companion-movie record for an anime series.
+pub struct MetadataAnimeMoviePayload {
+    /// Movie name.
+    pub name: String,
+    /// Release year, or null when unavailable.
+    pub year: Option<i32>,
+    /// How confidently the provider associates the movie with the series.
+    pub association_confidence: String,
+    /// Whether the movie is canon to the series.
+    pub continuity_status: String,
+    /// Where the movie sits relative to the series seasons.
+    pub placement: String,
+    /// Provider identifiers for the movie.
+    pub external_ids: Vec<ExternalIdPayload>,
 }
 
 #[derive(SimpleObject, Clone)]

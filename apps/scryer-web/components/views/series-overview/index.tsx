@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FileInput, FolderOpen, Loader2, X } from "lucide-react";
+import { FileInput, FolderOpen, Loader2, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,10 @@ import {
   releaseQueueScopeInput,
 } from "@/lib/utils/release-queue-scope";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
+import {
+  SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID,
+  SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID,
+} from "@/lib/utils/dom-ids";
 import {
   queueExistingMutation,
   queueReplacementMutation,
@@ -170,6 +174,21 @@ type Props = {
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   primaryMovieFileUpdatingId?: string | null;
+  /**
+   * Open the confirm flow for deleting the media files of the selected
+   * episodes. Only supplied when the viewer can manage the title.
+   */
+  onRequestDeleteEpisodeFiles?: (episodeIds: string[]) => void;
+  /**
+   * Bumped by the container each time a deletion job is accepted; the selection
+   * is cleared whenever it changes.
+   */
+  episodeSelectionResetToken?: number;
+  /**
+   * Episodes whose media files an in-flight deletion job is working through.
+   * Their rows cannot be selected until that run finishes.
+   */
+  pendingEpisodeIds?: ReadonlySet<string>;
   onOpenFixMatch?: () => void;
   moreLikeThisActions?: TitleMoreLikeThisStripActions;
 };
@@ -229,6 +248,9 @@ function SeriesOverviewViewImpl({
   onDeleteFile,
   onMakePrimaryFile,
   primaryMovieFileUpdatingId = null,
+  onRequestDeleteEpisodeFiles,
+  episodeSelectionResetToken,
+  pendingEpisodeIds,
   onOpenFixMatch,
   moreLikeThisActions,
 }: Props) {
@@ -268,6 +290,9 @@ function SeriesOverviewViewImpl({
   );
 
   const [expandedKeys, setExpandedKeys] = React.useState<Set<string>>(new Set());
+  const [selectedEpisodeIds, setSelectedEpisodeIds] = React.useState<Set<string>>(
+    () => new Set(),
+  );
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyEpisodeScope, setHistoryEpisodeScope] = React.useState<{
     episodeId: string;
@@ -295,6 +320,60 @@ function SeriesOverviewViewImpl({
       seriesMovieSearchAbortByLinkRef.current = {};
     };
   }, []);
+  const titleId = title?.id ?? null;
+  React.useEffect(() => {
+    setSelectedEpisodeIds(new Set());
+  }, [titleId]);
+
+  React.useEffect(() => {
+    if (!episodeSelectionResetToken) {
+      return;
+    }
+    setSelectedEpisodeIds(new Set());
+  }, [episodeSelectionResetToken]);
+
+  const handleToggleEpisodeSelected = React.useCallback((episodeId: string) => {
+    setSelectedEpisodeIds((current) => {
+      const next = new Set(current);
+      if (next.has(episodeId)) {
+        next.delete(episodeId);
+      } else {
+        next.add(episodeId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSetSeasonSelected = React.useCallback(
+    (episodeIds: string[], selected: boolean) => {
+      setSelectedEpisodeIds((current) => {
+        const next = new Set(current);
+        for (const episodeId of episodeIds) {
+          if (selected) {
+            next.add(episodeId);
+          } else {
+            next.delete(episodeId);
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleClearEpisodeSelection = React.useCallback(() => {
+    setSelectedEpisodeIds(new Set());
+  }, []);
+
+  const handleDeleteSelectedEpisodeFiles = React.useCallback(() => {
+    if (!onRequestDeleteEpisodeFiles || selectedEpisodeIds.size === 0) {
+      return;
+    }
+    onRequestDeleteEpisodeFiles([...selectedEpisodeIds]);
+  }, [onRequestDeleteEpisodeFiles, selectedEpisodeIds]);
+
+  const episodeSelectionEnabled = canManageTitle && Boolean(onRequestDeleteEpisodeFiles);
+
   const searchPrerequisiteNotice = canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice
     ? <TitleSearchDownloadClientNotice />
     : null;
@@ -1108,22 +1187,50 @@ function SeriesOverviewViewImpl({
       <div>
         <Card className="relative overflow-hidden">
           <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {/* min-h matches the small buttons so the header keeps one
+                height whether or not the selection controls are showing. */}
+            <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
                 <FolderOpen className="h-4 w-4" />
                 {t("title.seasonsAndEpisodes")}
               </CardTitle>
-              {canManageTitle && onOpenManualImport && completedDownloads && completedDownloads.length > 0 ? (
-                <Button
-                  className="w-full sm:w-auto"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onOpenManualImport(completedDownloads[0])}
-                >
-                  <FileInput className="mr-1.5 h-4 w-4" />
-                  {t("queue.manualImport")}
-                </Button>
-              ) : null}
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
+                  <>
+                    <Button
+                      id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearEpisodeSelection}
+                    >
+                      {t("seriesOverview.clearEpisodeSelection")}
+                    </Button>
+                    <Button
+                      id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleDeleteSelectedEpisodeFiles}
+                    >
+                      <Trash2 className="mr-1.5 h-4 w-4" />
+                      {t("seriesOverview.deleteSelectedEpisodeFiles", {
+                        count: selectedEpisodeIds.size,
+                      })}
+                    </Button>
+                  </>
+                ) : null}
+                {canManageTitle && onOpenManualImport && completedDownloads && completedDownloads.length > 0 ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onOpenManualImport(completedDownloads[0])}
+                  >
+                    <FileInput className="mr-1.5 h-4 w-4" />
+                    {t("queue.manualImport")}
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1213,6 +1320,14 @@ function SeriesOverviewViewImpl({
                     searchBlocked={searchBlockedByCollection[collection.id] === true}
                     onQueueFromSeasonSearch={canManageTitle ? onQueueFromSeasonSearch : undefined}
                     onDeleteFile={canManageTitle ? onDeleteFile : undefined}
+                    selectedEpisodeIds={episodeSelectionEnabled ? selectedEpisodeIds : undefined}
+                    pendingEpisodeIds={episodeSelectionEnabled ? pendingEpisodeIds : undefined}
+                    onToggleEpisodeSelected={
+                      episodeSelectionEnabled ? handleToggleEpisodeSelected : undefined
+                    }
+                    onSetSeasonSelected={
+                      episodeSelectionEnabled ? handleSetSeasonSelected : undefined
+                    }
                   />
                 );
               })}

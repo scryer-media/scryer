@@ -272,6 +272,22 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         ImageProxyKind::Poster,
         "w250",
     );
+    // Unlike the poster, no placeholder: requests submitted before background
+    // art was captured must fall back to the poster on the card.
+    let background_url = request
+        .background_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .and_then(|url| {
+            app.media_image_url(
+                Some(url),
+                Some("media_request"),
+                Some(&owner_id),
+                ImageProxyKind::Fanart,
+                "w1280",
+            )
+        });
     let rating_summary = request.rating_summary;
     MediaRequestPayload {
         id: request.id.into(),
@@ -283,6 +299,7 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         sort_title: request.sort_title,
         slug: request.slug,
         poster_url,
+        background_url,
         year: request.year,
         overview: request.overview,
         runtime_minutes: request.runtime_minutes,
@@ -308,6 +325,10 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
             .requested_monitor_type
             .as_deref()
             .and_then(monitor_type_value_from_normalized),
+        requested_monitor_selection: request
+            .requested_monitor_selection
+            .as_ref()
+            .map(monitor_selection_payload),
         resolved_by_user_id: request.resolved_by_user_id.map(Into::into),
         resolved_at: request.resolved_at,
         created_title_id: request.created_title_id.map(Into::into),
@@ -1050,6 +1071,30 @@ pub fn from_change_title_folder_preview(
     }
 }
 
+/// Domain selection -> GraphQL payload.
+pub fn monitor_selection_payload(
+    selection: &scryer_domain::MonitorSelection,
+) -> MonitorSelectionPayload {
+    MonitorSelectionPayload {
+        season_numbers: selection.seasons.clone(),
+        series_movies: selection
+            .series_movies
+            .iter()
+            .map(|movie| MonitorSelectionMoviePayload {
+                name: movie.name.clone(),
+                external_ids: movie
+                    .external_ids
+                    .iter()
+                    .map(|external_id| ExternalIdPayload {
+                        source: external_id.source.clone(),
+                        value: external_id.value.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 pub fn from_change_title_folder_result(
     result: ChangeTitleFolderResult,
 ) -> ChangeTitleFolderPayload {
@@ -1062,5 +1107,31 @@ pub fn from_change_title_folder_result(
         swapped_title: result.swapped_title.map(from_folder_match_title_ref),
         swapped_title_scan: result.swapped_title_scan.map(from_library_scan_summary),
         displaced_title: result.displaced_title.map(from_displaced_title_repair),
+    }
+}
+
+/// GraphQL input -> domain selection. Normalization (dedupe, dropping movies
+/// with no usable identifier) happens in the application layer.
+pub fn monitor_selection_from_input(
+    input: MonitorSelectionInput,
+) -> scryer_domain::MonitorSelection {
+    scryer_domain::MonitorSelection {
+        seasons: input.season_numbers,
+        series_movies: input
+            .series_movies
+            .unwrap_or_default()
+            .into_iter()
+            .map(|movie| scryer_domain::MonitorSelectionMovie {
+                name: movie.name,
+                external_ids: movie
+                    .external_ids
+                    .into_iter()
+                    .map(|external_id| scryer_domain::ExternalId {
+                        source: external_id.source,
+                        value: external_id.value,
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }

@@ -197,6 +197,16 @@ pub enum OAuthClientSourceValue {
     Custom,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What a registered OAuth client is for. Set at creation and immutable afterwards.
+pub enum OAuthClientKindValue {
+    /// A generic third-party application an administrator registered by hand.
+    Custom,
+    /// The Jellyfin Scryer plugin. Only this kind can be granted the `jellyfin-link` scope.
+    JellyfinPlugin,
+}
+
 #[derive(SimpleObject, Clone)]
 /// An OAuth application allowed to receive Scryer authorization codes.
 pub struct OAuthClientRegistrationPayload {
@@ -210,6 +220,8 @@ pub struct OAuthClientRegistrationPayload {
     pub enabled: bool,
     /// Whether the application is managed by Scryer or an administrator.
     pub source: OAuthClientSourceValue,
+    /// What the application is for. Immutable after creation.
+    pub kind: OAuthClientKindValue,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -886,6 +898,8 @@ pub struct CreateOAuthClientRegistrationInput {
     pub display_name: String,
     /// Exact HTTPS callback URLs permitted for this application.
     pub redirect_uris: Vec<String>,
+    /// What the application is for. Omission registers a generic `CUSTOM` application.
+    pub kind: Option<OAuthClientKindValue>,
 }
 
 #[derive(InputObject, Clone)]

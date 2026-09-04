@@ -8,9 +8,13 @@ use scryer_application::{
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestRequester, MediaRequestStatus,
-    NewDomainEvent, User,
+    MonitorSelection, NewDomainEvent, User,
 };
 
+use crate::media::monitor_selections::{
+    OWNER_KIND_MEDIA_REQUEST, load_monitor_selection, load_monitor_selections_for_owners,
+    replace_monitor_selection_tx,
+};
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::workflow::stores::append_domain_event_tx;
 
@@ -75,6 +79,13 @@ impl MediaRequestRepository for MediaRequestStore {
                 )
                 .await?;
                 insert_media_request_requester_tx(tx, &request.id, &requester.id, now).await?;
+                replace_monitor_selection_tx(
+                    tx,
+                    OWNER_KIND_MEDIA_REQUEST,
+                    &request.id,
+                    request.requested_monitor_selection.as_ref(),
+                )
+                .await?;
                 let event = append_domain_event_tx(tx, submitted_event).await?;
 
                 let request = load_media_request_tx(tx, &request.id)
@@ -156,7 +167,7 @@ impl MediaRequestRepository for MediaRequestStore {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
             "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                    poster_url, year, overview, runtime_minutes, language, content_status,
+                    poster_url, background_url, year, overview, runtime_minutes, language, content_status,
                     rating_summary_json,
                     requested_quality_profile_id, requested_quality_profile_name,
                     requested_monitor_type,
@@ -178,6 +189,12 @@ impl MediaRequestRepository for MediaRequestStore {
             load_media_request_external_ids(self.datastore.read_exec(), &request.id).await?;
         request.requesters =
             load_media_request_requesters(self.datastore.read_exec(), &request.id).await?;
+        request.requested_monitor_selection = load_monitor_selection(
+            self.datastore.read_exec(),
+            OWNER_KIND_MEDIA_REQUEST,
+            &request.id,
+        )
+        .await?;
         Ok(Some(request))
     }
 
@@ -227,6 +244,7 @@ impl MediaRequestRepository for MediaRequestStore {
         requested_quality_profile_id: String,
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
+        requested_monitor_selection: Option<MonitorSelection>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         let request_id = request_id.to_string();
@@ -238,6 +256,7 @@ impl MediaRequestRepository for MediaRequestStore {
                 let requested_quality_profile_id = requested_quality_profile_id.clone();
                 let requested_quality_profile_name = requested_quality_profile_name.clone();
                 let requested_monitor_type = requested_monitor_type.clone();
+                let requested_monitor_selection = requested_monitor_selection.clone();
                 let updated_event = updated_event.clone();
                 Box::pin(async move {
                     update_pending_request_preferences_tx(
@@ -246,6 +265,7 @@ impl MediaRequestRepository for MediaRequestStore {
                         requested_quality_profile_id,
                         requested_quality_profile_name,
                         requested_monitor_type,
+                        requested_monitor_selection,
                         updated_event,
                     )
                     .await
@@ -312,6 +332,20 @@ impl MediaRequestRepository for MediaRequestStore {
                 load_media_request_requesters(self.datastore.read_exec(), &request.id).await?;
             requests.push(request);
         }
+        // One query for the whole page rather than one per request.
+        let owner_ids = requests
+            .iter()
+            .map(|request| request.id.clone())
+            .collect::<Vec<_>>();
+        let mut selections = load_monitor_selections_for_owners(
+            self.datastore.read_exec(),
+            OWNER_KIND_MEDIA_REQUEST,
+            &owner_ids,
+        )
+        .await?;
+        for request in &mut requests {
+            request.requested_monitor_selection = selections.remove(&request.id);
+        }
         Ok(requests)
     }
 }
@@ -327,14 +361,14 @@ async fn insert_media_request_tx(
     tx.execute(
         "INSERT INTO media_requests (
             id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-            poster_url, year, overview, runtime_minutes, language, content_status,
+            poster_url, background_url, year, overview, runtime_minutes, language, content_status,
             rating_summary_json,
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
             created_by_user_id, created_at, updated_at
         ) VALUES (
             {}, {}, {}, {}, {}, {}, {}, {},
-            {}, {}, {}, {}, {}, {},
+            {}, {}, {}, {}, {}, {}, {},
             {},
             {}, {}, {},
             {}, {}, {}
@@ -349,6 +383,7 @@ async fn insert_media_request_tx(
             SqlArg::OptText(request.sort_title.clone()),
             SqlArg::OptText(request.slug.clone()),
             SqlArg::OptText(request.poster_url.clone()),
+            SqlArg::OptText(request.background_url.clone()),
             SqlArg::OptI32(request.year),
             SqlArg::OptText(request.overview.clone()),
             SqlArg::OptI32(request.runtime_minutes),
@@ -536,6 +571,7 @@ async fn update_pending_request_preferences_tx(
     requested_quality_profile_id: String,
     requested_quality_profile_name: String,
     requested_monitor_type: Option<String>,
+    requested_monitor_selection: Option<MonitorSelection>,
     updated_event: NewDomainEvent,
 ) -> AppResult<MediaRequestUpdateResult> {
     let now = Utc::now();
@@ -563,6 +599,14 @@ async fn update_pending_request_preferences_tx(
         ));
     }
 
+    replace_monitor_selection_tx(
+        tx,
+        OWNER_KIND_MEDIA_REQUEST,
+        request_id,
+        requested_monitor_selection.as_ref(),
+    )
+    .await?;
+
     let event = append_domain_event_tx(tx, updated_event).await?;
     let request = load_media_request_tx(tx, request_id)
         .await?
@@ -577,7 +621,7 @@ async fn load_media_request_tx(
     let row = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                poster_url, year, overview, runtime_minutes, language, content_status,
+                poster_url, background_url, year, overview, runtime_minutes, language, content_status,
                 rating_summary_json,
                 requested_quality_profile_id, requested_quality_profile_name,
                 requested_monitor_type,
@@ -597,6 +641,8 @@ async fn load_media_request_tx(
     let mut request = row_to_media_request(&row)?;
     request.external_ids = load_media_request_external_ids(SqlExec::Tx(tx), request_id).await?;
     request.requesters = load_media_request_requesters(SqlExec::Tx(tx), request_id).await?;
+    request.requested_monitor_selection =
+        load_monitor_selection(SqlExec::Tx(tx), OWNER_KIND_MEDIA_REQUEST, request_id).await?;
     Ok(Some(request))
 }
 
@@ -669,7 +715,7 @@ async fn load_media_request_requesters(
 fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlArg>) {
     let mut sql = String::from(
         "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                poster_url, year, overview, runtime_minutes, language, content_status,
+                poster_url, background_url, year, overview, runtime_minutes, language, content_status,
                 rating_summary_json,
                 requested_quality_profile_id, requested_quality_profile_name,
                 requested_monitor_type,
@@ -733,6 +779,7 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         sort_title: row.opt_text("sort_title")?,
         slug: row.opt_text("slug")?,
         poster_url: row.opt_text("poster_url")?,
+        background_url: row.opt_text("background_url")?,
         year: row.opt_i32("year")?,
         overview: row.opt_text("overview")?,
         runtime_minutes: row.opt_i32("runtime_minutes")?,
@@ -744,6 +791,7 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         requested_quality_profile_id: row.opt_text("requested_quality_profile_id")?,
         requested_quality_profile_name: row.opt_text("requested_quality_profile_name")?,
         requested_monitor_type: row.opt_text("requested_monitor_type")?,
+        requested_monitor_selection: None,
         resolved_by_user_id: row.opt_text("resolved_by_user_id")?,
         resolved_at: row.opt_timestamp("resolved_at")?,
         created_title_id: row.opt_text("created_title_id")?,

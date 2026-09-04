@@ -1,6 +1,11 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
+// Must match `IMPORT_FILE_WORKER_PROTOCOL_VERSION` in
+// `scryer-infrastructure-workflow::workflow::file_importer`; the worker refuses
+// any other version before it reads the request.
+const PROTOCOL_VERSION: u16 = 2;
+
 fn run_worker(request: &serde_json::Value) -> Vec<serde_json::Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_scryer"))
         .arg("__import-file-worker")
@@ -52,7 +57,7 @@ fn hidden_import_file_worker_snapshots_a_source_over_ndjson() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let events = run_worker(&serde_json::json!({
         "command": "snapshot",
-        "version": 1,
+        "version": PROTOCOL_VERSION,
         "nonce": 42,
         "source": source,
     }));
@@ -71,7 +76,7 @@ fn hidden_import_file_worker_reuses_prepared_state_for_copy() {
 
     let prepared_events = run_worker(&serde_json::json!({
         "command": "prepare",
-        "version": 1,
+        "version": PROTOCOL_VERSION,
         "nonce": 51,
         "source": source,
         "dest": destination,
@@ -93,7 +98,7 @@ fn hidden_import_file_worker_reuses_prepared_state_for_copy() {
 
     let copy_events = run_worker(&serde_json::json!({
         "command": "copy",
-        "version": 1,
+        "version": PROTOCOL_VERSION,
         "nonce": 52,
         "prepared": prepared,
     }));

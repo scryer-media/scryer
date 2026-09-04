@@ -2156,7 +2156,7 @@ fn import_file_blocking_at_depth(
     }
 }
 
-const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 1;
+const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 2;
 static IMPORT_FILE_WORKER_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2232,8 +2232,60 @@ enum ImportFileWorkerEvent {
     },
     Error {
         nonce: u64,
-        message: String,
+        error: ImportFileWorkerError,
     },
+}
+
+/// Failure reported by the import file worker, with the variant the parent
+/// needs preserved across the process boundary.
+///
+/// The parent decides between "park as Import Blocked" and "schedule an
+/// automatic retry" by matching on `AppError::ManualReconciliationRequired`,
+/// and treats `AppError::Canceled` as an operator stop rather than a failure,
+/// so both must survive serialisation as themselves. Everything else the
+/// worker's blocking functions produce is already `AppError::Repository`; any
+/// other variant is carried as `Repository` with its rendered text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ImportFileWorkerError {
+    Repository { message: String },
+    ManualReconciliationRequired { message: String },
+    Canceled { message: String },
+}
+
+impl From<AppError> for ImportFileWorkerError {
+    fn from(error: AppError) -> Self {
+        match error {
+            AppError::ManualReconciliationRequired(message) => {
+                Self::ManualReconciliationRequired { message }
+            }
+            AppError::Canceled(message) => Self::Canceled { message },
+            AppError::Repository(message) => Self::Repository { message },
+            other => Self::Repository {
+                message: other.to_string(),
+            },
+        }
+    }
+}
+
+impl From<io::Error> for ImportFileWorkerError {
+    fn from(error: io::Error) -> Self {
+        Self::Repository {
+            message: format!("failed to write import worker event: {error}"),
+        }
+    }
+}
+
+impl From<ImportFileWorkerError> for AppError {
+    fn from(error: ImportFileWorkerError) -> Self {
+        match error {
+            ImportFileWorkerError::Repository { message } => AppError::Repository(message),
+            ImportFileWorkerError::ManualReconciliationRequired { message } => {
+                AppError::ManualReconciliationRequired(message)
+            }
+            ImportFileWorkerError::Canceled { message } => AppError::Canceled(message),
+        }
+    }
 }
 
 fn write_import_worker_event(
@@ -2297,7 +2349,7 @@ pub fn run_import_file_worker() -> i32 {
                 &output,
                 &ImportFileWorkerEvent::Error {
                     nonce: 0,
-                    message: error,
+                    error: ImportFileWorkerError::Repository { message: error },
                 },
             );
             return 2;
@@ -2309,7 +2361,9 @@ pub fn run_import_file_worker() -> i32 {
             &output,
             &ImportFileWorkerEvent::Error {
                 nonce,
-                message: format!("unsupported import worker protocol version {version}"),
+                error: ImportFileWorkerError::Repository {
+                    message: format!("unsupported import worker protocol version {version}"),
+                },
             },
         );
         return 2;
@@ -2317,7 +2371,7 @@ pub fn run_import_file_worker() -> i32 {
     drop(input);
     start_import_worker_stdin_death_watch();
 
-    let result: Result<(), String> = match request {
+    let result: Result<(), ImportFileWorkerError> = match request {
         ImportFileWorkerRequest::Snapshot { source, .. } => {
             let _ = write_import_worker_event(
                 &output,
@@ -2327,13 +2381,13 @@ pub fn run_import_file_worker() -> i32 {
                 },
             );
             snapshot_import_source_blocking(source)
-                .map_err(|error| error.to_string())
+                .map_err(ImportFileWorkerError::from)
                 .and_then(|snapshot| {
                     write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::SnapshotFinished { nonce, snapshot },
                     )
-                    .map_err(|error| error.to_string())
+                    .map_err(ImportFileWorkerError::from)
                 })
         }
         ImportFileWorkerRequest::Cleanup {
@@ -2353,13 +2407,13 @@ pub fn run_import_file_worker() -> i32 {
                 final_dest_path,
                 ImportFileOptions::default(),
             )
-            .map_err(|error| error.to_string())
+            .map_err(ImportFileWorkerError::from)
             .and_then(|()| {
                 write_import_worker_event(
                     &output,
                     &ImportFileWorkerEvent::CleanupFinished { nonce },
                 )
-                .map_err(|error| error.to_string())
+                .map_err(ImportFileWorkerError::from)
             })
         }
         ImportFileWorkerRequest::Prepare {
@@ -2389,13 +2443,13 @@ pub fn run_import_file_worker() -> i32 {
                 None,
                 permissions,
             )
-            .map_err(|error| error.to_string())
+            .map_err(ImportFileWorkerError::from)
             .and_then(|prepared| {
                 write_import_worker_event(
                     &output,
                     &ImportFileWorkerEvent::Prepared { nonce, prepared },
                 )
-                .map_err(|error| error.to_string())
+                .map_err(ImportFileWorkerError::from)
             })
         }
         ImportFileWorkerRequest::FastPlacement { mut prepared, .. } => {
@@ -2409,13 +2463,13 @@ pub fn run_import_file_worker() -> i32 {
             prepared.options = ImportFileOptions::default();
             prepared.progress = None;
             try_fast_import_placement_blocking(prepared)
-                .map_err(|error| error.to_string())
+                .map_err(ImportFileWorkerError::from)
                 .and_then(|result| match result {
                     FastPlacementResult::Finished(result) => write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::ImportFinished { nonce, result },
                     )
-                    .map_err(|error| error.to_string()),
+                    .map_err(ImportFileWorkerError::from),
                     FastPlacementResult::CopyRequired(prepared) => write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::CopyRequired {
@@ -2423,7 +2477,7 @@ pub fn run_import_file_worker() -> i32 {
                             volume_key: prepared.volume_key,
                         },
                     )
-                    .map_err(|error| error.to_string()),
+                    .map_err(ImportFileWorkerError::from),
                 })
         }
         ImportFileWorkerRequest::Copy { mut prepared, .. } => {
@@ -2453,22 +2507,21 @@ pub fn run_import_file_worker() -> i32 {
             prepared.options = ImportFileOptions::default();
             prepared.progress = Some(progress_tx);
             let outcome = copy_prepared_import_blocking(prepared)
-                .map_err(|error| error.to_string())
+                .map_err(ImportFileWorkerError::from)
                 .and_then(|result| {
                     write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::ImportFinished { nonce, result },
                     )
-                    .map_err(|error| error.to_string())
+                    .map_err(ImportFileWorkerError::from)
                 });
             let _ = progress_thread.join();
             outcome
         }
     };
 
-    if let Err(message) = result {
-        let _ =
-            write_import_worker_event(&output, &ImportFileWorkerEvent::Error { nonce, message });
+    if let Err(error) = result {
+        let _ = write_import_worker_event(&output, &ImportFileWorkerEvent::Error { nonce, error });
         return 1;
     }
     0
@@ -2808,8 +2861,8 @@ impl FileImporter for FsFileImporter {
                     ImportFileWorkerEvent::SnapshotFinished { snapshot, .. } => {
                         return Ok(snapshot);
                     }
-                    ImportFileWorkerEvent::Error { message, .. } => {
-                        return Err(AppError::Repository(message));
+                    ImportFileWorkerEvent::Error { error, .. } => {
+                        return Err(error.into());
                     }
                     _ => {
                         return Err(AppError::ManualReconciliationRequired(
@@ -2978,8 +3031,8 @@ impl FileImporter for FsFileImporter {
                 match next_import_worker_event(&mut session).await? {
                     ImportFileWorkerEvent::Stage { .. } => {}
                     ImportFileWorkerEvent::CleanupFinished { .. } => return Ok(()),
-                    ImportFileWorkerEvent::Error { message, .. } => {
-                        return Err(AppError::Repository(message));
+                    ImportFileWorkerEvent::Error { error, .. } => {
+                        return Err(error.into());
                     }
                     _ => {
                         return Err(AppError::ManualReconciliationRequired(
@@ -3048,8 +3101,8 @@ impl FsFileImporter {
                         wait_for_import_worker_exit(&mut session, "after preparing import").await?;
                         break prepared;
                     }
-                    ImportFileWorkerEvent::Error { message, .. } => {
-                        return Err(AppError::Repository(message));
+                    ImportFileWorkerEvent::Error { error, .. } => {
+                        return Err(error.into());
                     }
                     _ => {
                         return Err(AppError::ManualReconciliationRequired(
@@ -3152,8 +3205,8 @@ impl FsFileImporter {
                         drop(copy_permit);
                         return Ok(result);
                     }
-                    ImportFileWorkerEvent::Error { message, .. } => {
-                        return Err(AppError::Repository(message));
+                    ImportFileWorkerEvent::Error { error, .. } => {
+                        return Err(error.into());
                     }
                     _ => {
                         return Err(AppError::ManualReconciliationRequired(
@@ -3236,6 +3289,64 @@ impl FsFileImporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn round_trip_worker_error(error: AppError) -> AppError {
+        let event = ImportFileWorkerEvent::Error {
+            nonce: 7,
+            error: ImportFileWorkerError::from(error),
+        };
+        let line = serde_json::to_string(&event).expect("event serialises");
+        match serde_json::from_str::<ImportFileWorkerEvent>(&line).expect("event parses") {
+            ImportFileWorkerEvent::Error { nonce, error } => {
+                assert_eq!(nonce, 7);
+                AppError::from(error)
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    // The parent routes on these variants, so they must come back as
+    // themselves after crossing the worker's stdout, not as repository text.
+    #[test]
+    fn worker_error_round_trip_preserves_routed_variants() {
+        let detail = "import destination appeared with different content: /x";
+        let error = round_trip_worker_error(AppError::ManualReconciliationRequired(detail.into()));
+        assert!(
+            matches!(&error, AppError::ManualReconciliationRequired(message) if message == detail),
+            "got {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("manual reconciliation required: {detail}")
+        );
+
+        let error = round_trip_worker_error(AppError::canceled("operator stop"));
+        assert!(matches!(&error, AppError::Canceled(message) if message == "operator stop"));
+
+        let error = round_trip_worker_error(AppError::Repository("disk full".into()));
+        assert!(matches!(&error, AppError::Repository(message) if message == "disk full"));
+    }
+
+    // Anything the worker's functions do not produce today still crosses as a
+    // repository error carrying the rendered text, rather than failing to
+    // serialise.
+    #[test]
+    fn worker_error_round_trip_flattens_unrouted_variants() {
+        let rendered = AppError::Validation("bad request".into()).to_string();
+        let error = round_trip_worker_error(AppError::Validation("bad request".into()));
+        assert!(
+            matches!(&error, AppError::Repository(message) if *message == rendered),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn worker_error_wire_shape_is_tagged_by_kind() {
+        let error = ImportFileWorkerError::from(AppError::ManualReconciliationRequired("x".into()));
+        let json = serde_json::to_value(&error).expect("serialises");
+        assert_eq!(json["kind"], "manual_reconciliation_required");
+        assert_eq!(json["message"], "x");
+    }
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::fmt::MakeWriter;

@@ -414,6 +414,7 @@ fn build_subtitle_spec(
             descriptor.id.clone(),
             config,
             allowed_hosts,
+            scryer_outbound_http::PluginEgressPolicy::default(),
             timeout,
             None,
             archive_provider,

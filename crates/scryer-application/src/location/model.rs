@@ -340,7 +340,7 @@ pub struct TitleCheckpointPlacement {
     /// Name of that surviving title, resolved from the catalog when the
     /// checkpoint is read — **not** a persisted column.
     ///
-    /// 0206 has no column for it and this campaign's migrations are immutable,
+    /// 0215 has no column for it and this campaign's migrations are immutable,
     /// so the store resolves it in the same `SELECT` that reads the checkpoint
     /// (one `LEFT JOIN titles`, no extra round-trip). The writer never sets it:
     /// [`crate::location::root_move::RootMoveTitleExecution::placement`] leaves

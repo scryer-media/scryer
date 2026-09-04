@@ -2,6 +2,7 @@ import * as React from "react";
 import { Loader2, Send } from "lucide-react";
 
 import { CatalogActionDialogSummary } from "@/components/root/catalog-action-dialog-summary";
+import { MonitorSelectionPicker } from "@/components/common/monitor-selection-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import {
@@ -20,6 +21,12 @@ import type {
   MetadataCatalogRequestOptions,
 } from "@/lib/hooks/use-global-search";
 import type { Facet, LibraryRecord } from "@/lib/types";
+import type { MonitorSelectionDraft } from "@/lib/types/titles";
+import {
+  EMPTY_MONITOR_SELECTION,
+  isMonitorSelectionEmpty,
+  monitorSelectionInput,
+} from "@/lib/utils/monitor-selection";
 import {
   mediaRequestMonitorOptionId,
   mediaRequestProfileOptionId,
@@ -55,6 +62,10 @@ export function RequestMediaDialog({
   const [monitorType, setMonitorType] = React.useState<MetadataCatalogMonitorType>(
     () => defaultMonitorTypeForFacet(facet),
   );
+  const [monitorSelection, setMonitorSelection] =
+    React.useState<MonitorSelectionDraft>(EMPTY_MONITOR_SELECTION);
+  const [monitorSelectionLoading, setMonitorSelectionLoading] =
+    React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   React.useEffect(() => {
@@ -66,6 +77,8 @@ export function RequestMediaDialog({
     );
     setQualityProfileId("");
     setMonitorType(defaultMonitorTypeForFacet(facet));
+    setMonitorSelection(EMPTY_MONITOR_SELECTION);
+    setMonitorSelectionLoading(false);
     setIsSubmitting(false);
   }, [facet, open, requestableLibraries]);
 
@@ -79,7 +92,17 @@ export function RequestMediaDialog({
     },
     { value: "ALL_EPISODES", label: t("search.monitorType.allEpisodes") },
     { value: "NONE", label: t("search.monitorType.none") },
+    { value: "ADVANCED", label: t("search.monitorType.advanced") },
   ];
+  // Same rule as the add dialog: the picker (and its one metadata query) only
+  // exists while ADVANCED is the live choice.
+  const advancedSelected = canRequestMonitorType && monitorType === "ADVANCED";
+  const advancedTvdbId = String(result.tvdbId ?? "").trim();
+  const advancedBlocksSubmit =
+    advancedSelected &&
+    (!advancedTvdbId ||
+      monitorSelectionLoading ||
+      isMonitorSelectionEmpty(monitorSelection));
   const requestProfileOptions = React.useMemo(() => {
     const requestProfileIds = selectedLibrary?.requestQualityProfileIds?.length
       ? selectedLibrary.requestQualityProfileIds
@@ -118,6 +141,9 @@ export function RequestMediaDialog({
         libraryId: selectedLibraryId,
         requestedQualityProfileId: selectedQualityProfileId,
         requestedMonitorType: canRequestMonitorType ? monitorType : undefined,
+        requestedMonitorSelection: advancedSelected
+          ? monitorSelectionInput(monitorSelection)
+          : undefined,
       });
       if (accepted) {
         onOpenChange(false);
@@ -126,8 +152,10 @@ export function RequestMediaDialog({
       setIsSubmitting(false);
     }
   }, [
+    advancedSelected,
     canRequestMonitorType,
     facet,
+    monitorSelection,
     monitorType,
     onOpenChange,
     onRequest,
@@ -208,9 +236,13 @@ export function RequestMediaDialog({
                 </span>
                 <Select
                   value={monitorType}
-                  onValueChange={(value) =>
-                    setMonitorType(value as MetadataCatalogMonitorType)
-                  }
+                  onValueChange={(value) => {
+                    const nextMonitorType = value as MetadataCatalogMonitorType;
+                    setMonitorType(nextMonitorType);
+                    if (nextMonitorType !== "ADVANCED") {
+                      setMonitorSelection(EMPTY_MONITOR_SELECTION);
+                    }
+                  }}
                   disabled={isSubmitting}
                 >
                   <SelectTrigger
@@ -235,6 +267,18 @@ export function RequestMediaDialog({
             ) : null}
           </div>
 
+          {advancedSelected ? (
+            <MonitorSelectionPicker
+              facet={facet}
+              tvdbId={advancedTvdbId}
+              value={monitorSelection}
+              onChange={setMonitorSelection}
+              onLoadingChange={setMonitorSelectionLoading}
+              disabled={isSubmitting}
+              idPrefix="request-media"
+            />
+          ) : null}
+
         <DialogFooter className="items-stretch gap-3 sm:items-center">
           <Button
             id="request-media-cancel"
@@ -254,7 +298,8 @@ export function RequestMediaDialog({
               isSubmitting ||
               !selectedLibrary ||
               !qualityProfileId ||
-              (canRequestMonitorType && !monitorType)
+              (canRequestMonitorType && !monitorType) ||
+              advancedBlocksSubmit
             }
             className="h-12 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
           >

@@ -19,6 +19,7 @@ mod consolidation;
 mod cross_library_transfer;
 mod discovery_sync;
 mod downloads;
+mod episode_file_delete;
 mod folder_match;
 mod full_hash_backfill;
 mod import_rejection_reopen;

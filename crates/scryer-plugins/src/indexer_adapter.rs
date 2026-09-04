@@ -106,6 +106,7 @@ impl WasmIndexerClient {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>(),
             inputs.allowed_hosts,
+            inputs.egress_policy,
             inputs.proxy_policy,
             inputs.timeout,
             None,
@@ -606,6 +607,7 @@ fn host_incomplete_reason(reason: PluginIncompleteReason) -> HostIncompleteReaso
 struct IndexerRuntimeInputs {
     config_entries: std::collections::HashMap<String, String>,
     allowed_hosts: Vec<String>,
+    egress_policy: scryer_outbound_http::PluginEgressPolicy,
     timeout: std::time::Duration,
     proxy_policy: Option<ProxyPolicy>,
     /// Managed-destination cooldown key: a shared upstream (a Prowlarr parent,
@@ -634,6 +636,10 @@ fn build_runtime_inputs(
         connection_url.as_deref(),
         config.config_json.as_deref(),
     );
+    let egress_policy = crate::loader::operator_egress_policy_for_descriptor(
+        connection_url.as_deref(),
+        config.config_json.as_deref(),
+    );
     let timeout = scryer_outbound_http::effective_indexer_timeout(
         proxy_config
             .as_ref()
@@ -642,6 +648,7 @@ fn build_runtime_inputs(
     IndexerRuntimeInputs {
         config_entries: config_entries.unwrap_or_default(),
         allowed_hosts,
+        egress_policy,
         timeout,
         proxy_policy: proxy_config.map(|proxy_config| ProxyPolicy {
             consumer_id: config.id.clone(),
