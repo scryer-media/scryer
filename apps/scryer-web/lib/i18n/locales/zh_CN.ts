@@ -649,6 +649,14 @@ const zh_CN: LocaleDictionary = {
     "这会保留 Scryer 面向用户的历史记录和审计轨迹。更改将在下一次清理运行时生效。",
   "settings.historyRetentionExternalHelp":
     "采集临时数据的运行级清理仍会继续执行，并且此设置不控制 SABnzbd、NZBGet 或 Weaver 保留的历史记录。",
+  "settings.featuresHeader": "功能",
+  "settings.experimentalFeaturesLabel": "启用实验性功能",
+  "settings.experimentalFeaturesHelp":
+    "显示仍在为此实例上的所有人完善的功能：在媒体库和根目录之间移动条目，以及维护规则。",
+  "settings.personalizedDiscoveryLabel": "个性化发现",
+  "settings.personalizedDiscoveryHelp":
+    "将你的媒体库摘要发送到元数据网关，让发现页可以根据你拥有的内容推荐条目。关闭后，发现页仅使用公共信息流。",
+  "discovery.personalizedDisabled": "此实例已关闭个性化发现。",
   "settings.keepHistoryForever": "永久保留历史记录",
   "settings.historyRetentionDaysHeader": "历史记录保留时长",
   "settings.historyRetentionDaysSuffix": "天",

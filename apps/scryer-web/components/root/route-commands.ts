@@ -54,6 +54,12 @@ type BuildRouteCommandsArgs = {
   t: Translate;
   user: AuthUser;
   activityImportCount?: number;
+  /**
+   * Whether surfaces that are still being finished are offered on this
+   * instance. Defaults to off so a caller that has not read the switch yet
+   * never surfaces a command for a page the sidebar is hiding.
+   */
+  experimentalFeaturesEnabled?: boolean;
   onNavigate: (
     nextView: ViewId,
     nextSettingsSection?: SettingsSection,
@@ -92,6 +98,7 @@ export function buildRouteCommands({
   t,
   user,
   activityImportCount = 0,
+  experimentalFeaturesEnabled = false,
   onNavigate,
 }: BuildRouteCommandsArgs): RouteCommand[] {
   const canViewCatalog = hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.view);
@@ -394,15 +401,22 @@ export function buildRouteCommands({
           keywords: ["settings", "rules", "rego", "opa", "scoring", "custom"],
           icon: SlidersHorizontal,
           onSelect: buildNavigate(onNavigate, "settings", "rules"),
-        } satisfies RouteCommand, {
-          id: "settings-maintenance-rules",
-          label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.maintenanceRules")}`,
-          description: t("settings.maintenanceRules"),
-          groupLabel: automationGroupLabel,
-          keywords: ["settings", "maintenance", "rules", "rego", "cleanup", "prune"],
-          icon: Wrench,
-          onSelect: buildNavigate(onNavigate, "settings", "maintenanceRules"),
-        } satisfies RouteCommand, {
+        } satisfies RouteCommand,
+        // Maintenance rules are still being finished, so the palette offers the
+        // page only when the instance has opted in. Its catalog-settings
+        // permission still gates the whole group above.
+        ...(experimentalFeaturesEnabled
+          ? [{
+              id: "settings-maintenance-rules",
+              label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.maintenanceRules")}`,
+              description: t("settings.maintenanceRules"),
+              groupLabel: automationGroupLabel,
+              keywords: ["settings", "maintenance", "rules", "rego", "cleanup", "prune"],
+              icon: Wrench,
+              onSelect: buildNavigate(onNavigate, "settings", "maintenanceRules"),
+            } satisfies RouteCommand]
+          : []),
+        {
           id: "settings-post-processing",
           label: `${automationGroupLabel} / ${t("settings.postProcessing")}`,
           description: t("settings.postProcessing"),

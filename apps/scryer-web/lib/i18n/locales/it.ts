@@ -677,6 +677,15 @@ const it: LocaleDictionary = {
     "Questo conserva la cronologia visibile all’utente e il registro di controllo di Scryer. Le modifiche avranno effetto alla prossima esecuzione della manutenzione.",
   "settings.historyRetentionExternalHelp":
     "La pulizia operativa dei dati temporanei di acquisizione continua comunque e questa impostazione non controlla la cronologia conservata da SABnzbd, NZBGet o Weaver.",
+  "settings.featuresHeader": "Funzionalità",
+  "settings.experimentalFeaturesLabel": "Abilita le funzionalità sperimentali",
+  "settings.experimentalFeaturesHelp":
+    "Mostra le funzionalità ancora in fase di completamento per tutti su questa istanza: lo spostamento dei titoli tra librerie e radici e le regole di manutenzione.",
+  "settings.personalizedDiscoveryLabel": "Scoperta personalizzata",
+  "settings.personalizedDiscoveryHelp":
+    "Invia un riepilogo della tua libreria al gateway dei metadati in modo che Scoperta possa consigliare titoli in base a ciò che possiedi. Disattivala per limitare Scoperta ai feed pubblici.",
+  "discovery.personalizedDisabled":
+    "La scoperta personalizzata è disattivata per questa istanza.",
   "settings.keepHistoryForever": "Conserva la cronologia per sempre",
   "settings.historyRetentionDaysHeader": "Conserva la cronologia per",
   "settings.historyRetentionDaysSuffix": "giorni",

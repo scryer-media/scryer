@@ -43,6 +43,7 @@ export function TitleSettingsPanel({
   onUpdateTitleOptions,
   onOpenFixMatch,
   onTitleChanged,
+  experimentalFeaturesEnabled = false,
 }: {
   title: TitleDetail;
   qualityProfiles: { id: string; name: string }[];
@@ -58,6 +59,12 @@ export function TitleSettingsPanel({
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
   onOpenFixMatch?: () => void;
   onTitleChanged?: () => Promise<void> | void;
+  /**
+   * Whether the move entry point is offered on this instance. The flag is read
+   * once by the view that owns this panel and passed down, so the panel keeps
+   * a module graph that server-renders.
+   */
+  experimentalFeaturesEnabled?: boolean;
 }) {
   const t = useTranslate();
   const client = useClient();
@@ -172,27 +179,31 @@ export function TitleSettingsPanel({
         rootFolderReadOnly
       />
 
-      <MoveTitleSettingsCard
-        idPrefix="series-overview-settings"
-        onOpen={() => setMoveOpen(true)}
-      />
+      {experimentalFeaturesEnabled ? (
+        <>
+          <MoveTitleSettingsCard
+            idPrefix="series-overview-settings"
+            onOpen={() => setMoveOpen(true)}
+          />
 
-      <MoveTitlesDialog
-        open={moveOpen}
-        onOpenChange={setMoveOpen}
-        titles={[
-          {
-            id: title.id,
-            name: title.name,
-            libraryId: title.libraryId,
-            libraryName: title.libraryName ?? null,
-            rootFolderId: title.rootFolderId ?? null,
-            rootFolderPath: title.rootFolderPath ?? null,
-          },
-        ]}
-        libraries={moveLibraries}
-        initialRootId={null}
-      />
+          <MoveTitlesDialog
+            open={moveOpen}
+            onOpenChange={setMoveOpen}
+            titles={[
+              {
+                id: title.id,
+                name: title.name,
+                libraryId: title.libraryId,
+                libraryName: title.libraryName ?? null,
+                rootFolderId: title.rootFolderId ?? null,
+                rootFolderPath: title.rootFolderPath ?? null,
+              },
+            ]}
+            libraries={moveLibraries}
+            initialRootId={null}
+          />
+        </>
+      ) : null}
 
       {onOpenFixMatch ? (
         <FixTitleMatchSettingsCard

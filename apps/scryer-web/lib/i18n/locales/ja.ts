@@ -671,6 +671,14 @@ const ja: LocaleDictionary = {
     "これは Scryer のユーザー向け履歴と監査証跡を保持します。変更は次回のハウスキーピング実行時に反映されます。",
   "settings.historyRetentionExternalHelp":
     "取得処理用の一時データに対する運用上のクリーンアップは引き続き実行され、この設定は SABnzbd、NZBGet、Weaver が保持する履歴には適用されません。",
+  "settings.featuresHeader": "機能",
+  "settings.experimentalFeaturesLabel": "実験的機能を有効にする",
+  "settings.experimentalFeaturesHelp":
+    "このインスタンスの全員に向けてまだ仕上げ中の機能を表示します。ライブラリやルート間でのタイトルの移動と、メンテナンスルールです。",
+  "settings.personalizedDiscoveryLabel": "パーソナライズされたディスカバリー",
+  "settings.personalizedDiscoveryHelp":
+    "ライブラリの概要をメタデータゲートウェイに送信し、所有している作品に基づいてディスカバリーがタイトルを推薦できるようにします。オフにすると、ディスカバリーは公開フィードのみを使用します。",
+  "discovery.personalizedDisabled": "このインスタンスではパーソナライズされたディスカバリーが無効になっています。",
   "settings.keepHistoryForever": "履歴を無期限に保持",
   "settings.historyRetentionDaysHeader": "履歴を保持する期間",
   "settings.historyRetentionDaysSuffix": "日",

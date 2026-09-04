@@ -9,6 +9,7 @@ import {
   maintenanceRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
+  rulesSectionsFor,
   type ParsedAppRoute,
 } from "./routing.ts";
 import { isMediaSettingsSection } from "./routes.ts";
@@ -319,4 +320,16 @@ test("rules pane paths round-trip through the section helpers", () => {
   assert.equal(maintenanceRulesSectionFromPath("/automation/rules/maintenance"), "rules");
   assert.equal(maintenanceRulesSectionFromPath("/automation/rules/scoring"), "rules");
   assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
+});
+
+test("rulesSectionsFor drops maintenance until experimental features are on", () => {
+  assert.deepEqual(rulesSectionsFor(true), ["scoring", "maintenance"]);
+  // One entry left means there is no kind to switch between, which is how the
+  // Rules page decides to drop its kind rail.
+  assert.deepEqual(rulesSectionsFor(false), ["scoring"]);
+  // Scoring stays reachable either way, and its path is unchanged.
+  for (const enabled of [true, false]) {
+    assert.ok(rulesSectionsFor(enabled).includes("scoring"));
+  }
+  assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
 });

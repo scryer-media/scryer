@@ -19,6 +19,7 @@ import {
   uiSettingsInputFromSettings,
   useUiSettings,
 } from "@/lib/context/ui-settings-context";
+import { useRefreshInstanceFeatures } from "@/lib/context/instance-features-context";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import type {
   GeneralSettings,
@@ -29,6 +30,8 @@ import type {
 } from "@/lib/types/settings";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  experimentalFeaturesEnabled: false,
+  personalizedDiscoveryEnabled: true,
   keepHistoryForever: false,
   historyRetentionDays: 180,
   imageCacheMaxSizeMb: 256,
@@ -61,6 +64,7 @@ export function SettingsOverviewContainer({
     uiSettingsLoading,
     setUiSettings,
   } = useUiSettings();
+  const refreshInstanceFeatures = useRefreshInstanceFeatures();
   const [pendingLanguage, setPendingLanguage] = React.useState<string | null>(null);
   const [rehydrating, setRehydrating] = React.useState(false);
   const [uiSettingsSaving, setUiSettingsSaving] = React.useState(false);
@@ -263,6 +267,15 @@ export function SettingsOverviewContainer({
         ...data?.updateGeneralSettings,
       });
       setGlobalStatus(t("settings.generalSaved"));
+      // The instance-wide switches are read app-wide through their own
+      // actor-only query, so a save has to push the new value into the
+      // provider for the gated surfaces to react without a reload.
+      if (
+        update.experimentalFeaturesEnabled !== undefined ||
+        update.personalizedDiscoveryEnabled !== undefined
+      ) {
+        await refreshInstanceFeatures();
+      }
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
@@ -270,7 +283,7 @@ export function SettingsOverviewContainer({
     } finally {
       setGeneralSaving(false);
     }
-  }, [client, setGlobalStatus, t]);
+  }, [client, refreshInstanceFeatures, setGlobalStatus, t]);
 
   const handleClearImageCache = React.useCallback(async () => {
     if (imageCacheClearing) return;

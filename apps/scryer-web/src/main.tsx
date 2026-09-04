@@ -6,6 +6,7 @@ import { ThemeProvider } from "next-themes";
 import { backendClient } from "@/lib/graphql/urql-client";
 import { SELECTABLE_THEMES } from "@/lib/theme";
 import { UiSettingsProvider } from "@/lib/context/ui-settings-context";
+import { InstanceFeaturesProvider } from "@/lib/context/instance-features-context";
 import { PageShellFallback } from "@/components/root/page-shell-fallback";
 import { URL_PARAM_LANGUAGE } from "@/lib/constants/settings";
 import { loadLocaleDictionary } from "@/lib/i18n";
@@ -57,7 +58,9 @@ async function bootstrap() {
       <ThemeProvider attribute="class" defaultTheme="dark" enableSystem themes={[...SELECTABLE_THEMES]}>
         <UrqlProvider value={backendClient}>
           <UiSettingsProvider>
-            <RouterProvider router={router} />
+            <InstanceFeaturesProvider>
+              <RouterProvider router={router} />
+            </InstanceFeaturesProvider>
           </UiSettingsProvider>
         </UrqlProvider>
       </ThemeProvider>

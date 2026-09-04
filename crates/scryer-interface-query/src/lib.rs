@@ -2773,6 +2773,17 @@ impl SystemQueries {
         Ok(SCRYER_VERSION.to_string())
     }
 
+    /// Instance-wide feature switches readable by any signed-in user.
+    async fn instance_features(&self, ctx: &Context<'_>) -> GqlResult<InstanceFeaturesPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let features = app.instance_features(&actor).await.map_err(to_gql_error)?;
+        Ok(InstanceFeaturesPayload {
+            experimental_features_enabled: features.experimental_features_enabled,
+            personalized_discovery_enabled: features.personalized_discovery_enabled,
+        })
+    }
+
     /// Return an SMG compatibility notice when the connected SMG version requires attention.
     async fn smg_version_compatibility_notice(
         &self,

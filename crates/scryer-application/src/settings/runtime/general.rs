@@ -185,6 +185,8 @@ fn summarize_plugin_http_trusted_certificates(
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
+    pub experimental_features_enabled: bool,
+    pub personalized_discovery_enabled: bool,
     pub keep_history_forever: bool,
     pub history_retention_days: i32,
     pub image_cache_max_size_mb: i32,
@@ -215,6 +217,8 @@ pub struct BackupSettings {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateGeneralSettings {
+    pub experimental_features_enabled: Option<bool>,
+    pub personalized_discovery_enabled: Option<bool>,
     pub keep_history_forever: Option<bool>,
     pub history_retention_days: Option<i32>,
     pub image_cache_max_size_mb: Option<i32>,
@@ -280,8 +284,48 @@ fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Instance-wide feature switches that any signed-in user may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceFeatures {
+    pub experimental_features_enabled: bool,
+    pub personalized_discovery_enabled: bool,
+}
+
+impl AppUseCase {
+    /// Instance-wide opt in for surfaces that are still being finished.
+    /// This is the single place the default lives.
+    pub async fn experimental_features_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(EXPERIMENTAL_FEATURES_ENABLED_KEY, None)
+            .await?
+            .unwrap_or(false))
+    }
+
+    /// Instance-wide switch for sending the library context to the metadata
+    /// gateway and serving personalized discovery rows. This is the single
+    /// place the default lives.
+    pub async fn personalized_discovery_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(DISCOVERY_PERSONALIZED_ENABLED_KEY, None)
+            .await?
+            .unwrap_or(true))
+    }
+
+    /// Read both instance-wide switches. The actor is taken to prove a session
+    /// exists; there is deliberately no app-permission check, because the
+    /// gated surfaces are used by non-administrators.
+    pub async fn instance_features(&self, _actor: &User) -> AppResult<InstanceFeatures> {
+        Ok(InstanceFeatures {
+            experimental_features_enabled: self.experimental_features_enabled().await?,
+            personalized_discovery_enabled: self.personalized_discovery_enabled().await?,
+        })
+    }
+}
+
 impl AppUseCase {
     async fn load_general_settings(&self) -> AppResult<GeneralSettings> {
+        let experimental_features_enabled = self.experimental_features_enabled().await?;
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let keep_history_forever = self
             .read_setting_bool_value(HISTORY_KEEP_FOREVER_KEY, None)
             .await?
@@ -323,6 +367,8 @@ impl AppUseCase {
             };
 
         Ok(GeneralSettings {
+            experimental_features_enabled,
+            personalized_discovery_enabled,
             keep_history_forever,
             history_retention_days,
             image_cache_max_size_mb,
@@ -455,6 +501,12 @@ impl AppUseCase {
             .await?;
 
         let current = self.load_general_settings().await?;
+        let experimental_features_enabled = input
+            .experimental_features_enabled
+            .unwrap_or(current.experimental_features_enabled);
+        let personalized_discovery_enabled = input
+            .personalized_discovery_enabled
+            .unwrap_or(current.personalized_discovery_enabled);
         let keep_history_forever = input
             .keep_history_forever
             .unwrap_or(current.keep_history_forever);
@@ -493,6 +545,24 @@ impl AppUseCase {
             summarize_plugin_http_trusted_certificates(&plugin_http_ca_bundle_pem)?;
 
         let mut changed_keys = Vec::new();
+        if input.experimental_features_enabled.is_some() {
+            self.upsert_system_setting_json(
+                EXPERIMENTAL_FEATURES_ENABLED_KEY,
+                &experimental_features_enabled,
+                Some(actor.id.clone()),
+            )
+            .await?;
+            changed_keys.push(EXPERIMENTAL_FEATURES_ENABLED_KEY.to_string());
+        }
+        if input.personalized_discovery_enabled.is_some() {
+            self.upsert_system_setting_json(
+                DISCOVERY_PERSONALIZED_ENABLED_KEY,
+                &personalized_discovery_enabled,
+                Some(actor.id.clone()),
+            )
+            .await?;
+            changed_keys.push(DISCOVERY_PERSONALIZED_ENABLED_KEY.to_string());
+        }
         if input.keep_history_forever.is_some() {
             self.upsert_system_setting_json(
                 HISTORY_KEEP_FOREVER_KEY,
@@ -549,6 +619,8 @@ impl AppUseCase {
             image_cache_max_size_env_override_active,
         ) = effective_image_cache_limit(image_cache_max_size_mb);
         Ok(GeneralSettings {
+            experimental_features_enabled,
+            personalized_discovery_enabled,
             keep_history_forever,
             history_retention_days,
             image_cache_max_size_mb,

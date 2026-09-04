@@ -242,6 +242,28 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "null",
             is_sensitive: false,
         },
+        // Instance-wide opt in for surfaces that are still being finished.
+        // Seeded false so existing installs keep them hidden until an
+        // administrator opts in.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::EXPERIMENTAL_FEATURES_ENABLED_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        // Instance-wide switch for sending the library context to the metadata
+        // gateway. Seeded true so existing installs keep personalized
+        // discovery working with no data change.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            data_type: "boolean",
+            default_value_json: "true",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
@@ -2375,6 +2397,24 @@ mod tests {
                 && seed.key_name == TITLE_METADATA_LANGUAGE_OVERRIDE_KEY
                 && seed.data_type == "string"
                 && seed.default_value_json == "null"
+        }));
+    }
+
+    #[test]
+    fn service_setting_seeds_include_instance_feature_switch_defaults() {
+        assert!(service_setting_seeds().iter().any(|seed| {
+            seed.scope == SETTINGS_SCOPE_SYSTEM
+                && seed.key_name == scryer_application::EXPERIMENTAL_FEATURES_ENABLED_KEY
+                && seed.data_type == "boolean"
+                && seed.default_value_json == "false"
+                && !seed.is_sensitive
+        }));
+        assert!(service_setting_seeds().iter().any(|seed| {
+            seed.scope == SETTINGS_SCOPE_SYSTEM
+                && seed.key_name == scryer_application::DISCOVERY_PERSONALIZED_ENABLED_KEY
+                && seed.data_type == "boolean"
+                && seed.default_value_json == "true"
+                && !seed.is_sensitive
         }));
     }
 

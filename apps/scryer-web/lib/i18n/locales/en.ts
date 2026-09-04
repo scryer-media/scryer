@@ -1045,6 +1045,15 @@ const en: LocaleDictionary = {
     "This preserves Scryer’s user-facing history and audit trail. Changes take effect on the next housekeeping run.",
   "settings.historyRetentionExternalHelp":
     "Operational cleanup for acquisition scratch data still runs, and this does not control history retained by SABnzbd, NZBGet, or Weaver.",
+  "settings.featuresHeader": "Features",
+  "settings.experimentalFeaturesLabel": "Enable experimental features",
+  "settings.experimentalFeaturesHelp":
+    "Shows features that are still being finished for everyone on this instance: moving titles between libraries and roots, and maintenance rules.",
+  "settings.personalizedDiscoveryLabel": "Personalized discovery",
+  "settings.personalizedDiscoveryHelp":
+    "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
+  "discovery.personalizedDisabled":
+    "Personalized discovery is turned off for this instance.",
   "settings.keepHistoryForever": "Keep history forever",
   "settings.historyRetentionDaysHeader": "Retain history for",
   "settings.historyRetentionDaysSuffix": "days",

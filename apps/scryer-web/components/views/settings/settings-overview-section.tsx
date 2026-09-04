@@ -199,6 +199,57 @@ export function SettingsOverviewSection({
 
       <div className="space-y-4 border-t border-border pt-6">
         <div className="space-y-1">
+          <h3 className="text-sm font-semibold">{t("settings.featuresHeader")}</h3>
+        </div>
+
+        {generalLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t("label.loading")}
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <Label>{t("settings.experimentalFeaturesLabel")}</Label>
+                <SettingsToggleSwitch
+                  checked={generalSettings.experimentalFeaturesEnabled}
+                  ariaLabel={t("settings.experimentalFeaturesLabel")}
+                  disabled={generalSaving}
+                  onChange={(nextValue) => {
+                    updateGeneralSettings({ experimentalFeaturesEnabled: nextValue });
+                    onGeneralSettingsCommit({ experimentalFeaturesEnabled: nextValue });
+                  }}
+                />
+              </div>
+              <p className="text-muted-foreground">
+                {t("settings.experimentalFeaturesHelp")}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <Label>{t("settings.personalizedDiscoveryLabel")}</Label>
+                <SettingsToggleSwitch
+                  checked={generalSettings.personalizedDiscoveryEnabled}
+                  ariaLabel={t("settings.personalizedDiscoveryLabel")}
+                  disabled={generalSaving}
+                  onChange={(nextValue) => {
+                    updateGeneralSettings({ personalizedDiscoveryEnabled: nextValue });
+                    onGeneralSettingsCommit({ personalizedDiscoveryEnabled: nextValue });
+                  }}
+                />
+              </div>
+              <p className="text-muted-foreground">
+                {t("settings.personalizedDiscoveryHelp")}
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="space-y-4 border-t border-border pt-6">
+        <div className="space-y-1">
           <h3 className="text-sm font-semibold">{t("settings.historyRetentionTitle")}</h3>
           <p className="text-muted-foreground">
             {t("settings.historyRetentionHelp")}

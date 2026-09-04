@@ -10,7 +10,10 @@ use crate::ports::{
     DiscoveryItemLibraryProvenanceRecord, DiscoveryItemsPageRecord, DiscoveryItemsStorageQuery,
     DiscoverySourceTagRecord,
 };
-use crate::settings::keys::{DISCOVERY_REGION_KEY, METADATA_LANGUAGE_KEY, SETTINGS_SCOPE_SYSTEM};
+use crate::settings::keys::{
+    DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY, METADATA_LANGUAGE_KEY,
+    SETTINGS_SCOPE_SYSTEM,
+};
 use crate::{
     AppError, AppResult, BulkMetadataResult, CatalogDiscoveryGroupKind, CatalogDiscoveryQuery,
     CatalogDiscoverySurface, DiscoveryContextChangeType, DiscoveryContextChangesInput,
@@ -5071,6 +5074,10 @@ struct RecordingDiscoveryRepository {
     // reads these columns from discovery_titles.
     home_hero_presentation: Mutex<HomeHeroPresentation>,
     personalized_facet_calls: Mutex<usize>,
+    // Filter options return the same shape whichever generation they read, so
+    // the personalized generation the caller asked for is the only observable
+    // that proves the visibility gate was applied.
+    filter_option_context_run_ids: Mutex<Vec<Option<String>>>,
 }
 
 #[async_trait]
@@ -5675,11 +5682,15 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
     async fn list_discovery_home_filter_options(
         &self,
         _public_run_id: Option<&str>,
-        _context_run_id: Option<&str>,
+        context_run_id: Option<&str>,
         _readable_library_ids: &[String],
         _allowed_media_kinds: &[String],
         _include_unresolved: bool,
     ) -> AppResult<DiscoveryHomeFilterOptions> {
+        self.filter_option_context_run_ids
+            .lock()
+            .await
+            .push(context_run_id.map(str::to_string));
         Ok(DiscoveryHomeFilterOptions::default())
     }
 
@@ -6802,4 +6813,397 @@ fn test_discovery_title() -> DiscoveryTitle {
         change_subject_keys: Vec::new(),
         removed_subject_keys: Vec::new(),
     }
+}
+
+// ── Instance-wide personalized discovery switch ────────────────────────────
+//
+// With `discovery.personalized_enabled` false, nothing derived from the local
+// library leaves the instance: no context snapshot submit, no incremental
+// change submit, and no scheduling bookkeeping for either. The public feed
+// (region and language only) keeps refreshing, and every read path serves
+// public rows.
+
+/// Build a settings repository with personalized discovery turned off.
+async fn settings_with_personalized_discovery(enabled: bool) -> Arc<StoredSettingsRepo> {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            if enabled { "true" } else { "false" },
+        )
+        .await;
+    settings
+}
+
+/// A populated library whose fingerprint has never been submitted, with the
+/// bootstrap quiet window already elapsed. With the switch on this state
+/// submits a first context snapshot on the very next run.
+fn snapshot_ready_discovery_state(due_at: DateTime<Utc>) -> DiscoverySyncStateRecord {
+    DiscoverySyncStateRecord {
+        bootstrap_started_at: Some(due_at),
+        bootstrap_quiet_until: Some(due_at),
+        updated_at: due_at,
+        ..DiscoverySyncStateRecord::default()
+    }
+}
+
+async fn assert_no_personalized_send_up(
+    gateway: &SnapshotMetadataGateway,
+    discovery: &RecordingDiscoveryRepository,
+) {
+    assert!(
+        gateway.submitted_inputs.lock().await.is_empty(),
+        "no context snapshot may be submitted while personalized discovery is off"
+    );
+    assert!(
+        gateway.change_inputs.lock().await.is_empty(),
+        "no incremental change submit may happen while personalized discovery is off"
+    );
+    assert!(
+        discovery.commits.lock().await.is_empty(),
+        "no personalized generation may be committed while the switch is off"
+    );
+    assert!(
+        discovery.incremental_commits.lock().await.is_empty(),
+        "no incremental generation may be committed while the switch is off"
+    );
+    let state = discovery
+        .state
+        .lock()
+        .await
+        .clone()
+        .expect("state should be written");
+    assert!(
+        state.last_success_generation_id.is_none(),
+        "no personalized generation should exist"
+    );
+    assert!(
+        state.next_context_snapshot_eligible_at.is_none(),
+        "the disabled run must not schedule a context snapshot gate"
+    );
+    assert!(
+        state.next_incremental_reload_eligible_at.is_none(),
+        "the disabled run must not schedule an incremental reload gate"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_scheduled_run_with_personalized_disabled_refreshes_public_feed_only() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Quiet Orchard",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should run");
+
+    assert_no_personalized_send_up(&gateway, &discovery).await;
+    assert_eq!(
+        gateway.public_feed_inputs.lock().await.len(),
+        1,
+        "the public feed must still refresh"
+    );
+    let runs = discovery.runs.lock().await;
+    assert!(
+        runs.iter().any(|run| run.kind == "public_feed"),
+        "a public feed run should be recorded"
+    );
+    assert!(
+        !runs.iter().any(|run| run.kind == "context_snapshot"),
+        "no context snapshot run should be recorded"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_manual_run_with_personalized_disabled_refreshes_public_feed_only() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Quiet Orchard",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+
+    // A manual "Run now" normally skips the bootstrap settle window and submits
+    // immediately, so it is the strongest check that the switch wins.
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::Manual)
+        .await
+        .expect("manual discovery sync should run");
+
+    assert_no_personalized_send_up(&gateway, &discovery).await;
+    assert_eq!(
+        gateway.public_feed_inputs.lock().await.len(),
+        1,
+        "the public feed must still refresh on a manual run"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_reenabling_personalized_submits_on_the_next_run() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Quiet Orchard",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("disabled discovery sync should run");
+    assert!(gateway.submitted_inputs.lock().await.is_empty());
+
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            "true",
+        )
+        .await;
+    // The disabled run left the bootstrap quiet window alone, so the very next
+    // run picks the snapshot up where it left off.
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("re-enabled discovery sync should run");
+
+    let submitted_inputs = gateway.submitted_inputs.lock().await;
+    assert_eq!(
+        submitted_inputs.len(),
+        1,
+        "re-enabling the switch lets the next run submit"
+    );
+    assert_eq!(submitted_inputs[0].subjects.len(), 1);
+    assert_eq!(submitted_inputs[0].subjects[0].tmdb_id, Some(603));
+    drop(submitted_inputs);
+    assert_eq!(discovery.commits.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn discovery_reads_with_personalized_disabled_serve_public_rows_only() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway, settings);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let observed_at = Utc.timestamp_opt(3_200, 0).unwrap();
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let viewer = library_permission_user(
+        "orchard-library-viewer",
+        &movie_library_id,
+        &[
+            scryer_domain::LibraryPermission::View,
+            scryer_domain::LibraryPermission::Request,
+        ],
+    );
+
+    // A personalized generation exists and is intact; the switch alone must
+    // keep it out of every read.
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("context-run".to_string()),
+        last_public_feed_generation_id: Some("public-run".to_string()),
+        updated_at: observed_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .sections
+        .lock()
+        .await
+        .push(discovery_section_record(
+            "public-run",
+            "trending_now",
+            "TRENDING_NOW",
+            "public",
+        ));
+    discovery.items.lock().await.extend([
+        discovery_item_record(
+            "public-run",
+            "public-run",
+            Some("trending_now"),
+            "tmdb:movie:910001",
+            "Lantern Season",
+            "movie",
+            10.0,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        ),
+        discovery_item_record(
+            "context-run",
+            "context-run",
+            None,
+            "tmdb:movie:910002",
+            "Personalized Pick",
+            "movie",
+            99.0,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        ),
+    ]);
+
+    let home = app
+        .discovery_home(
+            &viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 10,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("discovery home should load");
+    assert!(!home.can_view_personalized);
+    assert!(home.personalized_sections.is_empty());
+    assert!(
+        home.status.state.last_success_generation_id.is_none(),
+        "the returned status must not carry a personalized generation"
+    );
+    let home_titles = home
+        .public_sections
+        .iter()
+        .flat_map(|section| section.items.iter().map(|item| item.display_title.as_str()))
+        .collect::<HashSet<_>>();
+    assert_eq!(home_titles, HashSet::from(["Lantern Season"]));
+
+    let cards = app
+        .discovery_home_cards(
+            &viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 10,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("discovery home cards should load");
+    assert!(!cards.can_view_personalized);
+    assert!(cards.personalized_sections.is_empty());
+
+    app.discovery_home_filter_options(
+        &viewer,
+        DiscoveryHomeQuery {
+            include_public: true,
+            include_personalized: true,
+            include_unresolved: true,
+            limit_per_section: 10,
+            filters: DiscoveryHomeFilters::default(),
+        },
+    )
+    .await
+    .expect("discovery home filter options should load");
+    assert!(
+        discovery
+            .filter_option_context_run_ids
+            .lock()
+            .await
+            .iter()
+            .all(Option::is_none),
+        "filter options must never read the personalized generation while the switch is off"
+    );
+
+    let items = app
+        .discovery_items(
+            &viewer,
+            DiscoveryItemsQuery {
+                include_public: true,
+                include_unresolved: true,
+                limit: 10,
+                offset: 0,
+                ..DiscoveryItemsQuery::default()
+            },
+        )
+        .await
+        .expect("discovery items should load");
+    let item_titles = items
+        .items
+        .iter()
+        .map(|item| item.display_title.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(item_titles, HashSet::from(["Lantern Season"]));
+
+    let personalized_detail = app
+        .discovery_item_detail(
+            &viewer,
+            DiscoveryItemDetailQuery {
+                target_key: "tmdb:movie:910002".to_string(),
+                include_unresolved: true,
+            },
+        )
+        .await
+        .expect("detail query should succeed");
+    assert!(
+        personalized_detail.is_none(),
+        "a personalized row must not be reachable by detail lookup"
+    );
+    let public_detail = app
+        .discovery_item_detail(
+            &viewer,
+            DiscoveryItemDetailQuery {
+                target_key: "tmdb:movie:910001".to_string(),
+                include_unresolved: true,
+            },
+        )
+        .await
+        .expect("public detail query should succeed");
+    assert!(public_detail.is_some());
+
+    let catalog = app
+        .catalog_discovery(
+            &viewer,
+            CatalogDiscoveryQuery {
+                facet: MediaFacet::Movie,
+                library_ids: Vec::new(),
+                include_unresolved: true,
+                limit_per_group: 10,
+                max_groups: 6,
+            },
+        )
+        .await
+        .expect("catalog discovery should load");
+    assert!(!catalog.can_view_personalized);
+    assert!(
+        catalog
+            .groups
+            .iter()
+            .all(|group| group.surface == CatalogDiscoverySurface::Public),
+        "catalog discovery must return public groups only"
+    );
 }

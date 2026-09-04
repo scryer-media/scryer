@@ -289,6 +289,15 @@ pub struct ClearTitleImageCachePayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// Instance-wide feature switches readable by any signed-in user.
+pub struct InstanceFeaturesPayload {
+    /// Whether surfaces that are still being finished are shown on this instance.
+    pub experimental_features_enabled: bool,
+    /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
+    pub personalized_discovery_enabled: bool,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Current setup prerequisites and completion state.
 pub struct SetupStatusPayload {
     /// Whether initial setup has been completed.

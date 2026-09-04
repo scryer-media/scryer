@@ -31,6 +31,8 @@ export type AcquisitionSettings = {
 };
 
 export type GeneralSettings = {
+  experimentalFeaturesEnabled: boolean;
+  personalizedDiscoveryEnabled: boolean;
   keepHistoryForever: boolean;
   historyRetentionDays: number;
   imageCacheMaxSizeMb: number;
@@ -44,12 +46,25 @@ export type GeneralSettings = {
 export type GeneralSettingsUpdate = Partial<
   Pick<
     GeneralSettings,
+    | "experimentalFeaturesEnabled"
+    | "personalizedDiscoveryEnabled"
     | "keepHistoryForever"
     | "historyRetentionDays"
     | "imageCacheMaxSizeMb"
     | "pluginHttpCaBundlePem"
   >
 >;
+
+/**
+ * Instance-wide feature switches, readable by any signed-in user.
+ *
+ * These come from the actor-only `instanceFeatures` query rather than
+ * `generalSettings`, which is limited to system-settings administrators.
+ */
+export type InstanceFeatures = {
+  experimentalFeaturesEnabled: boolean;
+  personalizedDiscoveryEnabled: boolean;
+};
 
 export type UiDateTimeFormat = "LOCALE" | "ISO24H";
 
