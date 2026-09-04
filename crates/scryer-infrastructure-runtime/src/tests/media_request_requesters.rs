@@ -85,6 +85,7 @@ fn request_event(request_id: &str) -> NewDomainEvent {
 
 fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMediaRequest {
     NewMediaRequest {
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
         id: id.to_string(),
         library_id: library_id.to_string(),
         facet: MediaFacet::Movie,

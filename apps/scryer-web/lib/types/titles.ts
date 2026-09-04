@@ -280,6 +280,9 @@ export type MediaRequestRecord = {
   runtimeMinutes?: number | null;
   language?: string | null;
   contentStatus?: string | null;
+  rating?: number | null;
+  ratingSources: string[];
+  externalRatings: TitleExternalRatingRecord[];
   requestedQualityProfileId?: string | null;
   requestedQualityProfileName?: string | null;
   requestedMonitorType?: string | null;

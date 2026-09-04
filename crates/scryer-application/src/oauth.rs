@@ -4,7 +4,7 @@ use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{Duration, Utc};
-use scryer_domain::{Id, User};
+use scryer_domain::{Id, MediaServerProvider, User};
 use std::collections::BTreeSet;
 use url::Url;
 
@@ -19,6 +19,7 @@ pub const OAUTH_E2E_CLIENT_ID: &str = "e2e";
 pub const OAUTH_E2E_CLIENT_ENV: &str = "SCRYER_ENABLE_E2E_OAUTH_CLIENT";
 pub const OAUTH_E2E_RELEASE_GATE_ENV: &str = "SCRYER_E2E_RELEASE_GATE";
 pub const OAUTH_LIBRARY_SCOPE: &str = "library";
+pub const OAUTH_JELLYFIN_LINK_SCOPE: &str = "jellyfin-link";
 
 const AUTHORIZATION_CODE_TTL_SECONDS: i64 = 5 * 60;
 const OAUTH_SECRET_BYTES: usize = 32;
@@ -76,6 +77,14 @@ pub struct OAuthConnectedAppSummary {
     pub client_name: String,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
     pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OAuthJellyfinLinkBinding {
+    connection_id: String,
+    external_url: String,
+    base_url: String,
+    api_key_hash: String,
 }
 
 impl AppUseCase {
@@ -270,7 +279,7 @@ impl AppUseCase {
             .services
             .identity
             .oauth
-            .update_client_registration(record, !input.enabled, Utc::now(), "client_disabled")
+            .update_client_registration(record, Utc::now())
             .await?
         else {
             return Err(AppError::NotFound(format!("OAuth client {client_id}")));
@@ -334,10 +343,86 @@ impl AppUseCase {
     }
 
     pub fn validate_oauth_scope(&self, scope: Option<&str>) -> AppResult<String> {
-        match scope.map(str::trim).filter(|scope| !scope.is_empty()) {
-            None | Some(OAUTH_LIBRARY_SCOPE) => Ok(OAUTH_LIBRARY_SCOPE.to_string()),
-            Some(_) => Err(AppError::Validation("invalid OAuth scope".into())),
+        let scopes = scope
+            .unwrap_or(OAUTH_LIBRARY_SCOPE)
+            .split_ascii_whitespace()
+            .collect::<BTreeSet<_>>();
+        if scopes.is_empty() || !scopes.contains(OAUTH_LIBRARY_SCOPE) {
+            return Err(AppError::Validation("invalid OAuth scope".into()));
         }
+        if scopes
+            .iter()
+            .any(|scope| *scope != OAUTH_LIBRARY_SCOPE && *scope != OAUTH_JELLYFIN_LINK_SCOPE)
+        {
+            return Err(AppError::Validation("invalid OAuth scope".into()));
+        }
+        Ok(if scopes.contains(OAUTH_JELLYFIN_LINK_SCOPE) {
+            format!("{OAUTH_LIBRARY_SCOPE} {OAUTH_JELLYFIN_LINK_SCOPE}")
+        } else {
+            OAUTH_LIBRARY_SCOPE.to_string()
+        })
+    }
+
+    pub fn effective_oauth_authorization_scope(
+        &self,
+        scope: Option<&str>,
+        form_login_enabled: bool,
+    ) -> AppResult<String> {
+        self.validate_oauth_scope(scope)
+            .map(|scope| constrain_oauth_scope_for_authorization(scope, form_login_enabled))
+    }
+
+    async fn oauth_jellyfin_link_binding(
+        &self,
+        client: &OAuthClientInfo,
+        redirect_uri: &str,
+        scope: &str,
+    ) -> AppResult<Option<OAuthJellyfinLinkBinding>> {
+        if !oauth_scope_has_jellyfin_link(scope) {
+            return Ok(None);
+        }
+        if client.source != OAuthClientSource::Custom
+            || !client.enabled
+            || client.redirect_uris.len() != 1
+            || client
+                .redirect_uris
+                .first()
+                .is_none_or(|uri| uri != redirect_uri)
+        {
+            return Err(AppError::Validation(
+                "jellyfin-link requires an eligible plugin OAuth client".into(),
+            ));
+        }
+
+        let mut candidates = self
+            .services
+            .integrations
+            .media_server_connections
+            .list(Some(MediaServerProvider::Jellyfin))
+            .await?
+            .into_iter()
+            .filter_map(|connection| {
+                let external_url = connection.external_url?.trim_end_matches('/').to_string();
+                let api_key = connection.api_key?.trim().to_string();
+                let expected_redirect = format!("{external_url}/Scryer/Auth/Callback");
+                (connection.enabled
+                    && connection.linking_enabled
+                    && !api_key.is_empty()
+                    && expected_redirect == redirect_uri)
+                    .then_some(OAuthJellyfinLinkBinding {
+                        connection_id: connection.id,
+                        external_url,
+                        base_url: connection.base_url,
+                        api_key_hash: self.oauth_token_hash("jellyfin_link_api_key", &api_key),
+                    })
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            return Err(AppError::Validation(
+                "jellyfin-link requires exactly one eligible Jellyfin connection".into(),
+            ));
+        }
+        Ok(candidates.pop())
     }
 
     #[expect(
@@ -355,10 +440,13 @@ impl AppUseCase {
         authorization_source: OAuthAuthorizationSource,
         auth_session_version: Option<&str>,
     ) -> AppResult<OAuthIssuedCode> {
-        let (_, redirect_uri) = self
+        let (client, redirect_uri) = self
             .validated_oauth_redirect_uri(client_id, redirect_uri)
             .await?;
         let scope = self.validate_oauth_scope(Some(scope))?;
+        let jellyfin_link_binding = self
+            .oauth_jellyfin_link_binding(&client, &redirect_uri, &scope)
+            .await?;
         self.validate_oauth_pkce_request(code_challenge, code_challenge_method)?;
         let id = Id::new().0;
         let secret = random_oauth_secret()?;
@@ -372,6 +460,16 @@ impl AppUseCase {
             auth_session_version: auth_session_version.unwrap_or_default().to_string(),
             redirect_uri,
             scope,
+            jellyfin_connection_id: jellyfin_link_binding
+                .as_ref()
+                .map(|binding| binding.connection_id.clone()),
+            jellyfin_external_url: jellyfin_link_binding
+                .as_ref()
+                .map(|binding| binding.external_url.clone()),
+            jellyfin_base_url: jellyfin_link_binding
+                .as_ref()
+                .map(|binding| binding.base_url.clone()),
+            jellyfin_api_key_hash: jellyfin_link_binding.map(|binding| binding.api_key_hash),
             code_challenge: code_challenge.to_string(),
             code_challenge_method: code_challenge_method.to_string(),
             authorization_source,
@@ -469,7 +567,12 @@ impl AppUseCase {
             family_id: family_id.clone(),
             user_id: user.id.clone(),
             client_id: client_id.to_string(),
+            redirect_uri: record.redirect_uri.clone(),
             scope: record.scope.clone(),
+            jellyfin_connection_id: record.jellyfin_connection_id.clone(),
+            jellyfin_external_url: record.jellyfin_external_url.clone(),
+            jellyfin_base_url: record.jellyfin_base_url.clone(),
+            jellyfin_api_key_hash: record.jellyfin_api_key_hash.clone(),
             auth_session_version: record.auth_session_version.clone(),
             authorization_source: record.authorization_source,
             created_at: now,
@@ -756,7 +859,7 @@ impl AppUseCase {
         env_flag_enabled(OAUTH_E2E_CLIENT_ENV) && env_flag_enabled(OAUTH_E2E_RELEASE_GATE_ENV)
     }
 
-    fn oauth_token_hash(&self, context: &str, token: &str) -> String {
+    pub(crate) fn oauth_token_hash(&self, context: &str, token: &str) -> String {
         let key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
         crate::to_hex(hmac::sign(&key, format!("oauth:{context}:{token}").as_bytes()).as_ref())
     }
@@ -852,6 +955,12 @@ fn random_oauth_secret() -> AppResult<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
+pub(crate) fn oauth_scope_has_jellyfin_link(scope: &str) -> bool {
+    scope
+        .split_ascii_whitespace()
+        .any(|scope| scope == OAUTH_JELLYFIN_LINK_SCOPE)
+}
+
 fn oauth_token_id(token: &str, prefix: &str) -> AppResult<String> {
     let Some((id_part, secret)) = token.split_once('.') else {
         return Err(AppError::Unauthorized("OAuth token is malformed".into()));
@@ -925,9 +1034,33 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn constrain_oauth_scope_for_authorization(scope: String, form_login_enabled: bool) -> String {
+    if !form_login_enabled && oauth_scope_has_jellyfin_link(&scope) {
+        OAUTH_LIBRARY_SCOPE.to_string()
+    } else {
+        scope
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authless_authorization_reduces_jellyfin_link_to_library_scope() {
+        assert_eq!(
+            constrain_oauth_scope_for_authorization("library jellyfin-link".to_string(), false,),
+            "library"
+        );
+        assert_eq!(
+            constrain_oauth_scope_for_authorization("library jellyfin-link".to_string(), true,),
+            "library jellyfin-link"
+        );
+        assert_eq!(
+            constrain_oauth_scope_for_authorization("library".to_string(), false),
+            "library"
+        );
+    }
 
     #[test]
     fn pkce_s256_challenge_and_verifier_follow_rfc7636_syntax() {

@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use scryer_application::{
-    AppError, AppUseCase, JwtSessionScope, OAUTH_LIBRARY_SCOPE, OAuthAuthorizationSource,
+    AppError, AppUseCase, JwtSessionScope, OAUTH_JELLYFIN_LINK_SCOPE, OAUTH_LIBRARY_SCOPE,
+    OAuthAuthorizationSource,
 };
 use scryer_interface::context::AuthRuntimeStateHandle;
 
@@ -116,7 +117,52 @@ async fn oauth_authorize_decision_inner(
     headers: HeaderMap,
     input: OAuthAuthorizeDecisionRequest,
 ) -> Result<OAuthAuthorizeDecisionResponse, Response> {
-    let authless_authorization = !state.auth_runtime.snapshot().effective_form_login_enabled;
+    let form_login_enabled = state.auth_runtime.snapshot().effective_form_login_enabled;
+    let authless_authorization = !form_login_enabled;
+    state
+        .app
+        .validate_oauth_redirect_uri(&input.client_id, &input.redirect_uri)
+        .await
+        .map_err(oauth_validation_error)?;
+    if input.response_type != "code" {
+        return Ok(OAuthAuthorizeDecisionResponse {
+            redirect_uri: oauth_redirect_error(
+                &input.redirect_uri,
+                "unsupported_response_type",
+                "only response_type=code is supported",
+                input.state.as_deref(),
+            )
+            .map_err(|response| *response)?,
+        });
+    }
+    let scope = match state
+        .app
+        .effective_oauth_authorization_scope(input.scope.as_deref(), form_login_enabled)
+    {
+        Ok(scope) => scope,
+        Err(err) => {
+            return Ok(OAuthAuthorizeDecisionResponse {
+                redirect_uri: oauth_redirect_error(
+                    &input.redirect_uri,
+                    "invalid_scope",
+                    &oauth_error_description(&err),
+                    input.state.as_deref(),
+                )
+                .map_err(|response| *response)?,
+            });
+        }
+    };
+    if !input.approved {
+        return Ok(OAuthAuthorizeDecisionResponse {
+            redirect_uri: oauth_redirect_error(
+                &input.redirect_uri,
+                "access_denied",
+                "authorization was denied",
+                input.state.as_deref(),
+            )
+            .map_err(|response| *response)?,
+        });
+    }
     let (user, authorization_source, auth_session_version, security_action_verified_until) =
         if authless_authorization {
             let user = state
@@ -171,47 +217,6 @@ async fn oauth_authorize_decision_inner(
                 claims.security_action_verified_until,
             )
         };
-    state
-        .app
-        .validate_oauth_redirect_uri(&input.client_id, &input.redirect_uri)
-        .await
-        .map_err(oauth_validation_error)?;
-    if input.response_type != "code" {
-        return Ok(OAuthAuthorizeDecisionResponse {
-            redirect_uri: oauth_redirect_error(
-                &input.redirect_uri,
-                "unsupported_response_type",
-                "only response_type=code is supported",
-                input.state.as_deref(),
-            )
-            .map_err(|response| *response)?,
-        });
-    }
-    let scope = match state.app.validate_oauth_scope(input.scope.as_deref()) {
-        Ok(scope) => scope,
-        Err(err) => {
-            return Ok(OAuthAuthorizeDecisionResponse {
-                redirect_uri: oauth_redirect_error(
-                    &input.redirect_uri,
-                    "invalid_scope",
-                    &oauth_error_description(&err),
-                    input.state.as_deref(),
-                )
-                .map_err(|response| *response)?,
-            });
-        }
-    };
-    if !input.approved {
-        return Ok(OAuthAuthorizeDecisionResponse {
-            redirect_uri: oauth_redirect_error(
-                &input.redirect_uri,
-                "access_denied",
-                "authorization was denied",
-                input.state.as_deref(),
-            )
-            .map_err(|response| *response)?,
-        });
-    }
     if authorization_source == OAuthAuthorizationSource::Authenticated
         && security_action_verified_until
             .is_none_or(|verified_until| verified_until <= chrono::Utc::now().timestamp())
@@ -385,7 +390,7 @@ async fn oauth_metadata(State(state): State<OAuthRouteState>, headers: HeaderMap
         revocation_endpoint: absolute_oauth_url(&issuer, &state.base_path, "/oauth/revoke"),
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code", "refresh_token"],
-        scopes_supported: vec![OAUTH_LIBRARY_SCOPE],
+        scopes_supported: vec![OAUTH_LIBRARY_SCOPE, OAUTH_JELLYFIN_LINK_SCOPE],
         token_endpoint_auth_methods_supported: vec!["none"],
         revocation_endpoint_auth_methods_supported: vec!["none"],
         code_challenge_methods_supported: vec!["S256"],

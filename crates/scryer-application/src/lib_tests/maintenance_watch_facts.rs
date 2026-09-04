@@ -217,6 +217,7 @@ async fn seed_title(app: &AppUseCase, user: &User, name: &str) -> Title {
 fn request_for(title_id: &str, requester: &str) -> MediaRequest {
     let now = Utc::now();
     MediaRequest {
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
         id: Id::new().0,
         library_id: "library-1".to_string(),
         facet: MediaFacet::Movie,

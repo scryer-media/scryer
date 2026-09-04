@@ -4728,13 +4728,13 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
 }
 
 #[tokio::test]
-async fn migration_0211_makes_proxies_first_class_and_preserves_solver_rows() {
+async fn migration_0213_makes_proxies_first_class_and_preserves_solver_rows() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("migration test database should open");
-    // The pre-0211 shape, verbatim from the 0198 baseline: the proxy table, the
+    // The pre-0213 shape, verbatim from the 0198 baseline: the proxy table, the
     // indexer column that names it, and the download-client table that does not
     // know about proxies at all yet.
     sqlx::raw_sql(
@@ -4799,11 +4799,11 @@ async fn migration_0211_makes_proxies_first_class_and_preserves_solver_rows() {
     )
     .execute(&pool)
     .await
-    .expect("initialize pre-0211 schema");
+    .expect("initialize pre-0213 schema");
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0211_first_class_proxies.sql"),
+        include_str!("../../../scryer/src/db/migrations/0213_first_class_proxies.sql"),
     )
     .await;
 
@@ -4935,14 +4935,14 @@ async fn migration_0211_makes_proxies_first_class_and_preserves_solver_rows() {
 }
 
 #[tokio::test]
-async fn migration_0212_adds_the_wireguard_columns_without_disturbing_existing_rows() {
+async fn migration_0214_adds_the_wireguard_columns_without_disturbing_existing_rows() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("migration test database should open");
-    // The post-0211 shape, verbatim from that migration, plus one SSH tunnel
-    // row: 0212 must leave it exactly as it found it.
+    // The post-0213 shape, verbatim from that migration, plus one SSH tunnel
+    // row: 0214 must leave it exactly as it found it.
     sqlx::raw_sql(
         "CREATE TABLE proxy_configs (
              id TEXT PRIMARY KEY NOT NULL,
@@ -4979,11 +4979,11 @@ async fn migration_0212_adds_the_wireguard_columns_without_disturbing_existing_r
     )
     .execute(&pool)
     .await
-    .expect("initialize post-0211 schema");
+    .expect("initialize post-0213 schema");
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0212_wireguard_proxies.sql"),
+        include_str!("../../../scryer/src/db/migrations/0214_wireguard_proxies.sql"),
     )
     .await;
 
@@ -5082,7 +5082,7 @@ async fn migration_0212_adds_the_wireguard_columns_without_disturbing_existing_r
         )
     );
 
-    // 0211's index is untouched: 0212 only adds columns.
+    // 0213's index is untouched: 0214 only adds columns.
     let index: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master
           WHERE type = 'index' AND name = 'idx_proxy_configs_provider_type'",

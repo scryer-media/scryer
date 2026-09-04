@@ -741,7 +741,7 @@ jobs:
 
   linux-build:
     name: linux-${{ matrix.arch }}-${{ matrix.variant }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || matrix.release_runner }}
     timeout-minutes: 90
     needs: [changes, web, builtins-provenance, release-trust]
     if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
@@ -753,6 +753,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: ubuntu-24.04
+            release_runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             sccache_lane: pr-linux-x86_64-cpu
             artifact_name: scryer-linux-x86_64-portable
@@ -764,6 +765,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: ubuntu-26.04-arm
+            release_runner: linux_arm_release
             target: aarch64-unknown-linux-musl
             sccache_lane: pr-linux-arm64-cpu
             artifact_name: scryer-linux-arm64-portable
@@ -928,6 +930,7 @@ jobs:
               --output "${{ matrix.artifact_name }}-heartbeat.log" \
               --build-log "${{ matrix.artifact_name }}-build.log" \
               --status-file "${{ matrix.artifact_name }}-build-status.json" \
+              --interval-seconds "${{ matrix.arch == 'arm64' && '1' || '60' }}" \
               -- cargo build --timings -p scryer --profile "${SCRYER_CARGO_PROFILE}" --locked --target "${{ matrix.target }}"
           fi
 
@@ -999,7 +1002,7 @@ jobs:
 
   macos-build:
     name: macos-${{ matrix.arch }}-${{ matrix.variant }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || matrix.release_runner }}
     timeout-minutes: 90
     needs: [changes, web, builtins-provenance, release-trust]
     if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
@@ -1011,6 +1014,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: macos-15
+            release_runner: mac_arm_release
             target: aarch64-apple-darwin
             sccache_lane: scryer-macos-arm64
             sccache_writer_id: scryer-darwin-arm64-portable
@@ -1022,6 +1026,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: macos-15-intel
+            release_runner: macos-15-intel
             target: x86_64-apple-darwin
             sccache_lane: scryer-macos-x86_64
             sccache_writer_id: scryer-darwin-x86_64-portable
@@ -1288,7 +1293,7 @@ jobs:
 
   windows-build:
     name: windows-${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || matrix.release_runner }}
     timeout-minutes: 90
     needs: [changes, web, builtins-provenance, release-trust]
     if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
@@ -1299,6 +1304,7 @@ jobs:
           - arch: x86_64
             msi_arch: x64
             runner: windows-2025
+            release_runner: windows_x86_release
             toolchain: 1.97.1-x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
             sccache_lane: scryer-windows-x86_64-msvc
@@ -1310,7 +1316,8 @@ jobs:
             use_lld_link: true
           - arch: arm64
             msi_arch: arm64
-            runner: windows-11-arm
+            runner: windows-11-vs2026-arm
+            release_runner: windows-11-vs2026-arm
             toolchain: 1.97.1-aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
             sccache_lane: scryer-windows-arm64-msvc

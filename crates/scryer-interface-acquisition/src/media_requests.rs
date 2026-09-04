@@ -1,5 +1,5 @@
 use async_graphql::{Context, ID, Object, Result as GqlResult};
-use scryer_domain::ExternalId;
+use scryer_domain::{ExternalId, TitleExternalRating, TitleRatingSummary};
 
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, to_gql_error};
 use scryer_interface_media::mappers::from_media_request;
@@ -39,6 +39,23 @@ impl MediaRequestMutations {
                     runtime_minutes: input.runtime_minutes,
                     language: input.language,
                     content_status: input.content_status,
+                    rating_summary: TitleRatingSummary {
+                        rating: input.rating,
+                        rating_sources: input.rating_sources.unwrap_or_default(),
+                        external_ratings: input
+                            .external_ratings
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|rating| TitleExternalRating {
+                                source: rating.source,
+                                value: rating.value,
+                                score: rating.score,
+                                normalized: rating.normalized,
+                                votes: rating.votes,
+                                url: rating.url,
+                            })
+                            .collect(),
+                    },
                     requested_quality_profile_id: input
                         .requested_quality_profile_id
                         .map(String::from),

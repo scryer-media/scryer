@@ -219,6 +219,8 @@ pub struct OAuthAuthorizationClientPayload {
     pub client_id: String,
     /// Client name safe to display after callback validation.
     pub display_name: String,
+    /// Server-validated, canonical requested scope set for this authorization decision.
+    pub scope: String,
 }
 
 #[derive(SimpleObject, Clone)]

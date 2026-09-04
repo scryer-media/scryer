@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0211_first_class_proxies.sql.
+-- PostgreSQL twin of migrations/0213_first_class_proxies.sql.
 --
 -- Postgres can do in place everything SQLite needed a table rebuild for, so
 -- this is the same change expressed as ALTERs. Renaming the table carries the

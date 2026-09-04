@@ -1,10 +1,10 @@
-//! Migration 0204 — synthetic stable root ids (FR-078, plan D1).
+//! Migration 0210 — synthetic stable root ids (FR-078, plan D1).
 //!
 //! Until now a root's id *was* its path: `root_folder_id_for_path` hashed the
 //! platform-normalized path, and every root write recomputed it. Changing a
 //! root's path therefore changed the root's identity, and every
 //! `titles.root_folder_id` pointing at it went stale. This hook breaks that
-//! functional dependency once, in one transaction, so that from 0204 onward the
+//! functional dependency once, in one transaction, so that from 0210 onward the
 //! path is a mutable attribute of a root rather than its name.
 //!
 //! ## What it does
@@ -20,7 +20,7 @@
 //! operator-supplied id — already satisfies the invariant this migration exists
 //! to establish, so it keeps the id it has. Churning those would break stable
 //! references for no gain. The post-condition the hook asserts is the one that
-//! matters: after 0204 no root's id is its path-derived id.
+//! matters: after 0210 no root's id is its path-derived id.
 //!
 //! ## Referents
 //!
@@ -280,7 +280,7 @@ async fn postgres_roots(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppRe
         .collect()
 }
 
-/// The invariant 0204 exists to establish: no root's id is a function of its path.
+/// The invariant 0210 exists to establish: no root's id is a function of its path.
 async fn sqlite_assert_no_path_derived_root_ids(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 ) -> AppResult<()> {
@@ -300,7 +300,7 @@ fn assert_no_path_derived_root_ids(roots: &[RootRow]) -> AppResult<()> {
         let normalized_path = effective_normalized_path(root);
         if root.id == root_folder_id_for_normalized_path(&normalized_path) {
             return Err(AppError::Repository(format!(
-                "library root {} still carries a path-derived id after migration 0204",
+                "library root {} still carries a path-derived id after migration 0210",
                 root.id
             )));
         }

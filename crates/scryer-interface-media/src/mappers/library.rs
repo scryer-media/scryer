@@ -272,6 +272,7 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         ImageProxyKind::Poster,
         "w250",
     );
+    let rating_summary = request.rating_summary;
     MediaRequestPayload {
         id: request.id.into(),
         library_id: request.library_id.into(),
@@ -287,6 +288,20 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         runtime_minutes: request.runtime_minutes,
         language: request.language,
         content_status: request.content_status,
+        rating: rating_summary.rating,
+        rating_sources: rating_summary.rating_sources,
+        external_ratings: rating_summary
+            .external_ratings
+            .into_iter()
+            .map(|rating| MediaRequestExternalRatingPayload {
+                source: rating.source,
+                value: rating.value,
+                score: rating.score,
+                normalized: rating.normalized,
+                votes: rating.votes,
+                url: rating.url,
+            })
+            .collect(),
         requested_quality_profile_id: request.requested_quality_profile_id.map(Into::into),
         requested_quality_profile_name: request.requested_quality_profile_name,
         requested_monitor_type: request

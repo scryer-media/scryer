@@ -1,5 +1,5 @@
 -- Persisted full-file content hashes on media files (FR-041, FR-046, plan D2/D4).
--- PostgreSQL half of 0205; see the SQLite file for the rationale.
+-- PostgreSQL half of 0211; see the SQLite file for the rationale.
 
 ALTER TABLE media_files ADD COLUMN full_blake3 text;
 ALTER TABLE media_files ADD COLUMN move_crc text;

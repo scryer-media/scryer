@@ -646,6 +646,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `LocationRootScopePreviewPayload` was already one payload for both
     // branches, and `StartLocationOperationInput` swapped its `rootChange` and
     // `rootConsolidation` fields for one `rootScope`.
+    // OAuth-bound Jellyfin account linking (merged from main) adds one mutation
+    // root and reuses the existing linked-account payload: mutation +1, and its
+    // main-side census (OBJECT +1, INPUT_OBJECT +1) rides along.
     assert_eq!(
         query_field_count, 149,
         "query fields: {query_field_names:?}"
@@ -659,7 +662,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // job: issueInteractiveReleaseCandidateToken and queueUnlinkedRelease.
     // 216->218.
     assert_eq!(
-        mutation_field_count, 218,
+        mutation_field_count, 219,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -717,9 +720,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // census. Combined with the location-surface fold above, the totals are
     // public types 720->724, OBJECT 379->380, INPUT_OBJECT 191->193, and
     // ENUM 138->139.
-    assert_eq!(public_types.len(), 724);
-    assert_eq!(kind_count("OBJECT"), 380);
-    assert_eq!(kind_count("INPUT_OBJECT"), 193);
+    assert_eq!(public_types.len(), 726);
+    assert_eq!(kind_count("OBJECT"), 381);
+    assert_eq!(kind_count("INPUT_OBJECT"), 194);
     assert_eq!(kind_count("ENUM"), 139);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
@@ -783,6 +786,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));
     assert!(mutation_field_names.contains(&"accountSecurityPasskeyStart"));
     assert!(mutation_field_names.contains(&"accountSecurityPasskeyComplete"));
+    assert!(mutation_field_names.contains(&"linkCurrentOAuthJellyfinAccount"));
     assert!(query_field_names.contains(&"episode"));
     assert!(query_field_names.contains(&"titleCatalogFilterOptions"));
     assert!(!query_field_names.contains(&"catalogHasValidRoot"));

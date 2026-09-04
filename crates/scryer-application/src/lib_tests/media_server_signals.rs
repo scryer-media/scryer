@@ -336,6 +336,13 @@ impl UserExternalAccountRepository for StubExternalAccounts {
         Ok(account)
     }
 
+    async fn create_or_get_by_provider_identity(
+        &self,
+        account: UserExternalAccount,
+    ) -> AppResult<UserExternalAccount> {
+        Ok(account)
+    }
+
     async fn list_by_user_id(&self, user_id: &str) -> AppResult<Vec<UserExternalAccount>> {
         Ok(self
             .accounts

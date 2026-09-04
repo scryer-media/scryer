@@ -1172,6 +1172,30 @@ pub struct IndexerRoutingPlan {
     pub entries: std::collections::HashMap<String, IndexerRoutingEntry>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IndexerSearchEligibility {
+    Eligible,
+    ExcludedBySearchRestriction,
+    DisabledForScope,
+}
+
+pub fn indexer_search_eligibility(
+    routing: Option<&IndexerRoutingPlan>,
+    search_restriction: Option<&std::collections::HashSet<String>>,
+    indexer_id: &str,
+) -> IndexerSearchEligibility {
+    if search_restriction.is_some_and(|allowed| !allowed.contains(indexer_id)) {
+        return IndexerSearchEligibility::ExcludedBySearchRestriction;
+    }
+    if routing
+        .and_then(|plan| plan.entries.get(indexer_id))
+        .is_some_and(|entry| !entry.enabled)
+    {
+        return IndexerSearchEligibility::DisabledForScope;
+    }
+    IndexerSearchEligibility::Eligible
+}
+
 #[derive(Clone, Debug)]
 pub struct DownloadClientAddRequest {
     pub title: Title,
@@ -1334,9 +1358,72 @@ pub struct IndexerDownloadClientProviderCompatibility {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{
+        collections::{HashMap, HashSet},
+        fs,
+        path::Path,
+    };
 
-    use super::ClientJobLocator;
+    use super::{
+        ClientJobLocator, IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility,
+        indexer_search_eligibility,
+    };
+
+    fn routing_entry(enabled: bool) -> IndexerRoutingEntry {
+        IndexerRoutingEntry {
+            enabled,
+            categories: Vec::new(),
+            priority: 0,
+        }
+    }
+
+    #[test]
+    fn search_restriction_is_distinct_from_scope_routing() {
+        let plan = IndexerRoutingPlan {
+            entries: HashMap::from([
+                ("world".to_string(), routing_entry(true)),
+                ("c411".to_string(), routing_entry(true)),
+                ("parent".to_string(), routing_entry(false)),
+            ]),
+        };
+        let c411_only = HashSet::from(["c411".to_string()]);
+
+        assert_eq!(
+            indexer_search_eligibility(Some(&plan), Some(&c411_only), "c411"),
+            IndexerSearchEligibility::Eligible
+        );
+        assert_eq!(
+            indexer_search_eligibility(Some(&plan), Some(&c411_only), "world"),
+            IndexerSearchEligibility::ExcludedBySearchRestriction
+        );
+        assert_eq!(
+            indexer_search_eligibility(Some(&plan), Some(&c411_only), "parent"),
+            IndexerSearchEligibility::ExcludedBySearchRestriction
+        );
+        assert!(plan.entries["world"].enabled);
+        assert!(plan.entries["c411"].enabled);
+        assert!(!plan.entries["parent"].enabled);
+    }
+
+    #[test]
+    fn selected_scope_disabled_and_default_routed_indexers_are_distinct() {
+        let disabled_plan = IndexerRoutingPlan {
+            entries: HashMap::from([("parent".to_string(), routing_entry(false))]),
+        };
+        let parent_only = HashSet::from(["parent".to_string()]);
+        assert_eq!(
+            indexer_search_eligibility(Some(&disabled_plan), Some(&parent_only), "parent"),
+            IndexerSearchEligibility::DisabledForScope
+        );
+        let default_plan = IndexerRoutingPlan {
+            entries: HashMap::new(),
+        };
+        let new_indexer_only = HashSet::from(["new-indexer".to_string()]);
+        assert_eq!(
+            indexer_search_eligibility(Some(&default_plan), Some(&new_indexer_only), "new-indexer"),
+            IndexerSearchEligibility::Eligible
+        );
+    }
 
     #[test]
     fn client_job_locator_new_normalizes_locator_values() {

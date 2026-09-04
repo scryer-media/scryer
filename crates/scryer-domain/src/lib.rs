@@ -242,7 +242,7 @@ pub struct MediaRequestRequester {
     pub requested_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MediaRequest {
     pub id: String,
     pub library_id: String,
@@ -258,6 +258,7 @@ pub struct MediaRequest {
     pub runtime_minutes: Option<i32>,
     pub language: Option<String>,
     pub content_status: Option<String>,
+    pub rating_summary: TitleRatingSummary,
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,

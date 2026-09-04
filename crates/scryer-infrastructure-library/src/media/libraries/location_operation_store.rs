@@ -979,7 +979,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_operation_round_trips_through_the_0206_row() {
+    async fn an_operation_round_trips_through_the_0212_row() {
         let store = test_store().await;
         let operation = operation("op-1", LocationOperationState::Moving);
         store

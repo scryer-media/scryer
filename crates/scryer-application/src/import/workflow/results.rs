@@ -410,6 +410,41 @@ async fn reconcile_terminal_download_cleanup(
         _ => false,
     };
 
+    let host_managed_rtorrent_payload =
+        remove_data && client_type.trim().eq_ignore_ascii_case("rtorrent");
+    let rtorrent_cleanup_checkpoint = if host_managed_rtorrent_payload {
+        match remove_rtorrent_payload_before_entry_cleanup(
+            app,
+            client_id,
+            client_type,
+            download_client_item_id,
+        )
+        .await
+        {
+            Ok(checkpoint) => Some(checkpoint),
+            Err(error) => {
+                tracing::warn!(
+                    client_id,
+                    client_type,
+                    download_client_item_id,
+                    state = state.as_str(),
+                    error = %error,
+                    "failed to remove rTorrent payload before removing the client entry"
+                );
+                let seeding = seeding_report.map(|report| SeedingGateReport {
+                    action: Some(SeedingReleaseAction::Kept),
+                    ..report
+                });
+                return TerminalDownloadCleanup {
+                    outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                    seeding,
+                };
+            }
+        }
+    } else {
+        None
+    };
+
     let delete_result = if client_id.is_empty() {
         app.services
             .integrations
@@ -418,7 +453,7 @@ async fn reconcile_terminal_download_cleanup(
                 client_type,
                 download_client_item_id,
                 is_history,
-                remove_data,
+                remove_data && !host_managed_rtorrent_payload,
             )
             .await
     } else {
@@ -429,7 +464,7 @@ async fn reconcile_terminal_download_cleanup(
                 client_id,
                 download_client_item_id,
                 is_history,
-                remove_data,
+                remove_data && !host_managed_rtorrent_payload,
             )
             .await
     };
@@ -469,6 +504,22 @@ async fn reconcile_terminal_download_cleanup(
         }
     };
 
+    if matches!(
+        outcome,
+        TerminalDownloadCleanupOutcome::Removed | TerminalDownloadCleanupOutcome::AlreadyGone
+    ) && let Some(checkpoint) = rtorrent_cleanup_checkpoint.as_deref()
+        && let Err(error) = clear_rtorrent_payload_cleanup_checkpoint(checkpoint).await
+    {
+        tracing::warn!(
+            client_id,
+            client_type,
+            download_client_item_id,
+            checkpoint = %checkpoint.display(),
+            error = %error,
+            "failed to clear completed rTorrent payload cleanup checkpoint"
+        );
+    }
+
     // The removal may have failed after the gate released the entry; report
     // what actually happened rather than the intent.
     let seeding = seeding_report.map(|report| SeedingGateReport {
@@ -481,6 +532,246 @@ async fn reconcile_terminal_download_cleanup(
     });
     TerminalDownloadCleanup { outcome, seeding }
 }
+
+async fn remove_rtorrent_payload_before_entry_cleanup(
+    app: &AppUseCase,
+    client_id: &str,
+    client_type: &str,
+    download_client_item_id: &str,
+) -> AppResult<std::path::PathBuf> {
+    let client_id = client_id.trim();
+    if client_id.is_empty() {
+        return Err(AppError::Validation(
+            "rTorrent payload cleanup requires a configured client id".to_string(),
+        ));
+    }
+
+    let mut completed = app
+        .services
+        .integrations
+        .download_client
+        .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "rTorrent completed download {download_client_item_id} is unavailable for payload cleanup"
+            ))
+        })?;
+    let config = app
+        .services
+        .integrations
+        .download_client_configs
+        .get_by_id(client_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("download client {client_id}")))?;
+    let mappings = parse_download_client_remote_path_mappings(&config.config_json)?;
+    apply_remote_path_mappings_to_completed_download(&mut completed, &mappings);
+
+    let status = app
+        .services
+        .integrations
+        .download_client
+        .get_client_status_for_client_id(client_id)
+        .await?;
+    let roots = status
+        .remote_output_roots
+        .iter()
+        .map(|root| {
+            let root = std::path::PathBuf::from(root.trim());
+            if !root.is_absolute()
+                || root == std::path::Path::new("/")
+                || root
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err(AppError::Validation(format!(
+                    "rTorrent reported an unusable output root: {}",
+                    root.display()
+                )));
+            }
+            Ok(root)
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    if roots.is_empty() {
+        return Err(AppError::Validation(
+            "rTorrent did not report an absolute local output root for payload cleanup".to_string(),
+        ));
+    }
+
+    let target = std::path::PathBuf::from(completed.dest_dir.trim());
+    if !target.is_absolute() {
+        return Err(AppError::Validation(format!(
+            "rTorrent payload path must be absolute: {}",
+            target.display()
+        )));
+    }
+    if target
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(AppError::Validation(format!(
+            "rTorrent payload path must not contain traversal: {}",
+            target.display()
+        )));
+    }
+    let containing_root = crate::fs_safety::most_specific_containing_root(&target, &roots)
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "rTorrent payload path {} is outside configured output roots",
+                target.display()
+            ))
+        })?;
+    if target == containing_root {
+        return Err(AppError::Validation(format!(
+            "refusing to delete rTorrent output root {}",
+            target.display()
+        )));
+    }
+    crate::fs_safety::resolve_available_root_for_path(&target, &roots)?;
+    ensure_rtorrent_target_parents_are_not_symlinks(&containing_root, &target).await?;
+
+    let libraries = app.services.catalog.libraries.list(None).await?;
+    if crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
+        .iter()
+        .any(|root| {
+            crate::catalog_workflow::library_root_paths_overlap(&completed.dest_dir, &root.path)
+        })
+    {
+        return Err(AppError::Validation(format!(
+            "refusing to delete rTorrent payload {} because it overlaps a configured library root",
+            target.display()
+        )));
+    }
+
+    let checkpoint = rtorrent_payload_cleanup_checkpoint(
+        &containing_root,
+        client_id,
+        client_type,
+        download_client_item_id,
+        &target,
+    );
+    ensure_rtorrent_payload_cleanup_checkpoint(&checkpoint).await?;
+
+    match tokio::fs::symlink_metadata(&target).await {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
+            crate::fs_safety::remove_file_safely_if_exists(&target).await
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            crate::fs_safety::remove_dir_all_safely_if_exists(&target).await
+        }
+        Ok(_) => Err(AppError::Validation(format!(
+            "rTorrent payload path {} is not a file, directory, or symlink",
+            target.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to inspect rTorrent payload {}: {error}",
+            target.display()
+        ))),
+    }?;
+    Ok(checkpoint)
+}
+
+fn rtorrent_payload_cleanup_checkpoint(
+    root: &std::path::Path,
+    client_id: &str,
+    client_type: &str,
+    download_client_item_id: &str,
+    target: &std::path::Path,
+) -> std::path::PathBuf {
+    let mut hasher = blake3::Hasher::new();
+    for value in [client_id, client_type, download_client_item_id] {
+        hasher.update(value.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(target.to_string_lossy().as_bytes());
+    root.join(format!(
+        ".scryer-rtorrent-cleanup-{}",
+        hasher.finalize().to_hex()
+    ))
+}
+
+async fn ensure_rtorrent_payload_cleanup_checkpoint(
+    checkpoint: &std::path::Path,
+) -> AppResult<()> {
+    match tokio::fs::create_dir(checkpoint).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = tokio::fs::symlink_metadata(checkpoint).await.map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to inspect rTorrent payload cleanup checkpoint {}: {error}",
+                    checkpoint.display()
+                ))
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::Validation(format!(
+                    "rTorrent payload cleanup checkpoint {} is not a directory",
+                    checkpoint.display()
+                )));
+            }
+            Ok(())
+        }
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to create rTorrent payload cleanup checkpoint {}: {error}",
+            checkpoint.display()
+        ))),
+    }
+}
+
+async fn clear_rtorrent_payload_cleanup_checkpoint(
+    checkpoint: &std::path::Path,
+) -> AppResult<()> {
+    match tokio::fs::remove_dir(checkpoint).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to remove rTorrent payload cleanup checkpoint {}: {error}",
+            checkpoint.display()
+        ))),
+    }
+}
+
+async fn ensure_rtorrent_target_parents_are_not_symlinks(
+    root: &std::path::Path,
+    target: &std::path::Path,
+) -> AppResult<()> {
+    let relative = target.strip_prefix(root).map_err(|_| {
+        AppError::Validation(format!(
+            "rTorrent payload path {} is outside output root {}",
+            target.display(),
+            root.display()
+        ))
+    })?;
+    let mut parent = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            continue;
+        };
+        let candidate = parent.join(component);
+        if candidate == target {
+            break;
+        }
+        match tokio::fs::symlink_metadata(&candidate).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AppError::Validation(format!(
+                    "rTorrent payload path {} traverses symlink {}",
+                    target.display(),
+                    candidate.display()
+                )));
+            }
+            Ok(_) => parent = candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "failed to inspect rTorrent payload ancestor {}: {error}",
+                    candidate.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `SeedGoalMetAction::StopSeeding`: leave the entry in the client but stop it
 /// uploading.
 ///

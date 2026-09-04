@@ -10,6 +10,7 @@ import os
 import pathlib
 import platform
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -22,6 +23,7 @@ PROCESS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+PROCESS_ARGS_LIMIT = 2_048
 
 
 @dataclass(frozen=True)
@@ -145,13 +147,16 @@ def _posix_process_snapshot(root_pid: int) -> ProcessSnapshot:
         row = rows.get(pid)
         if row is None:
             continue
-        _parent_pid, process_cpu_percent, process_rss, cpu_seconds, command, args = row
+        parent_pid, process_cpu_percent, process_rss, cpu_seconds, command, args = row
         cpu_seconds_by_pid[pid] = cpu_seconds
         rss_bytes += process_rss
         cpu_percent += process_cpu_percent
         if PROCESS_PATTERN.match(pathlib.Path(command).name) and len(lines) < 12:
+            if len(args) > PROCESS_ARGS_LIMIT:
+                omitted = len(args) - PROCESS_ARGS_LIMIT
+                args = f"{args[:PROCESS_ARGS_LIMIT]}...[truncated_chars={omitted}]"
             lines.append(
-                f"pid={pid} cpu_percent={process_cpu_percent:.1f} "
+                f"pid={pid} ppid={parent_pid} cpu_percent={process_cpu_percent:.1f} "
                 f"rss_mib={process_rss / 1_048_576:.1f} command={command} args={args}"
             )
     return ProcessSnapshot(
@@ -169,6 +174,74 @@ def active_processes(root_pid: int) -> ProcessSnapshot:
         return _posix_process_snapshot(root_pid)
     except (OSError, subprocess.TimeoutExpired) as error:
         return ProcessSnapshot([f"process snapshot unavailable: {error}"], {}, 0, 0.0)
+
+
+def _read_text(path: pathlib.Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+
+
+def _format_byte_value(value: str | None) -> str:
+    if value is None or value == "max":
+        return value or "unavailable"
+    try:
+        return f"{int(value) / 1_048_576:.1f}MiB"
+    except ValueError:
+        return value
+
+
+def _cgroup_v2_path() -> pathlib.Path | None:
+    membership = _read_text(pathlib.Path("/proc/self/cgroup"))
+    if membership is None:
+        return None
+    for line in membership.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) == 3 and fields[0] == "0" and fields[1] == "":
+            return pathlib.Path("/sys/fs/cgroup") / fields[2].lstrip("/")
+    return None
+
+
+def linux_memory_diagnostics() -> str:
+    if platform.system() != "Linux":
+        return "linux_memory_diagnostics=not-applicable"
+
+    metrics: list[str] = []
+    meminfo = _read_text(pathlib.Path("/proc/meminfo"))
+    if meminfo is not None:
+        selected = {"MemAvailable", "MemFree", "SwapFree", "SwapTotal"}
+        for line in meminfo.splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key in selected:
+                fields = value.split()
+                if fields and fields[0].isdigit():
+                    metrics.append(f"host_{key.lower()}_mib={int(fields[0]) / 1024:.1f}")
+
+    cgroup = _cgroup_v2_path()
+    if cgroup is not None:
+        for filename in (
+            "memory.current",
+            "memory.peak",
+            "memory.max",
+            "memory.swap.current",
+            "memory.swap.max",
+        ):
+            key = filename.replace(".", "_")
+            value = _format_byte_value(_read_text(cgroup / filename))
+            metrics.append(f"cgroup_{key}={value}")
+        events = _read_text(cgroup / "memory.events")
+        if events is not None:
+            rendered_events = ",".join(
+                line.replace(" ", "=") for line in events.splitlines() if line
+            )
+            metrics.append(f"cgroup_memory_events={rendered_events}")
+
+    pressure = _read_text(pathlib.Path("/proc/pressure/memory"))
+    if pressure is not None:
+        metrics.append(f"memory_pressure={pressure.replace(chr(10), ';')}")
+
+    return " ".join(metrics) if metrics else "linux_memory_diagnostics=unavailable"
 
 
 def latest_cargo_unit(build_log: pathlib.Path) -> str:
@@ -262,6 +335,27 @@ def main() -> int:
     )
     reader.start()
 
+    pending_signals: list[int] = []
+    reported_signal_count = 0
+
+    def record_signal(signum: int, _frame: object) -> None:
+        pending_signals.append(signum)
+
+    def report_pending_signals() -> None:
+        nonlocal reported_signal_count
+        while reported_signal_count < len(pending_signals):
+            signum = pending_signals[reported_signal_count]
+            signal_name = signal.Signals(signum).name
+            emit(f"wrapper_signal_received signal={signum} name={signal_name}", args.output)
+            emit(linux_memory_diagnostics(), args.output)
+            snapshot = active_processes(process.pid)
+            for process_line in snapshot.lines:
+                emit(f"signal_snapshot {process_line}", args.output)
+            reported_signal_count += 1
+
+    signal.signal(signal.SIGTERM, record_signal)
+    signal.signal(signal.SIGINT, record_signal)
+
     previous_cpu_seconds_by_pid: dict[int, float] = {}
     observed_cpu_seconds = 0.0
     peak_rss_bytes = 0
@@ -273,6 +367,7 @@ def main() -> int:
 
     while process.poll() is None:
         now = time.monotonic()
+        report_pending_signals()
         if now >= next_sample:
             snapshot = active_processes(process.pid)
             cpu_delta = sum(
@@ -302,6 +397,7 @@ def main() -> int:
                 f"cpu_active={str(cpu_delta > 0.0 or aggregate_cpu_percent > 0.0).lower()}",
                 args.output,
             )
+            emit(linux_memory_diagnostics(), args.output)
             emit(latest_cargo_unit(args.build_log), args.output)
             for process_line in snapshot.lines:
                 emit(process_line, args.output)
@@ -309,6 +405,7 @@ def main() -> int:
         time.sleep(0.25)
 
     process_exit_code = process.wait()
+    report_pending_signals()
     reader.join()
     elapsed_seconds = int(time.monotonic() - started)
     if process_exit_code == 0:
@@ -341,6 +438,7 @@ def main() -> int:
             "peak_normalized_cpu_percent": peak_normalized_cpu_percent,
             "peak_rss_bytes": peak_rss_bytes,
             "process_exit_code": process_exit_code,
+            "received_signals": pending_signals,
             "started_at": started_wall.isoformat(),
             "wrapper_exit_code": wrapper_exit_code,
         },
