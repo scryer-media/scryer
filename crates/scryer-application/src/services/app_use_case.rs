@@ -180,6 +180,7 @@ impl AppUseCase {
     }
 
     pub async fn publish_stored_domain_event(&self, stored: &DomainEvent) {
+        crate::events::metrics::record_domain_event_metrics(stored);
         if should_invalidate_wanted_projection(&stored.payload) {
             self.runtime
                 .acquisition
@@ -219,6 +220,9 @@ impl AppUseCase {
             .domain_events
             .append_many(events)
             .await?;
+        for event in &stored {
+            crate::events::metrics::record_domain_event_metrics(event);
+        }
         if stored
             .iter()
             .any(|event| should_invalidate_wanted_projection(&event.payload))

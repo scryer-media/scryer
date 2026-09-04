@@ -157,6 +157,7 @@ pub use api_keys::{
     API_KEY_PREFIX, ApiKeyAuthentication, ApiKeyExpiryPreset, ApiKeySummary, CreateApiKey,
     CreatedApiKey, DevelopmentApiKeySeed, parse_api_key,
 };
+pub use events::metrics::describe_domain_event_metrics;
 pub use events::retention::user_facing_domain_event_types;
 pub use import::failed_download as failed_download_handler;
 pub use import::post_processing as app_usecase_post_processing;

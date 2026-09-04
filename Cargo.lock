@@ -4057,7 +4057,9 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.16.1",
+ "indexmap 2.14.1",
  "metrics",
+ "ordered-float 5.5.0",
  "quanta",
  "rand 0.9.5",
  "rand_xoshiro",
@@ -4610,6 +4612,15 @@ name = "ordered-float"
 version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "ordered-float"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
 dependencies = [
  "num-traits",
 ]
@@ -6159,7 +6170,9 @@ dependencies = [
  "futures-util",
  "governor",
  "http",
+ "metrics",
  "metrics-exporter-prometheus",
+ "metrics-util",
  "open",
  "percent-encoding",
  "reqwest",
@@ -6221,6 +6234,7 @@ dependencies = [
  "jsonwebtoken 11.0.0",
  "libc",
  "metrics",
+ "metrics-util",
  "quick-xml",
  "rand_core 0.10.1",
  "regex",
@@ -7073,7 +7087,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
 dependencies = [
- "ordered-float",
+ "ordered-float 2.10.1",
  "serde",
 ]
 

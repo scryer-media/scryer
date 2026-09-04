@@ -11,6 +11,7 @@ mod http_error;
 mod indexer_search_routes;
 mod init;
 mod log_buffer;
+mod metrics_setup;
 mod middleware;
 mod oauth_routes;
 mod rate_limit;
@@ -742,18 +743,7 @@ async fn run_application() {
     // Install Prometheus metrics recorder when enabled.
     // The `metrics` crate uses a global facade — once installed, `metrics::counter!()`
     // calls from any crate resolve to this recorder. When not installed, they are no-ops.
-    let metrics_handle = if std::env::var("SCRYER_METRICS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
-            .install_recorder()
-            .expect("failed to install prometheus metrics recorder");
-        tracing::info!("prometheus metrics enabled at /metrics");
-        Some(handle)
-    } else {
-        None
-    };
+    let metrics_handle = metrics_setup::install_prometheus_recorder();
 
     tracing::info!(version = VERSION, "starting scryer");
 
@@ -791,6 +781,13 @@ async fn run_application() {
 
     let addr: SocketAddr = bind.parse().expect("invalid bind address");
     let shutdown_token = CancellationToken::new();
+
+    // Drain raw histogram samples on a timer; without upkeep an instance with metrics enabled
+    // and no scraper accumulates samples without bound. The task exits on the shutdown token.
+    if let Some(ref handle) = metrics_handle {
+        let _upkeep = metrics_setup::spawn_upkeep(handle.clone(), shutdown_token.clone());
+    }
+
     let startup_base_path = base_path.clone();
     let bootstrap_base_path = base_path.clone();
 

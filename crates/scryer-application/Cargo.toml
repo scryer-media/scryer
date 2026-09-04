@@ -91,6 +91,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }
+# Thread-local recorder for asserting emitted metric names, labels and values
+# without installing a global recorder.
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 # The in-process SSH server double, so the end-to-end tunnel chain is tested
 # against a real SSH peer rather than a mock of one.
 scryer-tunnel = { path = "../scryer-tunnel", features = ["test-support"] }
