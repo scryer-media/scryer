@@ -11607,3 +11607,534 @@ async fn a_release_only_the_season_query_returns_still_reaches_the_episode() {
          submitted={submitted:?} standby={standby:?}"
     );
 }
+
+/// Position of the first query of each shape a staged walk issues.
+fn walk_query_stage_positions(
+    searches: &[RecordedIndexerSearch],
+) -> (Option<usize>, Option<usize>, Option<usize>) {
+    let position =
+        |predicate: fn(&RecordedIndexerSearch) -> bool| searches.iter().position(predicate);
+    (
+        position(|search| search.season.is_none() && search.episode.is_none()),
+        position(|search| search.season.is_some() && search.episode.is_none()),
+        position(|search| search.episode.is_some()),
+    )
+}
+
+/// An operator's title-scoped search is the same staged walk the cycle runs.
+/// The whole point is that the pack stages get their turn first: a series or
+/// season pack that answers every due episode must be found before the walk
+/// starts spending episode-scoped queries.
+#[tokio::test]
+async fn an_interactive_title_walk_runs_the_pack_stages_before_any_episode_query() {
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+
+    let mut progress = Vec::new();
+    let stats = crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |event: crate::acquisition::workflow::AcquisitionWalkProgress| {
+            progress.push((event.total, event.processed, event.stage_label))
+        },
+    )
+    .await
+    .expect("interactive title walk");
+
+    let searches = indexer_client.searches.lock().await.clone();
+    let (title_pack, season_scoped, episode) = walk_query_stage_positions(&searches);
+    assert_eq!(
+        title_pack,
+        Some(0),
+        "the walk opens with the series-pack query: {searches:?}"
+    );
+    for scoped in [season_scoped, episode].into_iter().flatten() {
+        assert!(
+            scoped > 0,
+            "no scoped query may precede the pack stage: {searches:?}"
+        );
+    }
+
+    // Progress is reported at stage granularity, opening with the work-item
+    // total so the job's bar is right before the first query goes out.
+    let (total, first_processed, _) = progress
+        .first()
+        .cloned()
+        .expect("an opening progress event");
+    assert_eq!(first_processed, 0);
+    assert!(
+        total >= 3,
+        "series pack, season pack and two scopes: {total}"
+    );
+    assert_eq!(
+        progress.last().expect("a final progress event").1,
+        stats.stages,
+        "every work item reported progress"
+    );
+    assert!(
+        progress
+            .iter()
+            .any(|(_, _, label)| label.contains("series pack")),
+        "the pack stage is named in progress: {progress:?}"
+    );
+}
+
+/// A season-scoped request must not reach outside the season it named. The
+/// series-pack stage is dropped entirely — a whole-series release answers for
+/// seasons the operator never asked about.
+#[tokio::test]
+async fn a_season_scoped_interactive_walk_never_spends_a_bare_title_query() {
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        Some(7),
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("season-scoped interactive walk");
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert!(
+        !searches.is_empty(),
+        "the season-scoped walk still queries its season"
+    );
+    assert!(
+        searches
+            .iter()
+            .all(|search| search.season == Some(7) || search.episode.is_some()),
+        "no bare-title pack query for a season-scoped request: {searches:?}"
+    );
+}
+
+/// Convergence exists to stop the *background* cycle re-querying a scope whose
+/// indexers have all answered. An operator asking for a search is new
+/// information, so the interactive walk runs the queries anyway — and still
+/// records coverage on the way through.
+#[tokio::test]
+async fn an_interactive_walk_re_queries_a_scope_the_cycle_considers_converged() {
+    let indexer_client = Arc::new(
+        TrackingIndexerClient::default()
+            .returning_no_results()
+            .reporting_routed_indexers_fired(),
+    );
+    let (app, title, indexer_client, _) =
+        seed_recent_failed_season_pack_fixture_with_indexer(indexer_client).await;
+    // The bootstrap coverage store is a null repository; convergence only means
+    // something with a ledger behind it.
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+
+    app.run_background_acquisition_cycle_once().await;
+    let converged_after = indexer_client.searches.lock().await.len();
+    assert!(
+        !coverage.recorded().await.is_empty(),
+        "the first cycle leaves a coverage ledger behind"
+    );
+    assert!(converged_after > 0, "the first cycle spends its queries");
+
+    app.run_background_acquisition_cycle_once().await;
+    assert_eq!(
+        indexer_client.searches.lock().await.len(),
+        converged_after,
+        "a converged scope rides RSS instead of re-querying in the background"
+    );
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("interactive title walk");
+
+    assert!(
+        indexer_client.searches.lock().await.len() > converged_after,
+        "an operator's request re-queries a converged scope"
+    );
+}
+
+/// Both walkers arbitrate over the same title, so exactly one may hold it at a
+/// time. The cycle *skips* a held title rather than blocking on it — and counts
+/// the skip for telemetry only: the job wakes the poller when it releases the
+/// lock, so a walk that runs for minutes cannot drive a cycle every retry
+/// interval for its whole length.
+#[tokio::test]
+async fn the_background_cycle_skips_a_title_an_interactive_walk_holds() {
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+
+    let held = app
+        .runtime
+        .acquisition
+        .title_walk_locks
+        .acquire(&title.id)
+        .await;
+    let outcome = app.run_background_acquisition_cycle_once().await;
+
+    assert!(
+        indexer_client.searches.lock().await.is_empty(),
+        "the cycle must not walk a title an interactive job holds"
+    );
+    assert!(
+        outcome.skipped_locked_titles > 0,
+        "the skip is counted for telemetry"
+    );
+    assert_eq!(
+        outcome.deferred_scopes, 0,
+        "a held title is not a deferred scope"
+    );
+    assert!(
+        outcome
+            .deferred_retry_delay(std::time::Duration::from_secs(60))
+            .is_none(),
+        "a title-lock skip must not arm the retry timer"
+    );
+
+    // Released, the very next cycle walks it normally.
+    drop(held);
+    app.run_background_acquisition_cycle_once().await;
+    assert!(
+        !indexer_client.searches.lock().await.is_empty(),
+        "the cycle picks the title back up once the walk releases it"
+    );
+}
+
+/// The reverse direction: an interactive walk waits for a cycle that already
+/// holds the title, rather than racing it. An operator's request is worth the
+/// short wait; two walkers arbitrating the same episodes concurrently is not.
+#[tokio::test]
+async fn an_interactive_walk_waits_for_a_cycle_that_holds_the_title() {
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+
+    let held = app
+        .runtime
+        .acquisition
+        .title_walk_locks
+        .acquire(&title.id)
+        .await;
+    let walk = tokio::spawn({
+        let app = app.clone();
+        let title_id = title.id.clone();
+        async move {
+            crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+                &app,
+                &title_id,
+                None,
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                |_| {},
+            )
+            .await
+        }
+    });
+
+    // The walk cannot have queried anything while the lock is held.
+    tokio::task::yield_now().await;
+    sleep(Duration::from_millis(50)).await;
+    assert!(
+        indexer_client.searches.lock().await.is_empty(),
+        "the interactive walk waits instead of racing the cycle"
+    );
+
+    drop(held);
+    let stats = timeout(Duration::from_secs(10), walk)
+        .await
+        .expect("the walk resumes once the lock is released")
+        .expect("walk task")
+        .expect("interactive title walk");
+    assert!(stats.stages > 0, "the walk ran its stages after waiting");
+    assert!(!indexer_client.searches.lock().await.is_empty());
+}
+
+/// A cancelled job stops the walk between work items instead of running the
+/// whole title out.
+#[tokio::test]
+async fn a_cancelled_interactive_walk_stops_between_stages() {
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+    let stats = crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        None,
+        cancellation,
+        |_| {},
+    )
+    .await
+    .expect("cancelled walk finishes cleanly");
+
+    assert_eq!(stats.stages, 0);
+    assert!(indexer_client.searches.lock().await.is_empty());
+}
+
+/// Plan routing: only a title-scoped request for an episodic title becomes a
+/// staged walk. A row-anchored request and a facet-wide sweep keep the flat
+/// per-scope `queue_best_release` path they have always had.
+#[tokio::test]
+async fn only_a_title_scoped_episodic_request_becomes_a_staged_walk() {
+    use crate::acquisition::wanted_views::AcquisitionSearchPlan;
+
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+
+    let plan = app
+        .acquisition_search_plan(
+            &AcquisitionSearchRequest {
+                title_id: Some(title.id.clone()),
+                season_number: Some(7),
+                ..Default::default()
+            },
+            Vec::new(),
+        )
+        .await
+        .expect("plan a title-scoped request");
+    assert!(matches!(
+        plan,
+        AcquisitionSearchPlan::TitleWalk {
+            season_number: Some(7),
+            ..
+        }
+    ));
+
+    let row_anchored = app
+        .acquisition_search_plan(
+            &AcquisitionSearchRequest {
+                title_id: Some(title.id.clone()),
+                wanted_item_id: Some("scope-row-id".to_string()),
+                ..Default::default()
+            },
+            Vec::new(),
+        )
+        .await
+        .expect("plan a row-anchored request");
+    assert!(
+        matches!(row_anchored, AcquisitionSearchPlan::Scopes(_)),
+        "a row-anchored request still searches exactly the scope it names"
+    );
+
+    let sweep = app
+        .acquisition_search_plan(&AcquisitionSearchRequest::default(), Vec::new())
+        .await
+        .expect("plan a facet-wide sweep");
+    assert!(
+        matches!(sweep, AcquisitionSearchPlan::Scopes(_)),
+        "a sweep has no single title to walk"
+    );
+}
+
+/// Give the fixture's seeded scopes the facet's default library id.
+///
+/// The fixture leaves `library_id` unset, which the convergence cycle does not
+/// care about — it derives targets directly — but an operator's *request* is
+/// narrowed by library permission, so an unset library resolves to no scopes at
+/// all. Anything exercising the request-shaped path needs this first.
+async fn attach_default_library_to_scope_states(app: &AppUseCase, facet: MediaFacet) {
+    let states = app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+            limit: i64::MAX,
+            ..AcquisitionScopeStatesQuery::default()
+        })
+        .await
+        .expect("list seeded scope states");
+    for mut state in states {
+        state.library_id = Some(scryer_domain::default_library_id_for_facet(&facet));
+        app.services
+            .workflow
+            .acquisition_scope_states
+            .upsert_acquisition_scope_state(&state)
+            .await
+            .expect("attach the default library to a seeded scope");
+    }
+}
+
+/// Poll an acquisition-search job until it leaves the running state.
+async fn await_acquisition_search_job(
+    app: &AppUseCase,
+    actor: &User,
+    run_id: &str,
+) -> AcquisitionSearchJobView {
+    for _ in 0..600 {
+        let view = app
+            .acquisition_search_job(actor, run_id)
+            .await
+            .expect("read the acquisition search job")
+            .expect("the job exists");
+        if view.finished_at.is_some() {
+            return view;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the acquisition search job never reached a terminal state");
+}
+
+/// A job whose every submission is refused must fail, not complete with nothing
+/// grabbed.
+///
+/// The staged walk replaced one `queue_best_release` per scope, and that flat
+/// path counted a failure for every scope whose submit errored. Losing that
+/// count turned the whole "the mapped download client is globally disabled"
+/// shape — which the `indexer-download-client-mapping` e2e gate asserts on —
+/// into a COMPLETED job with `grabbed = 0`.
+#[tokio::test]
+async fn a_title_walk_whose_only_download_client_is_disabled_fails_the_job() {
+    let (app, title, _, download_client) = seed_recent_failed_season_pack_fixture_with_indexer(
+        Arc::new(TrackingIndexerClient::default()),
+    )
+    .await;
+    // The job's terminal state is read back off its run record, so the bootstrap
+    // needs a job-run store that remembers one.
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let app = app.with_test_overrides(|services| services.with_job_runs(job_runs.clone()));
+    attach_default_library_to_scope_states(&app, MediaFacet::Anime).await;
+    download_client
+        .set_submit_error(Some(StubSubmitError::SubmitUnavailable(
+            "mapped download client is globally disabled".to_string(),
+        )))
+        .await;
+
+    let actor = test_admin_user();
+    let run = app
+        .start_acquisition_search_job(
+            &actor,
+            AcquisitionSearchRequest {
+                title_id: Some(title.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start the title-scoped acquisition search");
+
+    let view = await_acquisition_search_job(&app, &actor, &run.id).await;
+    assert_eq!(
+        view.state, "failed",
+        "every submission was refused: {view:?}"
+    );
+    assert_eq!(view.grabbed_count, 0);
+    assert!(
+        view.failed_count > 0,
+        "a scope that could not submit counts against the job: {view:?}"
+    );
+    assert_eq!(
+        view.processed, view.total,
+        "the walk ran every work item it announced: {view:?}"
+    );
+}
+
+/// A request narrows by wanted kind; the target derivation does not. The walk
+/// therefore runs the scopes the *request* resolved to, not everything derived
+/// for the title — otherwise "search cutoff-unmet for this title" would go on to
+/// search the title's missing scopes as well.
+#[tokio::test]
+async fn a_cutoff_unmet_title_request_does_not_search_the_titles_missing_scopes() {
+    use crate::acquisition::wanted_views::AcquisitionSearchPlan;
+
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+    attach_default_library_to_scope_states(&app, MediaFacet::Anime).await;
+
+    let missing_plan = app
+        .acquisition_search_plan(
+            &AcquisitionSearchRequest {
+                wanted_kind: WantedKind::Missing,
+                title_id: Some(title.id.clone()),
+                ..Default::default()
+            },
+            app.resolve_acquisition_search_scopes(
+                &test_admin_user(),
+                &AcquisitionSearchRequest {
+                    wanted_kind: WantedKind::Missing,
+                    title_id: Some(title.id.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("resolve the missing scopes"),
+        )
+        .await
+        .expect("plan the missing request");
+    let AcquisitionSearchPlan::TitleWalk {
+        scope_keys: missing_keys,
+        ..
+    } = missing_plan
+    else {
+        panic!("a title-scoped episodic request is a walk");
+    };
+    assert_eq!(
+        missing_keys.len(),
+        2,
+        "the fixture's two due episodes are the missing set"
+    );
+
+    // The fixture has nothing on disk, so nothing is cutoff-unmet: the request
+    // resolves to no scopes and the walk must query nothing at all.
+    let cutoff_request = AcquisitionSearchRequest {
+        wanted_kind: WantedKind::CutoffUpgrade,
+        title_id: Some(title.id.clone()),
+        ..Default::default()
+    };
+    let cutoff_scopes = app
+        .resolve_acquisition_search_scopes(&test_admin_user(), &cutoff_request)
+        .await
+        .expect("resolve the cutoff-unmet scopes");
+    let cutoff_plan = app
+        .acquisition_search_plan(&cutoff_request, cutoff_scopes)
+        .await
+        .expect("plan the cutoff-unmet request");
+    let AcquisitionSearchPlan::TitleWalk {
+        scope_keys: cutoff_keys,
+        season_number,
+        title_id: walk_title_id,
+    } = cutoff_plan
+    else {
+        panic!("a title-scoped episodic request is a walk");
+    };
+    assert!(
+        cutoff_keys.is_disjoint(&missing_keys),
+        "an upgrade request must not carry the title's missing scopes: {cutoff_keys:?}"
+    );
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &walk_title_id,
+        season_number,
+        Some(&cutoff_keys),
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("cutoff-unmet title walk");
+
+    assert!(
+        indexer_client.searches.lock().await.is_empty(),
+        "the walk must not widen a cutoff-unmet request onto missing scopes: {:?}",
+        indexer_client.searches.lock().await
+    );
+
+    // Control: the same title under a missing request does walk and query.
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        Some(&missing_keys),
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("missing title walk");
+    assert!(
+        !indexer_client.searches.lock().await.is_empty(),
+        "the missing scopes the request did resolve are still searched"
+    );
+}

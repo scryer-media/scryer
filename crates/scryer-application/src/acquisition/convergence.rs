@@ -62,6 +62,12 @@ impl AppUseCase {
 pub(crate) const BACKGROUND_ACQUISITION_RESUME_AFTER_KEY: &str =
     "acquisition.convergence_resume_after";
 
+/// The same, for the hot lane. The lanes rotate independently: a hot lane that
+/// fits inside one cycle's cap must not drag the cold cursor along with it, and
+/// a hot lane larger than the cap needs its own position to resume from.
+pub(crate) const BACKGROUND_ACQUISITION_HOT_RESUME_AFTER_KEY: &str =
+    "acquisition.convergence_hot_resume_after";
+
 /// Marker set once the run-once cutover seed has completed.
 pub(crate) const ACQUISITION_CONVERGENCE_SEEDED_AT_KEY: &str = "acquisition.convergence_seeded_at";
 
@@ -191,9 +197,15 @@ const QUOTA_EXHAUSTED_REMAINING_FRACTION: f64 = 0.01;
 /// *pre-skip* only — admission stays entirely the scheduler's inside the
 /// search; the cursor just declines to spend evaluation budget on scopes whose
 /// every routed indexer is currently unreachable.
+#[derive(Default)]
 pub(crate) struct SchedulerAvailability {
     cooled_hosts: std::collections::HashSet<String>,
     exhausted_accounts: std::collections::HashSet<String>,
+    /// The soonest a cooling host comes back, when any is cooling. It is the
+    /// only *timed* half of this snapshot — an exhausted quota carries no
+    /// recovery instant — so it is a lower bound on when deferred work becomes
+    /// runnable, not a promise that it will.
+    earliest_cooldown_until: Option<DateTime<Utc>>,
 }
 
 impl SchedulerAvailability {
@@ -208,6 +220,12 @@ impl SchedulerAvailability {
         !self
             .exhausted_accounts
             .contains(&indexer_id.trim().to_ascii_lowercase())
+    }
+
+    /// How long until the soonest cooling host is expected back, if one is.
+    pub(crate) fn earliest_recovery_in(&self, now: &DateTime<Utc>) -> Option<std::time::Duration> {
+        self.earliest_cooldown_until
+            .map(|until| (until - *now).to_std().unwrap_or_default())
     }
 }
 
@@ -229,6 +247,7 @@ impl AppUseCase {
         let now = chrono::Utc::now();
         let mut cooled_hosts = std::collections::HashSet::new();
         let mut exhausted_accounts = std::collections::HashSet::new();
+        let mut earliest_cooldown_until: Option<DateTime<Utc>> = None;
         match self
             .upstream_scheduler_snapshot(
                 crate::upstream_scheduler::SchedulerSnapshotFilter::default(),
@@ -237,8 +256,12 @@ impl AppUseCase {
         {
             Ok(snapshot) => {
                 for entry in snapshot.entries {
-                    if entry.cooldown_until.is_some_and(|until| until > now) {
+                    if let Some(until) = entry.cooldown_until.filter(|until| *until > now) {
                         cooled_hosts.insert(entry.host_key.as_str().to_string());
+                        earliest_cooldown_until = Some(
+                            earliest_cooldown_until
+                                .map_or(until, |current: DateTime<Utc>| current.min(until)),
+                        );
                     }
                     if !entry.quota_stale
                         && entry
@@ -260,6 +283,7 @@ impl AppUseCase {
         SchedulerAvailability {
             cooled_hosts,
             exhausted_accounts,
+            earliest_cooldown_until,
         }
     }
 
@@ -282,15 +306,22 @@ impl AppUseCase {
 
     /// The persisted cold-lane rotation position (§D3), if any.
     pub(crate) async fn background_acquisition_resume_position(&self) -> Option<String> {
+        self.acquisition_cursor_position(BACKGROUND_ACQUISITION_RESUME_AFTER_KEY)
+            .await
+    }
+
+    /// The persisted hot-lane rotation position, if any.
+    pub(crate) async fn background_acquisition_hot_resume_position(&self) -> Option<String> {
+        self.acquisition_cursor_position(BACKGROUND_ACQUISITION_HOT_RESUME_AFTER_KEY)
+            .await
+    }
+
+    async fn acquisition_cursor_position(&self, key: &str) -> Option<String> {
         let value_json = self
             .services
             .config
             .settings
-            .get_setting_json_explicit(
-                SETTINGS_SCOPE_SYSTEM,
-                BACKGROUND_ACQUISITION_RESUME_AFTER_KEY,
-                None,
-            )
+            .get_setting_json_explicit(SETTINGS_SCOPE_SYSTEM, key, None)
             .await
             .ok()
             .flatten()?;
@@ -305,6 +336,23 @@ impl AppUseCase {
         &self,
         position: Option<&str>,
     ) {
+        self.store_acquisition_cursor_position(BACKGROUND_ACQUISITION_RESUME_AFTER_KEY, position)
+            .await;
+    }
+
+    /// Persist the hot-lane rotation position for the next cycle.
+    pub(crate) async fn store_background_acquisition_hot_resume_position(
+        &self,
+        position: Option<&str>,
+    ) {
+        self.store_acquisition_cursor_position(
+            BACKGROUND_ACQUISITION_HOT_RESUME_AFTER_KEY,
+            position,
+        )
+        .await;
+    }
+
+    async fn store_acquisition_cursor_position(&self, key: &str, position: Option<&str>) {
         let value = position.unwrap_or_default();
         let Ok(value_json) = serde_json::to_string(value) else {
             return;
@@ -313,17 +361,10 @@ impl AppUseCase {
             .services
             .config
             .settings
-            .upsert_setting_json(
-                SETTINGS_SCOPE_SYSTEM,
-                BACKGROUND_ACQUISITION_RESUME_AFTER_KEY,
-                None,
-                value_json,
-                "system",
-                None,
-            )
+            .upsert_setting_json(SETTINGS_SCOPE_SYSTEM, key, None, value_json, "system", None)
             .await
         {
-            tracing::warn!(error = %error, "failed to persist convergence cursor position");
+            tracing::warn!(key, error = %error, "failed to persist convergence cursor position");
         }
     }
 }

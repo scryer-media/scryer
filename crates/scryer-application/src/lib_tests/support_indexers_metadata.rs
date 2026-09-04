@@ -176,6 +176,8 @@ pub(super) struct TrackingIndexerClient {
     pub(super) season_pack_titles: Vec<String>,
     pub(super) title_pack_titles: Vec<String>,
     pub(super) fail_scoped_queries: bool,
+    /// Answer every query with no results at all (see [`returning_no_results`]).
+    pub(super) empty_results: bool,
     pub(super) report_routed_indexers_fired: bool,
     /// Overrides the default 1970 publication date, so a delay profile can
     /// actually hold the results this stand-in returns.
@@ -200,6 +202,14 @@ impl TrackingIndexerClient {
         titles: impl IntoIterator<Item = String>,
     ) -> Self {
         self.title_pack_titles = titles.into_iter().collect();
+        self
+    }
+
+    /// Answer every query with a genuine zero-hit response. Coverage is still
+    /// recorded (the query ran), so this is the shape that leaves a scope both
+    /// converged and still wanted.
+    pub(super) fn returning_no_results(mut self) -> Self {
+        self.empty_results = true;
         self
     }
 
@@ -268,7 +278,9 @@ impl IndexerClient for TrackingIndexerClient {
                 .filter(|(_, entry)| entry.enabled)
                 .map(|(indexer_id, _)| crate::IndexerQueryOutcome {
                     indexer_id,
-                    outcome: crate::IndexerSearchOutcome::Complete { empty: false },
+                    outcome: crate::IndexerSearchOutcome::Complete {
+                        empty: self.empty_results,
+                    },
                 })
                 .collect()
         } else {
@@ -287,14 +299,15 @@ impl IndexerClient for TrackingIndexerClient {
             (Some(season), None) => format!("{query}.S{season:02}.1080p.WEB-DL"),
             (None, _) => format!("{query}.2024.1080p.WEB-DL"),
         };
-        let release_titles =
-            if season.is_none() && episode.is_none() && !self.title_pack_titles.is_empty() {
-                self.title_pack_titles.clone()
-            } else if season.is_some() && episode.is_none() && !self.season_pack_titles.is_empty() {
-                self.season_pack_titles.clone()
-            } else {
-                vec![release_title]
-            };
+        let release_titles = if self.empty_results {
+            Vec::new()
+        } else if season.is_none() && episode.is_none() && !self.title_pack_titles.is_empty() {
+            self.title_pack_titles.clone()
+        } else if season.is_some() && episode.is_none() && !self.season_pack_titles.is_empty() {
+            self.season_pack_titles.clone()
+        } else {
+            vec![release_title]
+        };
 
         Ok(IndexerSearchResponse {
             completion: crate::IndexerSearchCompletion::Complete,

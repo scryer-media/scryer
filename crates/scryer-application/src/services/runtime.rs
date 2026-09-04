@@ -925,6 +925,11 @@ pub struct AppRuntimeAcquisitionState {
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub download_submission_guards: DownloadSubmissionGuardTable,
     pub download_failure_guards: DownloadFailureGuardTable,
+    /// Per-title exclusion between the background convergence walk and an
+    /// operator's title-scoped acquisition-search walk. See
+    /// [`AcquisitionTitleWalkLocks`] for why the two callers take it
+    /// differently.
+    pub(crate) title_walk_locks: AcquisitionTitleWalkLocks,
     pub(crate) release_candidate_passwords:
         Arc<std::sync::Mutex<HashMap<String, ReleaseCandidatePasswordTicket>>>,
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
@@ -2028,6 +2033,7 @@ impl AppRuntimeState {
                 acquisition_wake: Arc::new(tokio::sync::Notify::new()),
                 download_submission_guards: DownloadSubmissionGuardTable::default(),
                 download_failure_guards: DownloadFailureGuardTable::default(),
+                title_walk_locks: AcquisitionTitleWalkLocks::default(),
                 release_candidate_passwords: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
                 rss_unknown_age_last_warned_at: Arc::new(tokio::sync::RwLock::new(HashMap::new())),

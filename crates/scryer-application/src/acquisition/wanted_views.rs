@@ -734,11 +734,61 @@ fn parse_sort_number(value: Option<&str>) -> i64 {
 
 /// One scope to search in an interactive acquisition-search job.
 #[derive(Clone, Debug)]
-struct AcquisitionSearchScope {
+pub(crate) struct AcquisitionSearchScope {
     title_id: String,
     scope: SubmissionScope,
+    /// The convergence scope key this row resolved to, so a plan that runs the
+    /// staged walk can restrict the walk to exactly the scopes the request
+    /// narrowed to.
+    scope_key: String,
     /// Human label for the progress `currentTitle` field.
     label: String,
+}
+
+/// What an acquisition-search job will actually run.
+#[derive(Clone, Debug)]
+pub(crate) enum AcquisitionSearchPlan {
+    /// A title-scoped request for an episodic title: the same staged walk the
+    /// convergence cycle runs, under interactive intent, so the pack stages
+    /// exist before any episode scope grabs.
+    TitleWalk {
+        title_id: String,
+        /// Restrict the walk to one season, when the request named one.
+        season_number: Option<u32>,
+        /// The scopes the request resolved to. The walk derives the title's
+        /// acquisition targets and keeps only these, because the request
+        /// narrowed by wanted kind, facet and library and the derivation does
+        /// not: a cutoff-unmet request must not go on to search the title's
+        /// missing scopes. The pack stages are then derived from what is left.
+        scope_keys: HashSet<String>,
+    },
+    /// Row-anchored requests and facet/library-wide sweeps: one
+    /// `queue_best_release` per scope, unchanged.
+    Scopes(Vec<AcquisitionSearchScope>),
+}
+
+/// What a title walk contributed to the job's terminal status.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AcquisitionSearchWalkOutcome {
+    total: usize,
+    processed: usize,
+    grabbed: usize,
+    failed: usize,
+    /// A work item could not submit because its download client was
+    /// unavailable. `acquisition_search_job_status` fails the job on that even
+    /// when other work items merely found nothing.
+    submit_unavailable: bool,
+}
+
+impl AcquisitionSearchPlan {
+    /// The job's starting `total`. A walk replaces it with its own work-item
+    /// count (pack stages included) on the first progress step.
+    fn scope_count(&self) -> usize {
+        match self {
+            Self::TitleWalk { scope_keys, .. } => scope_keys.len(),
+            Self::Scopes(scopes) => scopes.len(),
+        }
+    }
 }
 
 /// Request for the interactive acquisition-search job. A bare
@@ -800,7 +850,7 @@ pub struct AcquisitionSearchJobView {
 /// nothing grabbable — nothing at all, or nothing auto-eligible — is a completed
 /// search, not a failure: the typed `NoAutoEligibleRelease` expresses the same
 /// outcome the old `Validation("no auto-eligible release found")` did.
-fn scope_search_error_is_failure(error: &AppError) -> bool {
+pub(crate) fn scope_search_error_is_failure(error: &AppError) -> bool {
     !matches!(
         error,
         AppError::Validation(_) | AppError::NoAutoEligibleRelease { .. }
@@ -951,6 +1001,7 @@ impl AppUseCase {
         let scopes = self
             .resolve_acquisition_search_scopes(actor, &request)
             .await?;
+        let plan = self.acquisition_search_plan(&request, scopes).await?;
 
         let now = chrono::Utc::now();
         let mut run = JobRunRecord {
@@ -959,14 +1010,14 @@ impl AppUseCase {
             operation_type: format!(
                 "acquisition_search:{}:{}",
                 request.wanted_kind.as_str(),
-                scopes.len()
+                plan.scope_count()
             ),
             status: JobRunStatus::Running,
             trigger_source: JobTriggerSource::Manual,
             actor_user_id: Some(actor.id.clone()),
             progress_json: serde_json::to_string(&AcquisitionSearchProgress {
                 state: "running".to_string(),
-                total: scopes.len(),
+                total: plan.scope_count(),
                 processed: 0,
                 grabbed_count: 0,
                 failed_count: 0,
@@ -1018,7 +1069,7 @@ impl AppUseCase {
                 run,
                 actor,
                 actor_event,
-                scopes,
+                plan,
                 cancellation,
                 search_guard,
             )
@@ -1026,6 +1077,58 @@ impl AppUseCase {
         });
 
         Ok(run_payload)
+    }
+
+    /// Which of the two shapes an acquisition-search request runs as.
+    ///
+    /// A title-scoped request for an episodic title runs the staged walk: the
+    /// pack stages have to exist before any episode scope grabs, and expanding
+    /// the title to one episode-subject `queue_best_release` per scope cannot
+    /// produce them. Everything else keeps `queue_best_release`: a row-anchored
+    /// request names one scope the operator picked, and a facet- or
+    /// library-wide sweep is not a walk over one title.
+    pub(crate) async fn acquisition_search_plan(
+        &self,
+        request: &AcquisitionSearchRequest,
+        scopes: Vec<AcquisitionSearchScope>,
+    ) -> AppResult<AcquisitionSearchPlan> {
+        let row_anchored = request
+            .wanted_item_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let Some(title_id) = request
+            .title_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(AcquisitionSearchPlan::Scopes(scopes));
+        };
+        if row_anchored {
+            return Ok(AcquisitionSearchPlan::Scopes(scopes));
+        }
+        let Some(title) = self.services.catalog.titles.get_by_id(title_id).await? else {
+            return Ok(AcquisitionSearchPlan::Scopes(scopes));
+        };
+        if !self
+            .facet_registry
+            .get(&title.facet)
+            .is_some_and(|handler| handler.has_episodes())
+        {
+            return Ok(AcquisitionSearchPlan::Scopes(scopes));
+        }
+        Ok(AcquisitionSearchPlan::TitleWalk {
+            title_id: title_id.to_string(),
+            season_number: request
+                .season_number
+                .and_then(|value| u32::try_from(value).ok()),
+            scope_keys: scopes
+                .into_iter()
+                .map(|scope| scope.scope_key)
+                .filter(|key| !key.is_empty())
+                .collect(),
+        })
     }
 
     /// Permission split: a title-scoped
@@ -1088,7 +1191,7 @@ impl AppUseCase {
     /// The set of scopes an acquisition-search request targets. `wanted_item_id`
     /// yields exactly one scope; otherwise the derived target set of the requested
     /// kind is filtered by facet/library/title/season.
-    async fn resolve_acquisition_search_scopes(
+    pub(crate) async fn resolve_acquisition_search_scopes(
         &self,
         actor: &User,
         request: &AcquisitionSearchRequest,
@@ -1106,9 +1209,11 @@ impl AppUseCase {
                     AppError::NotFound(format!("no acquisition scope for '{identifier}'"))
                 })?;
             let label = self.acquisition_scope_label(&title_id, &scope).await;
+            let scope_key = convergence_scope_key(&scope, &title_id).unwrap_or_default();
             return Ok(vec![AcquisitionSearchScope {
                 title_id,
                 scope,
+                scope_key,
                 label,
             }]);
         }
@@ -1174,6 +1279,7 @@ impl AppUseCase {
                         .unwrap_or_else(|| view.title_id.clone()),
                     title_id: view.title_id.clone(),
                     scope,
+                    scope_key: view.scope_key.clone(),
                 })
             })
             .collect();
@@ -1368,10 +1474,41 @@ impl AppUseCase {
         mut run: JobRunRecord,
         actor: User,
         actor_event: DomainEventActor,
-        scopes: Vec<AcquisitionSearchScope>,
+        plan: AcquisitionSearchPlan,
         cancellation: tokio_util::sync::CancellationToken,
         _search_guard: tokio::sync::OwnedMutexGuard<()>,
     ) {
+        let scopes = match plan {
+            AcquisitionSearchPlan::TitleWalk {
+                title_id,
+                season_number,
+                scope_keys,
+            } => {
+                let outcome = self
+                    .run_acquisition_search_title_walk(
+                        &mut run,
+                        &title_id,
+                        season_number,
+                        &scope_keys,
+                        &cancellation,
+                    )
+                    .await;
+                self.finish_acquisition_search_job(
+                    run,
+                    actor_event,
+                    outcome.total,
+                    outcome.processed,
+                    outcome.grabbed,
+                    outcome.failed,
+                    outcome.submit_unavailable,
+                    cancellation.is_cancelled(),
+                )
+                .await;
+                return;
+            }
+            AcquisitionSearchPlan::Scopes(scopes) => scopes,
+        };
+
         let total = scopes.len();
         let mut processed = 0usize;
         let mut grabbed = 0usize;
@@ -1440,6 +1577,107 @@ impl AppUseCase {
             cancelled,
         )
         .await;
+    }
+
+    /// Run a title-scoped request as the staged acquisition walk and report the
+    /// counts the job's terminal status is computed from.
+    ///
+    /// The walk's progress callback is synchronous — it runs inside the walk,
+    /// which cannot await a database write mid-stage — so steps arrive over a
+    /// channel and are written out here, concurrently with the walk. That keeps
+    /// progress at stage-and-scope granularity without the walk having to know
+    /// what a job run is.
+    async fn run_acquisition_search_title_walk(
+        &self,
+        run: &mut JobRunRecord,
+        title_id: &str,
+        season_number: Option<u32>,
+        scope_keys: &HashSet<String>,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> AcquisitionSearchWalkOutcome {
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::acquisition_workflow::AcquisitionWalkProgress,
+        >();
+        let walk = crate::acquisition_workflow::run_interactive_title_acquisition_walk(
+            self,
+            title_id,
+            season_number,
+            Some(scope_keys),
+            cancellation.clone(),
+            move |progress| {
+                // A closed receiver only means the job stopped reading progress;
+                // the walk itself carries on.
+                let _ = progress_tx.send(progress);
+            },
+        );
+        tokio::pin!(walk);
+
+        let mut total = scope_keys.len();
+        let mut processed = 0usize;
+        let result = loop {
+            tokio::select! {
+                Some(progress) = progress_rx.recv() => {
+                    total = progress.total.max(progress.processed);
+                    processed = progress.processed;
+                    let _ = self
+                        .update_acquisition_search_progress(
+                            run,
+                            AcquisitionSearchProgress {
+                                state: "running".to_string(),
+                                total,
+                                processed,
+                                grabbed_count: 0,
+                                failed_count: 0,
+                                current_title: Some(progress.stage_label),
+                            },
+                        )
+                        .await;
+                }
+                result = &mut walk => break result,
+            }
+        };
+        // Steps the walk emitted after the last poll of the channel.
+        while let Ok(progress) = progress_rx.try_recv() {
+            total = progress.total.max(progress.processed);
+            processed = progress.processed;
+        }
+
+        match result {
+            Ok(stats) => AcquisitionSearchWalkOutcome {
+                total: total.max(stats.stages),
+                processed: stats.stages,
+                // Both halves count: the grabs the walk committed inline and the
+                // proposals the end-of-walk arbitration committed.
+                grabbed: stats.inline_grabs + stats.committed,
+                // Work items whose submissions all failed. Without this a job
+                // whose every submission was refused — a mapped download client
+                // that is globally disabled, say — would terminate `completed`
+                // with nothing grabbed, which is exactly what the old per-scope
+                // path reported as failed.
+                failed: stats.failed,
+                submit_unavailable: stats.submit_unavailable,
+            },
+            Err(error) => {
+                let is_failure = scope_search_error_is_failure(&error);
+                if is_failure {
+                    tracing::warn!(
+                        title_id,
+                        error = %error,
+                        "acquisition search job: title walk failed"
+                    );
+                }
+                AcquisitionSearchWalkOutcome {
+                    total: total.max(1),
+                    // A walk that failed outright reports one processed unit so
+                    // an all-failed job still reads as failed rather than as a
+                    // job that did nothing.
+                    processed: processed.max(1),
+                    grabbed: 0,
+                    failed: usize::from(is_failure),
+                    submit_unavailable: error.is_retryable_download_submit_failure(),
+                }
+            }
+        }
     }
 
     async fn update_acquisition_search_progress(
