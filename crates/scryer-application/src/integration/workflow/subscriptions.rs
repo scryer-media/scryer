@@ -20,13 +20,13 @@ impl Drop for LegacySubscriptionGauge {
 }
 
 impl AppUseCase {
-    pub fn subscribe_download_queue(
+    pub async fn subscribe_download_queue(
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<Vec<DownloadQueueItem>>> {
-        if !actor
-            .authorization
-            .has_any_library_permission(scryer_domain::LibraryPermission::View)
+        if !self
+            .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
+            .await?
         {
             return Err(AppError::Unauthorized(
                 "You do not have access to this library".to_string(),
@@ -61,13 +61,13 @@ impl AppUseCase {
         Ok(rx)
     }
 
-    pub fn subscribe_download_queue_sync(
+    pub async fn subscribe_download_queue_sync(
         &self,
         actor: &User,
     ) -> AppResult<tokio::sync::watch::Receiver<DownloadQueueSync>> {
-        if !actor
-            .authorization
-            .has_any_library_permission(scryer_domain::LibraryPermission::View)
+        if !self
+            .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
+            .await?
         {
             return Err(AppError::Unauthorized(
                 "You do not have access to this library".to_string(),

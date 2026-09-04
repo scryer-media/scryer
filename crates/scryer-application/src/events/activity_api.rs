@@ -1436,11 +1436,11 @@ impl AppUseCase {
             })
     }
 
-    pub fn subscribe_download_queue_state(
+    pub async fn subscribe_download_queue_state(
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<Vec<DownloadQueueItem>>> {
-        self.subscribe_download_queue(actor)
+        self.subscribe_download_queue(actor).await
     }
 
     pub async fn subscribe_job_run_state(

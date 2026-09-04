@@ -192,7 +192,7 @@ impl AppUseCase {
         let request_id = submitted_request.id.clone();
 
         if self
-            .has_granted_library_permission(
+            .has_library_permission(
                 actor,
                 &submitted_request.library_id,
                 LibraryPermission::AutoApproveRequests,
@@ -212,7 +212,7 @@ impl AppUseCase {
         input: ListMediaRequestsInput,
     ) -> AppResult<Vec<MediaRequest>> {
         let allowed_ids = self
-            .library_ids_with_library_permission(
+            .authorized_library_ids(
                 actor,
                 input.facet.clone(),
                 LibraryPermission::ManageTitles,
@@ -250,7 +250,7 @@ impl AppUseCase {
         input: ListMediaRequestsInput,
     ) -> AppResult<Vec<MediaRequest>> {
         let allowed_ids = self
-            .library_ids_with_library_permission(
+            .authorized_library_ids(
                 actor,
                 input.facet.clone(),
                 LibraryPermission::Request,
@@ -616,7 +616,7 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<MediaRequestCounts> {
         let library_ids = self
-            .library_ids_with_library_permission(actor, None, LibraryPermission::ManageTitles)
+            .authorized_library_ids(actor, None, LibraryPermission::ManageTitles)
             .await?;
 
         if library_ids.is_empty() {
@@ -632,7 +632,7 @@ impl AppUseCase {
 
     pub async fn can_manage_media_requests(&self, actor: &User) -> AppResult<bool> {
         Ok(!self
-            .library_ids_with_library_permission(actor, None, LibraryPermission::ManageTitles)
+            .authorized_library_ids(actor, None, LibraryPermission::ManageTitles)
             .await?
             .is_empty())
     }
@@ -643,7 +643,7 @@ impl AppUseCase {
         }
 
         Ok(!self
-            .library_ids_with_library_permission(actor, None, LibraryPermission::Request)
+            .authorized_library_ids(actor, None, LibraryPermission::Request)
             .await?
             .is_empty())
     }
@@ -655,7 +655,7 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let allowed_library_ids = self
-            .library_ids_with_library_permission(actor, None, LibraryPermission::ManageTitles)
+            .authorized_library_ids(actor, None, LibraryPermission::ManageTitles)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
@@ -713,12 +713,12 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let manageable_library_ids = self
-            .library_ids_with_library_permission(actor, None, LibraryPermission::ManageTitles)
+            .authorized_library_ids(actor, None, LibraryPermission::ManageTitles)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
         let requestable_library_ids = self
-            .library_ids_with_library_permission(actor, None, LibraryPermission::Request)
+            .authorized_library_ids(actor, None, LibraryPermission::Request)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();

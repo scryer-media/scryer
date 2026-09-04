@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  hasAnyLibraryPermission,
   hasAppPermission,
   hasLibraryPermission,
   normalizeJwtPermissionClaims,
@@ -87,4 +88,40 @@ test("normalizeJwtPermissionClaims discards malformed and unknown claims", () =>
     appPermissions: [],
     libraryPermissions: [{ libraryId: "library-primary", permissions: [] }],
   });
+});
+
+test("administrators hold every library permission on every library", () => {
+  const admin = normalizeJwtPermissionClaims(
+    ["managePermissions"],
+    [{ libraryId: "library-primary", permissions: ["view"] }],
+  );
+
+  assert.equal(
+    hasLibraryPermission(admin, "library-created-later", LIBRARY_PERMISSIONS.manageTitles),
+    true,
+  );
+  assert.equal(
+    hasLibraryPermission(admin, "library-primary", LIBRARY_PERMISSIONS.manageLibrary),
+    true,
+  );
+  assert.equal(hasAnyLibraryPermission(admin, LIBRARY_PERMISSIONS.resolveImports), true);
+  assert.equal(hasLibraryPermission(admin, null, LIBRARY_PERMISSIONS.view), false);
+  assert.equal(hasLibraryPermission(null, "library-primary", LIBRARY_PERMISSIONS.view), false);
+});
+
+test("non-administrators only hold explicitly granted library permissions", () => {
+  const user = normalizeJwtPermissionClaims(
+    ["manageCatalogSettings"],
+    [{ libraryId: "library-primary", permissions: ["view"] }],
+  );
+
+  assert.equal(
+    hasLibraryPermission(user, "library-created-later", LIBRARY_PERMISSIONS.view),
+    false,
+  );
+  assert.equal(
+    hasLibraryPermission(user, "library-primary", LIBRARY_PERMISSIONS.manageTitles),
+    false,
+  );
+  assert.equal(hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles), false);
 });

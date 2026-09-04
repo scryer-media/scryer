@@ -145,6 +145,15 @@ export function hasAnyAppPermission(
   return permissions.some((permission) => hasAppPermission(user, permission));
 }
 
+/**
+ * Administrators (holders of MANAGE_PERMISSIONS) hold every library permission
+ * on every library, including libraries created after their explicit grants
+ * were seeded. Mirrors the backend's `load_user_authorization` fallback.
+ */
+function isLibraryAdministrator(user: PermissionUser | null | undefined): boolean {
+  return hasAppPermission(user, APP_PERMISSIONS.managePermissions);
+}
+
 export function hasLibraryPermission(
   user: PermissionUser | null | undefined,
   libraryId: string | null | undefined,
@@ -152,6 +161,9 @@ export function hasLibraryPermission(
 ): boolean {
   if (!user || !libraryId) {
     return false;
+  }
+  if (isLibraryAdministrator(user)) {
+    return true;
   }
   return user.libraryPermissions.some((grant) => {
     if (grant.libraryId !== libraryId) {
@@ -165,6 +177,9 @@ export function hasAnyLibraryPermission(
   user: PermissionUser | null | undefined,
   permission: LibraryPermission,
 ): boolean {
+  if (isLibraryAdministrator(user)) {
+    return true;
+  }
   return user?.libraryPermissions.some((grant) =>
     libraryPermissionMatches(grant.permissions, permission),
   ) === true;

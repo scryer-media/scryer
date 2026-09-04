@@ -455,7 +455,7 @@ impl SubscriptionRoot {
                 return empty_box_stream();
             }
         };
-        let receiver = match app.subscribe_download_queue_sync(&actor) {
+        let receiver = match app.subscribe_download_queue_sync(&actor).await {
             Ok(receiver) => receiver,
             Err(error) => {
                 tracing::warn!("download_queue_sync sub: subscribe failed: {error}");
@@ -524,7 +524,7 @@ impl SubscriptionRoot {
             actor.id
         );
 
-        let receiver = match app.subscribe_download_queue_state(&actor) {
+        let receiver = match app.subscribe_download_queue_state(&actor).await {
             Ok(receiver) => receiver,
             Err(error) => {
                 tracing::warn!("download_queue sub: subscribe failed: {error}");

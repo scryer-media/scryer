@@ -9326,6 +9326,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
 
     let mut receiver = app
         .subscribe_download_queue(&user)
+        .await
         .expect("queue subscription should start");
     let snapshot = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -9362,6 +9363,7 @@ async fn download_queue_subscription_sends_empty_bootstrap_snapshot() {
 
     let mut receiver = app
         .subscribe_download_queue(&user)
+        .await
         .expect("queue subscription should start");
     let snapshot = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
