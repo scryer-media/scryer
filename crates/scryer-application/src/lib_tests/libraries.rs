@@ -2101,7 +2101,51 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
         .expect("catalog admin slug lookup should succeed in an ungranted library");
     assert_eq!(by_slug.map(|title| title.id), Some(created.title.id.clone()));
 
-    // Without the catalog-admin mask the explicit grant rows still decide.
+    // A full administrator also manages titles there, through both the
+    // override-aware and the grant-only checks.
+    app.require_library_permission(
+        &user,
+        &library.id,
+        scryer_domain::LibraryPermission::ManageTitles,
+    )
+    .await
+    .expect("administrator should manage titles in an ungranted library");
+    assert!(
+        app.has_granted_library_permission(
+            &user,
+            &library.id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await
+        .expect("permission check should load")
+    );
+
+    // Catalog-settings-only users keep read access but not manage-titles.
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, AppPermissionMask::MANAGE_CATALOG_SETTINGS)
+        .await
+        .expect("app permission mask should be stored");
+    user.authorization.loaded = false;
+    let by_id = app
+        .get_title(&user, &created.title.id)
+        .await
+        .expect("catalog-settings user should read a title in an ungranted library");
+    assert_eq!(by_id.map(|title| title.id), Some(created.title.id.clone()));
+    match app
+        .require_library_permission(
+            &user,
+            &library.id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await
+    {
+        Err(AppError::Unauthorized(_)) => {}
+        other => panic!("expected manage-titles to need a grant, got {other:?}"),
+    }
+
+    // Without any app-level mask the explicit grant rows still decide.
     app.services
         .catalog
         .libraries

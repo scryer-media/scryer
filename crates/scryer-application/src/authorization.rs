@@ -62,10 +62,20 @@ impl AppUseCase {
             libraries.insert(grant.library_id, grant.permissions);
         }
 
+        // An administrator who can grant library permissions holds every
+        // library permission on every library, including libraries created
+        // after the account was provisioned and therefore missing a grant
+        // row. Explicit rows still win where one exists.
+        let default_library = if app.contains(AppPermissionMask::MANAGE_PERMISSIONS) {
+            UserAuthorization::full_admin().default_library
+        } else {
+            LibraryPermissionMask::NONE
+        };
+
         Ok(UserAuthorization {
             app,
             libraries,
-            default_library: LibraryPermissionMask::NONE,
+            default_library,
             actor_capabilities: ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
             login_status: actor.login_status(),
             loaded: true,
