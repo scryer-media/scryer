@@ -1,6 +1,6 @@
 [package]
 name = "xtask-trash-guides"
-version = "0.19.10"
+version = "0.19.11"
 edition = "2024"
 publish = false
 
