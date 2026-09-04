@@ -110,6 +110,29 @@ pub(crate) struct QueuedRelease {
     pub tier_index: Option<usize>,
     pub revision: i32,
     pub score: i32,
+    /// [`release_key`] of `title`, so the gate can tell "the very release that
+    /// is already in flight" from "an equal one". `None` when the queued
+    /// title is unknown.
+    pub release_key: Option<u64>,
+}
+
+/// The identity a release name carries for the "already grabbed" refusal:
+/// case-folded, with every separator dropped, so `Desert.Warrior.2025.1080p`
+/// and `desert warrior 2025 1080p` name the same download. `None` for an empty
+/// name, which must never match anything.
+pub(crate) fn release_key(title: &str) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let normalized = title
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    normalized.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 /// Incumbent-aware policy. Both callers build one; only the numbers differ.
@@ -226,6 +249,10 @@ pub(crate) struct CandidateFacts {
     /// PROPER/REPACK rank; [`crate::acquisition::scoring::revision_rank`].
     pub revision: i32,
     pub score: i32,
+    /// [`release_key`] of the candidate's release name, when the caller knows
+    /// it. Only the queue comparison reads it: a candidate that *is* the
+    /// queued release is refused before any ladder runs.
+    pub release_key: Option<u64>,
 }
 
 impl CandidateFacts {
@@ -234,7 +261,14 @@ impl CandidateFacts {
             tier_index,
             revision,
             score,
+            release_key: None,
         }
+    }
+
+    /// Attach the candidate's release identity; see [`release_key`].
+    pub(crate) fn with_release_title(mut self, title: &str) -> Self {
+        self.release_key = release_key(title);
+        self
     }
 }
 
@@ -297,6 +331,10 @@ pub(crate) enum AdmissionRejectionReason {
         queued_score: i32,
         candidate_score: i32,
     },
+    /// The candidate *is* the release already grabbed for this scope — same
+    /// name, still in flight or still unresolved. Never fetched twice, whatever
+    /// the scores say: a second copy of the same bytes is never an upgrade.
+    QueuedSameRelease { queued_title: String },
     /// The incumbent has already reached the profile's `cutoff_score`, so no
     /// same-tier candidate is worth the bandwidth however far ahead it scores.
     /// Sonarr's `CustomFormatCutoff`, kept distinct from `NotAnUpgrade` because
@@ -510,8 +548,11 @@ fn queued_candidate_win(
         std::cmp::Ordering::Equal => match candidate.revision.cmp(&queued.revision) {
             std::cmp::Ordering::Greater => Some(QueueWin::Revision),
             std::cmp::Ordering::Less => None,
+            // A tie is never a win over a download already in flight: with a
+            // zero churn threshold the old `>=` admitted an identical score,
+            // and the scope fetched the same release again every pass.
             std::cmp::Ordering::Equal => (candidate.score.saturating_sub(queued.score)
-                >= policy.required_delta())
+                >= policy.required_delta().max(1))
             .then_some(QueueWin::Score),
         },
     }
@@ -555,6 +596,24 @@ fn queued_rejection(
         return None;
     }
     subject.queued.iter().find_map(|queued| {
+        // The very release that is already grabbed is refused before any
+        // comparison: no score, size or profile change makes a second copy
+        // of the same download worth fetching. This is the guard that stops
+        // a scope re-grabbing one release every sync while the first copy
+        // is still working its way through the client.
+        if candidate.release_key.is_some() && candidate.release_key == queued.release_key {
+            return Some(AdmissionRejection {
+                reason: AdmissionRejectionReason::QueuedSameRelease {
+                    queued_title: queued.title.clone(),
+                },
+                message: format!(
+                    "{} is already grabbed for this scope; the same release is not fetched twice",
+                    queued.title
+                ),
+                incumbent_file_id: String::new(),
+                incumbent_file_path: String::new(),
+            });
+        }
         // The same tier → revision → score ladder an incumbent gets.
         let win = queued_candidate_win(candidate, queued, policy);
         match win {

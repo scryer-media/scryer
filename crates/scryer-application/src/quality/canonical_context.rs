@@ -709,6 +709,7 @@ impl AppUseCase {
                     context,
                 );
                 Some(crate::admission::QueuedRelease {
+                    release_key: crate::admission::release_key(&release_title),
                     title: release_title,
                     covers: match &submission.scope {
                         crate::SubmissionScope::Episode { episode_id } => vec![episode_id.clone()],
@@ -726,6 +727,121 @@ impl AppUseCase {
                 })
             })
             .collect()
+    }
+
+    /// The grab the ledger remembers for this scope, as a pseudo-incumbent.
+    ///
+    /// [`Self::queued_releases_for_scope`] sees only what the download client
+    /// shows *right now*. A SABnzbd job spends minutes in history
+    /// post-processing, a slow poller has not yet written a tracked state,
+    /// a history page rolls over — and in each of those windows the client
+    /// view says "nothing in flight" while Scryer's own scope row still says
+    /// `grabbed` and names the release. Sonarr's `HistorySpecification`
+    /// closes the same gap from its grab history; here the scope row is that
+    /// history. The claim lasts exactly as long as the row stays `grabbed`:
+    /// an import, a failure, a blocklist, or an operator remove/ignore moves
+    /// it out, and nothing else does. A job the client lost without a trace
+    /// is failed by absence reconciliation, which is the release valve; the
+    /// claim itself never expires on a clock.
+    pub(crate) async fn grabbed_release_claims_for_scope(
+        &self,
+        title: &Title,
+        membership: &crate::acquisition::acquisition::ScopeMembership<'_>,
+        context: &ResolvedScoringContext,
+        catalog_episodes: &[scryer_domain::Episode],
+        catalog_collections: &[scryer_domain::Collection],
+    ) -> Vec<crate::admission::QueuedRelease> {
+        let states = match self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+            .await
+        {
+            Ok(states) => states,
+            Err(error) => {
+                tracing::warn!(
+                    title_id = %title.id,
+                    error = %error,
+                    "grab guard: failed to read acquisition scope states; recorded grabs are not claiming this pass"
+                );
+                return Vec::new();
+            }
+        };
+        states
+            .iter()
+            .filter(|state| {
+                crate::acquisition::acquisition::submission_scope_intersects(
+                    &submission_scope_for_acquisition_scope_state(state),
+                    membership,
+                )
+            })
+            .filter_map(|state| {
+                let record = grabbed_release_record(state)?;
+                let facts = score_parked_release_title(
+                    title,
+                    &record.title,
+                    None,
+                    catalog_episodes,
+                    catalog_collections,
+                    context,
+                );
+                Some(crate::admission::QueuedRelease {
+                    covers: match submission_scope_for_acquisition_scope_state(state) {
+                        crate::SubmissionScope::Episode { episode_id } => vec![episode_id],
+                        crate::SubmissionScope::Collection { .. } => {
+                            membership.episode_ids.to_vec()
+                        }
+                        _ => Vec::new(),
+                    },
+                    tier_index: facts.tier_index,
+                    revision: facts.revision,
+                    // The grab-time score is what the ledger has, but the
+                    // re-derivation is what the candidate beside it gets; use
+                    // the same derivation unless the title no longer parses.
+                    score: if facts.tier_index.is_some() {
+                        facts.score
+                    } else {
+                        record.score
+                    },
+                    release_key: crate::admission::release_key(&record.title),
+                    title: record.title,
+                })
+            })
+            .collect()
+    }
+
+    /// The client's live view plus the ledger's recorded grabs, one entry per
+    /// release. A grab the client still shows is already in `queued`; the
+    /// ledger only adds what the client cannot see this pass.
+    pub(crate) async fn queued_releases_with_grabbed_claims(
+        &self,
+        mut queued: Vec<crate::admission::QueuedRelease>,
+        title: &Title,
+        membership: &crate::acquisition::acquisition::ScopeMembership<'_>,
+        context: &ResolvedScoringContext,
+        catalog_episodes: &[scryer_domain::Episode],
+        catalog_collections: &[scryer_domain::Collection],
+    ) -> Vec<crate::admission::QueuedRelease> {
+        let recorded = self
+            .grabbed_release_claims_for_scope(
+                title,
+                membership,
+                context,
+                catalog_episodes,
+                catalog_collections,
+            )
+            .await;
+        for claim in recorded {
+            let already_listed = claim.release_key.is_some()
+                && queued
+                    .iter()
+                    .any(|queued| queued.release_key == claim.release_key);
+            if !already_listed {
+                queued.push(claim);
+            }
+        }
+        queued
     }
 
     /// The bar a candidate must clear to displace `file`.
@@ -777,4 +893,211 @@ pub(crate) struct IncumbentFacts {
     pub tier_index: Option<usize>,
     /// PROPER/REPACK rank of the release the row remembers.
     pub revision: i32,
+}
+
+/// What a scope row remembers about its last grab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GrabbedReleaseRecord {
+    pub title: String,
+    pub score: i32,
+    pub grabbed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The scope a state row anchors, in the vocabulary the queue comparison uses.
+/// Mirrors the wanted-item mapping the grab lanes submit under.
+pub(crate) fn submission_scope_for_acquisition_scope_state(
+    state: &crate::AcquisitionScopeState,
+) -> crate::SubmissionScope {
+    match (
+        state.media_type.as_str(),
+        state.episode_id.as_deref(),
+        state.series_movie_link_id.as_deref(),
+    ) {
+        ("episode", Some(episode_id), _) => crate::SubmissionScope::Episode {
+            episode_id: episode_id.to_string(),
+        },
+        ("series_movie", _, Some(series_movie_link_id)) => crate::SubmissionScope::SeriesMovie {
+            series_movie_link_id: series_movie_link_id.to_string(),
+        },
+        _ => crate::SubmissionScope::Title,
+    }
+}
+
+/// The grab a scope row still stands behind: the row is `grabbed` and names a
+/// release. There is no age bound; a release is never fetched again until the
+/// row leaves `grabbed`. A row without a grab timestamp falls back to its
+/// `updated_at`; a row with neither parseable claims nothing.
+pub(crate) fn grabbed_release_record(
+    state: &crate::AcquisitionScopeState,
+) -> Option<GrabbedReleaseRecord> {
+    if state.status != crate::AcquisitionScopeStatus::Grabbed {
+        return None;
+    }
+    let raw = state.grabbed_release.as_deref()?;
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let title = value
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())?
+        .to_string();
+    let score = value
+        .get("score")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|score| i32::try_from(score).ok())
+        .unwrap_or(0);
+    let grabbed_at = value
+        .get("grabbed_at")
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::quality_profile::parse_published_at)
+        .or_else(|| crate::quality_profile::parse_published_at(&state.updated_at))?;
+    Some(GrabbedReleaseRecord {
+        title,
+        score,
+        grabbed_at,
+    })
+}
+
+#[cfg(test)]
+mod grabbed_release_claim_tests {
+    use super::*;
+    use crate::{AcquisitionScopeState, AcquisitionScopeStatus, SubmissionScope};
+
+    fn state(
+        status: AcquisitionScopeStatus,
+        grabbed_release: Option<&str>,
+    ) -> AcquisitionScopeState {
+        AcquisitionScopeState {
+            id: "scope-1".to_string(),
+            title_id: "title-1".to_string(),
+            title_name: None,
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "movie".to_string(),
+            last_search_at: None,
+            status,
+            grabbed_release: grabbed_release.map(str::to_string),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: "2026-08-29T14:00:00Z".to_string(),
+            updated_at: "2026-08-29T14:42:00Z".to_string(),
+        }
+    }
+
+    fn at(rfc3339: &str) -> chrono::DateTime<chrono::Utc> {
+        crate::quality_profile::parse_published_at(rfc3339).expect("fixture timestamp parses")
+    }
+
+    const REMUX: &str = "Desert.Warrior.2025.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GRP";
+
+    /// The Desert Warrior window: the Remux was grabbed at 14:42, SABnzbd was
+    /// post-processing it at 16:49 with nothing in the queue leg, and the scope
+    /// row still said `grabbed`. That row is the claim.
+    #[test]
+    fn a_grabbed_scope_row_claims_its_release_while_the_grab_is_recent() {
+        let row = state(
+            AcquisitionScopeStatus::Grabbed,
+            Some(&format!(
+                r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-29T14:42:00Z","source":"rss_sync"}}"#
+            )),
+        );
+        let record = grabbed_release_record(&row).expect("a recent grab claims the scope");
+        assert_eq!(record.title, REMUX);
+        assert_eq!(record.score, 497);
+        assert_eq!(record.grabbed_at, at("2026-08-29T14:42:00Z"));
+    }
+
+    /// The claim has no clock: a grab from days ago still claims the scope as
+    /// long as the row says `grabbed`. Only an outcome (import, failure,
+    /// blocklist, operator remove/ignore) releases it, never elapsed time.
+    #[test]
+    fn a_grab_claims_for_as_long_as_the_row_stays_grabbed() {
+        let row = state(
+            AcquisitionScopeStatus::Grabbed,
+            Some(&format!(
+                r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-01T14:42:00Z"}}"#
+            )),
+        );
+        let record = grabbed_release_record(&row).expect("an old grab still claims");
+        assert_eq!(record.title, REMUX);
+        assert_eq!(record.grabbed_at, at("2026-08-01T14:42:00Z"));
+    }
+
+    /// Any outcome that moves the row out of `grabbed` (import, failure,
+    /// blocklist, operator reset) releases the claim immediately.
+    #[test]
+    fn only_a_grabbed_row_claims() {
+        let json =
+            format!(r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-29T14:42:00Z"}}"#);
+        for status in [
+            AcquisitionScopeStatus::Wanted,
+            AcquisitionScopeStatus::Paused,
+            AcquisitionScopeStatus::Completed,
+        ] {
+            let row = state(status, Some(&json));
+            assert!(
+                grabbed_release_record(&row).is_none(),
+                "{status:?} must not claim"
+            );
+        }
+    }
+
+    /// Rows written before the grab timestamp existed fall back to the row's
+    /// own `updated_at`; rows with no usable release name never claim.
+    #[test]
+    fn a_row_without_a_grab_timestamp_falls_back_to_updated_at() {
+        let row = state(
+            AcquisitionScopeStatus::Grabbed,
+            Some(&format!(r#"{{"title":"{REMUX}","score":497}}"#)),
+        );
+        let record = grabbed_release_record(&row).expect("updated_at stands in for grabbed_at");
+        assert_eq!(record.grabbed_at, at("2026-08-29T14:42:00Z"));
+
+        for raw in [
+            None,
+            Some("not json"),
+            Some(r#"{"score":1}"#),
+            Some(r#"{"title":"  "}"#),
+        ] {
+            let row = state(AcquisitionScopeStatus::Grabbed, raw);
+            assert!(
+                grabbed_release_record(&row).is_none(),
+                "{raw:?} carries no release to claim"
+            );
+        }
+    }
+
+    #[test]
+    fn scope_rows_map_to_the_submission_scope_the_lanes_grab_under() {
+        let mut row = state(AcquisitionScopeStatus::Grabbed, None);
+        assert_eq!(
+            submission_scope_for_acquisition_scope_state(&row),
+            SubmissionScope::Title
+        );
+        row.media_type = "episode".to_string();
+        row.episode_id = Some("ep-1".to_string());
+        assert_eq!(
+            submission_scope_for_acquisition_scope_state(&row),
+            SubmissionScope::Episode {
+                episode_id: "ep-1".to_string()
+            }
+        );
+        row.media_type = "series_movie".to_string();
+        row.series_movie_link_id = Some("link-1".to_string());
+        assert_eq!(
+            submission_scope_for_acquisition_scope_state(&row),
+            SubmissionScope::SeriesMovie {
+                series_movie_link_id: "link-1".to_string()
+            }
+        );
+    }
 }

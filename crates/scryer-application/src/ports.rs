@@ -6509,6 +6509,38 @@ pub struct DownloadClientSnapshotOutcome {
     pub any_client_read_succeeded: bool,
 }
 
+/// A queue or history listing together with the clients whose view could not
+/// be read this cycle. The aggregate router degrades a failing client to an
+/// empty contribution so one broken client cannot blind the others; callers
+/// that decide "is this download still there?" need to know which clients
+/// were actually consulted before treating absence as proof.
+#[derive(Clone, Debug, Default)]
+pub struct DownloadClientListing {
+    pub items: Vec<DownloadQueueItem>,
+    /// Clients configured for this read that contributed nothing: the read
+    /// errored, timed out, was skipped during failure backoff, or the client
+    /// could not be constructed from its config.
+    pub unreadable_client_ids: Vec<String>,
+    /// Number of clients this read was meant to cover.
+    pub polled_client_count: usize,
+}
+
+impl DownloadClientListing {
+    /// A listing from a single client that answered.
+    pub fn from_items(items: Vec<DownloadQueueItem>) -> Self {
+        Self {
+            items,
+            unreadable_client_ids: Vec::new(),
+            polled_client_count: 1,
+        }
+    }
+
+    /// True when at least one client was polled and none of them answered.
+    pub fn all_unreadable(&self) -> bool {
+        self.polled_client_count > 0 && self.unreadable_client_ids.len() >= self.polled_client_count
+    }
+}
+
 #[async_trait]
 pub trait DownloadClient: Send + Sync {
     async fn submit_download(
@@ -6540,6 +6572,14 @@ pub trait DownloadClient: Send + Sync {
         Err(AppError::Repository(
             "download queue listing is not supported for this client".to_string(),
         ))
+    }
+
+    /// `list_queue` plus the set of clients that could not be read. Single
+    /// clients answer for themselves; the aggregate router reports per client.
+    async fn list_queue_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.list_queue()
+            .await
+            .map(DownloadClientListing::from_items)
     }
 
     async fn list_queue_with_feedback_scope(
@@ -6584,6 +6624,13 @@ pub trait DownloadClient: Send + Sync {
         Err(AppError::Repository(
             "download history listing is not supported for this client".to_string(),
         ))
+    }
+
+    /// `list_history` plus the set of clients that could not be read.
+    async fn list_history_with_read_report(&self) -> AppResult<DownloadClientListing> {
+        self.list_history()
+            .await
+            .map(DownloadClientListing::from_items)
     }
 
     async fn list_history_with_feedback_scope(

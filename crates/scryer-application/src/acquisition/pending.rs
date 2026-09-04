@@ -1103,6 +1103,7 @@ impl AppUseCase {
         // D18: whatever is already downloading for this scope is a
         // pseudo-incumbent. A parked release has no submission of its own yet,
         // so nothing here can self-block.
+        let mut queued = Vec::new();
         if !dl_snapshot.queue_listing_failed() {
             let submissions = self
                 .services
@@ -1130,7 +1131,7 @@ impl AppUseCase {
                     })
                     .collect();
                 let membership = self.scope_membership_for(&title, &pending_scope).await;
-                let queued = self
+                queued = self
                     .queued_releases_for_scope(
                         &title,
                         &membership.view(),
@@ -1142,9 +1143,22 @@ impl AppUseCase {
                         &catalog_collections,
                     )
                     .await;
-                admission = admission.with_queued(queued);
             }
         }
+        // The ledger's recorded grab claims the scope even when the client
+        // shows nothing for it this pass.
+        let membership = self.scope_membership_for(&title, &pending_scope).await;
+        let queued = self
+            .queued_releases_with_grabbed_claims(
+                queued,
+                &title,
+                &membership.view(),
+                &scoring_context,
+                &catalog_episodes,
+                &catalog_collections,
+            )
+            .await;
+        admission = admission.with_queued(queued);
         let policy = crate::admission::AdmissionPolicy {
             allow_upgrades: upgrade_context.profile.criteria.allow_upgrades,
             min_delta: upgrade_context.thresholds.same_tier_min_delta,
@@ -1164,7 +1178,8 @@ impl AppUseCase {
             facts.tier_index,
             facts.revision,
             candidate_score,
-        );
+        )
+        .with_release_title(&pr.release_title);
         // The same candidate-aware cutoff gate the search and RSS lanes run
         // (D15). It used to be a scope-level `if cutoff_reached { return }`
         // above the score, which meant a PROPER parked behind a delay profile
