@@ -731,3 +731,132 @@ async fn update_security_settings_preserves_api_key_policy_when_omitted() {
             .api_keys_restrict_to_system_settings_users
     );
 }
+
+async fn create_full_admin(app: &AppUseCase, actor: &User, username: &str) -> User {
+    app.create_user(
+        actor,
+        username.to_string(),
+        "password123".to_string(),
+        scryer_domain::UserAuthorization::full_admin().app,
+        vec![],
+    )
+    .await
+    .expect("create full administrator")
+}
+
+#[tokio::test]
+async fn self_app_permission_edit_keeps_the_management_floor() {
+    let (app, actor) = bootstrap();
+    let admin = create_full_admin(&app, &actor, "self-editing-admin").await;
+    let _other = create_full_admin(&app, &actor, "other-admin").await;
+
+    let without_permissions = scryer_domain::AppPermissionMask::from_permissions([
+        scryer_domain::AppPermission::ManageUsers,
+        scryer_domain::AppPermission::ManageSystemSettings,
+        scryer_domain::AppPermission::ManageCatalogSettings,
+    ]);
+    let result = app
+        .set_user_app_permissions(&admin, &admin.id, without_permissions)
+        .await;
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(message))
+            if message == "cannot remove your own user-management or permission-management access"
+    ));
+
+    let without_users = scryer_domain::AppPermissionMask::from_permissions([
+        scryer_domain::AppPermission::ManagePermissions,
+        scryer_domain::AppPermission::ManageSystemSettings,
+        scryer_domain::AppPermission::ManageCatalogSettings,
+    ]);
+    let result = app
+        .set_user_app_permissions(&admin, &admin.id, without_users)
+        .await;
+    assert!(matches!(result, Err(AppError::Validation(_))));
+
+    let authorization = app
+        .load_user_authorization(&admin)
+        .await
+        .expect("load authorization");
+    assert!(authorization.has_app_permission(scryer_domain::AppPermission::ManagePermissions));
+    assert!(authorization.has_app_permission(scryer_domain::AppPermission::ManageUsers));
+}
+
+#[tokio::test]
+async fn self_app_permission_edit_adds_and_drops_settings_access() {
+    let (app, actor) = bootstrap();
+    let admin = create_full_admin(&app, &actor, "self-editing-admin").await;
+    let _other = create_full_admin(&app, &actor, "other-admin").await;
+
+    let management_only = scryer_domain::AppPermissionMask::from_permissions([
+        scryer_domain::AppPermission::ManageUsers,
+        scryer_domain::AppPermission::ManagePermissions,
+    ]);
+    app.set_user_app_permissions(&admin, &admin.id, management_only)
+        .await
+        .expect("admin drops own settings access while another full admin exists");
+    let authorization = app
+        .load_user_authorization(&admin)
+        .await
+        .expect("load authorization");
+    assert!(!authorization.has_app_permission(scryer_domain::AppPermission::ManageSystemSettings));
+
+    let mut admin = admin;
+    admin.authorization = authorization;
+    app.set_user_app_permissions(
+        &admin,
+        &admin.id,
+        scryer_domain::UserAuthorization::full_admin().app,
+    )
+    .await
+    .expect("admin restores own settings access");
+    let authorization = app
+        .load_user_authorization(&admin)
+        .await
+        .expect("load authorization");
+    assert!(authorization.has_app_permission(scryer_domain::AppPermission::ManageSystemSettings));
+}
+
+#[tokio::test]
+async fn last_full_administrator_cannot_demote_self() {
+    let (app, actor) = bootstrap();
+    let admin = create_full_admin(&app, &actor, "lone-admin").await;
+
+    let management_only = scryer_domain::AppPermissionMask::from_permissions([
+        scryer_domain::AppPermission::ManageUsers,
+        scryer_domain::AppPermission::ManagePermissions,
+    ]);
+    let result = app
+        .set_user_app_permissions(&admin, &admin.id, management_only)
+        .await;
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(message))
+            if message == "cannot demote the last full administrator"
+    ));
+
+    // Editing another account is unaffected by the self-lockout rules.
+    let other = create_full_admin(&app, &actor, "other-admin").await;
+    app.set_user_app_permissions(&admin, &other.id, management_only)
+        .await
+        .expect("admin edits another user's app permissions");
+}
+
+#[tokio::test]
+async fn self_library_permission_edit_is_allowed() {
+    let (app, actor) = bootstrap();
+    let admin = create_full_admin(&app, &actor, "self-editing-admin").await;
+
+    let grants = test_library_grants_from_presets(&[TestPermissionPreset::TitleManagement]);
+    app.set_user_library_permissions(&admin, &admin.id, grants)
+        .await
+        .expect("admin edits own library grants");
+    let authorization = app
+        .load_user_authorization(&admin)
+        .await
+        .expect("load authorization");
+    assert!(authorization.has_library_permission(
+        &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+        scryer_domain::LibraryPermission::ManageTitles,
+    ));
+}

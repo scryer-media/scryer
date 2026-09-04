@@ -884,7 +884,7 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("user {}", user_id)))?;
 
         if user.id == actor.id {
-            return Err(AppError::Validation("cannot modify own permissions".into()));
+            self.reject_self_lockout(&user, permissions).await?;
         }
 
         self.services
@@ -903,6 +903,52 @@ impl AppUseCase {
         .await;
 
         Ok(user)
+    }
+
+    /// Administrators may edit their own app permissions, but never into a
+    /// state they cannot recover from: the user- and permission-management
+    /// pair that gates this mutation must survive, and the last full
+    /// administrator cannot demote themselves.
+    async fn reject_self_lockout(
+        &self,
+        actor: &User,
+        next_permissions: scryer_domain::AppPermissionMask,
+    ) -> AppResult<()> {
+        let management_permissions = scryer_domain::AppPermissionMask::from_permissions([
+            scryer_domain::AppPermission::ManageUsers,
+            scryer_domain::AppPermission::ManagePermissions,
+        ]);
+        if !next_permissions.contains(management_permissions) {
+            return Err(AppError::Validation(
+                "cannot remove your own user-management or permission-management access".into(),
+            ));
+        }
+
+        let full_admin_permissions = Self::required_startup_admin_app_permissions();
+        if next_permissions.contains(full_admin_permissions) {
+            return Ok(());
+        }
+        let actor_is_full_admin = self
+            .attach_user_authorization(actor.clone())
+            .await?
+            .authorization
+            .app
+            .contains(full_admin_permissions);
+        if !actor_is_full_admin {
+            return Ok(());
+        }
+        for candidate in self.services.identity.users.list_all().await? {
+            if candidate.id == actor.id {
+                continue;
+            }
+            let candidate = self.attach_user_authorization(candidate).await?;
+            if candidate.authorization.app.contains(full_admin_permissions) {
+                return Ok(());
+            }
+        }
+        Err(AppError::Validation(
+            "cannot demote the last full administrator".into(),
+        ))
     }
 
     pub async fn set_user_library_permissions(

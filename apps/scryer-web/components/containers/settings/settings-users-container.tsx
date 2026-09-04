@@ -251,6 +251,10 @@ export function SettingsUsersContainer() {
       setGlobalStatus(t("user.permissionsUpdated", { name: updatedUserName }));
       await refreshUsers();
     } catch (error) {
+      setUserAppPermissionDrafts((previous) => {
+        const { [userId]: _rejected, ...rest } = previous;
+        return rest;
+      });
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
     } finally {
       setMutatingUserId(null);
@@ -291,6 +295,10 @@ export function SettingsUsersContainer() {
       setGlobalStatus(t("user.permissionsUpdated", { name: user?.username ?? userId }));
       await refreshUsers();
     } catch (error) {
+      setUserLibraryPermissionDrafts((previous) => {
+        const { [userId]: _rejected, ...rest } = previous;
+        return rest;
+      });
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
     } finally {
       setMutatingUserId(null);
