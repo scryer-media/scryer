@@ -2020,19 +2020,26 @@ async fn movie_title_scan_preserves_user_selected_primary() {
     );
 }
 
-#[tokio::test]
-async fn movie_title_scan_repairs_multiple_primaries_by_oldest_created_at() {
+/// Seeds two files that both claim the primary role and scans the title.
+/// `first` is inserted before `second` so age would pick `first` under the
+/// old oldest-wins repair; callers assert which one the ladder keeps.
+async fn scan_movie_title_with_two_primaries(
+    first: &str,
+    first_size: usize,
+    second: &str,
+    second_size: usize,
+) -> (std::path::PathBuf, std::path::PathBuf, Vec<TitleMediaFile>) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_dir = tempdir.path().join("Primary Repair (2026)");
     std::fs::create_dir(&title_dir).expect("create movie folder");
-    let oldest_path = title_dir.join("Primary.Repair.2026.720p.WEB-DL.mkv");
-    let newest_path = title_dir.join("Primary.Repair.2026.2160p.WEB-DL.mkv");
-    std::fs::write(&oldest_path, vec![0_u8; 128]).expect("write oldest primary movie file");
-    std::fs::write(&newest_path, vec![0_u8; 1024]).expect("write newest primary movie file");
+    let first_path = title_dir.join(first);
+    let second_path = title_dir.join(second);
+    std::fs::write(&first_path, vec![0_u8; first_size]).expect("write first primary movie file");
+    std::fs::write(&second_path, vec![0_u8; second_size]).expect("write second primary movie file");
 
     let (app, user, _) = bootstrap_movie_scan_app(
         tempdir.path(),
-        build_test_library_files(&[oldest_path.as_path(), newest_path.as_path()]),
+        build_test_library_files(&[first_path.as_path(), second_path.as_path()]),
         Arc::new(EmptySearchMetadataGateway),
     )
     .await;
@@ -2043,28 +2050,26 @@ async fn movie_title_scan_repairs_multiple_primaries_by_oldest_created_at() {
         .media_files
         .insert_media_file(&InsertMediaFileInput {
             title_id: title.id.clone(),
-            file_path: oldest_path.to_string_lossy().to_string(),
-            size_bytes: 128,
+            file_path: first_path.to_string_lossy().to_string(),
+            size_bytes: first_size as i64,
             role: MediaFileRole::Primary,
             ..Default::default()
         })
         .await
-        .expect("seed oldest primary");
+        .expect("seed first primary");
     sleep(Duration::from_millis(2)).await;
     app.services
         .library
         .media_files
         .insert_media_file(&InsertMediaFileInput {
             title_id: title.id.clone(),
-            file_path: newest_path.to_string_lossy().to_string(),
-            size_bytes: 1024,
+            file_path: second_path.to_string_lossy().to_string(),
+            size_bytes: second_size as i64,
             role: MediaFileRole::Primary,
-            quality_label: Some("2160p".to_string()),
-            acquisition_score: Some(100_000),
             ..Default::default()
         })
         .await
-        .expect("seed newest primary");
+        .expect("seed second primary");
 
     app.scan_title_library(&user, &title.id)
         .await
@@ -2077,12 +2082,51 @@ async fn movie_title_scan_repairs_multiple_primaries_by_oldest_created_at() {
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files");
+    (first_path, second_path, files)
+}
+
+/// Two primaries are repaired on the gate's ladder, not on age: the newer
+/// 1080p file outranks the older 720p file in the built-in profile and keeps
+/// the role. Oldest-wins used to demote a freshly imported upgrade behind the
+/// file it replaced, after which every gate read the scope through the worse
+/// file and admitted the same upgrade again on every sync.
+#[tokio::test]
+async fn movie_title_scan_repairs_multiple_primaries_by_keeping_the_best_ranked_file() {
+    let (older_720p, newer_1080p, files) = scan_movie_title_with_two_primaries(
+        "Primary.Repair.2026.720p.WEB-DL.mkv",
+        128,
+        "Primary.Repair.2026.1080p.WEB-DL.mkv",
+        1024,
+    )
+    .await;
     assert_eq!(
-        media_file_role_for_path(&files, oldest_path.as_path()),
+        media_file_role_for_path(&files, newer_1080p.as_path()),
         MediaFileRole::Primary
     );
     assert_eq!(
-        media_file_role_for_path(&files, newest_path.as_path()),
+        media_file_role_for_path(&files, older_720p.as_path()),
+        MediaFileRole::Additional
+    );
+}
+
+/// The ladder is the profile's, so a resolution the profile does not allow
+/// ranks below every allowed one: a 2160p file loses the role to a 1080p file
+/// under the built-in 1080p profile however large or new it is.
+#[tokio::test]
+async fn movie_title_scan_primary_repair_ranks_on_the_profile_ladder_not_resolution() {
+    let (older_1080p, newer_2160p, files) = scan_movie_title_with_two_primaries(
+        "Primary.Repair.2026.1080p.WEB-DL.mkv",
+        128,
+        "Primary.Repair.2026.2160p.WEB-DL.mkv",
+        1024,
+    )
+    .await;
+    assert_eq!(
+        media_file_role_for_path(&files, older_1080p.as_path()),
+        MediaFileRole::Primary
+    );
+    assert_eq!(
+        media_file_role_for_path(&files, newer_2160p.as_path()),
         MediaFileRole::Additional
     );
 }
