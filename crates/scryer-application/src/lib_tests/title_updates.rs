@@ -219,6 +219,14 @@ async fn update_title_metadata_changes_name_and_tags() {
         .await
         .expect("create title");
 
+    // The whole-bag write is registry-gated now, so the vocabulary has to exist
+    // before a title can be given it.
+    for label in ["action", "drama"] {
+        app.create_title_tag_definition(&user, label, None)
+            .await
+            .expect("tag should be defined");
+    }
+
     let updated = app
         .update_title_metadata(
             &user,
@@ -1371,4 +1379,434 @@ async fn external_import_monitor_snapshot_enables_collection_for_monitored_episo
         .expect("episode exists");
     assert!(updated_collection.monitored);
     assert!(updated_episode.monitored);
+}
+
+// ---------------------------------------------------------------------------
+// Title tags (registry-gated user tags)
+// ---------------------------------------------------------------------------
+
+/// A movie title in the default movie library, plus the tags it should carry.
+async fn create_tagged_movie(app: &AppUseCase, actor: &User, name: &str) -> Title {
+    app.add_title(
+        actor,
+        NewTitle {
+            name: name.to_string(),
+            facet: MediaFacet::Movie,
+            monitored: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("title should be created")
+}
+
+/// A minimal enabled delay profile whose only interesting field is its tag list.
+fn tagged_delay_profile(tags: Vec<String>) -> crate::DelayProfile {
+    crate::DelayProfile {
+        id: "profile-one".to_string(),
+        name: "Tagged".to_string(),
+        usenet_delay_minutes: 0,
+        torrent_delay_minutes: 0,
+        preferred_protocol: crate::PreferredProtocol::Usenet,
+        min_age_minutes: 0,
+        bypass_score_threshold: None,
+        enable_usenet: true,
+        enable_torrent: true,
+        bypass_if_highest_quality: false,
+        applies_to_facets: Vec::new(),
+        tags,
+        priority: 0,
+        enabled: true,
+    }
+}
+
+async fn stored_title_tags(app: &AppUseCase, title_id: &str) -> Vec<String> {
+    app.services
+        .catalog
+        .titles
+        .get_by_id(title_id)
+        .await
+        .expect("title should load")
+        .expect("title should exist")
+        .tags
+}
+
+#[tokio::test]
+async fn the_raw_tag_write_refuses_a_label_the_registry_does_not_define() {
+    let (app, user) = bootstrap();
+    let title = create_tagged_movie(&app, &user, "Registry Gate").await;
+
+    let error = app
+        .update_title_metadata(
+            &user,
+            &title.id,
+            None,
+            None,
+            Some(vec!["not defined".to_string()]),
+        )
+        .await
+        .expect_err("an unregistered label must be refused");
+    assert!(
+        error.to_string().contains("not defined"),
+        "the refusal must name the label: {error}"
+    );
+    assert!(stored_title_tags(&app, &title.id).await.is_empty());
+
+    // The same write succeeds once an administrator defines the tag.
+    app.create_title_tag_definition(&user, "not defined", None)
+        .await
+        .expect("tag should be defined");
+    let updated = app
+        .update_title_metadata(
+            &user,
+            &title.id,
+            None,
+            None,
+            Some(vec!["not defined".to_string()]),
+        )
+        .await
+        .expect("a defined label is accepted");
+    assert_eq!(updated.tags, vec!["not defined".to_string()]);
+}
+
+#[tokio::test]
+async fn the_tag_patch_refuses_the_reserved_namespace_and_undefined_labels() {
+    let (app, user) = bootstrap();
+    let title = create_tagged_movie(&app, &user, "Reserved Namespace").await;
+    app.update_title_metadata(
+        &user,
+        &title.id,
+        None,
+        None,
+        Some(vec!["scryer:monitor-type:all".to_string()]),
+    )
+    .await
+    .expect("structured settings entries stay writable");
+
+    // A reserved entry cannot be applied as if it were a user tag, and it
+    // cannot be stripped through the tag door either.
+    let reserved = app
+        .update_title_tags(
+            &user,
+            &[title.id.clone()],
+            &["scryer:monitor-type:none".to_string()],
+            &[],
+        )
+        .await
+        .expect_err("the reserved prefix must be refused");
+    assert!(reserved.to_string().contains("scryer:"), "{reserved}");
+
+    let undefined = app
+        .update_title_tags(&user, &[title.id.clone()], &["keep".to_string()], &[])
+        .await
+        .expect_err("an undefined label must be refused");
+    assert!(undefined.to_string().contains("keep"), "{undefined}");
+
+    assert_eq!(
+        stored_title_tags(&app, &title.id).await,
+        vec!["scryer:monitor-type:all".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn the_tag_patch_preserves_structured_entries_and_emits_one_event_per_title() {
+    let (app, user) = bootstrap();
+    let title = create_tagged_movie(&app, &user, "Patch Preserves").await;
+    app.update_title_metadata(
+        &user,
+        &title.id,
+        None,
+        None,
+        Some(vec!["scryer:monitor-type:all".to_string()]),
+    )
+    .await
+    .expect("set a structured entry");
+    for label in ["keep", "needs review"] {
+        app.create_title_tag_definition(&user, label, None)
+            .await
+            .expect("tag should be defined");
+    }
+
+    let updated = app
+        .update_title_tags(
+            &user,
+            &[title.id.clone()],
+            &["Keep".to_string(), " Needs  Review ".to_string()],
+            &[],
+        )
+        .await
+        .expect("tags should apply");
+    assert_eq!(updated.len(), 1);
+    assert_eq!(
+        updated[0].tags,
+        vec![
+            "scryer:monitor-type:all".to_string(),
+            "keep".to_string(),
+            "needs review".to_string(),
+        ],
+        "the structured entry survives and the labels arrive normalized"
+    );
+
+    // Removing one leaves the other and the structured entry alone.
+    app.update_title_tags(
+        &user,
+        &[title.id.clone()],
+        &[],
+        &["needs review".to_string()],
+    )
+    .await
+    .expect("tags should be removed");
+    assert_eq!(
+        stored_title_tags(&app, &title.id).await,
+        vec!["scryer:monitor-type:all".to_string(), "keep".to_string()]
+    );
+
+    // One title-updated event per patch call, so the catalog refreshes once.
+    let events = title_updated_events(&app, &title.id).await;
+    assert_eq!(events.len(), 3, "one per metadata write plus one per patch");
+}
+
+#[tokio::test]
+async fn a_bulk_tag_patch_writes_nothing_when_one_library_is_denied() {
+    let (app, admin) = bootstrap();
+    app.create_title_tag_definition(&admin, "keep", None)
+        .await
+        .expect("tag should be defined");
+
+    let allowed_title = create_tagged_movie(&app, &admin, "Allowed Movie").await;
+    let restricted_library = app
+        .create_library(
+            &admin,
+            MediaFacet::Movie,
+            "Restricted Movies".to_string(),
+            vec![LibraryRootDraft {
+                path: "/Volumes/Media/RestrictedMovies".to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("restricted library should be created");
+    let restricted_title = app
+        .create_title_without_hydration_in_library(
+            &admin,
+            NewTitle {
+                name: "Restricted Movie".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+            restricted_library.id.clone(),
+        )
+        .await
+        .expect("restricted title should be created")
+        .title;
+
+    // The editor manages the default libraries only; the restricted library is
+    // deliberately absent from the grant list.
+    let (created_editor, editor) = create_authenticated_user(
+        &app,
+        &admin,
+        "tag-editor",
+        "password123",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::TitleManagement,
+        ],
+    )
+    .await;
+    app.set_user_library_permissions(
+        &admin,
+        &created_editor.id,
+        test_library_grants_from_presets(&[
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::TitleManagement,
+        ]),
+    )
+    .await
+    .expect("grants should apply");
+
+    let error = app
+        .update_title_tags(
+            &editor,
+            &[allowed_title.id.clone(), restricted_title.id.clone()],
+            &["keep".to_string()],
+            &[],
+        )
+        .await
+        .expect_err("a denied library must refuse the whole batch");
+    assert!(matches!(error, AppError::Unauthorized(_)), "{error}");
+
+    // All-or-nothing: the title the editor *could* manage is untouched too.
+    assert!(
+        stored_title_tags(&app, &allowed_title.id).await.is_empty(),
+        "a partially authorized batch must write nothing"
+    );
+    assert!(
+        stored_title_tags(&app, &restricted_title.id)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn renaming_a_tag_rewrites_titles_and_delay_profiles() {
+    let (app, user) = bootstrap();
+    let definition = app
+        .create_title_tag_definition(&user, "Keep", Some("  hold on to this  ".to_string()))
+        .await
+        .expect("tag should be defined");
+    assert_eq!(definition.label, "keep");
+    assert_eq!(definition.description.as_deref(), Some("hold on to this"));
+
+    let first = create_tagged_movie(&app, &user, "Rename One").await;
+    let second = create_tagged_movie(&app, &user, "Rename Two").await;
+    app.update_title_tags(
+        &user,
+        &[first.id.clone(), second.id.clone()],
+        &["keep".to_string()],
+        &[],
+    )
+    .await
+    .expect("tags should apply");
+
+    app.upsert_delay_profile(&user, tagged_delay_profile(vec!["keep".to_string()]))
+        .await
+        .expect("delay profile should save");
+
+    let renamed = app
+        .update_title_tag_definition(&user, &definition.id, Some("Archive".to_string()), None)
+        .await
+        .expect("rename should apply");
+    assert_eq!(renamed.definition.label, "archive");
+    assert_eq!(renamed.counts.titles, 2);
+    assert_eq!(renamed.counts.delay_profiles, 1);
+    // No rules are configured in this fixture, so nothing references the old
+    // label; the counts exist so the UI can warn that Rego is never rewritten.
+    assert_eq!(renamed.counts.maintenance_rule_sets, 0);
+    assert_eq!(renamed.counts.release_rule_sets, 0);
+
+    assert_eq!(
+        stored_title_tags(&app, &first.id).await,
+        vec!["archive".to_string()]
+    );
+    assert_eq!(
+        stored_title_tags(&app, &second.id).await,
+        vec!["archive".to_string()]
+    );
+    let profiles = app
+        .get_delay_profiles(&user)
+        .await
+        .expect("delay profiles should load");
+    assert_eq!(profiles[0].tags, vec!["archive".to_string()]);
+
+    // The registry read reports the label and its live membership count.
+    let registry = app
+        .title_tag_definitions(&user)
+        .await
+        .expect("registry should load");
+    assert_eq!(registry.len(), 1);
+    assert_eq!(registry[0].definition.label, "archive");
+    assert_eq!(registry[0].title_count, 2);
+}
+
+#[tokio::test]
+async fn deleting_a_tag_strips_it_from_titles_and_delay_profiles() {
+    let (app, user) = bootstrap();
+    let definition = app
+        .create_title_tag_definition(&user, "keep", None)
+        .await
+        .expect("tag should be defined");
+    let title = create_tagged_movie(&app, &user, "Delete Cleanup").await;
+    app.update_title_metadata(
+        &user,
+        &title.id,
+        None,
+        None,
+        Some(vec!["scryer:monitor-type:all".to_string()]),
+    )
+    .await
+    .expect("set a structured entry");
+    app.update_title_tags(&user, &[title.id.clone()], &["keep".to_string()], &[])
+        .await
+        .expect("tags should apply");
+    app.upsert_delay_profile(
+        &user,
+        tagged_delay_profile(vec!["keep".to_string(), "other".to_string()]),
+    )
+    .await
+    .expect("delay profile should save");
+
+    let counts = app
+        .delete_title_tag_definition(&user, &definition.id)
+        .await
+        .expect("delete should apply");
+    assert_eq!(counts.titles, 1);
+    assert_eq!(counts.delay_profiles, 1);
+
+    assert_eq!(
+        stored_title_tags(&app, &title.id).await,
+        vec!["scryer:monitor-type:all".to_string()],
+        "deleting a tag must not disturb structured settings entries"
+    );
+    let profiles = app
+        .get_delay_profiles(&user)
+        .await
+        .expect("delay profiles should load");
+    assert_eq!(profiles[0].tags, vec!["other".to_string()]);
+    assert!(
+        app.title_tag_definitions(&user)
+            .await
+            .expect("registry should load")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_tag_patch_enforces_the_per_title_ceiling() {
+    let (app, user) = bootstrap();
+    let title = create_tagged_movie(&app, &user, "Ceiling").await;
+
+    let labels = (0..=crate::MAX_USER_TAGS_PER_TITLE)
+        .map(|index| format!("tag {index}"))
+        .collect::<Vec<_>>();
+    for label in &labels {
+        app.create_title_tag_definition(&user, label, None)
+            .await
+            .expect("tag should be defined");
+    }
+
+    app.update_title_tags(
+        &user,
+        &[title.id.clone()],
+        &labels[..crate::MAX_USER_TAGS_PER_TITLE],
+        &[],
+    )
+    .await
+    .expect("the ceiling itself is allowed");
+    assert_eq!(
+        stored_title_tags(&app, &title.id).await.len(),
+        crate::MAX_USER_TAGS_PER_TITLE
+    );
+
+    let error = app
+        .update_title_tags(
+            &user,
+            &[title.id.clone()],
+            &[labels[crate::MAX_USER_TAGS_PER_TITLE].clone()],
+            &[],
+        )
+        .await
+        .expect_err("one past the ceiling must be refused");
+    assert!(
+        error
+            .to_string()
+            .contains(&crate::MAX_USER_TAGS_PER_TITLE.to_string()),
+        "{error}"
+    );
+    assert_eq!(
+        stored_title_tags(&app, &title.id).await.len(),
+        crate::MAX_USER_TAGS_PER_TITLE,
+        "a refused patch leaves the bag as it was"
+    );
 }

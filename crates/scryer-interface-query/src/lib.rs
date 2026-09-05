@@ -274,6 +274,10 @@ fn title_catalog_filter_from_input(
         ),
         genre_tag_keys: title_catalog_tag_filter_keys("genreTagKeys", filter.genre_tag_keys)?,
         theme_tag_keys: title_catalog_tag_filter_keys("themeTagKeys", filter.theme_tag_keys)?,
+        // The user-tag filter has no GraphQL input field yet; the store and the
+        // in-memory matcher already honour it, and `TitleCatalogFilterInput.tags`
+        // wires up with the rest of the tag API.
+        user_tags: Vec::new(),
         minimum_year: filter.minimum_year,
         maximum_year: filter.maximum_year,
         minimum_rating,

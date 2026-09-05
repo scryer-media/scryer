@@ -860,9 +860,42 @@ pub struct TitleCatalogFilter {
     pub root_folder_ids: Vec<String>,
     pub genre_tag_keys: Vec<String>,
     pub theme_tag_keys: Vec<String>,
+    /// Normalized user-tag labels, matched any-of against `titles.tags`. These
+    /// are registry labels, not the SMG-derived canonical keys the two
+    /// `*_tag_keys` lists above carry.
+    pub user_tags: Vec<String>,
     pub minimum_year: Option<i32>,
     pub maximum_year: Option<i32>,
     pub minimum_rating: Option<f64>,
+}
+
+/// A registry row plus how many titles currently carry its label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleTagDefinitionSummary {
+    pub definition: scryer_domain::TitleTagDefinition,
+    pub title_count: u64,
+}
+
+/// What a rename or delete actually rewrote.
+///
+/// `titles` and `delay_profiles` are rewrites the operation performed.
+/// `maintenance_rule_sets` and `release_rule_sets` are references it found and
+/// deliberately did *not* rewrite: Rego revisions are immutable, so a rule that
+/// named the old label stops matching rather than silently changing meaning.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleTagRewriteCounts {
+    pub titles: u64,
+    pub delay_profiles: u64,
+    pub maintenance_rule_sets: u64,
+    pub release_rule_sets: u64,
+}
+
+/// Outcome of a registry rename/describe: the row as it now stands, and what
+/// the write touched or merely noticed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleTagDefinitionUpdate {
+    pub definition: scryer_domain::TitleTagDefinition,
+    pub counts: TitleTagRewriteCounts,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

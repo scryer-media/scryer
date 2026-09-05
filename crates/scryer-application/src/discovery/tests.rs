@@ -944,7 +944,7 @@ fn personalized_sections_dedupe_derived_items_and_require_subject_match() {
 
     let profile = DiscoveryLibraryAffinityProfile {
         genre_labels: vec!["Adventure".to_string(), "Animation".to_string()],
-        tag_labels: Vec::new(),
+        theme_labels: Vec::new(),
     };
     let items = vec![
         discovery_item("1", "Shared Match", &["Adventure", "Animation"], 100.0, 1),
@@ -1044,7 +1044,7 @@ fn personalized_sections_prefer_specific_tag_rail_over_broad_genre_rail() {
     // far broader "Because You Like Animation" genre rail.
     let profile = DiscoveryLibraryAffinityProfile {
         genre_labels: vec!["Animation".to_string()],
-        tag_labels: vec!["Isekai".to_string()],
+        theme_labels: vec!["Isekai".to_string()],
     };
     let items = vec![
         affinity_test_item(
@@ -1088,7 +1088,7 @@ fn affinity_label_rails_keep_animation_and_anime_apart() {
     // Western animation and anime out of each other's rails.
     let profile = DiscoveryLibraryAffinityProfile {
         genre_labels: vec!["Animation".to_string(), "Anime".to_string()],
-        tag_labels: Vec::new(),
+        theme_labels: Vec::new(),
     };
     let items = vec![
         affinity_test_item("western", "movie", &["canonical:genre:animation"]),
@@ -1111,6 +1111,56 @@ fn affinity_label_rails_keep_animation_and_anime_apart() {
         .find(|section| section.title == "Because You Like Anime")
         .expect("anime genre section");
     assert_eq!(affinity_section_titles(anime), vec!["Title shonen"]);
+}
+
+#[test]
+fn affinity_theme_labels_come_from_canonical_tags_not_from_the_user_tag_bag() {
+    // The affinity profile used to read `title.tags` for its theme rails, which
+    // put an operator's private tag vocabulary into discovery. User tags are
+    // catalog-local and never leave the instance, so the profile is built from
+    // canonical theme tags only. A title whose bag says "isekai" but whose
+    // canonical tags say nothing contributes no theme label at all.
+    let mut bag_only = test_title("bag-only", "Bag Only", MediaFacet::Series, Vec::new());
+    bag_only.tags = vec!["isekai".to_string(), "keep".to_string()];
+    bag_only.canonical_tags = vec![CanonicalMediaTag {
+        key: "canonical:theme:slow-burn".to_string(),
+        category: "theme".to_string(),
+        name: "Slow Burn".to_string(),
+        confidence: None,
+        sources: Vec::new(),
+        source_tag_keys: Vec::new(),
+        is_adult: false,
+        is_spoiler: false,
+    }];
+
+    let titles = vec![bag_only.clone(), bag_only];
+    let theme_labels = top_owned_title_labels(
+        &titles,
+        |title| canonical_tag_labels(&title.canonical_tags, "theme"),
+        2,
+    );
+    assert_eq!(theme_labels, vec!["Slow Burn".to_string()]);
+    assert!(
+        !theme_labels.iter().any(|label| label == "isekai"),
+        "a user tag must never reach the affinity profile: {theme_labels:?}"
+    );
+
+    // And the profile struct itself no longer has anywhere to put one.
+    let profile = DiscoveryLibraryAffinityProfile {
+        genre_labels: Vec::new(),
+        theme_labels,
+    };
+    let items = vec![affinity_test_item(
+        "slow",
+        "series",
+        &["canonical:theme:slow-burn"],
+    )];
+    let sections = personalized_section_results(&items, &profile, true, 10);
+    assert!(
+        sections
+            .iter()
+            .any(|section| section.title == "Because You Like Slow Burn")
+    );
 }
 
 #[test]
@@ -1152,7 +1202,7 @@ fn anime_affinity_label_survives_the_generic_label_filter() {
     // ...and the label, once reachable, splits the two traditions apart.
     let profile = DiscoveryLibraryAffinityProfile {
         genre_labels,
-        tag_labels: Vec::new(),
+        theme_labels: Vec::new(),
     };
     let items = vec![
         affinity_test_item("western", "movie", &["canonical:genre:animation"]),
@@ -1193,7 +1243,7 @@ fn anime_without_content_type_does_not_leak_into_the_animation_rail() {
 
     let profile = DiscoveryLibraryAffinityProfile {
         genre_labels: vec!["Animation".to_string(), "Anime".to_string()],
-        tag_labels: Vec::new(),
+        theme_labels: Vec::new(),
     };
     let items = vec![
         affinity_test_item("western", "movie", &["canonical:genre:animation"]),

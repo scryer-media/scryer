@@ -33,6 +33,13 @@ use std::path::PathBuf;
 pub const NOTIFICATION_REQUEST_SCHEMA_VERSION: u32 = 1;
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
+/// Fallback for repositories that have no tag registry behind them (the null
+/// repository and the non-SQL test doubles). Reads answer empty; writes say so
+/// rather than pretending to succeed.
+fn title_tag_registry_unsupported() -> AppError {
+    AppError::Repository("this repository does not store the title tag registry".to_string())
+}
+
 /// A field-level title option patch. `None` preserves stored state, `Some(None)`
 /// clears an override, and `Some(Some(_))` applies an explicit override.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -836,6 +843,80 @@ pub trait TitleRepository: Send + Sync {
             })
             .count() as u64)
     }
+    /// Every registry row with the number of titles currently carrying its
+    /// label, ordered by label. Reading the registry is unprivileged, so this
+    /// is the one tag method every repository is expected to answer.
+    async fn list_title_tag_definitions(&self) -> AppResult<Vec<TitleTagDefinitionSummary>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::TitleTagDefinition>> {
+        let _ = id;
+        Ok(None)
+    }
+
+    /// Insert a registry row. A label that already exists is a validation
+    /// error, not a repository error: the caller reports it to a human.
+    async fn create_title_tag_definition(
+        &self,
+        definition: &scryer_domain::TitleTagDefinition,
+    ) -> AppResult<scryer_domain::TitleTagDefinition> {
+        let _ = definition;
+        Err(title_tag_registry_unsupported())
+    }
+
+    /// Rename and/or re-describe a registry row, rewriting every `titles.tags`
+    /// bag that carries the old label in the *same* transaction, and return the
+    /// row plus the number of titles rewritten.
+    ///
+    /// `label` of `None` leaves the label alone; `description` of `None` leaves
+    /// the description alone, `Some(None)` clears it.
+    ///
+    /// Delay-profile tag lists are not rewritten here: they live in the
+    /// settings catalog, behind a different repository, so the application
+    /// service does that half immediately afterwards.
+    async fn update_title_tag_definition(
+        &self,
+        id: &str,
+        label: Option<String>,
+        description: Option<Option<String>>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<(scryer_domain::TitleTagDefinition, u64)> {
+        let _ = (id, label, description, updated_at);
+        Err(title_tag_registry_unsupported())
+    }
+
+    /// Remove a registry row and strip its label from every title in the same
+    /// transaction. Returns the row that was removed and the titles touched.
+    async fn delete_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<(scryer_domain::TitleTagDefinition, u64)> {
+        let _ = id;
+        Err(title_tag_registry_unsupported())
+    }
+
+    /// Patch one title's user tags as a read-modify-write inside a single
+    /// transaction, so a concurrent options save and a tag save cannot clobber
+    /// each other's half of the bag.
+    ///
+    /// `add` and `remove` carry already-normalized, already-registry-validated
+    /// labels; `remove` is applied first so a label in both lists ends up
+    /// present. Reserved `scryer:` entries are preserved exactly as stored, and
+    /// the result is refused if it would exceed [`crate::MAX_USER_TAGS_PER_TITLE`].
+    async fn update_user_tags(
+        &self,
+        title_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Title> {
+        let _ = (title_id, add, remove);
+        Err(title_tag_registry_unsupported())
+    }
+
     async fn list_without_external_ids(
         &self,
         facet: Option<MediaFacet>,
@@ -1542,6 +1623,18 @@ fn title_matches_catalog_filter(title: &Title, filter: &TitleCatalogFilter) -> b
 
     if !title_matches_catalog_tag_filter(title, "genre", &filter.genre_tag_keys)
         || !title_matches_catalog_tag_filter(title, "theme", &filter.theme_tag_keys)
+    {
+        return false;
+    }
+
+    // User tags are any-of over the label bag. Registry labels are already
+    // normalized, and so is everything the write paths put in the bag, so this
+    // is an exact comparison on both sides.
+    if !filter.user_tags.is_empty()
+        && !filter
+            .user_tags
+            .iter()
+            .any(|wanted| title.tags.iter().any(|tag| tag == wanted))
     {
         return false;
     }

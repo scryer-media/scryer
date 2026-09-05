@@ -22,6 +22,7 @@ pub mod title_folder_ownership;
 pub mod title_folder_ownership_safe;
 pub mod title_image_blobs;
 pub mod title_root_folder_ids;
+pub mod title_tag_definitions;
 
 use crate::encryption::EncryptionKey;
 use crate::migration_assets::{
@@ -795,6 +796,9 @@ async fn run_rust_hook(
         "compact_event_storage" => event_storage::compact_event_storage_sqlite(tx).await,
         "migrate_synthetic_root_ids" => {
             synthetic_root_ids::migrate_synthetic_root_ids_sqlite(tx).await
+        }
+        "adopt_existing_title_tag_definitions" => {
+            title_tag_definitions::adopt_existing_title_tag_definitions_sqlite(tx).await
         }
         #[cfg(test)]
         "test_insert_hook_marker" => {

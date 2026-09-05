@@ -250,7 +250,16 @@ async fn hydrated_title_metadata_with_extra_external_ids_completes_on_single_con
             value: "old-mal".to_string(),
         },
     ];
-    title.tags = vec!["score:old".to_string(), "keep".to_string()];
+    // The hydration payload's `extra_tags` are the anime metadata trio, which
+    // all live in the reserved `scryer:` namespace; a stale one is replaced by
+    // its successor. `season 1: opener` is the counter-case: an ordinary user
+    // label that happens to contain a colon shares no namespace with anything
+    // and must survive hydration untouched.
+    title.tags = vec![
+        "scryer:mal-score:old".to_string(),
+        "season 1: opener".to_string(),
+        "keep".to_string(),
+    ];
 
     TitleRepository::create(&catalog, title.clone())
         .await
@@ -269,7 +278,7 @@ async fn hydrated_title_metadata_with_extra_external_ids_completes_on_single_con
                 value: "269".to_string(),
             },
         ],
-        extra_tags: vec!["score:9.1".to_string()],
+        extra_tags: vec!["scryer:mal-score:9.1".to_string()],
         ..TitleMetadataUpdate::default()
     };
 
@@ -302,9 +311,14 @@ async fn hydrated_title_metadata_with_extra_external_ids_completes_on_single_con
             .collect::<Vec<_>>(),
         vec!["834"]
     );
-    assert!(!updated.tags.iter().any(|tag| tag == "score:old"));
-    assert!(updated.tags.iter().any(|tag| tag == "score:9.1"));
+    assert!(!updated.tags.iter().any(|tag| tag == "scryer:mal-score:old"));
+    assert!(updated.tags.iter().any(|tag| tag == "scryer:mal-score:9.1"));
     assert!(updated.tags.iter().any(|tag| tag == "keep"));
+    assert!(
+        updated.tags.iter().any(|tag| tag == "season 1: opener"),
+        "a user label is not a namespace: hydration must not evict it, {:?}",
+        updated.tags
+    );
 
     let _ = std::fs::remove_file(db);
 }

@@ -1919,3 +1919,26 @@ kind = "sql"
 file = "postgres/migrations/0217_wireguard_proxies.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 218
+description = "admin-defined title tag registry"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0218_title_tag_definitions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0218_title_tag_definitions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "adopt_existing_title_tag_definitions"
+engine = "all"
+scope = "all"
