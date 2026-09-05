@@ -1202,6 +1202,7 @@ fn prowlarr_config_fields() -> Vec<ConfigFieldDef> {
             host_binding: None,
             options: vec![],
             help_text: Some("Prowlarr server URL, for example http://prowlarr:9696".to_string()),
+            ..Default::default()
         },
         ConfigFieldDef {
             key: "api_key".to_string(),
@@ -1214,6 +1215,7 @@ fn prowlarr_config_fields() -> Vec<ConfigFieldDef> {
             host_binding: None,
             options: vec![],
             help_text: Some("Prowlarr API key".to_string()),
+            ..Default::default()
         },
     ]
 }

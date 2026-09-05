@@ -144,6 +144,7 @@ impl IndexerPluginProvider for MockIndexerPluginProvider {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }];
         if provider_type != "torrent_rss" {
             fields.push(scryer_domain::ConfigFieldDef {
@@ -157,6 +158,7 @@ impl IndexerPluginProvider for MockIndexerPluginProvider {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             });
         }
         fields

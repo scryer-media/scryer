@@ -2231,6 +2231,7 @@ mod tests {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 }],
                 allowed_hosts: vec![],
                 rate_limit_seconds: None,

@@ -58,6 +58,7 @@ mod tests {
                     ]),
                 }],
                 help_text: None,
+                ..Default::default()
             },
             ConfigFieldDef {
                 key: "base_url".to_string(),
@@ -70,6 +71,7 @@ mod tests {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             },
             ConfigFieldDef {
                 key: "api_path".to_string(),
@@ -82,6 +84,7 @@ mod tests {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             },
             ConfigFieldDef {
                 key: "request_interval_ms".to_string(),
@@ -94,6 +97,7 @@ mod tests {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             },
         ];
 

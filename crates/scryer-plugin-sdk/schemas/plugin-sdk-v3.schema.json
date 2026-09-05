@@ -1005,6 +1005,33 @@
             "string",
             "null"
           ]
+        },
+        "visible_when": {
+          "description": "Shown only while this holds. `None` means always shown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_when": {
+          "description": "Required while this holds, in addition to `required`. A field hidden by\n`visible_when` is never required, whatever this says.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "advanced": {
+          "description": "Placed behind the form's advanced disclosure rather than shown up front.",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -1014,16 +1041,25 @@
       ]
     },
     "ConfigFieldType": {
-      "type": "string",
-      "enum": [
-        "string",
-        "password",
-        "multiline",
-        "bool",
-        "select",
-        "number",
-        "path",
-        "tag"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "string",
+            "password",
+            "multiline",
+            "bool",
+            "select",
+            "number",
+            "path",
+            "tag"
+          ]
+        },
+        {
+          "description": "Enumerated selection rendered with a filter box. Same `options` payload\nas `Select`; declare it when the list is long enough that scanning it\nunaided is the wrong ask.",
+          "type": "string",
+          "const": "filtered_select"
+        }
       ]
     },
     "ConfigFieldValueSource": {
@@ -1065,6 +1101,49 @@
       "required": [
         "value",
         "label"
+      ]
+    },
+    "FieldCondition": {
+      "description": "A predicate over another configuration field's current value.\n\nThe host evaluates these, so the operator set is closed rather than an\nexpression language: a plugin declares what it depends on, it does not run\nlogic in the form.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Key of the field whose value is tested.",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/ConditionOp"
+        },
+        "values": {
+          "description": "Values compared against. `eq`/`ne` use the first, `in`/`not_in` the\nwhole set, and `non_empty` ignores it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "op"
+      ]
+    },
+    "ConditionOp": {
+      "description": "How a [`FieldCondition`] compares another field's value.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "eq",
+            "ne",
+            "in",
+            "not_in"
+          ]
+        },
+        {
+          "description": "Holds when the referenced field has a non-blank value. Ignores `values`.",
+          "type": "string",
+          "const": "non_empty"
+        }
       ]
     },
     "IndexerDescriptor": {

@@ -364,32 +364,28 @@ export function cleanPayloadObject(payload: Record<string, unknown>) {
   }, {});
 }
 
+/// Whether a field should offer the folder browser.
+///
+/// `PATH` is the declaration to reach for. The name inference behind it is
+/// deliberate and covers providers that predate the `path` field type — it is
+/// tested, so do not drop it without moving those declarations over first.
+///
+/// `role` and `valueSource` used to be sniffed the same way. They cannot match:
+/// the only values they take are `CONNECTION_URL`, `USER` and `HOST_BINDING`,
+/// none of which contain any of these words.
 export function isFileBackedDownloadClientConfigField(field: ConfigFieldDef): boolean {
   const key = field.key.trim().toLowerCase();
-  const role = field.role?.trim().toLowerCase() ?? "";
-  const valueSource = field.valueSource?.trim().toLowerCase() ?? "";
   const hostBinding = field.hostBinding?.trim().toLowerCase() ?? "";
   const pathPattern = /(?:^|[_\-.])(path|folder|directory|file)(?:$|[_\-.])/;
+  const namesAPath = (value: string) =>
+    pathPattern.test(value) ||
+    value.endsWith("path") ||
+    value.endsWith("folder") ||
+    value.endsWith("directory") ||
+    value.endsWith("file");
 
   return (
-    field.fieldType === "PATH" ||
-    pathPattern.test(key) ||
-    key.endsWith("path") ||
-    key.endsWith("folder") ||
-    key.endsWith("directory") ||
-    key.endsWith("file") ||
-    role.includes("path") ||
-    role.includes("folder") ||
-    role.includes("directory") ||
-    role.includes("file") ||
-    valueSource.includes("path") ||
-    valueSource.includes("folder") ||
-    valueSource.includes("directory") ||
-    valueSource.includes("file") ||
-    hostBinding.includes("path") ||
-    hostBinding.includes("folder") ||
-    hostBinding.includes("directory") ||
-    hostBinding.includes("file")
+    field.fieldType === "PATH" || namesAPath(key) || namesAPath(hostBinding)
   );
 }
 

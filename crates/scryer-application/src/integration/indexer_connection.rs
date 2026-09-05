@@ -1376,6 +1376,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }
     }
 
@@ -1391,6 +1392,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }
     }
 

@@ -1,7 +1,9 @@
 use super::{CatalogRefreshStateValue, Long, MediaFacetValue};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
-use scryer_domain::{ConfigFieldRole, ConfigFieldType, ConfigFieldValueSource};
+use scryer_domain::{
+    ConditionOp, ConfigFieldRole, ConfigFieldType, ConfigFieldValueSource, FieldCondition,
+};
 
 // ── Plugins ────────────────────────────────────────────────────────────────
 
@@ -288,6 +290,8 @@ pub enum PluginConfigFieldTypeValue {
     Bool,
     /// Enumerated selection.
     Select,
+    /// Enumerated selection rendered with a filter box.
+    FilteredSelect,
     /// Numeric value.
     Number,
     /// Filesystem path.
@@ -304,6 +308,7 @@ impl PluginConfigFieldTypeValue {
             ConfigFieldType::Multiline => Self::Multiline,
             ConfigFieldType::Bool => Self::Bool,
             ConfigFieldType::Select => Self::Select,
+            ConfigFieldType::FilteredSelect => Self::FilteredSelect,
             ConfigFieldType::Number => Self::Number,
             ConfigFieldType::Path => Self::Path,
             ConfigFieldType::Tag => Self::Tag,
@@ -346,6 +351,55 @@ impl PluginConfigFieldRoleValue {
     }
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Comparison a provider configuration field condition applies.
+pub enum PluginConditionOpValue {
+    /// Referenced value equals the first condition value.
+    Eq,
+    /// Referenced value differs from the first condition value.
+    Ne,
+    /// Referenced value is one of the condition values.
+    In,
+    /// Referenced value is none of the condition values.
+    NotIn,
+    /// Referenced value is non-blank.
+    NonEmpty,
+}
+
+impl PluginConditionOpValue {
+    pub fn from_domain(value: ConditionOp) -> Self {
+        match value {
+            ConditionOp::Eq => Self::Eq,
+            ConditionOp::Ne => Self::Ne,
+            ConditionOp::In => Self::In,
+            ConditionOp::NotIn => Self::NotIn,
+            ConditionOp::NonEmpty => Self::NonEmpty,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+/// Predicate over another configuration field's current value.
+pub struct PluginFieldConditionPayload {
+    /// Key of the field whose value is tested.
+    pub key: String,
+    /// Comparison applied to that field's value.
+    pub op: PluginConditionOpValue,
+    /// Values compared against; empty for NON_EMPTY.
+    pub values: Vec<String>,
+}
+
+impl PluginFieldConditionPayload {
+    pub fn from_domain(condition: FieldCondition) -> Self {
+        Self {
+            key: condition.key,
+            op: PluginConditionOpValue::from_domain(condition.op),
+            values: condition.values,
+        }
+    }
+}
+
 #[derive(SimpleObject, Clone)]
 /// Provider configuration field schema.
 pub struct PluginConfigFieldPayload {
@@ -369,6 +423,12 @@ pub struct PluginConfigFieldPayload {
     pub options: Vec<PluginConfigFieldOptionPayload>,
     /// Help text, or null when unavailable.
     pub help_text: Option<String>,
+    /// Condition gating visibility, or null when always shown.
+    pub visible_when: Option<PluginFieldConditionPayload>,
+    /// Condition that makes the field required, or null when it never applies.
+    pub required_when: Option<PluginFieldConditionPayload>,
+    /// Whether the field belongs behind the form's advanced disclosure.
+    pub advanced: bool,
 }
 
 #[derive(SimpleObject, Clone)]
