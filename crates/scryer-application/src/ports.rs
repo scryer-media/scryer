@@ -1093,6 +1093,48 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(existing)
     }
+    /// Same lookup as `list_existing_external_ids_in_library_and_facet`, but
+    /// keeping the owning title id for each matched external id so callers can
+    /// point the user at the title they already have. The default fans out over
+    /// the library's titles; SQL stores override with a single query.
+    async fn map_existing_external_ids_to_title_ids_in_library_and_facet(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        source: &str,
+        values: &[String],
+    ) -> AppResult<BTreeMap<String, String>> {
+        let library_id = library_id.trim();
+        let source = source.trim();
+        if library_id.is_empty() || source.is_empty() || values.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let requested = values
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<BTreeSet<_>>();
+        if requested.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut existing = BTreeMap::new();
+        for title in self
+            .list_for_libraries(Some(facet), &[library_id.to_string()], None)
+            .await?
+        {
+            for external_id in &title.external_ids {
+                let value = external_id.value.trim();
+                if external_id.source.eq_ignore_ascii_case(source) && requested.contains(value) {
+                    existing
+                        .entry(value.to_string())
+                        .or_insert_with(|| title.id.clone());
+                }
+            }
+        }
+        Ok(existing)
+    }
     async fn list_for_matching(
         &self,
         facet: Option<MediaFacet>,

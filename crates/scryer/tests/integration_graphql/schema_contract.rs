@@ -574,6 +574,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Stored OAuth client kinds add one enum behind the existing registration
     // payload and create input: ENUM 112->113, public types 628->629. Root,
     // object, and input-object counts are unchanged.
+    // In-library pending-import candidates add
+    // MetadataSearchItemPayload.existingTitleId and
+    // ResolvePendingImportInput.attachToExistingTitle. Both hang off existing
+    // types, so no census counts change.
     assert_eq!(
         query_field_count, 135,
         "query fields: {query_field_names:?}"

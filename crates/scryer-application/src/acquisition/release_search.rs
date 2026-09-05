@@ -1280,7 +1280,15 @@ fn candidate_numbering_contradicts_subject(
         return false;
     };
     let Some(episode) = parsed.episode.as_ref() else {
-        return true;
+        // A release that carries no numbering at all cannot answer a subject
+        // that names one. The single exception is a specials-season subject
+        // with no episode number of its own: specials are published under
+        // names that assert nothing ("{title} OVA", "{title} - {special
+        // name}"), so that pairing stays with the coverage resolver rather
+        // than being vetoed here.
+        return !(subject.season == Some(0)
+            && subject.episode.is_none()
+            && subject.absolute_episode.is_none());
     };
     // A specials-scoped subject is season 0, whatever the search parameters
     // left out. A release that names any other season is a different episode
@@ -3316,6 +3324,159 @@ mod tests {
         assert_eq!(
             evaluate_auto_candidate(&candidate, &context),
             ReleaseAutoDecisionCode::EpisodeMismatch
+        );
+    }
+
+    fn specials_wanted_item(
+        title: &Title,
+        season: &str,
+        episode_number: &str,
+    ) -> (crate::AcquisitionScopeState, Episode) {
+        let episode = Episode {
+            id: "episode-special".into(),
+            title_id: title.id.clone(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Special,
+            episode_number: Some(episode_number.into()),
+            season_number: Some(season.into()),
+            episode_label: None,
+            title: Some("Quiet Harbor: Graduation".into()),
+            air_date: Some("2024-05-01".into()),
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let item = crate::AcquisitionScopeState {
+            id: "wanted-1".into(),
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            title_slug: None,
+            title_facet: Some(title.facet.as_str().to_string()),
+            library_id: Some(title.library_id.clone()),
+            library_name: None,
+            library_slug: None,
+            episode_id: Some(episode.id.clone()),
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: episode.season_number.clone(),
+            episode_number: episode.episode_number.clone(),
+            media_type: "episode".into(),
+            last_search_at: None,
+            status: crate::AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        (item, episode)
+    }
+
+    /// The source of the regression: the specials season used to be folded into
+    /// "no season" here, which is what left the acceptance veto with nothing to
+    /// compare a season-1 release against.
+    #[test]
+    fn a_season_zero_wanted_item_reports_season_zero() {
+        let mut title = make_title();
+        title.name = "Quiet Harbor".to_string();
+        title.facet = MediaFacet::Anime;
+        let (item, episode) = specials_wanted_item(&title, "0", "2");
+
+        let result =
+            build_search_queries(&title, &item, Some(&episode), &crate::FacetRegistry::new());
+
+        assert_eq!(result.season, Some(0));
+        assert_eq!(result.episode, Some(2));
+        assert!(
+            !result
+                .queries
+                .iter()
+                .any(|query| query.contains("S00E02") || query.contains("S00")),
+            "season 0 must not shape an S00 query: {:?}",
+            result.queries
+        );
+    }
+
+    /// A regular season is unchanged by that: it still reports its own number
+    /// and still shapes the `SxxEyy` queries.
+    #[test]
+    fn a_regular_wanted_item_still_reports_its_own_season() {
+        let mut title = make_title();
+        title.name = "Quiet Harbor".to_string();
+        title.facet = MediaFacet::Anime;
+        let (item, episode) = specials_wanted_item(&title, "2", "3");
+
+        let result =
+            build_search_queries(&title, &item, Some(&episode), &crate::FacetRegistry::new());
+
+        assert_eq!(result.season, Some(2));
+        assert_eq!(result.episode, Some(3));
+        assert!(
+            result.queries.iter().any(|query| query.contains("S02E03")),
+            "a regular season still shapes an SxxEyy query: {:?}",
+            result.queries
+        );
+    }
+
+    /// The specials regression. A season-0 wanted item used to reach the
+    /// acceptance layer with no expected season at all, so a regular S01E02
+    /// release satisfied it on the episode number alone and the film was
+    /// imported against the wrong scope.
+    #[test]
+    fn a_specials_season_subject_rejects_a_regular_season_release() {
+        let mut title = make_title();
+        title.name = "Quiet Harbor".to_string();
+        title.facet = MediaFacet::Anime;
+        title.tagged_aliases = Vec::new();
+        let subject = numbering_scoped_subject(&title, Some(0), Some(2));
+
+        let mut candidate = make_candidate("Quiet.Harbor.S01E02.1080p.WEB-DL-GroupTag.mkv", None);
+        candidate.quality_profile_decision = Some(allowed_quality_decision(2400));
+
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::EpisodeMismatch
+        );
+    }
+
+    /// The other half of the same gate. A specials subject that carries no
+    /// episode number of its own must not start vetoing the unnumbered release
+    /// names specials actually ship under — that pairing stays with the
+    /// coverage resolver, exactly as it did before the season became known.
+    #[test]
+    fn a_specials_subject_without_an_episode_number_leaves_unnumbered_releases_alone() {
+        let mut title = make_title();
+        title.name = "Quiet Harbor".to_string();
+        title.facet = MediaFacet::Anime;
+        title.tagged_aliases = Vec::new();
+        let subject = numbering_scoped_subject(&title, Some(0), None);
+
+        let unnumbered = make_candidate("Quiet.Harbor.Graduation.1080p.BluRay-GroupTag.mkv", None);
+        assert!(
+            unnumbered
+                .parsed_release_metadata
+                .as_ref()
+                .is_some_and(|parsed| parsed.episode.is_none()),
+            "fixture must model a release that asserts no numbering"
+        );
+        assert!(
+            !candidate_numbering_contradicts_subject(&unnumbered, &subject),
+            "a release that asserts no numbering must not be vetoed for a special"
+        );
+
+        let regular_season = make_candidate("Quiet.Harbor.S01E02.1080p.WEB-DL-GroupTag.mkv", None);
+        assert!(
+            candidate_numbering_contradicts_subject(&regular_season, &subject),
+            "a season-1 release cannot satisfy a season-0 scope"
         );
     }
 
