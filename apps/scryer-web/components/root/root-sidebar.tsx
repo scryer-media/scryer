@@ -252,6 +252,19 @@ const PROMOTED_SETTINGS_SHORTCUT_IDS = new Set<SettingsSection>(
     group.items.flatMap((item) => (item.kind === "settings" ? [item.id] : [])),
   ),
 );
+
+/// Whether a promoted shortcut already owns the open section, which is what
+/// keeps the Settings entry dark. Ownership runs through the same predicate the
+/// shortcuts light themselves with, so an entry standing in for more than one
+/// section covers all of them here too.
+function isPromotedSettingsSection(settingsSection: SettingsSection): boolean {
+  for (const entryId of PROMOTED_SETTINGS_SHORTCUT_IDS) {
+    if (isSettingsNavEntryActive(entryId, settingsSection)) {
+      return true;
+    }
+  }
+  return false;
+}
 const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "general",
   "profile",
@@ -1237,13 +1250,10 @@ function RootSidebarContent({
                   const isActivityTop = item.id === "activity";
                   const isActiveMediaSection =
                     isMediaSection && view === item.id && !isRequestsSection;
-                  const isPromotedSettingsSection =
-                    view === "settings" &&
-                    PROMOTED_SETTINGS_SHORTCUT_IDS.has(settingsSection);
                   const isActiveSettingsSection =
                     isSettingsTop &&
                     view === "settings" &&
-                    !isPromotedSettingsSection;
+                    !isPromotedSettingsSection(settingsSection);
                   const isActiveSystemSection =
                     isSystemTop &&
                     view === "system" &&
