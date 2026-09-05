@@ -348,6 +348,7 @@ pub fn from_request_rule_preview_result(
             input_schema_version: to_graphql_int(i64::from(REQUEST_INPUT_SCHEMA_VERSION)),
         },
         metadata_partial: result.metadata_partial,
+        undefined_tags: result.undefined_tags,
         input_document: async_graphql::Json(
             serde_json::from_str(&result.input_json).unwrap_or(serde_json::Value::Null),
         ),

@@ -2050,6 +2050,21 @@ pub trait MediaRequestRepository: Send + Sync {
         rule_set_ids: &[String],
         tags: &[String],
     ) -> AppResult<()>;
+
+    /// Rename `label` to `replacement`, or drop it when `replacement` is
+    /// `None`, in the `policy_tags` of every **pending** request. Returns how
+    /// many rows changed.
+    ///
+    /// The title tag registry stores membership by label, so a rename is a data
+    /// migration across every place a label is held — and a pending request
+    /// holds one that an approver is about to apply. Resolved requests are
+    /// deliberately excluded: their policy tags record what was decided, and a
+    /// rewrite would falsify the history the decision trace explains.
+    async fn rewrite_pending_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64>;
 }
 
 #[async_trait]

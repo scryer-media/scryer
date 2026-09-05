@@ -720,4 +720,30 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         request.updated_at = Utc::now();
         Ok(())
     }
+
+    async fn rewrite_pending_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        let mut requests = self.requests.lock().await;
+        let mut changed = 0_u64;
+        for request in requests
+            .iter_mut()
+            .filter(|request| request.status == scryer_domain::MediaRequestStatus::Pending)
+        {
+            if !request.policy_tags.iter().any(|tag| tag == label) {
+                continue;
+            }
+            request.policy_tags.retain(|tag| tag != label);
+            if let Some(replacement) = replacement
+                && !request.policy_tags.iter().any(|tag| tag == replacement)
+            {
+                request.policy_tags.push(replacement.to_string());
+            }
+            request.updated_at = Utc::now();
+            changed += 1;
+        }
+        Ok(changed)
+    }
 }

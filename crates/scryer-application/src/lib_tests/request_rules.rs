@@ -38,6 +38,24 @@ tags contains "auto-approved" if {
 }
 "#;
 
+/// Sends everything to a human, and asks for two tags — one the registry
+/// defines and one it does not.
+const MANUAL_WITH_TWO_TAGS: &str = r#"package rules
+import rego.v1
+
+manual if {
+	input.request.origin == "manual"
+}
+
+tags contains "auto-approved" if {
+	input.request.origin == "manual"
+}
+
+tags contains "nobody-defined-this" if {
+	input.request.origin == "manual"
+}
+"#;
+
 /// Denies anything, with a reason code an approver can read.
 const DENY_EVERYTHING: &str = r#"package rules
 import rego.v1
@@ -1275,6 +1293,147 @@ async fn an_undefined_policy_tag_is_dropped_without_failing_the_approval() {
         .find(|trace| trace.request_id == request_id)
         .expect("the decision was traced");
     assert_eq!(trace.tags, vec!["auto-approved"]);
+}
+
+/// The "would be tagged" chip on a pending row promises only what an approval
+/// can actually deliver, while the trace keeps the label the operator still has
+/// to define.
+#[tokio::test]
+async fn a_pending_request_records_only_the_tags_that_can_land() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Send to a human", MANUAL_WITH_TWO_TAGS).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+    harness
+        .app
+        .create_title_tag_definition(&harness.manager, "auto-approved", None)
+        .await
+        .expect("one of the two labels is defined");
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9061))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(preflight.tags, vec!["auto-approved"]);
+
+    let request_id = submit(&harness, &library_id, 9061, None).await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Pending);
+    assert_eq!(
+        requests[0].policy_tags,
+        vec!["auto-approved".to_string()],
+        "the row never offers the approver a label the approval would drop"
+    );
+    drop(requests);
+
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces
+        .iter()
+        .find(|trace| trace.request_id == request_id)
+        .expect("the decision was traced");
+    let mut traced = trace.tags.clone();
+    traced.sort();
+    assert_eq!(
+        traced,
+        vec![
+            "auto-approved".to_string(),
+            "nobody-defined-this".to_string()
+        ],
+        "the trace still names the label nobody has defined yet"
+    );
+}
+
+/// A registry rename is a data migration, and a pending request holds the list
+/// an approver is about to apply — so it has to move with the label. The
+/// request rule that emits it cannot be rewritten, so it is counted instead.
+#[tokio::test]
+async fn renaming_a_tag_follows_a_pending_request_and_counts_the_request_rule() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Send to a human", MANUAL_WITH_TWO_TAGS).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+    let definition = harness
+        .app
+        .create_title_tag_definition(&harness.manager, "auto-approved", None)
+        .await
+        .expect("the label is defined");
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    submit(&harness, &library_id, 9062, None).await;
+
+    let renamed = harness
+        .app
+        .update_title_tag_definition(
+            &harness.manager,
+            &definition.id,
+            Some("policy approved".to_string()),
+            None,
+        )
+        .await
+        .expect("the rename should succeed");
+    assert_eq!(
+        renamed.counts.request_rule_sets, 1,
+        "the rule that emits the old label is named, because Rego is never rewritten"
+    );
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Pending);
+    assert_eq!(
+        requests[0].policy_tags,
+        vec!["policy approved".to_string()],
+        "the pending row followed the rename"
+    );
+}
+
+/// Deleting the label takes it off the pending row too: leaving it there would
+/// offer an approver a tag the approval then drops in silence.
+#[tokio::test]
+async fn deleting_a_tag_strips_it_from_a_pending_request() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Send to a human", MANUAL_WITH_TWO_TAGS).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+    let definition = harness
+        .app
+        .create_title_tag_definition(&harness.manager, "auto-approved", None)
+        .await
+        .expect("the label is defined");
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    submit(&harness, &library_id, 9063, None).await;
+
+    let counts = harness
+        .app
+        .delete_title_tag_definition(&harness.manager, &definition.id)
+        .await
+        .expect("the delete should succeed");
+    assert_eq!(counts.request_rule_sets, 1);
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert!(
+        requests[0].policy_tags.is_empty(),
+        "the pending row no longer offers a label nothing defines: {:?}",
+        requests[0].policy_tags
+    );
 }
 
 /// An approver's own list is held to the same bar as the tag editor.

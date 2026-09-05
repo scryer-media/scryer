@@ -528,6 +528,8 @@ pub struct TitleTagRewriteCountsPayload {
     pub release_rule_sets: i32,
     /// Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.
     pub managed_tag_filters: i32,
+    /// Request rule sets whose current rule source emits the old label; rule sources are never rewritten, so those rules stop applying the tag.
+    pub request_rule_sets: i32,
 }
 
 #[derive(SimpleObject, Clone)]

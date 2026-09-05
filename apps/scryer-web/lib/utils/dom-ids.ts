@@ -307,16 +307,24 @@ export function mediaRequestClaimsPanelId(requestId: string): string {
 export const APPROVE_MEDIA_REQUEST_LEASE_ID = "approve-media-request-lease";
 export const APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID =
   "approve-media-request-lease-days";
-export const APPROVE_MEDIA_REQUEST_TAG_INPUT_ID =
-  "approve-media-request-tag-input";
-export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID = "approve-media-request-tag-add";
+/// Prefix the approve dialog hands `TitleTagsPicker`, which derives its own
+/// ids from it: `<prefix>-tags` for the block, `<prefix>-tags-add` for the
+/// registry select, and `<prefix>-tag-remove-<label>` for each chip's remove
+/// button. The approver picks from the registry rather than typing, so the
+/// free-text field these ids used to name no longer exists.
+export const APPROVE_MEDIA_REQUEST_TAGS_PREFIX = "approve-media-request";
+export const APPROVE_MEDIA_REQUEST_TAGS_ID = "approve-media-request-tags";
+export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID = "approve-media-request-tags-add";
 
 export function approveMediaRequestLeaseOptionId(value: string): string {
   return selectorId("approve-media-request-lease-option", value);
 }
 
+/// Mirrors `TitleTagsPicker`'s own remove-button id exactly — the picker keeps
+/// the label's case and only collapses whitespace, so this cannot go through
+/// `selectorId`, which lowercases.
 export function approveMediaRequestTagRemoveId(tag: string): string {
-  return selectorId("approve-media-request-tag-remove", tag);
+  return `${APPROVE_MEDIA_REQUEST_TAGS_PREFIX}-tag-remove-${tag.replace(/\s+/g, "-")}`;
 }
 
 export function titleClaimRowId(claimId: string): string {

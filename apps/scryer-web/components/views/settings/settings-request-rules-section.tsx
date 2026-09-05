@@ -408,6 +408,9 @@ function RequestTemplateGallery({
         <p className="text-xs text-muted-foreground">
           {t("settings.requestTemplateGalleryDescription")}
         </p>
+        <p className="text-xs text-muted-foreground">
+          {t("settings.requestTemplateGalleryTagNote")}
+        </p>
       </CardHeader>
       {open ? (
         <CardContent id="settings-request-template-gallery" className="@container">
@@ -882,6 +885,20 @@ function RequestPreviewPanel({
                     {tag}
                   </Badge>
                 ))}
+              </div>
+            ) : null}
+            {previewResult.undefinedTags.length > 0 ? (
+              <div id="settings-request-preview-undefined-tags" className="space-y-1">
+                <div className="flex flex-wrap gap-1">
+                  {previewResult.undefinedTags.map((tag) => (
+                    <Badge key={tag} tone="warning" className="text-[10px]">
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.requestPreviewUndefinedTags")}
+                </p>
               </div>
             ) : null}
             <Button

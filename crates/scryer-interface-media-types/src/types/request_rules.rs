@@ -270,6 +270,11 @@ pub struct RequestRulePreviewPayload {
     /// True when the sample's metadata could not be fully established, so some
     /// facts were unknown.
     pub metadata_partial: bool,
+    /// Of the tags the rule emitted, the ones the title tag registry does not
+    /// define. They are dropped at approval, so an author needs to define them
+    /// in Settings before the rule can apply them. `decision.tags` still lists
+    /// everything the rule emitted.
+    pub undefined_tags: Vec<String>,
     /// The exact document the rule saw.
     pub input_document: Json<serde_json::Value>,
 }

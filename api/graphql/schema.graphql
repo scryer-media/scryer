@@ -20563,6 +20563,13 @@ type RequestRulePreviewPayload {
 	"""
 	metadataPartial: Boolean!
 	"""
+	Of the tags the rule emitted, the ones the title tag registry does not
+	define. They are dropped at approval, so an author needs to define them
+	in Settings before the rule can apply them. `decision.tags` still lists
+	everything the rule emitted.
+	"""
+	undefinedTags: [String!]!
+	"""
 	The exact document the rule saw.
 	"""
 	inputDocument: JSON!
@@ -24330,6 +24337,10 @@ type TitleTagRewriteCountsPayload {
 	Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.
 	"""
 	managedTagFilters: Int!
+	"""
+	Request rule sets whose current rule source emits the old label; rule sources are never rewritten, so those rules stop applying the tag.
+	"""
+	requestRuleSets: Int!
 }
 
 """

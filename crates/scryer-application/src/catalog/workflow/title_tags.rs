@@ -90,11 +90,11 @@ impl AppUseCase {
 
         // The rule-set scan runs before the write so the warning describes the
         // label the operator is renaming away from, not what is left afterwards.
-        let (maintenance_rule_sets, release_rule_sets, managed_tag_filters) = if renamed {
+        let references = if renamed {
             self.count_rule_sets_referencing_title_tag(&previous_label)
                 .await?
         } else {
-            (0, 0, 0)
+            RuleSetTagReferenceCounts::default()
         };
 
         let (definition, membership) = self
@@ -117,6 +117,15 @@ impl AppUseCase {
             0
         };
 
+        // A pending request's `policy_tags` is the list an approver is about to
+        // apply, so it has to follow the rename the same way a title bag does;
+        // resolved requests are history and keep the label they were decided
+        // with. The decision traces are audit records and are never rewritten.
+        if renamed {
+            self.rewrite_pending_request_policy_tag(&previous_label, Some(&definition.label))
+                .await?;
+        }
+
         self.emit_configuration_changed_event(
             actor,
             "title_tag",
@@ -131,9 +140,10 @@ impl AppUseCase {
                 titles: membership.titles,
                 series_movies: membership.series_movies,
                 delay_profiles,
-                maintenance_rule_sets,
-                release_rule_sets,
-                managed_tag_filters,
+                maintenance_rule_sets: references.maintenance,
+                release_rule_sets: references.release,
+                managed_tag_filters: references.managed_tag_filters,
+                request_rule_sets: references.request,
             },
         })
     }
@@ -158,7 +168,7 @@ impl AppUseCase {
             .get_title_tag_definition(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
-        let (maintenance_rule_sets, release_rule_sets, managed_tag_filters) = self
+        let references = self
             .count_rule_sets_referencing_title_tag(&existing.label)
             .await?;
 
@@ -170,6 +180,10 @@ impl AppUseCase {
             .await?;
         let delay_profiles = self
             .rewrite_delay_profile_tag(actor, &definition.label, None)
+            .await?;
+        // A pending request would otherwise keep offering an approver a label
+        // that no longer exists, which the approval would then drop in silence.
+        self.rewrite_pending_request_policy_tag(&definition.label, None)
             .await?;
 
         self.emit_configuration_changed_event(
@@ -184,9 +198,10 @@ impl AppUseCase {
             titles: membership.titles,
             series_movies: membership.series_movies,
             delay_profiles,
-            maintenance_rule_sets,
-            release_rule_sets,
-            managed_tag_filters,
+            maintenance_rule_sets: references.maintenance,
+            release_rule_sets: references.release,
+            managed_tag_filters: references.managed_tag_filters,
+            request_rule_sets: references.request,
         })
     }
 
@@ -457,19 +472,44 @@ impl AppUseCase {
         Ok(changed)
     }
 
-    /// `(maintenance rule sets, release rule sets, managed tag filters)` that
-    /// name `label`.
+    /// Rewrite `label` to `replacement` (or drop it) in every *pending*
+    /// request's policy tags, returning how many rows changed.
     ///
-    /// The first two are a plain substring search over stored Rego, on purpose:
-    /// this is a warning, not a rewrite. Rego revisions are immutable, so
-    /// nothing here can be corrected automatically, and an over-broad match
+    /// Only pending rows: `policy_tags` on a resolved request records what was
+    /// decided, and rewriting it would falsify the history the decision trace
+    /// is joined against.
+    async fn rewrite_pending_request_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        self.services
+            .catalog
+            .media_requests
+            .rewrite_pending_policy_tag(label, replacement)
+            .await
+    }
+
+    /// How many rule sets of each kind name `label`.
+    ///
+    /// The Rego counts are a plain substring search over stored source, on
+    /// purpose: this is a warning, not a rewrite. Rego revisions are immutable,
+    /// so nothing here can be corrected automatically, and an over-broad match
     /// costs the operator one extra look at a rule while a missed match costs a
     /// rule that silently stops firing.
     ///
-    /// The third is exact: a managed pack's `tag_filter` is a list of labels,
-    /// not free text, and it is SMG-owned, so it is neither rewritten nor
-    /// folded into the Rego count — the operator has to fix it somewhere else.
-    /// One managed pack can therefore be counted twice, once per reason.
+    /// Request rules are matched a little more tightly, on the quoted label
+    /// (`"<label>"`) rather than the bare word, because a request matcher's
+    /// only use for a tag is inside a `tags contains "<label>"` head, and the
+    /// quotes keep a short label like `hd` from matching every identifier that
+    /// happens to contain it. It is still a substring match, not a parse: an
+    /// author who builds the string at runtime is not counted.
+    ///
+    /// The managed tag filter count is exact: a managed pack's `tag_filter` is
+    /// a list of labels, not free text, and it is SMG-owned, so it is neither
+    /// rewritten nor folded into the Rego count — the operator has to fix it
+    /// somewhere else. One managed pack can therefore be counted twice, once
+    /// per reason.
     ///
     /// Only each rule set's *current* revision is scanned. Older revisions are
     /// immutable history and cannot fire, so naming them would send the
@@ -477,7 +517,7 @@ impl AppUseCase {
     async fn count_rule_sets_referencing_title_tag(
         &self,
         label: &str,
-    ) -> AppResult<(u64, u64, u64)> {
+    ) -> AppResult<RuleSetTagReferenceCounts> {
         let mut maintenance = 0_u64;
         for rule_set in self
             .services
@@ -519,8 +559,44 @@ impl AppUseCase {
             }
         }
 
-        Ok((maintenance, release, managed_tag_filters))
+        let quoted = format!("\"{label}\"");
+        let mut request = 0_u64;
+        for rule_set in self
+            .services
+            .customization
+            .request_rule_sets
+            .list_rule_sets()
+            .await?
+        {
+            if let Some(revision) = self
+                .services
+                .customization
+                .request_rule_sets
+                .get_revision(&rule_set.id, rule_set.current_revision_number)
+                .await?
+                && revision.rego_source.contains(&quoted)
+            {
+                request += 1;
+            }
+        }
+
+        Ok(RuleSetTagReferenceCounts {
+            maintenance,
+            release,
+            managed_tag_filters,
+            request,
+        })
     }
+}
+
+/// The rule-set halves of [`crate::TitleTagRewriteCounts`], which none of these
+/// paths can rewrite: they are what the warning is about.
+#[derive(Clone, Copy, Debug, Default)]
+struct RuleSetTagReferenceCounts {
+    maintenance: u64,
+    release: u64,
+    managed_tag_filters: u64,
+    request: u64,
 }
 
 /// A description is either real text or absent; an all-whitespace one is the

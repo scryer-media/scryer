@@ -110,6 +110,13 @@ pub struct RequestRulePreviewResult {
     pub held: bool,
     pub reasons: Vec<RequestDecisionReason>,
     pub tags: Vec<String>,
+    /// The subset of `tags` the title tag registry does not define.
+    ///
+    /// A request rule cannot be validated statically the way a maintenance
+    /// action's tag list can — the labels only exist inside the compiled Rego —
+    /// so the preview is the one moment an author can be told that a tag they
+    /// emit will be dropped at approval until somebody defines it.
+    pub undefined_tags: Vec<String>,
     pub error: Option<String>,
     /// The exact document the rule saw, pretty-printed. An author debugging
     /// "why did this not match" needs the facts, not just the verdict.
@@ -480,6 +487,10 @@ impl AppUseCase {
                 ),
             };
 
+        // The preview keeps returning every emitted label; `undefined_tags`
+        // only says which of them cannot land yet.
+        let undefined_tags = self.undefined_title_tag_labels(&tags).await?;
+
         Ok(RequestRulePreviewResult {
             rule_set_id,
             matcher_content_hash,
@@ -488,6 +499,7 @@ impl AppUseCase {
             held,
             reasons,
             tags,
+            undefined_tags,
             error,
             input_json,
             metadata_partial,
