@@ -784,10 +784,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // claim enums): OBJECT 388->402, INPUT_OBJECT 198->209, ENUM 140->146,
     // public types 738->769. The additive fields on the existing media-request
     // payload and its three inputs add no type.
-    assert_eq!(public_types.len(), 777);
-    assert_eq!(kind_count("OBJECT"), 406);
+    // Provider config schemas add the field-condition payload (visibleWhen /
+    // requiredWhen on a plugin config field) and its operator enum:
+    // OBJECT 406->407, ENUM 146->147, public types 777->779. The `advanced`
+    // flag is an additive field on the existing config-field payload.
+    assert_eq!(public_types.len(), 779);
+    assert_eq!(kind_count("OBJECT"), 407);
     assert_eq!(kind_count("INPUT_OBJECT"), 213);
-    assert_eq!(kind_count("ENUM"), 146);
+    assert_eq!(kind_count("ENUM"), 147);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));

@@ -16978,6 +16978,32 @@ type PluginCatalogStatusPayload {
 }
 
 """
+Comparison a provider configuration field condition applies.
+"""
+enum PluginConditionOpValue {
+	"""
+	Referenced value equals the first condition value.
+	"""
+	EQ
+	"""
+	Referenced value differs from the first condition value.
+	"""
+	NE
+	"""
+	Referenced value is one of the condition values.
+	"""
+	IN
+	"""
+	Referenced value is none of the condition values.
+	"""
+	NOT_IN
+	"""
+	Referenced value is non-blank.
+	"""
+	NON_EMPTY
+}
+
+"""
 One selectable value for a plugin configuration field.
 """
 type PluginConfigFieldOptionPayload {
@@ -17053,6 +17079,18 @@ type PluginConfigFieldPayload {
 	Help text, or null when unavailable.
 	"""
 	helpText: String
+	"""
+	Condition gating visibility, or null when always shown.
+	"""
+	visibleWhen: PluginFieldConditionPayload
+	"""
+	Condition that makes the field required, or null when it never applies.
+	"""
+	requiredWhen: PluginFieldConditionPayload
+	"""
+	Whether the field belongs behind the form's advanced disclosure.
+	"""
+	advanced: Boolean!
 }
 
 """
@@ -17090,6 +17128,10 @@ enum PluginConfigFieldTypeValue {
 	"""
 	SELECT
 	"""
+	Enumerated selection rendered with a filter box.
+	"""
+	FILTERED_SELECT
+	"""
 	Numeric value.
 	"""
 	NUMBER
@@ -17115,6 +17157,24 @@ enum PluginConfigValueSourceValue {
 	Value supplied by a host binding.
 	"""
 	HOST_BINDING
+}
+
+"""
+Predicate over another configuration field's current value.
+"""
+type PluginFieldConditionPayload {
+	"""
+	Key of the field whose value is tested.
+	"""
+	key: String!
+	"""
+	Comparison applied to that field's value.
+	"""
+	op: PluginConditionOpValue!
+	"""
+	Values compared against; empty for NON_EMPTY.
+	"""
+	values: [String!]!
 }
 
 """
