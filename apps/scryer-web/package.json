@@ -70,7 +70,7 @@
     "vite-plugin-compression2": "^2.5.3"
   },
   "overrides": {
-    "@hono/node-server": "2.1.0",
+    "@hono/node-server": "2.1.1",
     "immutable": "5.1.9"
   }
 }
