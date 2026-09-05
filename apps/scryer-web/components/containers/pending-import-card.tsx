@@ -371,6 +371,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               <>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Input
+                    id={`pending-import-search-query-${item.id}`}
                     className="min-w-0 flex-1"
                     value={searchQuery}
                     onChange={(event) => onSearchQueryChange(event.target.value)}
@@ -379,6 +380,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                   />
                   <div className="flex items-center gap-2">
                     <Input
+                      id={`pending-import-search-year-${item.id}`}
                       type="number"
                       inputMode="numeric"
                       min={1888}
@@ -402,6 +404,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                       type="button"
                       size="sm"
                       variant="ghost"
+                      id={`pending-import-search-year-clear-${item.id}`}
                       onClick={() => onSearchYearChange(null)}
                       disabled={isBusy || searchYear == null}
                     >
@@ -410,25 +413,37 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                   </div>
                 </div>
 
-                <p className="text-xs text-muted-foreground">
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-ui="pending-import-search-year-hint"
+                >
                   {t("pendingImports.searchYearHint")}
                 </p>
 
                 {searching ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div
+                    className="flex items-center gap-2 text-sm text-muted-foreground"
+                    data-ui="pending-import-search-pending"
+                  >
                     <Loader2 className="h-4 w-4 animate-spin" />
                     {t("pendingImports.searching")}
                   </div>
                 ) : null}
 
                 {!searching && searchError ? (
-                  <div className="text-sm text-destructive">
+                  <div
+                    className="text-sm text-destructive"
+                    data-ui="pending-import-search-error"
+                  >
                     {t("pendingImports.searchRequestFailed", { error: searchError })}
                   </div>
                 ) : null}
 
                 {!searching && !searchError && searchQuery.trim() && searchResults.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">
+                  <div
+                    className="text-sm text-muted-foreground"
+                    data-ui="pending-import-search-empty"
+                  >
                     {t("pendingImports.noSearchResults")}
                   </div>
                 ) : null}
@@ -441,6 +456,12 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                       <div
                         key={`${item.id}-${result.smgId ?? result.tvdbId ?? result.name}`}
                         className="flex gap-3 rounded-lg border border-border bg-card/40 p-3"
+                        data-ui="pending-import-search-result"
+                        data-pending-import-id={item.id}
+                        data-tvdb-id={result.tvdbId ?? ""}
+                        data-smg-id={result.smgId == null ? "" : String(result.smgId)}
+                        data-title-name={result.name}
+                        data-existing-title-id={result.existingTitleId ?? ""}
                       >
                         <div className="h-24 w-16 flex-none overflow-hidden rounded-md border border-border bg-muted">
                           {result.posterUrl ? (
@@ -457,7 +478,10 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                               {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
                             </span>
                             {alreadyInLibrary ? (
-                              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              <span
+                                className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                                data-ui="pending-import-already-in-library"
+                              >
                                 {t("pendingImports.alreadyInLibrary")}
                               </span>
                             ) : null}
@@ -475,6 +499,14 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                           <Button
                             type="button"
                             size="sm"
+                            id={`pending-import-search-${
+                              alreadyInLibrary ? "attach" : "match"
+                            }-${item.id}-${result.tvdbId}`}
+                            data-ui={
+                              alreadyInLibrary
+                                ? "pending-import-search-attach"
+                                : "pending-import-search-match"
+                            }
                             variant={alreadyInLibrary ? "secondary" : "default"}
                             onClick={() =>
                               void onResolve(
