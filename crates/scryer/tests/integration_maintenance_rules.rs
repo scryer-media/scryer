@@ -886,6 +886,7 @@ async fn maintenance_action_descriptors_expose_the_static_catalog() {
                 timingMode
                 allowedRepeatModes
                 requiresTargetQualityProfile
+                requiresTags
             }
         }"#,
         json!({}),
@@ -896,7 +897,7 @@ async fn maintenance_action_descriptors_expose_the_static_catalog() {
     let descriptors = body["data"]["maintenanceActionDescriptors"]
         .as_array()
         .expect("descriptor list");
-    assert_eq!(descriptors.len(), 9);
+    assert_eq!(descriptors.len(), 11);
 
     let delete = descriptors
         .iter()
@@ -918,6 +919,29 @@ async fn maintenance_action_descriptors_expose_the_static_catalog() {
         requiring[0]["kind"],
         "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED"
     );
+
+    // The tag actions are the second parameterized pair, and the editor learns
+    // that from the descriptor rather than from a hardcoded list of kinds.
+    let tagging: Vec<&Value> = descriptors
+        .iter()
+        .filter(|descriptor| descriptor["requiresTags"] == json!(true))
+        .collect();
+    assert_eq!(tagging.len(), 2);
+    let tagging_kinds: Vec<&Value> = tagging
+        .iter()
+        .map(|descriptor| &descriptor["kind"])
+        .collect();
+    assert_eq!(
+        tagging_kinds,
+        vec![&json!("ADD_TAGS"), &json!("REMOVE_TAGS")]
+    );
+    let add = tagging[0];
+    assert_eq!(add["supportedSubjects"], json!(["MOVIE", "SHOW"]));
+    assert_eq!(add["riskClass"], "LOW");
+    assert_eq!(add["effectClasses"], json!(["catalog_intent"]));
+    assert_eq!(add["timingMode"], "after_grace");
+    assert_eq!(add["allowedRepeatModes"], json!(["ensure_state"]));
+    assert_eq!(add["requiresTargetQualityProfile"], false);
 }
 
 // ===========================================================================
@@ -1739,4 +1763,259 @@ async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
         survivor.is_some(),
         "a canceled candidate must not delete the title"
     );
+}
+
+// ── Tag actions ─────────────────────────────────────────────────────────────
+
+const DEFINE_TAG_MUTATION: &str = r#"mutation($input: CreateTitleTagDefinitionInput!) {
+    createTitleTagDefinition(input: $input) { definition { id label } }
+}"#;
+
+const DELETE_TAG_MUTATION: &str = r#"mutation($id: ID!) {
+    deleteTitleTagDefinition(id: $id) { id label }
+}"#;
+
+/// Define a tag in the registry and return its id. Every tag write, by a rule
+/// or by a person, is refused unless the label is defined here first.
+async fn define_tag(ctx: &TestContext, label: &str) -> String {
+    let body = gql(
+        ctx,
+        DEFINE_TAG_MUTATION,
+        json!({ "input": { "label": label } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    body["data"]["createTitleTagDefinition"]["definition"]["id"]
+        .as_str()
+        .expect("tag id")
+        .to_string()
+}
+
+fn tag_action(kind: &str, tags: &[&str]) -> Value {
+    json!({ "kind": kind, "tags": tags })
+}
+
+/// Seed a title that already carries `tags`, through the repository, so the
+/// fixture does not depend on the assignment path it is testing around.
+async fn seed_tagged_title(ctx: &TestContext, id: &str, name: &str, tags: &[&str]) -> Title {
+    let title = seed_title(ctx, id, name, true).await;
+    TitleRepository::update_metadata(
+        &ctx.titles,
+        id,
+        None,
+        None,
+        Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+        None,
+    )
+    .await
+    .expect("seed title tags");
+    title
+}
+
+/// Arm one tag rule and run a full evaluate-then-handle pass over it.
+async fn run_tag_rule(ctx: &TestContext, rule_set_id: &str) {
+    observe_rule_with_gates(ctx, rule_set_id, true, false).await;
+    let started = gql(ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&started);
+    let armed = gql(
+        ctx,
+        SET_ARMING_MUTATION,
+        json!({ "input": { "id": rule_set_id, "arming": "REVERSIBLE" } }),
+    )
+    .await;
+    assert_no_errors(&armed);
+}
+
+#[tokio::test]
+async fn a_tag_rule_writes_the_label_through_the_normal_assignment_path() {
+    let ctx = TestContext::new().await;
+    define_tag(&ctx, "needs review").await;
+    seed_title(&ctx, "title-untagged", "Untagged Movie", true).await;
+    let detail = create_rule(
+        &ctx,
+        "Flag for review",
+        MONITORED_MATCHER,
+        tag_action("ADD_TAGS", &["needs review"]),
+    )
+    .await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    assert_eq!(detail["actionSpec"]["kind"], "ADD_TAGS");
+
+    run_tag_rule(&ctx, &rule_set_id).await;
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+
+    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
+    assert_eq!(candidate["stateReason"], "action_succeeded");
+
+    let title = ctx
+        .titles
+        .get_by_id("title-untagged")
+        .await
+        .expect("read title")
+        .expect("a tag write never removes the title");
+    assert!(
+        title.tags.iter().any(|tag| tag == "needs review"),
+        "{:?}",
+        title.tags
+    );
+}
+
+#[tokio::test]
+async fn a_tag_rule_whose_postcondition_already_holds_reports_already_satisfied() {
+    let ctx = TestContext::new().await;
+    define_tag(&ctx, "needs review").await;
+    seed_tagged_title(&ctx, "title-tagged", "Tagged Movie", &["needs review"]).await;
+    let detail = create_rule(
+        &ctx,
+        "Flag for review",
+        MONITORED_MATCHER,
+        tag_action("ADD_TAGS", &["needs review"]),
+    )
+    .await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+
+    run_tag_rule(&ctx, &rule_set_id).await;
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+
+    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
+    assert_eq!(
+        candidate["stateReason"], "already_satisfied",
+        "the label was already there, so nothing was written"
+    );
+    let runs = gql(&ctx, ACTION_RUNS_QUERY, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&runs);
+    assert_eq!(
+        runs["data"]["maintenanceActionRuns"][0]["status"],
+        "already_satisfied"
+    );
+}
+
+#[tokio::test]
+async fn a_tag_rule_holds_when_its_label_was_deleted_after_authoring() {
+    let ctx = TestContext::new().await;
+    let tag_id = define_tag(&ctx, "needs review").await;
+    seed_title(&ctx, "title-orphaned", "Orphaned Movie", true).await;
+    let detail = create_rule(
+        &ctx,
+        "Flag for review",
+        MONITORED_MATCHER,
+        tag_action("ADD_TAGS", &["needs review"]),
+    )
+    .await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    run_tag_rule(&ctx, &rule_set_id).await;
+
+    // The administrator retires the tag between authoring and execution. The
+    // rule is still stored, still armed, and now names a vocabulary the
+    // instance no longer has.
+    let deleted = gql(&ctx, DELETE_TAG_MUTATION, json!({ "id": tag_id })).await;
+    assert_no_errors(&deleted);
+
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+
+    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "BLOCKED").await;
+    assert_eq!(candidate["stateReason"], "tag_not_defined");
+    let title = ctx
+        .titles
+        .get_by_id("title-orphaned")
+        .await
+        .expect("read title")
+        .expect("title survives");
+    assert!(
+        title.tags.is_empty(),
+        "a held candidate must write nothing: {:?}",
+        title.tags
+    );
+}
+
+#[tokio::test]
+async fn two_rules_writing_opposite_tag_patches_hold_both_candidates() {
+    let ctx = TestContext::new().await;
+    define_tag(&ctx, "needs review").await;
+    seed_tagged_title(
+        &ctx,
+        "title-contested",
+        "Contested Movie",
+        &["needs review"],
+    )
+    .await;
+
+    let adder = create_rule(
+        &ctx,
+        "Flag for review",
+        MONITORED_MATCHER,
+        tag_action("ADD_TAGS", &["needs review"]),
+    )
+    .await;
+    let adder_id = adder["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    let remover = create_rule(
+        &ctx,
+        "Clear review flag",
+        MONITORED_MATCHER,
+        tag_action("REMOVE_TAGS", &["needs review"]),
+    )
+    .await;
+    let remover_id = remover["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+
+    run_tag_rule(&ctx, &adder_id).await;
+    run_tag_rule(&ctx, &remover_id).await;
+
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+
+    for rule_set_id in [&adder_id, &remover_id] {
+        let candidate = wait_for_candidate_state(&ctx, rule_set_id, "BLOCKED").await;
+        assert_eq!(
+            candidate["stateReason"], "tag_patch_conflict",
+            "both sides hold rather than letting rule order decide"
+        );
+    }
+
+    let title = ctx
+        .titles
+        .get_by_id("title-contested")
+        .await
+        .expect("read title")
+        .expect("title survives");
+    assert_eq!(
+        title.tags,
+        vec!["needs review".to_string()],
+        "neither side wrote anything"
+    );
+}
+
+#[tokio::test]
+async fn a_tag_action_naming_an_undefined_label_is_refused_at_authoring_time() {
+    let ctx = TestContext::new().await;
+    let refused = gql(
+        &ctx,
+        &create_mutation(),
+        json!({
+            "input": {
+                "name": "Flag for review",
+                "regoSource": MONITORED_MATCHER,
+                "action": tag_action("ADD_TAGS", &["never defined"]),
+            }
+        }),
+    )
+    .await;
+    assert_error_contains(&refused, "is not a defined tag");
 }

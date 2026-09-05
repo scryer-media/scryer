@@ -1127,6 +1127,7 @@ export const deleteDelayProfileMutation = `mutation DeleteDelayProfile($id: ID!)
 /// every registry write returns the counts the settings section warns with.
 const TITLE_TAG_REWRITE_COUNT_FIELDS = `
       titles
+      seriesMovies
       delayProfiles
       maintenanceRuleSets
       releaseRuleSets
@@ -1163,6 +1164,15 @@ export const deleteTitleTagDefinitionMutation = `mutation DeleteTitleTagDefiniti
 /// and one denied library leaves the whole set unchanged.
 export const updateTitleTagsMutation = `mutation UpdateTitleTags($input: UpdateTitleTagsInput!) {
   updateTitleTags(input: $input) {
+    id
+    tags
+  }
+}`;
+
+/// The series-movie twin of `updateTitleTags`. A series movie is a link row,
+/// not a title, so its tags are patched by link id and read back off the link.
+export const updateSeriesMovieTagsMutation = `mutation UpdateSeriesMovieTags($input: UpdateSeriesMovieTagsInput!) {
+  updateSeriesMovieTags(input: $input) {
     id
     tags
   }

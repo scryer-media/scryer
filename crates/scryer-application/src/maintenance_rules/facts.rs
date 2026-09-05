@@ -19,7 +19,8 @@ use chrono::{DateTime, Utc};
 use scryer_domain::{MediaFacet, Title, UserMediaSignal};
 use scryer_rules::maintenance::{
     MAINTENANCE_INPUT_SCHEMA_VERSION, MaintenanceFactsDoc, MaintenanceFileDoc, MaintenanceInput,
-    MaintenanceLibraryDoc, MaintenanceSubjectDoc, MaintenanceSubjectKind, Observation,
+    MaintenanceLibraryDoc, MaintenanceSeriesMovieDoc, MaintenanceSubjectDoc,
+    MaintenanceSubjectKind, Observation,
 };
 
 use crate::types::TitleMediaFile;
@@ -209,6 +210,7 @@ pub fn build_title_input(
     files: &[TitleMediaFile],
     people: MaintenanceTitlePeople<'_>,
     watch: MaintenanceTitleWatch<'_>,
+    series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceInput {
     MaintenanceInput {
         schema_version: MAINTENANCE_INPUT_SCHEMA_VERSION,
@@ -226,7 +228,7 @@ pub fn build_title_input(
             id: library.id.clone(),
             name: library.name.clone(),
         },
-        facts: build_facts(title, files, people, watch),
+        facts: build_facts(title, files, people, watch, series_movies),
     }
 }
 
@@ -235,6 +237,7 @@ fn build_facts(
     files: &[TitleMediaFile],
     people: MaintenanceTitlePeople<'_>,
     watch: MaintenanceTitleWatch<'_>,
+    series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceFactsDoc {
     let file_docs: Vec<MaintenanceFileDoc> = files.iter().map(file_doc).collect();
     let total_size: i64 = files.iter().map(|file| file.size_bytes).sum();
@@ -272,6 +275,24 @@ fn build_facts(
         last_watched_at: watched.last_watched_at,
         watched_by_any_requester: watched.watched_by_any_requester,
         watched_by_all_requesters: watched.watched_by_all_requesters,
+        series_movies: series_movies_observation(&title.facet, series_movies),
+    }
+}
+
+/// The show's series movies, or a confirmed absence for a movie subject.
+///
+/// A movie has no series movies the way a movie has no episodes: the question
+/// does not apply, the source answered, and the rule sees a missing key rather
+/// than being held. A show with no linked movies is a known-empty list, so
+/// `count(input.facts.series_movies) == 0` is a decisive answer instead of
+/// something the engine holds on.
+fn series_movies_observation(
+    facet: &MediaFacet,
+    series_movies: &[MaintenanceSeriesMovieDoc],
+) -> Observation<Vec<MaintenanceSeriesMovieDoc>> {
+    match facet {
+        MediaFacet::Movie => Observation::absent(),
+        MediaFacet::Series | MediaFacet::Anime => Observation::known(series_movies.to_vec()),
     }
 }
 
@@ -682,6 +703,7 @@ mod tests {
                 usernames,
             },
             MaintenanceTitleWatch { context, signals },
+            &[],
         );
         serde_json::to_value(input).expect("input serializes")
     }

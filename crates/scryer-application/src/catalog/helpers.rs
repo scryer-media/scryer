@@ -254,6 +254,9 @@ pub(crate) fn series_movie_link_from_anime_movie(
         metadata_active: true,
         monitored,
         legacy_collection_id: None,
+        // Metadata never carries operator tags; an existing link's bag is
+        // preserved by the upsert rather than replaced from this value.
+        tags: Vec::new(),
         created_at: now,
         updated_at: now,
     }

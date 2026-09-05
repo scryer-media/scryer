@@ -303,6 +303,7 @@ const SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS = `
       monitoringOverride
       metadataActive
       monitored
+      tags
       movie {
         id
         title
@@ -2855,6 +2856,7 @@ export const TITLE_TAG_DEFINITION_FIELDS = `
     label
     description
     titleCount
+    seriesMovieCount
     createdAt`;
 
 /// Readable by any authenticated caller: the picker and the catalog filter both
@@ -3467,6 +3469,7 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
       kind
       schemaVersion
       targetQualityProfileId
+      tags
     }
     createdAt
     updatedAt`;
@@ -3502,6 +3505,7 @@ export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
       kind
       schemaVersion
       targetQualityProfileId
+      tags
     }`;
 
 export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
@@ -3523,6 +3527,7 @@ export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescrip
     timingMode
     allowedRepeatModes
     requiresTargetQualityProfile
+    requiresTags
   }
 }`;
 

@@ -982,6 +982,15 @@ pub struct SeriesMovieLink {
     pub metadata_active: bool,
     pub monitored: bool,
     pub legacy_collection_id: Option<String>,
+    /// User tags applied to this series movie, by label.
+    ///
+    /// A series movie is a link, not a title, so it carries its own bag rather
+    /// than borrowing the series title's: the same `movie_entities` row can be
+    /// linked from several series, and each placement is tagged on its own.
+    /// Same registry gate, same normalization, and the same reserved `scryer:`
+    /// namespace rule as `Title::tags`.
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

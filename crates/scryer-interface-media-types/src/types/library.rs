@@ -985,6 +985,17 @@ pub struct UpdateTitleTagsInput {
 }
 
 #[derive(InputObject)]
+/// User-tag additions and removals applied across a set of series movies.
+pub struct UpdateSeriesMovieTagsInput {
+    /// Series-movie links to patch. Each link's series is checked for title-management rights before the first write, so a set spanning a library the caller cannot manage changes nothing.
+    pub series_movie_link_ids: Vec<ID>,
+    /// Labels to add. Each must already be defined in the title-tag registry, and reserved `scryer:` entries are rejected.
+    pub add: Option<Vec<String>>,
+    /// Labels to remove. A label the registry no longer defines may still be removed, so a deleted tag can always be cleared off a series movie.
+    pub remove: Option<Vec<String>>,
+}
+
+#[derive(InputObject)]
 /// Primary-file assignment for a movie title.
 pub struct SetPrimaryMovieFileInput {
     /// Movie title identity.

@@ -850,6 +850,22 @@ pub trait TitleRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Every defined label, ordered, with no membership counts.
+    ///
+    /// The registry gate runs on every title add, every raw tag write, every
+    /// tag patch, and every maintenance candidate the executor touches. Those
+    /// paths only need to know whether a label exists; the counted list scans
+    /// every bag per definition and must not be paid there. Repositories that
+    /// keep a real table override this with a plain `SELECT label`.
+    async fn list_title_tag_labels(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_title_tag_definitions()
+            .await?
+            .into_iter()
+            .map(|summary| summary.definition.label)
+            .collect())
+    }
+
     async fn get_title_tag_definition(
         &self,
         id: &str,
@@ -869,8 +885,8 @@ pub trait TitleRepository: Send + Sync {
     }
 
     /// Rename and/or re-describe a registry row, rewriting every `titles.tags`
-    /// bag that carries the old label in the *same* transaction, and return the
-    /// row plus the number of titles rewritten.
+    /// and `series_movie_links.tags` bag that carries the old label in the
+    /// *same* transaction, and return the row plus what was rewritten.
     ///
     /// `label` of `None` leaves the label alone; `description` of `None` leaves
     /// the description alone, `Some(None)` clears it.
@@ -884,17 +900,24 @@ pub trait TitleRepository: Send + Sync {
         label: Option<String>,
         description: Option<Option<String>>,
         updated_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<(scryer_domain::TitleTagDefinition, u64)> {
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
         let _ = (id, label, description, updated_at);
         Err(title_tag_registry_unsupported())
     }
 
-    /// Remove a registry row and strip its label from every title in the same
-    /// transaction. Returns the row that was removed and the titles touched.
+    /// Remove a registry row and strip its label from every title and every
+    /// series movie in the same transaction. Returns the row that was removed
+    /// and what the strip touched.
     async fn delete_title_tag_definition(
         &self,
         id: &str,
-    ) -> AppResult<(scryer_domain::TitleTagDefinition, u64)> {
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
         let _ = id;
         Err(title_tag_registry_unsupported())
     }
@@ -2127,6 +2150,27 @@ pub trait ShowRepository: Send + Sync {
         title_id: &str,
         retained_link_ids: &[String],
     ) -> AppResult<()>;
+    /// Patch one series movie's user tags as a read-modify-write inside a
+    /// single transaction, the same way
+    /// [`TitleRepository::update_user_tags`] patches a title.
+    ///
+    /// `add` and `remove` carry already-normalized, already-registry-validated
+    /// labels; removals are applied first so a label named in both lists ends
+    /// up present. Reserved `scryer:` entries are preserved exactly as stored —
+    /// nothing writes one to a link today, but a bag is a bag — and the result
+    /// is refused if it would exceed [`crate::MAX_USER_TAGS_PER_TITLE`].
+    ///
+    /// Defaulted rather than required so the null repository and the non-SQL
+    /// test doubles need no boilerplate.
+    async fn update_series_movie_link_user_tags(
+        &self,
+        link_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<scryer_domain::SeriesMovieLink> {
+        let _ = (link_id, add, remove);
+        Err(title_tag_registry_unsupported())
+    }
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>>;
     async fn list_collection_external_ids(
         &self,

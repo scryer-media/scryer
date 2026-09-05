@@ -1552,7 +1552,7 @@ async fn the_tag_patch_refuses_the_reserved_namespace_and_undefined_labels() {
     let reserved = app
         .update_title_tags(
             &user,
-            &[title.id.clone()],
+            std::slice::from_ref(&title.id),
             &["scryer:monitor-type:none".to_string()],
             &[],
         )
@@ -1561,7 +1561,12 @@ async fn the_tag_patch_refuses_the_reserved_namespace_and_undefined_labels() {
     assert!(reserved.to_string().contains("scryer:"), "{reserved}");
 
     let undefined = app
-        .update_title_tags(&user, &[title.id.clone()], &["keep".to_string()], &[])
+        .update_title_tags(
+            &user,
+            std::slice::from_ref(&title.id),
+            &["keep".to_string()],
+            &[],
+        )
         .await
         .expect_err("an undefined label must be refused");
     assert!(undefined.to_string().contains("keep"), "{undefined}");
@@ -1594,7 +1599,7 @@ async fn the_tag_patch_preserves_structured_entries_and_emits_one_event_per_titl
     let updated = app
         .update_title_tags(
             &user,
-            &[title.id.clone()],
+            std::slice::from_ref(&title.id),
             &["Keep".to_string(), " Needs  Review ".to_string()],
             &[],
         )
@@ -1614,7 +1619,7 @@ async fn the_tag_patch_preserves_structured_entries_and_emits_one_event_per_titl
     // Removing one leaves the other and the structured entry alone.
     app.update_title_tags(
         &user,
-        &[title.id.clone()],
+        std::slice::from_ref(&title.id),
         &[],
         &["needs review".to_string()],
     )
@@ -1711,6 +1716,134 @@ async fn a_bulk_tag_patch_writes_nothing_when_one_library_is_denied() {
             .await
             .is_empty()
     );
+}
+
+/// A series title plus one series movie linked to it, which is the smallest
+/// shape the link-tag patch needs: the link carries the bag, the series carries
+/// the library the permission is checked against.
+async fn create_series_with_movie(
+    app: &AppUseCase,
+    actor: &User,
+    name: &str,
+) -> (Title, scryer_domain::SeriesMovieLink) {
+    let series = app
+        .add_title(
+            actor,
+            NewTitle {
+                name: name.to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("series should be created");
+    let link = app
+        .services
+        .catalog
+        .shows
+        .upsert_series_movie_link(test_series_movie_link(
+            &series.id,
+            &format!("{name} Movie"),
+            Some(2024),
+            None,
+            None,
+        ))
+        .await
+        .expect("series movie link should be created");
+    (series, link)
+}
+
+async fn stored_series_movie_tags(app: &AppUseCase, link_id: &str) -> Vec<String> {
+    app.services
+        .catalog
+        .shows
+        .get_series_movie_link_by_id(link_id)
+        .await
+        .expect("link should load")
+        .expect("link should exist")
+        .tags
+}
+
+#[tokio::test]
+async fn the_series_movie_tag_patch_gates_on_the_registry_and_patches_the_link() {
+    let (app, user) = bootstrap();
+    app.create_title_tag_definition(&user, "keep", None)
+        .await
+        .expect("tag should be defined");
+    let (series, link) = create_series_with_movie(&app, &user, "Tagged Series").await;
+
+    let refused = app
+        .update_series_movie_tags(
+            &user,
+            std::slice::from_ref(&link.id),
+            &["never defined".to_string()],
+            &[],
+        )
+        .await
+        .expect_err("an undefined label must be refused");
+    assert!(matches!(refused, AppError::Validation(_)), "{refused}");
+    assert!(stored_series_movie_tags(&app, &link.id).await.is_empty());
+
+    let updated = app
+        .update_series_movie_tags(
+            &user,
+            std::slice::from_ref(&link.id),
+            &["  KEEP  ".to_string()],
+            &[],
+        )
+        .await
+        .expect("a defined label should apply");
+    assert_eq!(updated.len(), 1);
+    // The label is normalized on the way in, exactly as it is for a title.
+    assert_eq!(updated[0].tags, vec!["keep".to_string()]);
+    assert_eq!(
+        stored_series_movie_tags(&app, &link.id).await,
+        vec!["keep".to_string()]
+    );
+
+    // The series title itself is untouched: a series movie's tags are its own.
+    assert!(stored_title_tags(&app, &series.id).await.is_empty());
+
+    app.update_series_movie_tags(
+        &user,
+        std::slice::from_ref(&link.id),
+        &[],
+        &["keep".to_string()],
+    )
+    .await
+    .expect("removal should apply");
+    assert!(stored_series_movie_tags(&app, &link.id).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_series_movie_tag_patch_needs_title_rights_on_the_parent_series_library() {
+    let (app, admin) = bootstrap();
+    app.create_title_tag_definition(&admin, "keep", None)
+        .await
+        .expect("tag should be defined");
+    let (_, link) = create_series_with_movie(&app, &admin, "Guarded Series").await;
+
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "series-movie-viewer",
+        "password123",
+        vec![TestPermissionPreset::CatalogView],
+    )
+    .await;
+
+    let error = app
+        .update_series_movie_tags(
+            &viewer,
+            std::slice::from_ref(&link.id),
+            &["keep".to_string()],
+            &[],
+        )
+        .await
+        .expect_err("a viewer must not tag a series movie");
+    assert!(matches!(error, AppError::Unauthorized(_)), "{error}");
+    assert!(stored_series_movie_tags(&app, &link.id).await.is_empty());
 }
 
 #[tokio::test]
@@ -1945,9 +2078,14 @@ async fn deleting_a_tag_strips_it_from_titles_and_delay_profiles() {
     )
     .await
     .expect("set a structured entry");
-    app.update_title_tags(&user, &[title.id.clone()], &["keep".to_string()], &[])
-        .await
-        .expect("tags should apply");
+    app.update_title_tags(
+        &user,
+        std::slice::from_ref(&title.id),
+        &["keep".to_string()],
+        &[],
+    )
+    .await
+    .expect("tags should apply");
     app.upsert_delay_profile(
         &user,
         tagged_delay_profile(vec!["keep".to_string(), "other".to_string()]),
@@ -1996,7 +2134,7 @@ async fn the_tag_patch_enforces_the_per_title_ceiling() {
 
     app.update_title_tags(
         &user,
-        &[title.id.clone()],
+        std::slice::from_ref(&title.id),
         &labels[..crate::MAX_USER_TAGS_PER_TITLE],
         &[],
     )
@@ -2010,7 +2148,7 @@ async fn the_tag_patch_enforces_the_per_title_ceiling() {
     let error = app
         .update_title_tags(
             &user,
-            &[title.id.clone()],
+            std::slice::from_ref(&title.id),
             &[labels[crate::MAX_USER_TAGS_PER_TITLE].clone()],
             &[],
         )
@@ -2026,5 +2164,32 @@ async fn the_tag_patch_enforces_the_per_title_ceiling() {
         stored_title_tags(&app, &title.id).await.len(),
         crate::MAX_USER_TAGS_PER_TITLE,
         "a refused patch leaves the bag as it was"
+    );
+}
+
+#[tokio::test]
+async fn a_tag_patch_naming_a_label_on_both_sides_is_refused_before_any_write() {
+    let (app, user) = bootstrap();
+    let title = create_tagged_movie(&app, &user, "Both Sides").await;
+    app.create_title_tag_definition(&user, "keep", None)
+        .await
+        .expect("definition");
+
+    let error = app
+        .update_title_tags(
+            &user,
+            std::slice::from_ref(&title.id),
+            &["keep".to_string()],
+            &["keep".to_string()],
+        )
+        .await
+        .expect_err("a label on both sides is a contradiction");
+    assert!(error.to_string().contains("keep"), "{error}");
+    assert!(
+        !stored_title_tags(&app, &title.id)
+            .await
+            .iter()
+            .any(|tag| tag == "keep"),
+        "nothing may be written when the patch contradicts itself"
     );
 }

@@ -14,3 +14,7 @@ CREATE TABLE title_tag_definitions (
 
 CREATE UNIQUE INDEX idx_title_tag_definitions_label
     ON title_tag_definitions(label);
+
+-- Series-movie tag membership; see the SQLite file for why links carry their
+-- own bag instead of borrowing the title's.
+ALTER TABLE series_movie_links ADD COLUMN tags jsonb NOT NULL DEFAULT '[]'::jsonb;

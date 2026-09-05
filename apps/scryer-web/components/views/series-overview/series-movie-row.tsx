@@ -52,6 +52,9 @@ export type SeriesMovieTimelineContentProps = {
   onQueueAdditionalFromSeriesMovieSearch?: (link: SeriesMovieLink, release: Release) => Promise<void> | void;
   onAutoSearchSeriesMovie?: (link: SeriesMovieLink) => void;
   onSetSeriesMovieMonitored?: (seriesMovieLinkId: string, monitored: boolean) => Promise<void>;
+  /// Reloads the series detail after a series-movie tag save. Present only when
+  /// the viewer may manage this series' titles, which is what gates the picker.
+  onSeriesMovieTagsChanged?: () => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   primaryMovieFileUpdatingId?: string | null;
@@ -73,6 +76,7 @@ function SeriesMovieTimelineContent({
   onDeleteFile,
   onMakePrimaryFile,
   primaryMovieFileUpdatingId = null,
+  onSeriesMovieTagsChanged,
 }: SeriesMovieTimelineContentProps) {
   const t = useTranslate();
   const searchBlockedForMovie = searchBlockedBySeriesMovie[link.id] === true;
@@ -90,6 +94,8 @@ function SeriesMovieTimelineContent({
       <SeriesMoviePanel
         link={link}
         hasFile={mediaFiles.length > 0}
+        canManageTags={Boolean(onSeriesMovieTagsChanged)}
+        onTagsChanged={onSeriesMovieTagsChanged}
         filesOnDisk={
           <TitleFilesOnDiskRail>
             <MediaFilesOnDiskPanel

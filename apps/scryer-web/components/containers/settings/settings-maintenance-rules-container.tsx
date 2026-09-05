@@ -292,6 +292,7 @@ export function SettingsMaintenanceRulesContainer({
         regoSource: template.regoSource,
         actionKind: template.actionKind,
         targetQualityProfileId: template.targetQualityProfileId ?? "",
+        tags: [...(template.tags ?? [])],
         graceDays: template.graceDays,
       };
       setEditingRuleSetId(null);

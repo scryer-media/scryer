@@ -611,12 +611,14 @@ fn title_tag_count(value: u64) -> i32 {
 pub(crate) fn from_title_tag_definition(
     definition: scryer_domain::TitleTagDefinition,
     title_count: u64,
+    series_movie_count: u64,
 ) -> TitleTagDefinitionPayload {
     TitleTagDefinitionPayload {
         id: definition.id.into(),
         label: definition.label,
         description: definition.description,
         title_count: title_tag_count(title_count),
+        series_movie_count: title_tag_count(series_movie_count),
         created_at: definition.created_at,
         updated_at: definition.updated_at,
     }
@@ -625,7 +627,11 @@ pub(crate) fn from_title_tag_definition(
 pub(crate) fn from_title_tag_summary(
     summary: scryer_application::TitleTagDefinitionSummary,
 ) -> TitleTagDefinitionPayload {
-    from_title_tag_definition(summary.definition, summary.title_count)
+    from_title_tag_definition(
+        summary.definition,
+        summary.title_count,
+        summary.series_movie_count,
+    )
 }
 
 pub(crate) fn from_title_tag_rewrite_counts(
@@ -633,6 +639,7 @@ pub(crate) fn from_title_tag_rewrite_counts(
 ) -> TitleTagRewriteCountsPayload {
     TitleTagRewriteCountsPayload {
         titles: title_tag_count(counts.titles),
+        series_movies: title_tag_count(counts.series_movies),
         delay_profiles: title_tag_count(counts.delay_profiles),
         maintenance_rule_sets: title_tag_count(counts.maintenance_rule_sets),
         release_rule_sets: title_tag_count(counts.release_rule_sets),

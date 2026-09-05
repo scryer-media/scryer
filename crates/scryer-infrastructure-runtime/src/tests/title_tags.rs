@@ -7,7 +7,8 @@
 
 use super::*;
 use crate::queries::sql_runtime::StoreDatastore;
-use scryer_application::{TitleCatalogFilter, TitleCatalogSort};
+use scryer_application::{ShowRepository, TitleCatalogFilter, TitleCatalogSort};
+use scryer_infrastructure_library::media::shows::store::ShowStore;
 
 fn tag_definition(id: &str, label: &str) -> scryer_domain::TitleTagDefinition {
     let now = Utc::now();
@@ -29,7 +30,70 @@ async fn stored_tags(catalog: &TitleStore, title_id: &str) -> Vec<String> {
         .tags
 }
 
-async fn assert_title_tag_registry_behaviour(catalog: &TitleStore) -> AppResult<()> {
+/// A series-movie link on `series_title_id`, with just the columns the tag
+/// bag rides on filled in.
+fn series_movie_link(id: &str, series_title_id: &str) -> scryer_domain::SeriesMovieLink {
+    let now = Utc::now();
+    scryer_domain::SeriesMovieLink {
+        id: id.to_string(),
+        series_title_id: series_title_id.to_string(),
+        movie: scryer_domain::MovieEntity {
+            id: format!("{id}-movie"),
+            title: "Linked Movie".to_string(),
+            sort_title: None,
+            slug: None,
+            year: Some(2024),
+            overview: None,
+            poster_url: None,
+            background_url: None,
+            language: None,
+            runtime_minutes: None,
+            content_status: None,
+            studio: None,
+            digital_release_date: None,
+            imdb_id: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            mal_id: None,
+            anidb_id: None,
+            ratings: None,
+            credits: None,
+            created_at: now,
+            updated_at: now,
+        },
+        placement: None,
+        narrative_order: None,
+        after_season: None,
+        before_season: None,
+        linked_episode_id: None,
+        association_confidence: None,
+        continuity_status: None,
+        movie_form: None,
+        confidence: None,
+        signal_summary: None,
+        source: None,
+        monitoring_override: None,
+        metadata_active: true,
+        monitored: true,
+        legacy_collection_id: None,
+        tags: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+async fn stored_link_tags(shows: &ShowStore, link_id: &str) -> Vec<String> {
+    ShowRepository::get_series_movie_link_by_id(shows, link_id)
+        .await
+        .expect("link should load")
+        .expect("link should exist")
+        .tags
+}
+
+async fn assert_title_tag_registry_behaviour(
+    catalog: &TitleStore,
+    shows: &ShowStore,
+) -> AppResult<()> {
     let created =
         TitleRepository::create_title_tag_definition(catalog, &tag_definition("tag-keep", "keep"))
             .await?;
@@ -58,6 +122,13 @@ async fn assert_title_tag_registry_behaviour(catalog: &TitleStore) -> AppResult<
     TitleRepository::create(catalog, second.clone()).await?;
     let untagged = make_test_title("tagstore-three", None);
     TitleRepository::create(catalog, untagged.clone()).await?;
+    // A series movie hanging off the first title: a second bag, with the same
+    // registry behind it.
+    ShowRepository::upsert_series_movie_link(
+        shows,
+        series_movie_link("tagstore-link-one", &first.id),
+    )
+    .await?;
 
     // The patch is a read-modify-write inside the transaction: the structured
     // entry that was already on the title survives it.
@@ -88,12 +159,32 @@ async fn assert_title_tag_registry_behaviour(catalog: &TitleStore) -> AppResult<
     .await?;
     assert!(both_ways.tags.iter().any(|tag| tag == "needs review"));
 
+    // The link patch is the same read-modify-write, against its own bag.
+    let patched_link = ShowRepository::update_series_movie_link_user_tags(
+        shows,
+        "tagstore-link-one",
+        &["keep".to_string()],
+        &[],
+    )
+    .await?;
+    assert_eq!(patched_link.tags, vec!["keep".to_string()]);
+    assert_eq!(
+        stored_link_tags(shows, "tagstore-link-one").await,
+        vec!["keep".to_string()],
+        "the bag survives a reload rather than living only on the returned value"
+    );
+
     let registry = TitleRepository::list_title_tag_definitions(catalog).await?;
     assert_eq!(registry.len(), 2);
     assert_eq!(registry[0].definition.label, "keep");
     assert_eq!(registry[0].title_count, 2, "counted across the JSON bag");
+    assert_eq!(
+        registry[0].series_movie_count, 1,
+        "series movies are counted apart from titles"
+    );
     assert_eq!(registry[1].definition.label, "needs review");
     assert_eq!(registry[1].title_count, 1);
+    assert_eq!(registry[1].series_movie_count, 0);
 
     // Any-of filtering reads the bag directly, per dialect.
     let filtered = TitleRepository::list_for_libraries_catalog(
@@ -148,7 +239,15 @@ async fn assert_title_tag_registry_behaviour(catalog: &TitleStore) -> AppResult<
     .await?;
     assert_eq!(renamed.label, "archive");
     assert_eq!(renamed.description.as_deref(), Some("kept for later"));
-    assert_eq!(rewritten, 2);
+    assert_eq!(rewritten.titles, 2);
+    assert_eq!(
+        rewritten.series_movies, 1,
+        "a rename has to move the link bag too, or that membership is orphaned"
+    );
+    assert_eq!(
+        stored_link_tags(shows, "tagstore-link-one").await,
+        vec!["archive".to_string()]
+    );
     assert_eq!(
         stored_tags(catalog, &first.id).await,
         vec![
@@ -172,14 +271,21 @@ async fn assert_title_tag_registry_behaviour(catalog: &TitleStore) -> AppResult<
         Utc::now(),
     )
     .await?;
-    assert_eq!(untouched, 0);
+    assert_eq!(untouched.titles, 0);
+    assert_eq!(untouched.series_movies, 0);
 
     // Delete strips the label from every title in the same transaction and
     // leaves the reserved entry exactly where it was.
     let (deleted, stripped) =
         TitleRepository::delete_title_tag_definition(catalog, &created.id).await?;
     assert_eq!(deleted.label, "archive");
-    assert_eq!(stripped, 2);
+    assert_eq!(stripped.titles, 2);
+    assert_eq!(stripped.series_movies, 1);
+    assert!(
+        stored_link_tags(shows, "tagstore-link-one")
+            .await
+            .is_empty()
+    );
     assert_eq!(
         stored_tags(catalog, &first.id).await,
         vec![
@@ -208,8 +314,9 @@ async fn assert_title_tag_registry_behaviour(catalog: &TitleStore) -> AppResult<
 async fn title_tag_registry_reads_writes_and_rewrites_on_sqlite() {
     let (services, db) = temp_services("scryer_title_tag_registry").await;
     let catalog = title_store(&services);
+    let shows = show_store(&services);
 
-    assert_title_tag_registry_behaviour(&catalog)
+    assert_title_tag_registry_behaviour(&catalog, &shows)
         .await
         .expect("the registry should behave consistently on sqlite");
 
@@ -252,7 +359,8 @@ async fn title_tag_registry_reads_writes_and_rewrites_on_postgres() -> AppResult
             crate::PostgresServices::new_with_mode(url.to_string(), crate::MigrationMode::Apply)
                 .await?;
         let catalog = TitleStore::new(services.datastore());
-        let result = assert_title_tag_registry_behaviour(&catalog).await;
+        let shows = ShowStore::new(services.datastore());
+        let result = assert_title_tag_registry_behaviour(&catalog, &shows).await;
         services.pool().close().await;
         result
     }

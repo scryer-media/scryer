@@ -11,7 +11,10 @@ import {
 } from "@/components/ui/select";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { updateTitleTagsMutation } from "@/lib/graphql/mutations";
+import {
+  updateSeriesMovieTagsMutation,
+  updateTitleTagsMutation,
+} from "@/lib/graphql/mutations";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
 import {
@@ -207,6 +210,89 @@ export function TitleTagsEditor({
       }
     },
     [client, onTitleChanged, setGlobalStatus, t, tags, titleId],
+  );
+
+  return (
+    <div className="min-w-0">
+      <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Tag aria-hidden="true" className="size-3.5" />
+        {t("title.tagsLabel")}
+      </label>
+      <TitleTagsPicker
+        value={tags}
+        onChange={(labels) => void applyTags(labels)}
+        definitions={definitions}
+        loading={loading}
+        disabled={disabled || saving}
+        idPrefix={idPrefix}
+      />
+    </div>
+  );
+}
+
+export type SeriesMovieTagsEditorProps = {
+  seriesMovieLinkId: string;
+  tags: readonly string[] | null | undefined;
+  idPrefix: string;
+  /**
+   * Refreshes the series detail once the patch lands, the same way the
+   * monitoring toggle beside it does.
+   */
+  onLinkChanged?: () => Promise<void> | void;
+  disabled?: boolean;
+};
+
+/**
+ * The per-series-movie picker.
+ *
+ * Identical in behaviour to {@link TitleTagsEditor} and deliberately sharing
+ * its picker and its delta helper; only the mutation differs, because a series
+ * movie is a `series_movie_links` row rather than a title and carries its own
+ * bag.
+ */
+export function SeriesMovieTagsEditor({
+  seriesMovieLinkId,
+  tags,
+  idPrefix,
+  onLinkChanged,
+  disabled = false,
+}: SeriesMovieTagsEditorProps) {
+  const t = useTranslate();
+  const client = useClient();
+  const setGlobalStatus = useGlobalStatus();
+  const { definitions, loading } = useTitleTagDefinitions();
+  const [saving, setSaving] = React.useState(false);
+
+  const applyTags = React.useCallback(
+    async (labels: string[]) => {
+      const delta = titleTagsDelta(tags, labels);
+      if (isEmptyTitleTagsDelta(delta)) {
+        return;
+      }
+      setSaving(true);
+      try {
+        const { error } = await client
+          .mutation(updateSeriesMovieTagsMutation, {
+            input: {
+              seriesMovieLinkIds: [seriesMovieLinkId],
+              add: delta.add,
+              remove: delta.remove,
+            },
+          })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+        await onLinkChanged?.();
+      } catch (error: unknown) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+      } finally {
+        setSaving(false);
+      }
+    },
+    [client, onLinkChanged, seriesMovieLinkId, setGlobalStatus, t, tags],
   );
 
   return (

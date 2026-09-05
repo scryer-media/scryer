@@ -9,6 +9,7 @@ type TitleTagDefinitionPayload = {
   label: string;
   description?: string | null;
   titleCount: number;
+  seriesMovieCount?: number | null;
   createdAt: string;
 };
 
@@ -20,6 +21,7 @@ export function fromTitleTagDefinitionPayload(
     label: payload.label,
     description: payload.description ?? null,
     titleCount: payload.titleCount,
+    seriesMovieCount: payload.seriesMovieCount ?? 0,
     createdAt: payload.createdAt,
   };
 }
@@ -31,11 +33,18 @@ export function fromTitleTagDefinitionPayload(
  * filter — is registry-backed and offers no free text, so each of them needs
  * this list before it can render a control at all. Registry reads are open to
  * any authenticated caller, so no permission gate sits in front of it.
+ *
+ * `enabled` exists for surfaces that are mounted long before they are shown:
+ * the bulk-edit dialog lives in the media page's tree the whole time, so an
+ * unconditional read would fetch the vocabulary on every page load for a dialog
+ * most sessions never open. A disabled hook fetches nothing and reports
+ * `loading: false`, which renders as an empty registry until it is enabled.
  */
-export function useTitleTagDefinitions() {
+export function useTitleTagDefinitions(options?: { enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
   const client = useClient();
   const [definitions, setDefinitions] = React.useState<TitleTagDefinition[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  const [loading, setLoading] = React.useState(enabled);
   const [error, setError] = React.useState(false);
 
   // The vocabulary is small, changes rarely, and is read by three surfaces at
@@ -69,8 +78,11 @@ export function useTitleTagDefinitions() {
   const reload = React.useCallback(() => load("network-only"), [load]);
 
   React.useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     void load("cache-first");
-  }, [load]);
+  }, [enabled, load]);
 
   return { definitions, loading, error, reload };
 }

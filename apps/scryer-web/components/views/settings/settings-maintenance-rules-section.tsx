@@ -19,6 +19,8 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
+import { TitleTagsPicker } from "@/components/common/title-tags-picker";
+import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import { SingleSelectField } from "@/components/ui/select";
 import {
   Table,
@@ -52,6 +54,7 @@ import type {
 import {
   MAINTENANCE_PREVIEW_LIMIT_MAX,
   actionKindLabelKey,
+  actionRequiresTags,
   actionRequiresTargetQualityProfile,
   armingOptionsFor,
   descriptorForActionKind,
@@ -284,6 +287,16 @@ function MaintenanceContextReference() {
               <li>{t("settings.refMaintOutputUnknown")}</li>
               <li>{t("settings.refMaintOutputReasons")}</li>
               <li>{t("settings.refMaintOutputNoPackage")}</li>
+            </ul>
+          </div>
+
+          <div>
+            <h4 className="mb-1 font-semibold">
+              {t("settings.refMaintTagActionsTitle")}
+            </h4>
+            <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+              <li>{t("settings.refMaintTagActionsNote")}</li>
+              <li>{t("settings.refMaintTagOscillationNote")}</li>
             </ul>
           </div>
 
@@ -677,6 +690,12 @@ export function SettingsMaintenanceRulesSection({
     actionDescriptors,
     ruleSetDraft.actionKind,
   );
+  // The tag actions are the second parameterized pair. Which labels exist is an
+  // administrator's decision, so the control is the same registry-backed picker
+  // the title surfaces use rather than a free-text field.
+  const needsTags = actionRequiresTags(actionDescriptors, ruleSetDraft.actionKind);
+  const { definitions: tagDefinitions, loading: tagDefinitionsLoading } =
+    useTitleTagDefinitions({ enabled: needsTags });
   const selectedDescriptor = descriptorForActionKind(
     actionDescriptors,
     ruleSetDraft.actionKind,
@@ -1015,6 +1034,27 @@ export function SettingsMaintenanceRulesSection({
                         </p>
                       </label>
                     </div>
+
+                    {needsTags ? (
+                      <div className="md:max-w-[50%]">
+                        <Label className="mb-2 block">
+                          {t("settings.maintenanceRuleTags")}
+                        </Label>
+                        <TitleTagsPicker
+                          value={ruleSetDraft.tags}
+                          onChange={(labels) =>
+                            setRuleSetDraft((prev) => ({ ...prev, tags: labels }))
+                          }
+                          definitions={tagDefinitions}
+                          loading={tagDefinitionsLoading}
+                          idPrefix="settings-maintenance-rule"
+                          emptyValueText={t("settings.maintenanceRuleTagsNone")}
+                        />
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {t("settings.maintenanceRuleTagsHelp")}
+                        </p>
+                      </div>
+                    ) : null}
 
                     {needsTargetProfile ? (
                       <div className="md:max-w-[50%]">

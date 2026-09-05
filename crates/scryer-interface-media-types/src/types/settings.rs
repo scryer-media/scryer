@@ -505,6 +505,8 @@ pub struct TitleTagDefinitionPayload {
     pub description: Option<String>,
     /// Number of titles currently carrying the label.
     pub title_count: i32,
+    /// Number of series movies currently carrying the label. Counted separately from `titleCount`: a series movie is a link inside a series, not a title of its own.
+    pub series_movie_count: i32,
     /// Time the tag was defined, in UTC.
     pub created_at: DateTime<Utc>,
     /// Time the tag was last renamed or re-described, in UTC.
@@ -516,6 +518,8 @@ pub struct TitleTagDefinitionPayload {
 pub struct TitleTagRewriteCountsPayload {
     /// Titles whose tag list was rewritten.
     pub titles: i32,
+    /// Series movies whose tag list was rewritten.
+    pub series_movies: i32,
     /// Delay profiles whose tag list was rewritten.
     pub delay_profiles: i32,
     /// Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.

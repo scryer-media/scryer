@@ -4908,3 +4908,90 @@ async fn graphql_title_catalog_filters_by_user_tag() {
     assert_no_errors(&unfiltered);
     assert_eq!(unfiltered["data"]["titles"]["totalCount"], 3);
 }
+
+#[tokio::test]
+async fn graphql_series_movie_tags_patch_the_link_and_count_apart_from_titles() {
+    let ctx = TestContext::new().await;
+    define_title_tag(&ctx, "keep", None).await;
+    let series = create_catalog_title(
+        &ctx,
+        "Tagged Series",
+        MediaFacet::Anime,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let link =
+        create_test_series_movie_link(&ctx, &series, "Tagged Series Movie", "7654305", None, None)
+            .await;
+
+    let update = r#"mutation($input: UpdateSeriesMovieTagsInput!) {
+        updateSeriesMovieTags(input: $input) { id tags }
+    }"#;
+
+    // A label the registry does not define is refused by name, exactly as it is
+    // on the title path.
+    let refused = gql(
+        &ctx,
+        update,
+        json!({ "input": { "seriesMovieLinkIds": [link.id], "add": ["never defined"] } }),
+    )
+    .await;
+    assert!(
+        graphql_error_messages(&refused).contains("is not a defined tag"),
+        "{refused}"
+    );
+
+    let assigned = gql(
+        &ctx,
+        update,
+        json!({ "input": { "seriesMovieLinkIds": [link.id], "add": ["  KEEP  "] } }),
+    )
+    .await;
+    assert_no_errors(&assigned);
+    assert_eq!(
+        assigned["data"]["updateSeriesMovieTags"][0]["tags"],
+        json!(["keep"])
+    );
+
+    // The link reads its bag back through the series overview, and the series
+    // title itself stays untagged: two owners, two bags.
+    let overview = gql(
+        &ctx,
+        r#"query($id: ID!) { title(id: $id) { tags seriesMovieLinks { id tags } } }"#,
+        json!({ "id": series.id }),
+    )
+    .await;
+    assert_no_errors(&overview);
+    assert_eq!(overview["data"]["title"]["tags"], json!([]));
+    assert_eq!(
+        overview["data"]["title"]["seriesMovieLinks"][0]["tags"],
+        json!(["keep"])
+    );
+
+    // The registry counts the two owners separately.
+    let listed = gql(
+        &ctx,
+        r#"{ titleTagDefinitions { label titleCount seriesMovieCount } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let definition = &listed["data"]["titleTagDefinitions"][0];
+    assert_eq!(definition["label"], "keep");
+    assert_eq!(definition["titleCount"], 0);
+    assert_eq!(definition["seriesMovieCount"], 1);
+
+    let cleared = gql(
+        &ctx,
+        update,
+        json!({ "input": { "seriesMovieLinkIds": [link.id], "remove": ["keep"] } }),
+    )
+    .await;
+    assert_no_errors(&cleared);
+    assert_eq!(
+        cleared["data"]["updateSeriesMovieTags"][0]["tags"],
+        json!([])
+    );
+}

@@ -26,3 +26,13 @@ CREATE TABLE title_tag_definitions (
 
 CREATE UNIQUE INDEX idx_title_tag_definitions_label
     ON title_tag_definitions(label);
+
+-- Series movies carry their own tags. A series movie is a `series_movie_links`
+-- row, not a title, so its membership cannot live in `titles.tags`: the link
+-- points at a shared `movie_entities` record that several series may reference,
+-- and the same movie placed in two series is two independently taggable things.
+--
+-- Same shape and same rules as the title bag: a JSON array of normalized
+-- labels, gated by the registry above, with reserved `scryer:` entries
+-- preserved should anything ever write one here.
+ALTER TABLE series_movie_links ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';

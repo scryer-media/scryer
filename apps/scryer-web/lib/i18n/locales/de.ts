@@ -2591,7 +2591,7 @@ const de: LocaleDictionary = {
   "settings.titleTagLabelReserved": "Labels cannot start with scryer:, which is reserved for settings Scryer writes itself.",
   "settings.titleTagLabelTooLong": "Eine Bezeichnung darf höchstens 64 Zeichen lang sein.",
   "settings.titleTagLabelInvalid": "A label cannot contain control characters.",
-  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles and {{delayProfiles}} delay profiles.",
+  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
   "settings.titleTagRenameWarning": "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
   "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} Wartungsregelsätze",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} Release-Regelsätze",
@@ -2608,6 +2608,23 @@ const de: LocaleDictionary = {
   "title.catalogFilters.selectThemes": "Themen auswählen...",
   "title.catalogFilters.userTags": "Tags",
   "title.catalogFilters.selectUserTags": "Tags auswählen...",
+
+  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // sentences carry the English string where no translation is available yet,
+  // the same way the WP3 block above does.
+  "settings.titleTagSeriesMovieCount": "Serienfilme",
+  "settings.maintenanceActionAddTags": "Tags hinzufügen",
+  "settings.maintenanceActionRemoveTags": "Tags entfernen",
+  "settings.maintenanceRuleTags": "Tags",
+  "settings.maintenanceRuleTagsNone": "Noch keine Tags ausgewählt",
+  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceCandidatesTagPatchAdd": "fügt {{tags}} hinzu",
+  "settings.maintenanceCandidatesTagPatchRemove": "entfernt {{tags}}",
+  "settings.maintenanceTemplateTaggedForRemovalTitle": "Zum Entfernen markiert",
+  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateFlagForReviewTitle": "Zur Prüfung markieren",
+  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+
 };
 
 export default de;

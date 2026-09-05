@@ -7,6 +7,9 @@ export type TitleTagDefinition = {
   label: string;
   description: string | null;
   titleCount: number;
+  /// Series movies carrying the label. Counted apart from `titleCount` because
+  /// a series movie is a link inside a series rather than a title of its own.
+  seriesMovieCount: number;
   createdAt: string;
 };
 
@@ -15,6 +18,7 @@ export type TitleTagDefinition = {
 /// rather than results.
 export type TitleTagRewriteCounts = {
   titles: number;
+  seriesMovies: number;
   delayProfiles: number;
   maintenanceRuleSets: number;
   releaseRuleSets: number;

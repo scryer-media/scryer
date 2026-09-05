@@ -99,8 +99,10 @@ export function BulkTitleEditDialog({
   const [tagDraft, setTagDraft] = React.useState<BulkTitleTagsDraft>(
     emptyBulkTitleTagsDraft,
   );
+  // Deferred until the dialog is open: this component is mounted with the media
+  // page, and the vocabulary is only ever needed once someone opens it.
   const { definitions: tagDefinitions, loading: tagDefinitionsLoading } =
-    useTitleTagDefinitions();
+    useTitleTagDefinitions({ enabled: open });
 
   const isMovieView = view === "movies";
   const isAnimeView = view === "anime";

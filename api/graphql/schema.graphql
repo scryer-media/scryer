@@ -11208,6 +11208,10 @@ type MaintenanceActionDescriptor {
 	Whether configuring the action requires a target quality profile.
 	"""
 	requiresTargetQualityProfile: Boolean!
+	"""
+	Whether configuring the action requires at least one title tag.
+	"""
+	requiresTags: Boolean!
 }
 
 """
@@ -11223,6 +11227,12 @@ input MaintenanceActionInput {
 	rejected for every other kind.
 	"""
 	targetQualityProfileId: String
+	"""
+	Tags to add or remove. Required by the tag actions, ignored by every
+	other kind, and rejected unless every label is already defined in the
+	title-tag registry.
+	"""
+	tags: [String!]
 }
 
 """
@@ -11268,6 +11278,14 @@ enum MaintenanceActionKind {
 	differs from the target.
 	"""
 	CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED
+	"""
+	Add the configured user tags to the matched title.
+	"""
+	ADD_TAGS
+	"""
+	Remove the configured user tags from the matched title.
+	"""
+	REMOVE_TAGS
 }
 
 """
@@ -11345,6 +11363,11 @@ type MaintenanceActionSpec {
 	for every other kind.
 	"""
 	targetQualityProfileId: String
+	"""
+	Tags the action writes, set only for the tag actions and empty for every
+	other kind. Labels are registry-defined and stored lowercase.
+	"""
+	tags: [String!]!
 }
 
 """
@@ -13741,6 +13764,22 @@ type MutationRoot {
 		"""
 		input: SetSeriesMovieMonitoredInput!
 	): SeriesMovieLinkPayload!
+	"""
+	Adds and/or removes user tags across a set of series movies.
+	
+	Series-movie tags live on the link rather than on a title, so this is a
+	separate mutation from `updateTitleTags`. The rules are the same ones:
+	labels must already exist in the title-tag registry, they are normalized
+	before they are stored, removals are applied before additions, and every
+	link's series is checked for title-management rights before the first
+	write.
+	"""
+	updateSeriesMovieTags(
+		"""
+		Series movies to patch plus the labels to add and remove.
+		"""
+		input: UpdateSeriesMovieTagsInput!
+	): [SeriesMovieLinkPayload!]!
 	"""
 	Queue the release represented by a signed candidate token for an existing title.
 	Returns a job id when accepted or a conflict payload when the submission scope is busy.
@@ -20702,6 +20741,10 @@ type SeriesMovieLinkPayload {
 	Whether acquisition and monitoring are enabled for this link.
 	"""
 	monitored: Boolean!
+	"""
+	User tags applied to this series movie. Defined in the title-tag registry and stored on the link, not on the series title.
+	"""
+	tags: [String!]!
 }
 
 """
@@ -23230,6 +23273,10 @@ type TitleTagDefinitionPayload {
 	"""
 	titleCount: Int!
 	"""
+	Number of series movies currently carrying the label. Counted separately from `titleCount`: a series movie is a link inside a series, not a title of its own.
+	"""
+	seriesMovieCount: Int!
+	"""
 	Time the tag was defined, in UTC.
 	"""
 	createdAt: DateTime!
@@ -23247,6 +23294,10 @@ type TitleTagRewriteCountsPayload {
 	Titles whose tag list was rewritten.
 	"""
 	titles: Int!
+	"""
+	Series movies whose tag list was rewritten.
+	"""
+	seriesMovies: Int!
 	"""
 	Delay profiles whose tag list was rewritten.
 	"""
@@ -24654,6 +24705,24 @@ input UpdateSeedingProfileInput {
 	Replacement post-import tracking mode; omission preserves it.
 	"""
 	postImportTracking: PostImportTrackingValue
+}
+
+"""
+User-tag additions and removals applied across a set of series movies.
+"""
+input UpdateSeriesMovieTagsInput {
+	"""
+	Series-movie links to patch. Each link's series is checked for title-management rights before the first write, so a set spanning a library the caller cannot manage changes nothing.
+	"""
+	seriesMovieLinkIds: [ID!]!
+	"""
+	Labels to add. Each must already be defined in the title-tag registry, and reserved `scryer:` entries are rejected.
+	"""
+	add: [String!]
+	"""
+	Labels to remove. A label the registry no longer defines may still be removed, so a deleted tag can always be cleared off a series movie.
+	"""
+	remove: [String!]
 }
 
 """

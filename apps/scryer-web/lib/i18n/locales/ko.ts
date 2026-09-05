@@ -2510,7 +2510,7 @@ const ko: LocaleDictionary = {
   "settings.titleTagLabelReserved": "Labels cannot start with scryer:, which is reserved for settings Scryer writes itself.",
   "settings.titleTagLabelTooLong": "라벨은 최대 64자입니다.",
   "settings.titleTagLabelInvalid": "A label cannot contain control characters.",
-  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles and {{delayProfiles}} delay profiles.",
+  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
   "settings.titleTagRenameWarning": "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
   "settings.titleTagReferenceMaintenanceRuleSets": "유지 관리 규칙 세트 {{count}}개",
   "settings.titleTagReferenceReleaseRuleSets": "릴리스 규칙 세트 {{count}}개",
@@ -2527,6 +2527,23 @@ const ko: LocaleDictionary = {
   "title.catalogFilters.selectThemes": "테마 선택...",
   "title.catalogFilters.userTags": "태그",
   "title.catalogFilters.selectUserTags": "태그 선택...",
+
+  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // sentences carry the English string where no translation is available yet,
+  // the same way the WP3 block above does.
+  "settings.titleTagSeriesMovieCount": "시리즈 영화",
+  "settings.maintenanceActionAddTags": "태그 추가",
+  "settings.maintenanceActionRemoveTags": "태그 제거",
+  "settings.maintenanceRuleTags": "태그",
+  "settings.maintenanceRuleTagsNone": "선택된 태그가 없습니다",
+  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} 추가",
+  "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} 제거",
+  "settings.maintenanceTemplateTaggedForRemovalTitle": "삭제 대상 태그",
+  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateFlagForReviewTitle": "검토 표시",
+  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+
 };
 
 export default ko;

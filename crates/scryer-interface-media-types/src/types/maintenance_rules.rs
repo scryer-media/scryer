@@ -63,6 +63,10 @@ pub enum MaintenanceActionKind {
     /// Change the quality profile and search only when the current profile
     /// differs from the target.
     ChangeQualityProfileAndSearchIfChanged,
+    /// Add the configured user tags to the matched title.
+    AddTags,
+    /// Remove the configured user tags from the matched title.
+    RemoveTags,
 }
 
 /// Lifecycle state of one maintenance candidate.
@@ -206,6 +210,9 @@ pub struct MaintenanceActionSpec {
     /// Target quality profile, set only for the quality-profile action and null
     /// for every other kind.
     pub target_quality_profile_id: Option<String>,
+    /// Tags the action writes, set only for the tag actions and empty for every
+    /// other kind. Labels are registry-defined and stored lowercase.
+    pub tags: Vec<String>,
 }
 
 /// A rule set together with the revision currently in force.
@@ -236,6 +243,8 @@ pub struct MaintenanceActionDescriptor {
     pub allowed_repeat_modes: Vec<String>,
     /// Whether configuring the action requires a target quality profile.
     pub requires_target_quality_profile: bool,
+    /// Whether configuring the action requires at least one title tag.
+    pub requires_tags: bool,
 }
 
 /// Identifier returned after deleting a maintenance rule set.
@@ -484,6 +493,10 @@ pub struct MaintenanceActionInput {
     /// Target quality profile. Required by the quality-profile action and
     /// rejected for every other kind.
     pub target_quality_profile_id: Option<String>,
+    /// Tags to add or remove. Required by the tag actions, ignored by every
+    /// other kind, and rejected unless every label is already defined in the
+    /// title-tag registry.
+    pub tags: Option<Vec<String>>,
 }
 
 /// Creates a maintenance rule set together with its first matcher revision.

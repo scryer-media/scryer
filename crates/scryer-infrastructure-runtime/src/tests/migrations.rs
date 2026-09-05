@@ -5275,7 +5275,13 @@ async fn migration_0218_creates_the_tag_registry_and_adopts_the_labels_already_i
          INSERT INTO titles (id, name, tags) VALUES
              ('title-one', 'Alpha', '[\"keep\", \"scryer:monitor-type:all\"]'),
              ('title-two', 'Bravo', '[\"Needs  Review\", \"keep\"]'),
-             ('title-three', 'Charlie', '[\"scryer:quality-profile:1080p\"]');",
+             ('title-three', 'Charlie', '[\"scryer:quality-profile:1080p\"]');
+         CREATE TABLE series_movie_links (
+             id TEXT PRIMARY KEY NOT NULL,
+             series_title_id TEXT NOT NULL
+         );
+         INSERT INTO series_movie_links (id, series_title_id) VALUES
+             ('link-one', 'title-one');",
     )
     .execute(&pool)
     .await
@@ -5346,6 +5352,15 @@ async fn migration_0218_creates_the_tag_registry_and_adopts_the_labels_already_i
             .await
             .expect("read ids");
     assert_eq!(ids_before, ids_after);
+
+    // Series-movie membership is a second bag on the link row, and an existing
+    // link starts empty rather than null: readers decode it with no fallback.
+    let link_tags: String =
+        sqlx::query_scalar("SELECT tags FROM series_movie_links WHERE id = 'link-one'")
+            .fetch_one(&pool)
+            .await
+            .expect("read series movie link bag");
+    assert_eq!(link_tags, "[]");
 
     // The unique index is what makes the label the join key against the bag.
     let duplicate = sqlx::query(

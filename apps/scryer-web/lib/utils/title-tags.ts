@@ -127,6 +127,7 @@ export type TitleTagRenameWarning = {
 
 export const EMPTY_TITLE_TAG_REWRITE_COUNTS: TitleTagRewriteCounts = {
   titles: 0,
+  seriesMovies: 0,
   delayProfiles: 0,
   maintenanceRuleSets: 0,
   releaseRuleSets: 0,
@@ -199,6 +200,7 @@ export function formatTitleTagRenameSummary(
   return t("settings.titleTagRenameSummary", {
     label,
     titles: Math.max(0, Math.trunc(counts.titles ?? 0)),
+    seriesMovies: Math.max(0, Math.trunc(counts.seriesMovies ?? 0)),
     delayProfiles: Math.max(0, Math.trunc(counts.delayProfiles ?? 0)),
   });
 }

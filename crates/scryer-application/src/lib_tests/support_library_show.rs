@@ -377,6 +377,47 @@ impl ShowRepository for MockShowRepo {
         Ok(())
     }
 
+    async fn update_series_movie_link_user_tags(
+        &self,
+        link_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<scryer_domain::SeriesMovieLink> {
+        let mut links = self.series_movie_links.lock().await;
+        let link = links
+            .iter_mut()
+            .find(|item| item.id == link_id)
+            .ok_or_else(|| AppError::NotFound(format!("series movie link {link_id}")))?;
+        // Same order as the store: removals first, reserved entries untouched,
+        // and the bag assembled before it is assigned because the mock has no
+        // transaction to roll a refused write back.
+        let mut next_tags = link
+            .tags
+            .iter()
+            .filter(|tag| {
+                crate::is_reserved_title_tag(tag) || !remove.iter().any(|removed| removed == *tag)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for label in add {
+            if !next_tags.iter().any(|tag| tag == label) {
+                next_tags.push(label.clone());
+            }
+        }
+        let user_tag_count = next_tags
+            .iter()
+            .filter(|tag| !crate::is_reserved_title_tag(tag))
+            .count();
+        if user_tag_count > crate::MAX_USER_TAGS_PER_TITLE {
+            return Err(AppError::Validation(format!(
+                "a title can carry at most {} tags; this change would leave it with {user_tag_count}",
+                crate::MAX_USER_TAGS_PER_TITLE
+            )));
+        }
+        link.tags = next_tags;
+        Ok(link.clone())
+    }
+
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>> {
         let collections = self.collections.lock().await;
         Ok(collections

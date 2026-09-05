@@ -286,6 +286,10 @@ impl TitleRepository for MockTitleRepo {
                 TitleTagDefinitionSummary {
                     definition,
                     title_count,
+                    // The mock owns titles only; series-movie membership lives
+                    // on the show repository, so the count it can honestly give
+                    // for links is zero.
+                    series_movie_count: 0,
                 }
             })
             .collect::<Vec<_>>();
@@ -330,7 +334,10 @@ impl TitleRepository for MockTitleRepo {
         label: Option<String>,
         description: Option<Option<String>>,
         updated_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<(scryer_domain::TitleTagDefinition, u64)> {
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
         let mut definitions = self.title_tag_definitions.lock().await;
         let existing = definitions
             .iter()
@@ -376,13 +383,22 @@ impl TitleRepository for MockTitleRepo {
                 rewritten += 1;
             }
         }
-        Ok((updated, rewritten))
+        Ok((
+            updated,
+            crate::TitleTagMembershipCounts {
+                titles: rewritten,
+                series_movies: 0,
+            },
+        ))
     }
 
     async fn delete_title_tag_definition(
         &self,
         id: &str,
-    ) -> AppResult<(scryer_domain::TitleTagDefinition, u64)> {
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
         let mut definitions = self.title_tag_definitions.lock().await;
         let index = definitions
             .iter()
@@ -400,7 +416,13 @@ impl TitleRepository for MockTitleRepo {
             title.tags.retain(|tag| tag != &removed.label);
             stripped += 1;
         }
-        Ok((removed, stripped))
+        Ok((
+            removed,
+            crate::TitleTagMembershipCounts {
+                titles: stripped,
+                series_movies: 0,
+            },
+        ))
     }
 
     async fn update_user_tags(

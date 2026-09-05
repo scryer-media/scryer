@@ -28,6 +28,7 @@ function definition(
     label,
     description: null,
     titleCount: 0,
+    seriesMovieCount: 0,
     createdAt: "2026-01-01T00:00:00Z",
     ...overrides,
   };
@@ -202,11 +203,11 @@ test("rename warning names the old label and the places that still use it", () =
 test("rename summary always states what was rewritten", () => {
   assert.equal(
     formatTitleTagRenameSummary(
-      counts({ titles: 12, delayProfiles: 2 }),
+      counts({ titles: 12, seriesMovies: 3, delayProfiles: 2 }),
       "archive",
       stubTranslate,
     ),
-    "settings.titleTagRenameSummary(label=archive|titles=12|delayProfiles=2)",
+    "settings.titleTagRenameSummary(label=archive|titles=12|seriesMovies=3|delayProfiles=2)",
   );
 });
 

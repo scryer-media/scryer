@@ -1467,7 +1467,7 @@ impl SettingsMutations {
         Ok(TitleTagDefinitionMutationPayload {
             // A tag nothing carries yet rewrote nothing, so the counts are the
             // zero value rather than a separate payload shape.
-            definition: from_title_tag_definition(definition, 0),
+            definition: from_title_tag_definition(definition, 0, 0),
             counts: from_title_tag_rewrite_counts(Default::default()),
         })
     }
@@ -1496,12 +1496,17 @@ impl SettingsMutations {
             MaybeUndefined::Value(value) => Some(Some(value)),
         };
         let updated = app
-            .update_title_tag_definition(&actor, &input.id.to_string(), input.label, description)
+            .update_title_tag_definition(&actor, input.id.as_str(), input.label, description)
             .await
             .map_err(to_gql_error)?;
         let title_count = updated.counts.titles;
+        let series_movie_count = updated.counts.series_movies;
         Ok(TitleTagDefinitionMutationPayload {
-            definition: from_title_tag_definition(updated.definition, title_count),
+            definition: from_title_tag_definition(
+                updated.definition,
+                title_count,
+                series_movie_count,
+            ),
             counts: from_title_tag_rewrite_counts(updated.counts),
         })
     }

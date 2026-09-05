@@ -688,8 +688,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Admin-defined title tags add four mutations: the per-title patch
     // (updateTitleTags) plus the three registry writes beside the delay
     // profiles (create/update/deleteTitleTagDefinition). 220->224.
+    // Series-movie tags add a fifth, updateSeriesMovieTags, beside
+    // setSeriesMovieMonitored: a series movie is a link row rather than a
+    // title, so its tag patch takes link ids and cannot ride updateTitleTags.
+    // 224->225.
     assert_eq!(
-        mutation_field_count, 224,
+        mutation_field_count, 225,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -753,9 +757,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // INPUT_OBJECT 198->201, public types 738->745. `TitleCatalogFilterInput.tags`
     // and the `updateTitleTags` result are additive on types that already
     // exist, and no enum joins the schema.
-    assert_eq!(public_types.len(), 745);
+    // Series-movie tags and the maintenance tag actions add one input,
+    // UpdateSeriesMovieTagsInput: INPUT_OBJECT 201->202, public types 745->746.
+    // Everything else in that work is additive on types that already exist -
+    // `tags` on the series-movie link payload, the action spec and the action
+    // input, `seriesMovieCount` on the tag definition, `seriesMovies` on the
+    // rewrite counts, `requiresTags` on the action descriptor - and the two new
+    // action kinds are values inside the existing MaintenanceActionKind enum,
+    // so OBJECT and ENUM are unchanged.
+    assert_eq!(public_types.len(), 746);
     assert_eq!(kind_count("OBJECT"), 392);
-    assert_eq!(kind_count("INPUT_OBJECT"), 201);
+    assert_eq!(kind_count("INPUT_OBJECT"), 202);
     assert_eq!(kind_count("ENUM"), 140);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);

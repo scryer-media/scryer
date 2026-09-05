@@ -69,4 +69,37 @@ impl CollectionMutations {
             .map_err(to_gql_error)?;
         Ok(from_series_movie_link(&app, link))
     }
+
+    /// Adds and/or removes user tags across a set of series movies.
+    ///
+    /// Series-movie tags live on the link rather than on a title, so this is a
+    /// separate mutation from `updateTitleTags`. The rules are the same ones:
+    /// labels must already exist in the title-tag registry, they are normalized
+    /// before they are stored, removals are applied before additions, and every
+    /// link's series is checked for title-management rights before the first
+    /// write.
+    async fn update_series_movie_tags(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Series movies to patch plus the labels to add and remove.")]
+        input: UpdateSeriesMovieTagsInput,
+    ) -> GqlResult<Vec<SeriesMovieLinkPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let link_ids = input
+            .series_movie_link_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let add = input.add.unwrap_or_default();
+        let remove = input.remove.unwrap_or_default();
+        let links = app
+            .update_series_movie_tags(&actor, &link_ids, &add, &remove)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(links
+            .into_iter()
+            .map(|link| from_series_movie_link(&app, link))
+            .collect())
+    }
 }

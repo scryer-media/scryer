@@ -142,6 +142,7 @@ type Props = {
   onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
   onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
   onSetSeriesMovieMonitored?: (seriesMovieLinkId: string, monitored: boolean) => Promise<void>;
+  onSeriesMovieTagsChanged?: () => Promise<void> | void;
   onSetTitleMonitored?: (monitored: boolean) => Promise<void>;
   onSearchMonitored?: () => Promise<void> | void;
   onRefreshAndScan?: () => Promise<void> | void;
@@ -221,6 +222,7 @@ function SeriesOverviewViewImpl({
   onSetCollectionMonitored,
   onSetEpisodeMonitored,
   onSetSeriesMovieMonitored,
+  onSeriesMovieTagsChanged,
   onSetTitleMonitored,
   onSearchMonitored,
   onRefreshAndScan,
@@ -1263,6 +1265,7 @@ function SeriesOverviewViewImpl({
                       onQueueAdditionalFromSeriesMovieSearch={canManageTitle ? handleQueueAdditionalFromSeriesMovieSearch : undefined}
                       onAutoSearchSeriesMovie={canManageTitle && onAutoSearchSeriesMovie ? handleAutoSearchSeriesMovie : undefined}
                       onSetSeriesMovieMonitored={canManageTitle ? onSetSeriesMovieMonitored : undefined}
+                      onSeriesMovieTagsChanged={canManageTitle ? onSeriesMovieTagsChanged : undefined}
                       onDeleteFile={canManageTitle ? onDeleteFile : undefined}
                       onMakePrimaryFile={canManageTitle ? onMakePrimaryFile : undefined}
                       primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}

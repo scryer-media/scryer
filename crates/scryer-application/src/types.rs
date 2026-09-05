@@ -874,6 +874,21 @@ pub struct TitleCatalogFilter {
 pub struct TitleTagDefinitionSummary {
     pub definition: scryer_domain::TitleTagDefinition,
     pub title_count: u64,
+    /// Series movies carrying the label. Counted separately from `title_count`
+    /// because a series movie is a link row rather than a title: the two are
+    /// different objects an operator manages in different places, and summing
+    /// them would claim a rename touched titles it never saw.
+    pub series_movie_count: u64,
+}
+
+/// How much membership a registry write moved, per owner kind.
+///
+/// Titles and series-movie links are two independent bags, so a rename that
+/// rewrote one and not the other has to be able to say so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TitleTagMembershipCounts {
+    pub titles: u64,
+    pub series_movies: u64,
 }
 
 /// What a rename or delete actually rewrote.
@@ -889,6 +904,9 @@ pub struct TitleTagDefinitionSummary {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TitleTagRewriteCounts {
     pub titles: u64,
+    /// Series-movie links rewritten. A second membership bag, so a rename that
+    /// touched no title can still have touched series movies.
+    pub series_movies: u64,
     pub delay_profiles: u64,
     pub maintenance_rule_sets: u64,
     pub release_rule_sets: u64,

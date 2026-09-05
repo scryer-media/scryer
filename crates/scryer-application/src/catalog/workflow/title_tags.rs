@@ -97,7 +97,7 @@ impl AppUseCase {
             (0, 0, 0)
         };
 
-        let (definition, titles) = self
+        let (definition, membership) = self
             .services
             .catalog
             .titles
@@ -128,7 +128,8 @@ impl AppUseCase {
         Ok(crate::TitleTagDefinitionUpdate {
             definition,
             counts: crate::TitleTagRewriteCounts {
-                titles,
+                titles: membership.titles,
+                series_movies: membership.series_movies,
                 delay_profiles,
                 maintenance_rule_sets,
                 release_rule_sets,
@@ -161,7 +162,7 @@ impl AppUseCase {
             .count_rule_sets_referencing_title_tag(&existing.label)
             .await?;
 
-        let (definition, titles) = self
+        let (definition, membership) = self
             .services
             .catalog
             .titles
@@ -180,7 +181,8 @@ impl AppUseCase {
         .await;
 
         Ok(crate::TitleTagRewriteCounts {
-            titles,
+            titles: membership.titles,
+            series_movies: membership.series_movies,
             delay_profiles,
             maintenance_rule_sets,
             release_rule_sets,
@@ -209,6 +211,7 @@ impl AppUseCase {
                 "at least one tag to add or remove must be provided".to_string(),
             ));
         }
+        require_disjoint_tag_patch(&add, &remove)?;
         // Only additions are gated on the registry. Removing a label that was
         // deleted from the registry while it was still on a title is cleanup,
         // and refusing it would strand the title with a tag nothing can clear.
@@ -257,6 +260,135 @@ impl AppUseCase {
         Ok(updated)
     }
 
+    /// Add and/or remove user tags across a set of series movies.
+    ///
+    /// A series movie is a `series_movie_links` row, not a title, so it carries
+    /// its own bag — but everything around that bag is the title rules: the same
+    /// registry gate, the same normalization, the same per-owner ceiling, and
+    /// the same all-checks-before-any-write ordering across a bulk call.
+    ///
+    /// Permission is `ManageTitles` on the library of the *series* the link
+    /// belongs to, because that is the title an operator manages: a series movie
+    /// has no library of its own, and `setSeriesMovieMonitored` already draws
+    /// the boundary in exactly this place.
+    pub async fn update_series_movie_tags(
+        &self,
+        actor: &User,
+        series_movie_link_ids: &[String],
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Vec<scryer_domain::SeriesMovieLink>> {
+        let add = crate::normalize_user_title_tags(add).map_err(AppError::Validation)?;
+        let remove = crate::normalize_user_title_tags(remove).map_err(AppError::Validation)?;
+        if add.is_empty() && remove.is_empty() {
+            return Err(AppError::Validation(
+                "at least one tag to add or remove must be provided".to_string(),
+            ));
+        }
+        require_disjoint_tag_patch(&add, &remove)?;
+        // Additions only, for the same reason titles gate additions only:
+        // removing a label the registry no longer defines is cleanup.
+        self.require_registered_title_tags(&add).await?;
+
+        let mut seen = HashSet::new();
+        let mut links = Vec::new();
+        for link_id in series_movie_link_ids {
+            if !seen.insert(link_id.clone()) {
+                continue;
+            }
+            let link = self
+                .services
+                .catalog
+                .shows
+                .get_series_movie_link_by_id(link_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("series movie {link_id}")))?;
+            links.push(link);
+        }
+        if links.is_empty() {
+            return Err(AppError::Validation(
+                "at least one series movie must be provided".to_string(),
+            ));
+        }
+
+        // Every parent series is resolved and checked before the first write, so
+        // a bulk call spanning a library the actor cannot manage changes nothing
+        // rather than half-applying.
+        let mut parent_titles = HashMap::new();
+        for link in &links {
+            if parent_titles.contains_key(&link.series_title_id) {
+                continue;
+            }
+            let title = self
+                .services
+                .catalog
+                .titles
+                .get_by_id(&link.series_title_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("title {}", link.series_title_id)))?;
+            self.require_library_permission(
+                actor,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            parent_titles.insert(link.series_title_id.clone(), title);
+        }
+
+        let mut updated = Vec::with_capacity(links.len());
+        let mut notified_titles = HashSet::new();
+        for link in &links {
+            let patched = self
+                .services
+                .catalog
+                .shows
+                .update_series_movie_link_user_tags(&link.id, &add, &remove)
+                .await?;
+            // The activity is on the parent series, once per series rather than
+            // once per movie: the series is the thing the operator is looking
+            // at, and a bulk tag of eight of its movies is one change to it.
+            if notified_titles.insert(patched.series_title_id.clone())
+                && let Some(title) = parent_titles.get(&patched.series_title_id)
+            {
+                self.emit_title_updated_activity(actor, title).await;
+            }
+            updated.push(patched);
+        }
+        Ok(updated)
+    }
+
+    /// Which of `labels` the registry does not define, in the order given.
+    ///
+    /// The read half of [`Self::require_registered_title_tags`], for callers
+    /// that need to decide what to do about an undefined label rather than
+    /// refuse outright — the maintenance executor holds its candidate instead
+    /// of failing it, and wants to know without catching an error.
+    pub(crate) async fn undefined_title_tag_labels(
+        &self,
+        labels: &[String],
+    ) -> AppResult<Vec<String>> {
+        let unprefixed = labels
+            .iter()
+            .filter(|label| !crate::is_reserved_title_tag(label))
+            .cloned()
+            .collect::<Vec<_>>();
+        if unprefixed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let defined = self
+            .services
+            .catalog
+            .titles
+            .list_title_tag_labels()
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        Ok(unprefixed
+            .into_iter()
+            .filter(|label| !defined.contains(label))
+            .collect())
+    }
+
     /// Refuse any unprefixed label the registry does not define.
     ///
     /// The gate lives here rather than in the store so both write paths share
@@ -273,10 +405,9 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_title_tag_definitions()
+            .list_title_tag_labels()
             .await?
             .into_iter()
-            .map(|summary| summary.definition.label)
             .collect::<HashSet<_>>();
         for label in unprefixed {
             if !defined.contains(label) {
@@ -398,4 +529,17 @@ fn normalize_title_tag_description(description: Option<String>) -> Option<String
     description
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+/// A label named on both sides of one patch is a contradiction, not a form
+/// state: the caller could not have meant both. Refusing it by name keeps the
+/// API's answer independent of which side happens to be applied first, and
+/// matches the bulk dialog, which never submits an overlap.
+fn require_disjoint_tag_patch(add: &[String], remove: &[String]) -> AppResult<()> {
+    if let Some(label) = add.iter().find(|label| remove.contains(*label)) {
+        return Err(AppError::Validation(format!(
+            "'{label}' is listed both to add and to remove; choose one"
+        )));
+    }
+    Ok(())
 }

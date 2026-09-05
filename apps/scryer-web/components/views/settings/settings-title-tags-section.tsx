@@ -142,6 +142,11 @@ export function SettingsTitleTagsSection({
                     >
                       {t("settings.titleTagTitleCount")}
                     </TableHead>
+                    <TableHead
+                      className={`w-32 text-center font-semibold ${TAG_MUTED_TEXT_CLASS}`}
+                    >
+                      {t("settings.titleTagSeriesMovieCount")}
+                    </TableHead>
                     {canManageCatalogSettings ? (
                       <TableActionsHead className="w-24">
                         {t("label.actions")}
@@ -165,6 +170,9 @@ export function SettingsTitleTagsSection({
                       </TableCell>
                       <TableCell className="text-center tabular-nums text-[var(--scry-ink2)]">
                         {definition.titleCount}
+                      </TableCell>
+                      <TableCell className="text-center tabular-nums text-[var(--scry-ink2)]">
+                        {definition.seriesMovieCount}
                       </TableCell>
                       {canManageCatalogSettings ? (
                         <TableActionsCell className="w-24">

@@ -22,10 +22,12 @@ const ACTION_KINDS: MaintenanceActionKind[] = [
   "UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY",
   "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY",
   "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+  "ADD_TAGS",
+  "REMOVE_TAGS",
 ];
 
 test("the gallery ships every starter template exactly once", () => {
-  assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 10);
+  assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 12);
 
   const ids = MAINTENANCE_RULE_TEMPLATES.map((template) => template.id);
   assert.deepEqual([...new Set(ids)], ids);
@@ -133,6 +135,7 @@ test("every file-deleting template is marked and says so in its copy", () => {
       "requested-media-expiry",
       "departed-requester",
       "watched-by-every-requester",
+      "tagged-for-removal",
     ],
   );
 });

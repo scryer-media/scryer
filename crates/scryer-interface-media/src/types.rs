@@ -386,6 +386,8 @@ pub struct SeriesMovieLinkPayload {
     pub metadata_active: bool,
     /// Whether acquisition and monitoring are enabled for this link.
     pub monitored: bool,
+    /// User tags applied to this series movie. Defined in the title-tag registry and stored on the link, not on the series title.
+    pub tags: Vec<String>,
 }
 
 #[derive(SimpleObject, Clone)]

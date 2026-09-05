@@ -2429,7 +2429,7 @@ const zh_CN: LocaleDictionary = {
   "settings.titleTagLabelReserved": "Labels cannot start with scryer:, which is reserved for settings Scryer writes itself.",
   "settings.titleTagLabelTooLong": "标签名最多 64 个字符。",
   "settings.titleTagLabelInvalid": "A label cannot contain control characters.",
-  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles and {{delayProfiles}} delay profiles.",
+  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
   "settings.titleTagRenameWarning": "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
   "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} 个维护规则集",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} 个发布规则集",
@@ -2446,6 +2446,23 @@ const zh_CN: LocaleDictionary = {
   "title.catalogFilters.selectThemes": "选择主题...",
   "title.catalogFilters.userTags": "标签",
   "title.catalogFilters.selectUserTags": "选择标签...",
+
+  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // sentences carry the English string where no translation is available yet,
+  // the same way the WP3 block above does.
+  "settings.titleTagSeriesMovieCount": "剧集电影",
+  "settings.maintenanceActionAddTags": "添加标签",
+  "settings.maintenanceActionRemoveTags": "移除标签",
+  "settings.maintenanceRuleTags": "标签",
+  "settings.maintenanceRuleTagsNone": "尚未选择标签",
+  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceCandidatesTagPatchAdd": "添加 {{tags}}",
+  "settings.maintenanceCandidatesTagPatchRemove": "移除 {{tags}}",
+  "settings.maintenanceTemplateTaggedForRemovalTitle": "标记为待删除",
+  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateFlagForReviewTitle": "标记待审核",
+  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+
 };
 
 export default zh_CN;
