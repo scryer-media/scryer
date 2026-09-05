@@ -7788,7 +7788,10 @@ async fn resolve_pending_import_attaches_series_to_existing_title_in_same_librar
     // can still pick episodes - the same state the create path produces.
     let items = unmatched_items.items().await;
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].title_id.as_deref(), Some(existing_title.id.as_str()));
+    assert_eq!(
+        items[0].title_id.as_deref(),
+        Some(existing_title.id.as_str())
+    );
     assert_eq!(items[0].status, PendingImportStatus::Pending);
 }
 
