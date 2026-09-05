@@ -397,6 +397,7 @@ pub enum ObservationResolution {
         token_id: scryer_domain::download_identity::DownloadId,
         binding_download_id: scryer_domain::download_identity::DownloadId,
     },
+    BindingAlreadyEnded,
 }
 
 #[derive(Clone, Debug)]

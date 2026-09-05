@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-runtime"
-version = "0.19.10"
+version = "0.19.11"
 edition.workspace = true
 publish = false
 

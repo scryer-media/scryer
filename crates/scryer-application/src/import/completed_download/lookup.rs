@@ -240,7 +240,8 @@ fn index_completed_download_observations(
             crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
                 Some((completed, Some(download_id)))
             }
-            crate::download_identity::ObservedClientJobResolution::Conflict => None,
+            crate::download_identity::ObservedClientJobResolution::Conflict
+            | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => None,
             crate::download_identity::ObservedClientJobResolution::Unavailable => {
                 Some((completed, None))
             }

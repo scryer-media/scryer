@@ -367,7 +367,14 @@ async fn normalize_movie_file_roles_after_scan(
         .iter()
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
+    // Two primaries is a contradiction the scan has to resolve, and it must
+    // resolve it on the ladder the gate uses — tier, then bar, then size — not
+    // on age. Oldest-wins demoted a freshly imported Remux behind an 800p
+    // WEB-DL that had been on disk a week longer, after which every gate read
+    // the scope through the WEB-DL and admitted the same BluRay release
+    // again on every sync.
     let should_rank_primary = newly_imported_file_count == media_files.len()
+        || primary_files.len() > 1
         || (primary_files.is_empty() && allow_existing_additional_role_promotion);
     if primary_files.is_empty() && !should_rank_primary {
         return false;
@@ -397,8 +404,17 @@ async fn normalize_movie_file_roles_after_scan(
         };
         let context = app.resolve_canonical_scoring_context(title, &profile).await;
 
-        let mut ranked = Vec::with_capacity(media_files.len());
-        for file in &media_files {
+        // A scan that owns every file (or has no primary to keep) ranks the
+        // whole folder; a scan that merely found two primaries elects among
+        // them, so an operator's additional file stays additional.
+        let ranking_pool: Vec<&TitleMediaFile> =
+            if newly_imported_file_count == media_files.len() || primary_files.is_empty() {
+                media_files.iter().collect()
+            } else {
+                primary_files.clone()
+            };
+        let mut ranked = Vec::with_capacity(ranking_pool.len());
+        for file in ranking_pool {
             let (tier_key, score) = rank_movie_media_file_for_primary(app, &context, file);
             ranked.push(RankedMovieFile {
                 tier_key,
@@ -415,18 +431,24 @@ async fn normalize_movie_file_roles_after_scan(
             // `media_files` is non-empty above, so this is unreachable; a
             // rejection beats a panic on a bulk scan pass (D14).
             .unwrap_or_default()
-    } else if let [file] = primary_files.as_slice() {
-        file.id.clone()
     } else {
-        let mut primary_files = primary_files;
-        primary_files.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.file_path.cmp(&right.file_path))
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        // Exactly one primary: `should_rank_primary` covers the empty and the
+        // multiple cases above.
         primary_files[0].id.clone()
     };
+    if primary_files.len() > 1 {
+        let demoted = primary_files
+            .iter()
+            .filter(|file| file.id != selected_primary_id)
+            .map(|file| file.file_path.as_str())
+            .collect::<Vec<_>>();
+        warn!(
+            title_id = %title.id,
+            primary_file_id = %selected_primary_id,
+            demoted = ?demoted,
+            "movie scan found more than one primary file; keeping the best-ranked one"
+        );
+    }
 
     let additional_file_ids = media_files
         .iter()

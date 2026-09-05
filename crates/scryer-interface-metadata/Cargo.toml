@@ -1,6 +1,6 @@
 [package]
 name = "scryer-interface-metadata"
-version = "0.19.10"
+version = "0.19.11"
 edition.workspace = true
 
 [dependencies]

@@ -11847,3 +11847,435 @@ async fn download_history_applies_permission_filtering_to_durable_rows() {
         "an operator with operational history sees every durable row"
     );
 }
+
+/// A two-season `S01-S02` pack laid out the way a client delivers one:
+/// one root folder, `S01/` and `S02/` season folders, sixteen members named
+/// `<Title> 2024 SxxEyy <Episode Title> 1080p WEB-DL HEVC x265 5.1 SYNTH.mkv`,
+/// and the last member typo'd as `2024S 02E08` so it carries no identity.
+struct TwoSeasonPackLayout {
+    source_root: tempfile::TempDir,
+    download_dir: std::path::PathBuf,
+    season_one: Vec<Episode>,
+    season_two: Vec<Episode>,
+}
+
+const TWO_SEASON_PACK_PACK_RELEASE: &str =
+    "Fail Closed Pack 2024 S01-S02 1080p WEB-DL HEVC x265 5 1 SYNTH";
+const TWO_SEASON_PACK_STRIPPED_RELEASE: &str =
+    "Fail Closed Pack 2024 S01 S02 1080p WEB-DL HEVC x265 5 1 SYNTH";
+const TWO_SEASON_PACK_TYPO_MEMBER: &str =
+    "Fail Closed Pack 2024S 02E08 Bring Me The Ledger 1080p WEB-DL HEVC x265 5.1 SYNTH.mkv";
+const TWO_SEASON_PACK_EPISODE_TITLES: [[&str; 8]; 2] = [
+    [
+        "Opening Ledger",
+        "Quiet Handshake",
+        "Where The Ledger Went",
+        "An Unlikely Clerk",
+        "Cousins By The Dozen",
+        "Every Contingency",
+        "Not Without Cost",
+        "The Sermon Of Old Glass",
+    ],
+    [
+        "The Road To Kingsway",
+        "A Rat In The Pantry",
+        "Renounce The Deal",
+        "The Wider Frame",
+        "A Suburban Roundabout",
+        "The Bells Of Marlow",
+        "This Loud Circus",
+        "Bring Me The Ledger",
+    ],
+];
+
+async fn two_season_pack_layout(
+    app: &AppUseCase,
+    user: &User,
+    title: &scryer_domain::Title,
+    first_episode: &Episode,
+) -> TwoSeasonPackLayout {
+    let mut season_one = vec![first_episode.clone()];
+    for number in 2..=8u32 {
+        season_one.push(
+            app.create_episode(
+                user,
+                title.id.clone(),
+                first_episode.collection_id.clone(),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                Some(format!("S01E{number:02}")),
+                Some(TWO_SEASON_PACK_EPISODE_TITLES[0][(number - 1) as usize].to_string()),
+                None,
+                Some(3_000),
+                false,
+                false,
+            )
+            .await
+            .expect("create season one episode"),
+        );
+    }
+    let second_first =
+        create_pack_episode_in_season(app, user, &title.id, 2, 1, None, "standard").await;
+    let mut season_two = vec![second_first.clone()];
+    for number in 2..=8u32 {
+        season_two.push(
+            app.create_episode(
+                user,
+                title.id.clone(),
+                second_first.collection_id.clone(),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("2".into()),
+                Some(format!("S02E{number:02}")),
+                Some(TWO_SEASON_PACK_EPISODE_TITLES[1][(number - 1) as usize].to_string()),
+                None,
+                Some(3_000),
+                false,
+                false,
+            )
+            .await
+            .expect("create season two episode"),
+        );
+    }
+
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let download_dir = source_root
+        .path()
+        .join("Fail Closed Pack 2024 S01-S02 1080p WEB-DL HEVC x265 5.1 SYNTH");
+    for (season_index, folder) in ["S01", "S02"].iter().enumerate() {
+        let season_dir = download_dir.join(folder);
+        std::fs::create_dir_all(&season_dir).expect("create season folder");
+        for (episode_index, episode_title) in TWO_SEASON_PACK_EPISODE_TITLES[season_index]
+            .iter()
+            .enumerate()
+        {
+            let file_name = if season_index == 1 && episode_index == 7 {
+                TWO_SEASON_PACK_TYPO_MEMBER.to_string()
+            } else {
+                format!(
+                    "Fail Closed Pack 2024 S{:02}E{:02} {episode_title} 1080p WEB-DL HEVC x265 5.1 SYNTH.mkv",
+                    season_index + 1,
+                    episode_index + 1
+                )
+            };
+            write_pack_video(&season_dir, &file_name);
+        }
+    }
+
+    TwoSeasonPackLayout {
+        source_root,
+        download_dir,
+        season_one,
+        season_two,
+    }
+}
+
+/// Regression for the 0.19.10 two-season pack report: the pack was
+/// grabbed for season one, every S01 member imported, and all eight S02
+/// members were held even though seven of them name their episode exactly.
+/// Only the typo'd `2024S 02E08` member may be withheld; the other fifteen
+/// import to the episodes their names say.
+#[tokio::test]
+async fn multi_season_pack_grabbed_for_one_season_imports_every_self_identified_member() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: first_episode,
+            library_dir,
+            import_artifacts,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let layout = two_season_pack_layout(&app, &user, &title, &first_episode).await;
+    let item_id = "two-season-pack";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        TWO_SEASON_PACK_PACK_RELEASE,
+        SubmissionScope::Collection {
+            collection_id: first_episode
+                .collection_id
+                .clone()
+                .expect("season one collection"),
+        },
+    )
+    .await;
+    let completed = series_pack_completed_download(
+        item_id,
+        &title.id,
+        TWO_SEASON_PACK_PACK_RELEASE,
+        &layout.download_dir,
+    );
+
+    let result = {
+        let _probe = probe_sequence_agrees_with_the_names(std::iter::repeat_n((1920, 1080), 16));
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("multi-season pack import should run")
+    };
+
+    let mut per_file = Vec::new();
+    for (season_index, folder) in ["S01", "S02"].iter().enumerate() {
+        for entry in std::fs::read_dir(layout.download_dir.join(folder)).expect("read season dir") {
+            let file_name = entry.expect("dir entry").file_name();
+            let file_name = file_name.to_string_lossy().into_owned();
+            let artifacts = import_artifacts.artifacts_for_file(&file_name).await;
+            per_file.push((
+                season_index,
+                file_name,
+                artifacts
+                    .iter()
+                    .map(|artifact| {
+                        (
+                            artifact.result.clone(),
+                            artifact.reason_code.clone(),
+                            artifact.episode_id.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+        }
+    }
+    per_file.sort();
+    let report = per_file
+        .iter()
+        .map(|(_, name, outcomes)| format!("{name}: {outcomes:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let imported_ids = media_file_episode_ids(
+        &app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list imported media files"),
+    );
+    let expected_ids: std::collections::BTreeSet<String> = layout
+        .season_one
+        .iter()
+        .chain(layout.season_two.iter().take(7))
+        .map(|episode| episode.id.clone())
+        .collect();
+    assert_eq!(
+        imported_ids, expected_ids,
+        "fifteen self-identified members must import\nresult: {result:?}\n{report}"
+    );
+    assert_eq!(
+        library_video_file_names(library_dir.path()).len(),
+        15,
+        "{report}"
+    );
+
+    let typo = import_artifacts
+        .artifacts_for_file(TWO_SEASON_PACK_TYPO_MEMBER)
+        .await;
+    assert_eq!(typo.len(), 1, "{typo:?}");
+    assert_eq!(typo[0].result, "rejected", "{typo:?}");
+    assert_eq!(
+        typo[0].reason_code.as_deref(),
+        Some("unparseable_pack_member"),
+        "{typo:?}"
+    );
+    let summary = result.error_message.clone().unwrap_or_default();
+    assert!(
+        summary.starts_with("15 imported, 0 ignored, 0 skipped, 1 rejected, 0 failed. Rejected: 1 × Automatic import could not identify this pack member."),
+        "summary must count every rejection reason: {summary}"
+    );
+    drop(layout.source_root);
+}
+
+/// The indexer that surfaced the two-season pack returned its name with the
+/// range hyphen stripped (`S01 S02`), and that is the title Scryer persisted at
+/// grab. The pack must still declare both seasons, so every self-identified
+/// member imports; only the typo'd member is held.
+#[tokio::test]
+async fn multi_season_pack_named_without_range_hyphen_still_imports_every_self_identified_member() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: first_episode,
+            library_dir,
+            import_artifacts,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let layout = two_season_pack_layout(&app, &user, &title, &first_episode).await;
+    let item_id = "two-season-pack-stripped-hyphen";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        TWO_SEASON_PACK_STRIPPED_RELEASE,
+        SubmissionScope::Collection {
+            collection_id: first_episode
+                .collection_id
+                .clone()
+                .expect("season one collection"),
+        },
+    )
+    .await;
+    let completed = series_pack_completed_download(
+        item_id,
+        &title.id,
+        TWO_SEASON_PACK_PACK_RELEASE,
+        &layout.download_dir,
+    );
+
+    let result = {
+        let _probe = probe_sequence_agrees_with_the_names(std::iter::repeat_n((1920, 1080), 16));
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("multi-season pack import should run")
+    };
+
+    let mut per_file = Vec::new();
+    for (season_index, folder) in ["S01", "S02"].iter().enumerate() {
+        for entry in std::fs::read_dir(layout.download_dir.join(folder)).expect("read season dir") {
+            let file_name = entry.expect("dir entry").file_name();
+            let file_name = file_name.to_string_lossy().into_owned();
+            let artifacts = import_artifacts.artifacts_for_file(&file_name).await;
+            per_file.push((
+                season_index,
+                file_name,
+                artifacts
+                    .iter()
+                    .map(|artifact| {
+                        (
+                            artifact.result.clone(),
+                            artifact.reason_code.clone(),
+                            artifact.episode_id.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+        }
+    }
+    per_file.sort();
+    let report = per_file
+        .iter()
+        .map(|(_, name, outcomes)| format!("{name}: {outcomes:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let imported_ids = media_file_episode_ids(
+        &app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list imported media files"),
+    );
+    let expected_ids: std::collections::BTreeSet<String> = layout
+        .season_one
+        .iter()
+        .chain(layout.season_two.iter().take(7))
+        .map(|episode| episode.id.clone())
+        .collect();
+    assert_eq!(
+        imported_ids, expected_ids,
+        "fifteen self-identified members must import\nresult: {result:?}\n{report}"
+    );
+    assert_eq!(
+        library_video_file_names(library_dir.path()).len(),
+        15,
+        "{report}"
+    );
+
+    let typo = import_artifacts
+        .artifacts_for_file(TWO_SEASON_PACK_TYPO_MEMBER)
+        .await;
+    assert_eq!(typo.len(), 1, "{typo:?}");
+    assert_eq!(typo[0].result, "rejected", "{typo:?}");
+    assert_eq!(
+        typo[0].reason_code.as_deref(),
+        Some("unparseable_pack_member"),
+        "{typo:?}"
+    );
+    let summary = result.error_message.clone().unwrap_or_default();
+    assert!(
+        summary.starts_with("15 imported, 0 ignored, 0 skipped, 1 rejected, 0 failed. Rejected: 1 × Automatic import could not identify this pack member."),
+        "summary must count every rejection reason: {summary}"
+    );
+    drop(layout.source_root);
+}
+
+/// Manual Import for the same download must pre-select each S02 member's own
+/// episode: the grab was recorded against season one, but the release is a
+/// verified two-season pack, so members outside the grabbed season still
+/// resolve. Only the typo'd member is left to the operator.
+#[tokio::test]
+async fn manual_import_preview_suggests_members_outside_the_grabbed_season_of_a_multi_season_pack()
+{
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: first_episode,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let layout = two_season_pack_layout(&app, &user, &title, &first_episode).await;
+    let item_id = "two-season-pack-manual";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        TWO_SEASON_PACK_PACK_RELEASE,
+        SubmissionScope::Collection {
+            collection_id: first_episode
+                .collection_id
+                .clone()
+                .expect("season one collection"),
+        },
+    )
+    .await;
+    let completed = series_pack_completed_download(
+        item_id,
+        &title.id,
+        TWO_SEASON_PACK_PACK_RELEASE,
+        &layout.download_dir,
+    );
+    let release_evidence =
+        crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .expect("resolve durable release evidence");
+    let available: Vec<Episode> = layout
+        .season_one
+        .iter()
+        .chain(layout.season_two.iter())
+        .cloned()
+        .collect();
+
+    let suggested = crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+        &app,
+        &layout.download_dir,
+        &title,
+        &release_evidence,
+        &available,
+    )
+    .await
+    .expect("preview manual import");
+
+    let suggested: std::collections::BTreeSet<Option<String>> = suggested.into_iter().collect();
+    let mut expected: std::collections::BTreeSet<Option<String>> = available
+        .iter()
+        .take(15)
+        .map(|episode| Some(episode.id.clone()))
+        .collect();
+    expected.insert(None);
+    assert_eq!(suggested, expected);
+    drop(layout.source_root);
+}

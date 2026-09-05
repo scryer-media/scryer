@@ -255,6 +255,12 @@ async fn resolve_observation_tx(
                 Some(binding) if binding_matches_locator(&binding, &observation.locator) => {
                     Some(binding)
                 }
+                Some(binding)
+                    if binding.ended_at.is_some()
+                        && binding_locator_fields_match(&binding, &observation.locator) =>
+                {
+                    return Ok(ObservationResolution::BindingAlreadyEnded);
+                }
                 Some(binding) if binding.ended_at.is_none() && binding.native_item_id.is_some() => {
                     return Ok(locator_conflict(token_id, binding.download_id));
                 }
@@ -685,8 +691,14 @@ fn binding_matches_locator(
     binding: &DownloadClientBindingRecord,
     locator: &ClientJobLocator,
 ) -> bool {
-    binding.ended_at.is_none()
-        && binding.client_config_id.as_deref().map(str::trim) == locator.client_id.as_deref()
+    binding.ended_at.is_none() && binding_locator_fields_match(binding, locator)
+}
+
+fn binding_locator_fields_match(
+    binding: &DownloadClientBindingRecord,
+    locator: &ClientJobLocator,
+) -> bool {
+    binding.client_config_id.as_deref().map(str::trim) == locator.client_id.as_deref()
         && binding
             .client_type_snapshot
             .as_deref()
@@ -1197,6 +1209,30 @@ mod tests {
             .unwrap()
             .expect("active binding should load");
         assert_eq!(found.download_id, DownloadId::parse(FIRST_ID).unwrap());
+    }
+
+    #[tokio::test]
+    async fn known_token_with_matching_ended_binding_skips_without_writes() {
+        let store = store().await;
+        let id = DownloadId::parse(FIRST_ID).unwrap();
+        insert_download(&store, FIRST_ID, "scryer_submission", None).await;
+        insert_binding(&store, FIRST_ID, Some("client-1"), Some("job-1"), None).await;
+        store.end_binding(&id).await.unwrap();
+        let before = raw_identity_snapshot(&store, FIRST_ID).await;
+
+        assert_eq!(
+            store
+                .resolve_observation(&observation(
+                    "job-1",
+                    Some(&wire(FIRST_ID)),
+                    Some("release"),
+                    "2026-08-24T13:00:00Z",
+                ))
+                .await
+                .unwrap(),
+            ObservationResolution::BindingAlreadyEnded
+        );
+        assert_eq!(raw_identity_snapshot(&store, FIRST_ID).await, before);
     }
 
     #[tokio::test]

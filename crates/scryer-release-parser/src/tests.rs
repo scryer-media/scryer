@@ -1249,6 +1249,60 @@ fn season_pack_range_sets_multi_season_contract_flag() {
 }
 
 #[test]
+fn season_runs_without_range_hyphens_and_chained_ranges_declare_every_season() {
+    let pack_seasons = |name: &str| {
+        let analysis =
+            analyze_release_for_target(name, &context(ContextFacetHint::Series, "Quiet Meridian"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.clone())
+            .unwrap_or_else(|| panic!("{name}: expected an episodic parse"));
+        (
+            episode.season_numbers.clone(),
+            episode.is_series_pack,
+            episode.season,
+            episode.episode_numbers.clone(),
+        )
+    };
+
+    // An indexer that strips hyphens turns `S01-S02` into `S01 S02`; the pack
+    // still declares both seasons, as does the dotted scene form.
+    assert_eq!(
+        pack_seasons("Quiet Meridian 2024 S01 S02 1080p WEB-DL HEVC x265 5 1 GRP"),
+        (vec![1, 2], true, None, vec![])
+    );
+    assert_eq!(
+        pack_seasons("Quiet.Meridian.2024.S01.S02.1080p.BluRay.Dual-Audio.Opus.2.0.AV1-GRP"),
+        (vec![1, 2], true, None, vec![])
+    );
+    assert_eq!(
+        pack_seasons("Quiet Meridian S01 S02 S03 OVA 1080p BD AV1"),
+        (vec![1, 2, 3], true, None, vec![])
+    );
+
+    // Chained ranges keep every season, not just the first pair.
+    assert_eq!(
+        pack_seasons("Quiet Meridian S01-S02-S03 VOSTFR 1080p x265 10bit AAC [GroupTag]"),
+        (vec![1, 2, 3], true, None, vec![])
+    );
+    assert_eq!(
+        pack_seasons("[GroupTag] Quiet Meridian S01~S02~S03 - VOSTFR (BD x264 1080p FLAC) v2"),
+        (vec![1, 2, 3], true, None, vec![])
+    );
+    assert_eq!(
+        pack_seasons("Quiet.Meridian.S01-S03.1080p.WEB-DL-GRP"),
+        (vec![1, 2, 3], true, None, vec![])
+    );
+
+    // Non-consecutive bare seasons are not a range.
+    let (seasons, is_series_pack, _, _) = pack_seasons("Quiet Meridian S01 S03 1080p WEB-DL");
+    assert!(
+        !is_series_pack,
+        "S01 S03 must not declare a pack: {seasons:?}"
+    );
+}
+
+#[test]
 fn series_pack_markers_cover_complete_and_multi_season_release_names() {
     let complete = analyze_release_for_target(
         "[GroupTag] Quiet Meridian Complete Series + Specials & Extras",

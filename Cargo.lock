@@ -378,7 +378,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -869,9 +869,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.4"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+checksum = "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1027,7 +1027,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1809,7 +1809,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -2127,9 +2127,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "fixedbitset"
@@ -2296,7 +2296,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -4509,9 +4509,9 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.7"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
+checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
 dependencies = [
  "portable-atomic",
 ]
@@ -5084,7 +5084,7 @@ checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -5480,7 +5480,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -5497,7 +5497,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
@@ -5558,7 +5558,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "argon2",
  "async-trait",
@@ -5617,7 +5617,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "blake3",
  "chrono",
@@ -5633,7 +5633,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-acquisition"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -5672,7 +5672,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-configuration"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5690,7 +5690,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-crypto"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -5700,7 +5700,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-datastore"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5737,7 +5737,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-identity"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5761,7 +5761,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5794,7 +5794,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library-search"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "scryer-application",
  "scryer-domain",
@@ -5805,7 +5805,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-metadata"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-notifications"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5849,7 +5849,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-runtime"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5885,7 +5885,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-sql"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "blake3",
  "chrono",
@@ -5900,7 +5900,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-workflow"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5922,7 +5922,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5947,7 +5947,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-acquisition"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5959,7 +5959,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-core"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -5970,7 +5970,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-import"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5988,7 +5988,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6004,7 +6004,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media-types"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6014,7 +6014,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-metadata"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -6025,7 +6025,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-query"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "base64 0.22.1",
@@ -6042,7 +6042,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-security"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-settings"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6067,7 +6067,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-subscription"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6081,7 +6081,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-system"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6094,14 +6094,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-launcher"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scryer-logging"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "chrono",
  "serde",
@@ -6112,7 +6112,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "bytes",
  "isolang",
@@ -6130,7 +6130,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "axum",
  "serde",
@@ -6142,7 +6142,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-outbound-http"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "chrono",
  "governor",
@@ -6168,7 +6168,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -6207,7 +6207,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "aho-corasick",
  "chrono",
@@ -6221,7 +6221,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-rules"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "regorus",
  "serde",
@@ -6232,11 +6232,11 @@ dependencies = [
 
 [[package]]
 name = "scryer-runtime-info"
-version = "0.19.10"
+version = "0.19.11"
 
 [[package]]
 name = "scryer-webauthn"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -6415,7 +6415,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -6426,7 +6426,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -6482,7 +6482,7 @@ checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -7122,9 +7122,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7227,7 +7227,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -7282,9 +7282,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.12.0"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+checksum = "4cf0ded5c4e56918d8f8a339e1bb67d038d3bc6d144ac407904015ba2e4cde9b"
 dependencies = [
  "tinyvec_macros",
 ]
@@ -7340,14 +7340,14 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "tokio-rustls"
-version = "0.26.4"
+version = "0.26.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
+checksum = "b0c85f2c3ef0b1cd58b36682f4b17aaa995f0e5db534d85692b4903abce21f67"
 dependencies = [
  "rustls",
  "tokio",
@@ -8947,7 +8947,7 @@ dependencies = [
 
 [[package]]
 name = "xtask-trash-guides"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9082,7 +9082,7 @@ checksum = "34df6fc39dbd26ddc9c10e6a2984476e13acce22e64e4487636ef494369225da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -9108,18 +9108,18 @@ dependencies = [
 
 [[package]]
 name = "zstd-safe"
-version = "7.2.4"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
 dependencies = [
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
+version = "2.1.0+zstd.1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
 dependencies = [
  "cc",
  "pkg-config",

@@ -5047,32 +5047,55 @@ fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
         return series_pack(seasons, vec![index]);
     }
 
-    let (first, next, second, consumed) = if token == "SEASONS" {
+    if token == "SEASONS" {
         let first = tokens
             .get(index + 1)
             .and_then(|token| parse_numeric_token(&token.normalized))?;
         let next_index = index + 2;
         let next = tokens.get(next_index)?;
         let second = parse_numeric_token(&next.normalized)?;
-        (first, next, second, vec![index, index + 1, next_index])
-    } else {
-        let first = parse_season_token(token)?;
-        let next_index = index + 1;
-        let next = tokens.get(next_index)?;
-        let second = parse_season_token(&next.normalized)?;
-        (first, next, second, vec![index, next_index])
-    };
-    if !matches!(
-        next.separator_before,
-        SeparatorKind::Hyphen | SeparatorKind::Other
-    ) {
-        return None;
+        if !matches!(
+            next.separator_before,
+            SeparatorKind::Hyphen | SeparatorKind::Other
+        ) {
+            return None;
+        }
+        let seasons = if next.separator_before == SeparatorKind::Hyphen && second > first {
+            (first..=second).collect()
+        } else {
+            vec![first, second]
+        };
+        return series_pack(seasons, vec![index, index + 1, next_index]);
     }
-    let seasons = if next.separator_before == SeparatorKind::Hyphen && second > first {
-        (first..=second).collect()
-    } else {
-        vec![first, second]
-    };
+
+    // A run of season tokens declares every season it names. A hyphen (or a
+    // `+`/`~`-style joiner) spans a range (`S01-S03`) and may chain
+    // (`S01-S02-S03`, `S01~S02~S03`). A bare space or dot joins only strictly
+    // consecutive seasons (`S01 S02`, `S01.S02`): that is what an indexer that
+    // strips hyphens hands back for `S01-S02`, while `S01 S03` stays two
+    // unrelated markers.
+    let first = parse_season_token(token)?;
+    let mut seasons = vec![first];
+    let mut consumed = vec![index];
+    let mut cursor = index + 1;
+    while let Some(next) = tokens.get(cursor) {
+        let Some(season) = parse_season_token(&next.normalized) else {
+            break;
+        };
+        let last = *seasons.last().expect("seasons start non-empty");
+        match next.separator_before {
+            SeparatorKind::Hyphen if season > last => seasons.extend(last + 1..=season),
+            SeparatorKind::Other if season != last => seasons.push(season),
+            SeparatorKind::Space | SeparatorKind::Dot | SeparatorKind::Underscore
+                if season == last + 1 =>
+            {
+                seasons.push(season)
+            }
+            _ => break,
+        }
+        consumed.push(cursor);
+        cursor += 1;
+    }
     series_pack(seasons, consumed)
 }
 

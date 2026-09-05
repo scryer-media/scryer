@@ -100,6 +100,7 @@ async fn import_series_download(
     let mut release_burned = false;
     let mut failed_count: usize = 0;
     let mut last_error: Option<String> = None;
+    let mut rejection_reasons: BTreeMap<String, usize> = BTreeMap::new();
     let mut last_rejection_skip_reason: Option<ImportSkipReason> = None;
     let mut last_skipped_message: Option<String> = None;
     let mut last_skipped_skip_reason: Option<ImportSkipReason> = None;
@@ -206,6 +207,9 @@ async fn import_series_download(
                     crate::import_decide::RejectionDisposition::Blocklist
                 );
                 append_unique_episode_ids(&mut attributed_episode_ids, &episode_ids);
+                *rejection_reasons
+                    .entry(rejection.message.clone())
+                    .or_insert(0) += 1;
                 last_error = Some(rejection.message.clone());
                 last_rejection_skip_reason = rejection.skip_reason.clone();
             }
@@ -241,23 +245,18 @@ async fn import_series_download(
     );
     let release_burned = matches!(&decision, ImportDecision::Rejected) && release_burned;
 
-    let error_message = if imported_count == 0
-        && failed_count == 0
-        && rejected_count == 0
-        && skipped_count > 0
-    {
-        last_skipped_message
-    } else if failed_count > 0 || skipped_count > 0 || ignored_count > 0 || rejected_count > 0 {
-        Some(format!(
-            "{imported_count} imported, {ignored_count} ignored, {skipped_count} skipped, {rejected_count} rejected, {failed_count} failed{}",
-            last_error
-                .as_ref()
-                .map(|e| format!(". Last error: {e}"))
-                .unwrap_or_default()
-        ))
-    } else {
-        None
-    };
+    let error_message = episode_import_summary_message(
+        EpisodeImportSummaryCounts {
+            imported: imported_count,
+            ignored: ignored_count,
+            skipped: skipped_count,
+            rejected: rejected_count,
+            failed: failed_count,
+        },
+        &rejection_reasons,
+        last_error.as_deref(),
+        last_skipped_message,
+    );
 
     let result = ImportResult {
         import_id: import_id.to_string(),
@@ -527,6 +526,160 @@ fn append_unique_episode_ids(target: &mut Vec<String>, source: &[String]) {
         if !target.contains(episode_id) {
             target.push(episode_id.clone());
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EpisodeImportSummaryCounts {
+    imported: usize,
+    ignored: usize,
+    skipped: usize,
+    rejected: usize,
+    failed: usize,
+}
+
+/// The one-line summary a mixed-outcome series import records.
+///
+/// Every rejection reason is listed with how many members it held, most
+/// frequent first, so a pack that imported eight members and held eight more
+/// says *why* each group was held — not just whatever the last file happened
+/// to hit. `Last error` is reserved for members whose import actually failed
+/// to execute.
+fn episode_import_summary_message(
+    counts: EpisodeImportSummaryCounts,
+    rejection_reasons: &BTreeMap<String, usize>,
+    last_error: Option<&str>,
+    last_skipped_message: Option<String>,
+) -> Option<String> {
+    let EpisodeImportSummaryCounts {
+        imported,
+        ignored,
+        skipped,
+        rejected,
+        failed,
+    } = counts;
+    if imported == 0 && failed == 0 && rejected == 0 && skipped > 0 {
+        return last_skipped_message;
+    }
+    if failed == 0 && skipped == 0 && ignored == 0 && rejected == 0 {
+        return None;
+    }
+
+    let mut summary = format!(
+        "{imported} imported, {ignored} ignored, {skipped} skipped, {rejected} rejected, {failed} failed"
+    );
+    if rejected > 0 {
+        let mut reasons: Vec<(&String, &usize)> = rejection_reasons.iter().collect();
+        reasons.sort_by(|left, right| right.1.cmp(left.1).then_with(|| left.0.cmp(right.0)));
+        let listed = reasons
+            .iter()
+            .map(|(message, count)| format!("{count} × {message}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        if !listed.is_empty() {
+            summary.push_str(". Rejected: ");
+            summary.push_str(&listed);
+        }
+    }
+    if let Some(error) = last_error
+        && (failed > 0 || rejection_reasons.is_empty())
+    {
+        summary.push_str(". Last error: ");
+        summary.push_str(error);
+    }
+    Some(summary)
+}
+
+#[cfg(test)]
+mod episode_import_summary_message_tests {
+    use super::*;
+
+    fn counts(
+        imported: usize,
+        rejected: usize,
+        failed: usize,
+        skipped: usize,
+    ) -> EpisodeImportSummaryCounts {
+        EpisodeImportSummaryCounts {
+            imported,
+            ignored: 0,
+            skipped,
+            rejected,
+            failed,
+        }
+    }
+
+    #[test]
+    fn every_rejection_reason_is_counted_most_frequent_first() {
+        let reasons = BTreeMap::from([
+            ("could not identify this pack member".to_string(), 1),
+            ("outside the seasons declared by this pack".to_string(), 7),
+        ]);
+        assert_eq!(
+            episode_import_summary_message(
+                counts(8, 8, 0, 0),
+                &reasons,
+                Some("could not identify this pack member"),
+                None,
+            )
+            .as_deref(),
+            Some(
+                "8 imported, 0 ignored, 0 skipped, 8 rejected, 0 failed. Rejected: 7 × outside the seasons declared by this pack | 1 × could not identify this pack member"
+            )
+        );
+    }
+
+    #[test]
+    fn execution_failure_keeps_its_last_error() {
+        assert_eq!(
+            episode_import_summary_message(
+                counts(0, 0, 1, 0),
+                &BTreeMap::new(),
+                Some("unexpected hardlink failure"),
+                None,
+            )
+            .as_deref(),
+            Some("0 imported, 0 ignored, 0 skipped, 0 rejected, 1 failed. Last error: unexpected hardlink failure")
+        );
+    }
+
+    #[test]
+    fn rejections_alongside_a_failure_report_both() {
+        let reasons = BTreeMap::from([("held for manual import".to_string(), 1)]);
+        assert_eq!(
+            episode_import_summary_message(
+                counts(1, 1, 1, 0),
+                &reasons,
+                Some("disk full"),
+                None,
+            )
+            .as_deref(),
+            Some(
+                "1 imported, 0 ignored, 0 skipped, 1 rejected, 1 failed. Rejected: 1 × held for manual import. Last error: disk full"
+            )
+        );
+    }
+
+    #[test]
+    fn all_skipped_reports_the_skip_message_alone() {
+        assert_eq!(
+            episode_import_summary_message(
+                counts(0, 0, 0, 2),
+                &BTreeMap::new(),
+                None,
+                Some("nothing wanted".to_string()),
+            )
+            .as_deref(),
+            Some("nothing wanted")
+        );
+    }
+
+    #[test]
+    fn clean_import_has_no_summary() {
+        assert_eq!(
+            episode_import_summary_message(counts(3, 0, 0, 0), &BTreeMap::new(), None, None),
+            None
+        );
     }
 }
 
