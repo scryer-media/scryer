@@ -32,6 +32,7 @@ type MetadataSearchResult = {
   language: string | null;
   runtimeMinutes: number | null;
   sortTitle: string | null;
+  existingTitleId?: string | null;
 };
 
 export type PendingImportCardProps = {
@@ -50,7 +51,9 @@ export type PendingImportCardProps = {
   expandedBindingSeasonKeys: string[];
   selectedEpisodeIds: string[];
   searchQuery: string;
+  searchYear: number | null;
   searchResults: MetadataSearchResult[];
+  searchError: string | null;
   searching: boolean;
   formatBindingEpisodeDisplay: (
     episode: PendingImportBindingEpisode,
@@ -58,11 +61,15 @@ export type PendingImportCardProps = {
   onOpenSearch: (item: PendingImportItem) => void;
   onRequestIgnore: (item: PendingImportItem) => void;
   onBind: () => void;
-  onResolve: (result: MetadataSearchResult) => void;
+  onResolve: (
+    result: MetadataSearchResult,
+    options?: { attachToExistingTitle?: boolean },
+  ) => void;
   onToggleEpisodeSelection: (episodeId: string, checked: boolean) => void;
   onSetSelectedEpisodeIds: React.Dispatch<React.SetStateAction<string[]>>;
   onSetExpandedBindingSeasonKeys: React.Dispatch<React.SetStateAction<string[]>>;
   onSearchQueryChange: (value: string) => void;
+  onSearchYearChange: (value: number | null) => void;
   onClearActiveItem: () => void;
 };
 
@@ -82,7 +89,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   expandedBindingSeasonKeys,
   selectedEpisodeIds,
   searchQuery,
+  searchYear,
   searchResults,
+  searchError,
   searching,
   formatBindingEpisodeDisplay,
   onOpenSearch,
@@ -93,6 +102,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onSetSelectedEpisodeIds,
   onSetExpandedBindingSeasonKeys,
   onSearchQueryChange,
+  onSearchYearChange,
   onClearActiveItem,
 }: PendingImportCardProps) {
   const t = useTranslate();
@@ -359,12 +369,50 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               </>
             ) : (
               <>
-                <Input
-                  value={searchQuery}
-                  onChange={(event) => onSearchQueryChange(event.target.value)}
-                  placeholder={t("pendingImports.searchPlaceholder")}
-                  disabled={isBusy}
-                />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input
+                    className="min-w-0 flex-1"
+                    value={searchQuery}
+                    onChange={(event) => onSearchQueryChange(event.target.value)}
+                    placeholder={t("pendingImports.searchPlaceholder")}
+                    disabled={isBusy}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min={1888}
+                      max={2100}
+                      className="w-28"
+                      value={searchYear == null ? "" : String(searchYear)}
+                      onChange={(event) => {
+                        const raw = event.target.value.trim();
+                        if (!raw) {
+                          onSearchYearChange(null);
+                          return;
+                        }
+                        const parsed = Number.parseInt(raw, 10);
+                        onSearchYearChange(Number.isNaN(parsed) ? null : parsed);
+                      }}
+                      placeholder={t("pendingImports.searchYearPlaceholder")}
+                      aria-label={t("pendingImports.searchYearLabel")}
+                      disabled={isBusy}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onSearchYearChange(null)}
+                      disabled={isBusy || searchYear == null}
+                    >
+                      {t("pendingImports.searchYearClear")}
+                    </Button>
+                  </div>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  {t("pendingImports.searchYearHint")}
+                </p>
 
                 {searching ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -373,54 +421,77 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                   </div>
                 ) : null}
 
-                {!searching && searchQuery.trim() && searchResults.length === 0 ? (
+                {!searching && searchError ? (
+                  <div className="text-sm text-destructive">
+                    {t("pendingImports.searchRequestFailed", { error: searchError })}
+                  </div>
+                ) : null}
+
+                {!searching && !searchError && searchQuery.trim() && searchResults.length === 0 ? (
                   <div className="text-sm text-muted-foreground">
                     {t("pendingImports.noSearchResults")}
                   </div>
                 ) : null}
 
                 <div className="space-y-3">
-                  {searchResults.map((result) => (
-                    <div
-                      key={`${item.id}-${result.smgId ?? result.tvdbId ?? result.name}`}
-                      className="flex gap-3 rounded-lg border border-border bg-card/40 p-3"
-                    >
-                      <div className="h-24 w-16 flex-none overflow-hidden rounded-md border border-border bg-muted">
-                        {result.posterUrl ? (
-                          <TitlePoster src={result.posterUrl} alt={result.name} />
-                        ) : null}
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium text-foreground">{result.name}</span>
-                          {result.year ? (
-                            <span className="text-xs text-muted-foreground">{result.year}</span>
+                  {searchResults.map((result) => {
+                    const alreadyInLibrary = Boolean(result.existingTitleId);
+
+                    return (
+                      <div
+                        key={`${item.id}-${result.smgId ?? result.tvdbId ?? result.name}`}
+                        className="flex gap-3 rounded-lg border border-border bg-card/40 p-3"
+                      >
+                        <div className="h-24 w-16 flex-none overflow-hidden rounded-md border border-border bg-muted">
+                          {result.posterUrl ? (
+                            <TitlePoster src={result.posterUrl} alt={result.name} />
                           ) : null}
-                          <span className="text-xs text-muted-foreground">
-                            {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
-                          </span>
                         </div>
-                        {result.status ? (
-                          <div className="text-xs text-muted-foreground">{result.status}</div>
-                        ) : null}
-                        {result.overview ? (
-                          <p className="line-clamp-3 text-sm text-muted-foreground">
-                            {result.overview}
-                          </p>
-                        ) : null}
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-foreground">{result.name}</span>
+                            {result.year ? (
+                              <span className="text-xs text-muted-foreground">{result.year}</span>
+                            ) : null}
+                            <span className="text-xs text-muted-foreground">
+                              {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
+                            </span>
+                            {alreadyInLibrary ? (
+                              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                {t("pendingImports.alreadyInLibrary")}
+                              </span>
+                            ) : null}
+                          </div>
+                          {result.status ? (
+                            <div className="text-xs text-muted-foreground">{result.status}</div>
+                          ) : null}
+                          {result.overview ? (
+                            <p className="line-clamp-3 text-sm text-muted-foreground">
+                              {result.overview}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-none items-start">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={alreadyInLibrary ? "secondary" : "default"}
+                            onClick={() =>
+                              void onResolve(
+                                result,
+                                alreadyInLibrary ? { attachToExistingTitle: true } : undefined,
+                              )
+                            }
+                            disabled={isBusy}
+                          >
+                            {alreadyInLibrary
+                              ? t("pendingImports.attachToExistingTitle")
+                              : t("pendingImports.match")}
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex flex-none items-start">
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() => void onResolve(result)}
-                          disabled={isBusy}
-                        >
-                          {t("pendingImports.match")}
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}

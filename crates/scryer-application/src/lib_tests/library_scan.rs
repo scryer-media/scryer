@@ -6930,7 +6930,7 @@ fn pending_import_search_result(tvdb_id: &str, name: &str) -> RichMetadataSearch
 }
 
 #[tokio::test]
-async fn pending_import_title_search_filters_same_library_titles_only() {
+async fn pending_import_title_search_annotates_same_library_titles_only() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let library_scanner = Arc::new(MutableLibraryScanner::default());
     let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
@@ -7007,15 +7007,30 @@ async fn pending_import_title_search_filters_same_library_titles_only() {
         .await
         .expect("search pending import titles");
 
-    let result_ids = results
+    // Every candidate is returned; the one this library already owns is
+    // annotated with its title id instead of being dropped, so the dialog can
+    // offer "attach to existing title" rather than looking like a failure.
+    let annotated = results
         .iter()
-        .map(|result| result.tvdb_id.as_str())
+        .map(|result| {
+            (
+                result.item.tvdb_id.as_str(),
+                result.existing_title_id.as_deref(),
+            )
+        })
         .collect::<Vec<_>>();
-    assert_eq!(result_ids, vec!["123456", "222222"]);
+    assert_eq!(
+        annotated,
+        vec![
+            ("123456", None),
+            ("333333", Some(existing_title.title.id.as_str())),
+            ("222222", None),
+        ]
+    );
     assert_eq!(
         titles.external_id_batch_lookup_calls.load(Ordering::SeqCst),
         1,
-        "pending-import title search should batch same-library exclusion"
+        "pending-import title search should batch the same-library lookup"
     );
 }
 
@@ -7104,7 +7119,7 @@ async fn resolve_pending_import_creates_unmonitored_movie_title_and_keeps_item_b
         value: "5001".to_string(),
     }];
     let result = app
-        .resolve_pending_import(&user, "movie-resolve-1", request)
+        .resolve_pending_import(&user, "movie-resolve-1", request, false)
         .await
         .expect("resolve pending import");
 
@@ -7209,6 +7224,7 @@ async fn resolve_ignored_pending_import_creates_unmonitored_movie_title_and_clea
                 Some("123456"),
                 Some(2020),
             ),
+            false,
         )
         .await
         .expect("resolve ignored pending import");
@@ -7263,6 +7279,7 @@ async fn resolve_pending_import_failure_keeps_pending_item() {
             &user,
             "movie-resolve-failure-1",
             pending_import_title_request(MediaFacet::Movie, "Matched Movie", None, Some(2020)),
+            false,
         )
         .await
         .expect_err("resolution should fail without tvdb id");
@@ -7594,6 +7611,7 @@ async fn resolve_pending_import_rejects_existing_title_in_same_library() {
                 Some("123456"),
                 Some(2020),
             ),
+            false,
         )
         .await
         .expect_err("resolution should fail when title already exists");
@@ -7616,6 +7634,162 @@ async fn resolve_pending_import_rejects_existing_title_in_same_library() {
         refreshed_title.folder_path.as_deref(),
         Some("/existing/movies/Existing Movie")
     );
+}
+
+#[tokio::test]
+async fn resolve_pending_import_attaches_movie_to_existing_title_in_same_library() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let movie_path = tempdir.path().join("Missing.Movie.2020.mkv");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner.set_library_files(vec![]).await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) =
+        bootstrap_with_scan_unmatched_tracking(settings, library_scanner, unmatched_items.clone());
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile legacy movie root");
+
+    let existing_title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Existing Movie".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "123456".to_string(),
+                }],
+                root_folder_id: None,
+                min_availability: None,
+                poster_url: None,
+                year: Some(2020),
+                overview: None,
+                sort_title: None,
+                slug: None,
+                runtime_minutes: None,
+                language: None,
+                content_status: None,
+            },
+        )
+        .await
+        .expect("seed existing title");
+    let existing_title = existing_title.title;
+
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
+            "movie-resolve-attach-1",
+            MediaFacet::Movie,
+            tempdir.path().to_string_lossy().as_ref(),
+            movie_path.to_string_lossy().as_ref(),
+            "Unknown Movie",
+            "Existing Movie",
+            Some(2020),
+        ))
+        .await
+        .expect("seed pending import");
+
+    let result = app
+        .resolve_pending_import(
+            &user,
+            "movie-resolve-attach-1",
+            pending_import_title_request(
+                MediaFacet::Movie,
+                "Existing Movie",
+                Some("123456"),
+                Some(2020),
+            ),
+            true,
+        )
+        .await
+        .expect("attach pending import to the existing title");
+
+    assert!(!result.created);
+    assert_eq!(result.title.id, existing_title.id);
+    assert!(result.library_scan.is_none());
+    // A movie pending import ends in exactly the state the create path leaves
+    // it in: the row is consumed and the file is imported by the title's next
+    // scan.
+    assert!(unmatched_items.items().await.is_empty());
+    assert_eq!(
+        app.list_titles_unpaged(&user, Some(MediaFacet::Movie), None, None)
+            .await
+            .expect("list movie titles")
+            .len(),
+        1,
+        "attaching must not create a second title"
+    );
+}
+
+#[tokio::test]
+async fn resolve_pending_import_attaches_series_to_existing_title_in_same_library() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+
+    let existing_title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Existing Show".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                external_ids: vec![ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "654321".to_string(),
+                }],
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .expect("seed existing series title");
+    let existing_title = existing_title.title;
+
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
+            "series-resolve-attach-1",
+            MediaFacet::Series,
+            "/shows",
+            "/shows/Unknown Show",
+            "Unknown Show",
+            "Existing Show",
+            None,
+        ))
+        .await
+        .expect("seed pending import");
+
+    let result = app
+        .resolve_pending_import(
+            &user,
+            "series-resolve-attach-1",
+            pending_import_title_request(MediaFacet::Series, "Existing Show", Some("654321"), None),
+            true,
+        )
+        .await
+        .expect("attach pending import to the existing series title");
+
+    assert!(!result.created);
+    assert_eq!(result.title.id, existing_title.id);
+    // A series pending import stays pending, bound to the title, so the user
+    // can still pick episodes - the same state the create path produces.
+    let items = unmatched_items.items().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title_id.as_deref(), Some(existing_title.id.as_str()));
+    assert_eq!(items[0].status, PendingImportStatus::Pending);
 }
 
 #[tokio::test]
@@ -7673,6 +7847,7 @@ async fn ownership_conflict_pending_import_cannot_be_bound_or_adopted() {
                 Some("123"),
                 None,
             ),
+            false,
         )
         .await
         .expect_err("ownership conflict must not be adopted");
