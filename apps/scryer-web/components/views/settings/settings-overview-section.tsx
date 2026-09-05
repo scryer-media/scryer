@@ -1,6 +1,7 @@
 import * as React from "react";
 import { AlertTriangle, ChevronDown, Loader2, Rocket, ShieldPlus, Trash2, Upload } from "lucide-react";
 import { Link } from "react-router";
+import { InfoHelp } from "@/components/common/info-help";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -209,58 +210,55 @@ export function SettingsOverviewSection({
           </div>
         ) : (
           <>
-            <div className="space-y-1">
-              <div className="flex items-center gap-3">
-                <Label>{t("settings.experimentalFeaturesLabel")}</Label>
-                <SettingsToggleSwitch
-                  checked={generalSettings.experimentalFeaturesEnabled}
-                  ariaLabel={t("settings.experimentalFeaturesLabel")}
-                  disabled={generalSaving}
-                  onChange={(nextValue) => {
-                    updateGeneralSettings({ experimentalFeaturesEnabled: nextValue });
-                    onGeneralSettingsCommit({ experimentalFeaturesEnabled: nextValue });
-                  }}
-                />
-              </div>
-              <p className="text-muted-foreground">
-                {t("settings.experimentalFeaturesHelp")}
-              </p>
+            <div className="flex items-center gap-3">
+              <Label>{t("settings.experimentalFeaturesLabel")}</Label>
+              <SettingsToggleSwitch
+                checked={generalSettings.experimentalFeaturesEnabled}
+                ariaLabel={t("settings.experimentalFeaturesLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ experimentalFeaturesEnabled: nextValue });
+                  onGeneralSettingsCommit({ experimentalFeaturesEnabled: nextValue });
+                }}
+              />
             </div>
 
-            <div className="space-y-1">
-              <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
                 <Label>{t("settings.personalizedDiscoveryLabel")}</Label>
-                <SettingsToggleSwitch
-                  checked={generalSettings.personalizedDiscoveryEnabled}
+                <InfoHelp
+                  text={t("settings.personalizedDiscoveryHelp")}
                   ariaLabel={t("settings.personalizedDiscoveryLabel")}
-                  disabled={generalSaving}
-                  onChange={(nextValue) => {
-                    updateGeneralSettings({ personalizedDiscoveryEnabled: nextValue });
-                    onGeneralSettingsCommit({ personalizedDiscoveryEnabled: nextValue });
-                  }}
                 />
               </div>
-              <p className="text-muted-foreground">
-                {t("settings.personalizedDiscoveryHelp")}
-              </p>
+              <SettingsToggleSwitch
+                checked={generalSettings.personalizedDiscoveryEnabled}
+                ariaLabel={t("settings.personalizedDiscoveryLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ personalizedDiscoveryEnabled: nextValue });
+                  onGeneralSettingsCommit({ personalizedDiscoveryEnabled: nextValue });
+                }}
+              />
             </div>
 
-            <div className="space-y-1">
-              <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
                 <Label>{t("settings.srrdbFilenameRecoveryLabel")}</Label>
-                <SettingsToggleSwitch
-                  checked={generalSettings.srrdbFilenameRecoveryEnabled}
+                <InfoHelp
+                  text={t("settings.srrdbFilenameRecoveryHelp")}
                   ariaLabel={t("settings.srrdbFilenameRecoveryLabel")}
-                  disabled={generalSaving}
-                  onChange={(nextValue) => {
-                    updateGeneralSettings({ srrdbFilenameRecoveryEnabled: nextValue });
-                    onGeneralSettingsCommit({ srrdbFilenameRecoveryEnabled: nextValue });
-                  }}
                 />
               </div>
-              <p className="text-muted-foreground">
-                {t("settings.srrdbFilenameRecoveryHelp")}
-              </p>
+              <SettingsToggleSwitch
+                checked={generalSettings.srrdbFilenameRecoveryEnabled}
+                ariaLabel={t("settings.srrdbFilenameRecoveryLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ srrdbFilenameRecoveryEnabled: nextValue });
+                  onGeneralSettingsCommit({ srrdbFilenameRecoveryEnabled: nextValue });
+                }}
+              />
             </div>
           </>
         )}
