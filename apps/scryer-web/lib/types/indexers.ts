@@ -116,11 +116,16 @@ export type ProviderTypeInfo = {
   recommendedFacets: Array<"MOVIE" | "SERIES" | "ANIME">;
 };
 
+/// Which of a provider's declared fields the form offers.
+///
+/// Host-bound values are supplied by the host, so they are configuration the
+/// operator never sees. Everything else is the plugin's to decide — this used
+/// to take a provider type and filter on it, and nothing should reintroduce
+/// that: a form that knows provider names is a form that drifts from them.
 export function visibleIndexerConfigFields(
-  _providerType: string,
   configFields: ConfigFieldDef[],
 ): ConfigFieldDef[] {
-  return configFields;
+  return configFields.filter((field) => field.valueSource !== "HOST_BINDING");
 }
 
 export type IndexerCategoryRoutingSettings = {

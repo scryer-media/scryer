@@ -1,19 +1,25 @@
-import { Check, Loader2, Search, X } from "lucide-react";
+import { useState } from "react";
+import { Check, ChevronRight, Loader2, Search, X } from "lucide-react";
+import { DownloadClientConfigField } from "@/components/common/download-client-config-field";
 import { PluginVisualLabel } from "@/components/common/plugin-visual";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   SetupBackButton,
   SetupPanel,
   SetupPrimaryButton,
   SetupStepHeader,
 } from "./setup-chrome";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input, signedIntegerInputProps } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { selectorId } from "@/lib/utils/dom-ids";
 import { type ConfigFieldDef, visibleIndexerConfigFields } from "@/lib/types";
+import { splitAdvancedConfigFields } from "@/lib/utils/provider-config-fields";
+import { cn } from "@/lib/utils";
 
 interface ProviderOption {
   value: string;
@@ -57,127 +63,72 @@ function isMissingRequiredField(
   return field.fieldType !== "BOOL" && value.trim() === "";
 }
 
+/// The wizard renders the same declarations the settings form does, so it
+/// shares that renderer rather than keeping a third copy — this one had no TAG,
+/// PATH or FILTERED_SELECT branch and quietly fell through to a text input for
+/// each. Only the id prefix is pinned, because selectors depend on it.
 function DynamicConfigField({
-  t,
   field,
   value,
   onChange,
 }: {
-  t: SetupIndexerViewProps["t"];
   field: ConfigFieldDef;
   value: string;
   onChange: (key: string, value: string) => void;
 }) {
-  const fieldId = selectorId("setup-indexer-field", field.key);
-  const requiredMarker = field.required ? (
-    <span aria-hidden="true" className="text-destructive">
-      *
-    </span>
-  ) : null;
+  return (
+    <DownloadClientConfigField
+      field={field}
+      value={value}
+      onChange={onChange}
+      idPrefix="setup-indexer-field"
+    />
+  );
+}
 
-  if (field.fieldType === "BOOL") {
-    return (
-      <label className="flex items-center gap-2">
-        <Checkbox
-          id={fieldId}
-          checked={value === "true"}
-          onCheckedChange={(checkedValue) =>
-            onChange(field.key, checkedValue === true ? "true" : "false")
-          }
-        />
-        <span className="inline-flex items-center gap-2 text-sm">
-          {field.label}
-          {requiredMarker}
-        </span>
-        {field.helpText ? (
-          <span className="text-xs text-muted-foreground">
-            {field.helpText}
-          </span>
-        ) : null}
-      </label>
-    );
+/// One group of a provider's fields: values first, then the checkboxes. Used
+/// for the standard fields and again inside the advanced disclosure.
+function SetupConfigFieldGroup({
+  fields,
+  configValues,
+  onConfigValueChange,
+}: {
+  fields: ConfigFieldDef[];
+  configValues: Record<string, string>;
+  onConfigValueChange: (key: string, value: string) => void;
+}) {
+  if (fields.length === 0) {
+    return null;
   }
-
-  if (field.fieldType === "SELECT" && field.options.length > 0) {
-    return (
-      <label className="space-y-2">
-        <Label className="inline-flex items-center gap-2" htmlFor={fieldId}>
-          {field.label}
-          {requiredMarker}
-        </Label>
-        <Select
-          value={value || field.defaultValue || ""}
-          onValueChange={(nextValue) => onChange(field.key, nextValue)}
-        >
-          <SelectTrigger id={fieldId} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {field.options.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {field.helpText ? (
-          <p className="text-xs text-muted-foreground">{field.helpText}</p>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.fieldType === "MULTILINE") {
-    return (
-      <label className="space-y-2">
-        <Label className="inline-flex items-center gap-2" htmlFor={fieldId}>
-          {field.label}
-          {requiredMarker}
-        </Label>
-        <Textarea
-          id={fieldId}
-          value={value}
-          onChange={(event) => onChange(field.key, event.target.value)}
-          required={field.required}
-          placeholder={field.defaultValue ?? ""}
-          rows={5}
-        />
-        {field.helpText ? (
-          <p className="text-xs text-muted-foreground">{field.helpText}</p>
-        ) : null}
-      </label>
-    );
-  }
+  const boolFields = fields.filter((field) => field.fieldType === "BOOL");
+  const valueFor = (field: ConfigFieldDef, fallback: string) =>
+    configValues[field.key] ?? field.defaultValue ?? fallback;
 
   return (
-    <label className="space-y-2">
-      <Label className="inline-flex items-center gap-2" htmlFor={fieldId}>
-        {field.label}
-        {requiredMarker}
-      </Label>
-      <Input
-        id={fieldId}
-        value={value}
-        onChange={(event) => onChange(field.key, event.target.value)}
-        {...(field.fieldType === "NUMBER" ? signedIntegerInputProps : {})}
-        type={
-          field.fieldType === "PASSWORD"
-            ? "password"
-            : field.fieldType === "NUMBER"
-              ? "number"
-              : "text"
-        }
-        required={field.required}
-        placeholder={
-          field.fieldType === "PASSWORD"
-            ? t("form.apiKeyInputPlaceholder")
-            : field.defaultValue ?? ""
-        }
-      />
-      {field.helpText ? (
-        <p className="text-xs text-muted-foreground">{field.helpText}</p>
+    <div className="space-y-4">
+      {fields
+        .filter((field) => field.fieldType !== "BOOL")
+        .map((field) => (
+          <DynamicConfigField
+            key={field.key}
+            field={field}
+            value={valueFor(field, "")}
+            onChange={onConfigValueChange}
+          />
+        ))}
+      {boolFields.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-4">
+          {boolFields.map((field) => (
+            <DynamicConfigField
+              key={field.key}
+              field={field}
+              value={valueFor(field, "false")}
+              onChange={onConfigValueChange}
+            />
+          ))}
+        </div>
       ) : null}
-    </label>
+    </div>
   );
 }
 
@@ -202,11 +153,11 @@ export function SetupIndexerView({
 }: SetupIndexerViewProps) {
   const selectedProvider = providerOptions.find((p) => p.value === providerType);
   const selectedProviderFields = visibleIndexerConfigFields(
-    providerType,
-    (selectedProvider?.configFields ?? []).filter(
-      (field) => field.valueSource !== "HOST_BINDING",
-    ),
+    selectedProvider?.configFields ?? [],
   );
+  const { standard: standardProviderFields, advanced: advancedProviderFields } =
+    splitAdvancedConfigFields(selectedProviderFields);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const hasMissingRequiredField = selectedProviderFields.some((field) =>
     isMissingRequiredField(field, configValues),
   );
@@ -258,39 +209,39 @@ export function SetupIndexerView({
             </SelectContent>
           </Select>
         </div>
-        {selectedProviderFields
-          .filter((field) => field.fieldType !== "BOOL")
-          .map((field) => (
-            <DynamicConfigField
-              key={field.key}
-              t={t}
-              field={field}
-              value={
-                configValues[field.key] ??
-                field.defaultValue ??
-                ""
-              }
-              onChange={onConfigValueChange}
-            />
-          ))}
-        {selectedProviderFields.some((field) => field.fieldType === "BOOL") ? (
-          <div className="flex flex-wrap items-center gap-4">
-            {selectedProviderFields
-              .filter((field) => field.fieldType === "BOOL")
-              .map((field) => (
-                <DynamicConfigField
-                  key={field.key}
-                  t={t}
-                  field={field}
-                  value={
-                    configValues[field.key] ??
-                    field.defaultValue ??
-                    "false"
-                  }
-                  onChange={onConfigValueChange}
+        <SetupConfigFieldGroup
+          fields={standardProviderFields}
+          configValues={configValues}
+          onConfigValueChange={onConfigValueChange}
+        />
+        {advancedProviderFields.length > 0 ? (
+          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+            <CollapsibleTrigger asChild>
+              <button
+                id="setup-indexer-advanced-toggle"
+                type="button"
+                className="flex items-center gap-1.5 rounded-[8px] py-1 text-sm font-medium text-[var(--scry-muted)] transition-colors hover:text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronRight
+                  className={cn(
+                    "h-4 w-4 transition-transform",
+                    advancedOpen && "rotate-90",
+                  )}
                 />
-              ))}
-          </div>
+                {t("settings.advancedConfig")}
+                <span className="text-[var(--scry-faint)]">
+                  ({advancedProviderFields.length})
+                </span>
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-4 pt-3">
+              <SetupConfigFieldGroup
+                fields={advancedProviderFields}
+                configValues={configValues}
+                onConfigValueChange={onConfigValueChange}
+              />
+            </CollapsibleContent>
+          </Collapsible>
         ) : null}
         <div className="flex items-center gap-3">
           <Button
