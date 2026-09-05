@@ -347,8 +347,8 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
-        let can_view_personalized = !readable_library_ids.is_empty()
-            && self.personalized_discovery_enabled().await?;
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -391,8 +391,8 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
-        let can_view_personalized = !readable_library_ids.is_empty()
-            && self.personalized_discovery_enabled().await?;
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -727,8 +727,8 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
-        let can_view_personalized = !readable_library_ids.is_empty()
-            && self.personalized_discovery_enabled().await?;
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
         let state = self
             .services
@@ -792,8 +792,8 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
-        let can_view_personalized = !readable_library_ids.is_empty()
-            && self.personalized_discovery_enabled().await?;
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
         let state = self
             .services
@@ -879,8 +879,8 @@ impl AppUseCase {
                 .cloned()
                 .collect()
         };
-        let can_view_personalized = !effective_library_ids.is_empty()
-            && self.personalized_discovery_enabled().await?;
+        let can_view_personalized =
+            !effective_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let effective_library_id_list = sorted_discovery_library_ids(&effective_library_ids);
         let state = self
             .services
