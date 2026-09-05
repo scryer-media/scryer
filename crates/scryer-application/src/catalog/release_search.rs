@@ -1674,7 +1674,11 @@ impl AppUseCase {
             caller_label,
             mode,
             runtime_minutes: subject.runtime_minutes,
-            season: subject.season,
+            // The subject carries season 0 so the acceptance layer can veto a
+            // season-1 release for a special; `&season=0` is not a query an
+            // indexer answers, so it is dropped here and the search runs on the
+            // title/absolute queries the specials lane already builds.
+            season: subject.season.filter(|season| *season > 0),
             episode: subject.episode,
             absolute_episode: subject.absolute_episode,
             tagged_aliases: &tagged_aliases,

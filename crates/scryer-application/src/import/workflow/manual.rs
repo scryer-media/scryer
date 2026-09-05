@@ -2187,27 +2187,20 @@ async fn execute_manual_series_movie_import(
     let ext = scryer_domain::canonical_video_extension(source)
         .unwrap_or("mkv")
         .to_string();
-    let linked_episode = if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
-        app.services
-            .catalog
-            .shows
-            .get_episode_by_id(linked_episode_id)
-            .await?
-    } else {
-        None
-    };
+    let linked_episode = resolve_series_movie_linked_episode(app, title, &link).await?;
+    // The resolved episode, not `link.linked_episode_id`, is this import's episode
+    // everywhere below, so a film the fallback identified is mapped and owned by
+    // the special exactly as a real link would be.
+    let linked_episode_id = linked_episode.as_ref().map(|episode| episode.id.clone());
     let season_episode = linked_episode
         .as_ref()
-        .and_then(|episode| {
-            let season = episode.season_number.as_deref()?.parse::<i32>().ok()?;
-            let episode_number = episode.episode_number.as_deref()?.parse::<i32>().ok()?;
-            Some(format!("S{season:02}E{episode_number:02}"))
-        })
-        .unwrap_or_else(|| "S00E00".to_string());
+        .and_then(series_movie_season_episode_token);
     let rendered_filename = if rename_enabled {
-        sanitize_filesystem_component(&format!(
-            "{} - {} - {}.{}",
-            title.name, season_episode, link.movie.title, ext
+        sanitize_filesystem_component(&series_movie_import_filename(
+            &title.name,
+            season_episode.as_deref(),
+            &link.movie.title,
+            &ext,
         ))
     } else {
         preserved_import_filename(source)
@@ -2247,7 +2240,7 @@ async fn execute_manual_series_movie_import(
     .await?;
     let destination_ownership = ImportDestinationOwnership::series_movie(
         series_movie_link_id,
-        link.linked_episode_id.as_deref(),
+        linked_episode_id.as_deref(),
     );
     let file_result = match import_file_with_record_progress(
         app,
@@ -2320,7 +2313,7 @@ async fn execute_manual_series_movie_import(
         }
     };
 
-    if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
+    if let Some(linked_episode_id) = linked_episode_id.as_deref() {
         app.services
             .library
             .media_files
@@ -2393,7 +2386,7 @@ async fn execute_manual_series_movie_import(
         let nfo_path = dest_path.with_extension("nfo");
         let nfo_content = crate::nfo::render_series_movie_episode_nfo(
             &link.movie,
-            &season_episode,
+            season_episode.as_deref().unwrap_or_default(),
             link.after_season,
         );
         if let Err(error) = tokio::fs::write(&nfo_path, nfo_content.as_bytes()).await {

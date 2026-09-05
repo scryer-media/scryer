@@ -38,20 +38,26 @@ pub(crate) fn build_search_queries(
             let mut episode_param: Option<u32> = None;
 
             if let Some(episode) = episode {
-                let season_num: usize = episode
+                // Season 0 is a real season — the specials season — so it is
+                // reported as `Some(0)` rather than folded into "no season".
+                // The acceptance layer needs that distinction: with no expected
+                // season, a release parsed as S01E02 satisfies the wanted
+                // S00E02 special on the episode number alone. Season 0 is still
+                // not a searchable Newznab parameter, and the request builder
+                // and the season-pack lane drop it before it reaches an
+                // indexer.
+                let parsed_season = episode
                     .season_number
                     .as_deref()
-                    .and_then(|value| value.parse().ok())
-                    .unwrap_or(0);
+                    .and_then(|value| value.trim().parse::<u32>().ok());
+                let season_num: usize = parsed_season.unwrap_or(0) as usize;
                 let episode_num: usize = episode
                     .episode_number
                     .as_deref()
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(0);
 
-                if season_num > 0 {
-                    season_param = Some(season_num as u32);
-                }
+                season_param = parsed_season;
                 if episode_num > 0 {
                     episode_param = Some(episode_num as u32);
                 }
