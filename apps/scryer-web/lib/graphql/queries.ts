@@ -591,6 +591,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     libraryId
     librarySlug
     monitored
+    tags
     playbackLinks {
       connectionId
       displayName
@@ -2846,6 +2847,20 @@ export const delayProfilesQuery = `query DelayProfiles {
     tags
     priority
     enabled
+  }
+}`;
+
+export const TITLE_TAG_DEFINITION_FIELDS = `
+    id
+    label
+    description
+    titleCount
+    createdAt`;
+
+/// Readable by any authenticated caller: the picker and the catalog filter both
+/// need the vocabulary, and the vocabulary says nothing about any one title.
+export const titleTagDefinitionsQuery = `query TitleTagDefinitions {
+  titleTagDefinitions {${TITLE_TAG_DEFINITION_FIELDS}
   }
 }`;
 

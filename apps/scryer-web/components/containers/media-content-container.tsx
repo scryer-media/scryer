@@ -24,6 +24,7 @@ import {
   setTitleMonitoredMutation,
   updateLibraryMutation,
   updateRuleSetMutation,
+  updateTitleTagsMutation,
 } from "@/lib/graphql/mutations";
 import {
   browsePathQuery,
@@ -89,6 +90,11 @@ import {
   titleCatalogQueryKey,
   type TitleCatalogAdvancedFilters,
 } from "@/lib/utils/title-catalog-query";
+import {
+  EMPTY_TITLE_TAGS_DELTA,
+  isEmptyTitleTagsDelta,
+} from "@/lib/utils/title-tags";
+import type { TitleTagsDelta } from "@/lib/types/title-tags";
 import {
   hasPrimaryMediaFile,
   releaseQueueScopeInput,
@@ -917,7 +923,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (
         updates.rootFolderIds !== undefined ||
         updates.genreTagKeys !== undefined ||
-        updates.themeTagKeys !== undefined
+        updates.themeTagKeys !== undefined ||
+        updates.userTagLabels !== undefined
       ) {
         markCatalogTiming("filter-intent");
         reloadCatalogForAdvancedFiltersRef.current?.(nextFilters);
@@ -4080,14 +4087,56 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
 
   const applyBulkTitleOptions = React.useCallback(
-    async (changes: TitleOptionUpdates) => {
+    async (
+      changes: TitleOptionUpdates,
+      tagChanges: TitleTagsDelta = EMPTY_TITLE_TAGS_DELTA,
+    ) => {
       const targets = [...editDialogTitles];
       if (targets.length === 0 || bulkActionBusy) {
+        return;
+      }
+      const hasOptionChanges = Object.keys(changes).length > 0;
+      const hasTagChanges = !isEmptyTitleTagsDelta(tagChanges);
+      if (!hasOptionChanges && !hasTagChanges) {
         return;
       }
 
       setBulkActionBusy(true);
       try {
+        // Tags travel as one call for the whole selection: every title's
+        // library is authorized before the first write, so a set containing one
+        // title the caller cannot manage changes nothing at all.
+        if (hasTagChanges) {
+          const tagResult = await client
+            .mutation(updateTitleTagsMutation, {
+              input: {
+                titleIds: targets.map((title) => title.id),
+                add: tagChanges.add,
+                remove: tagChanges.remove,
+              },
+            })
+            .toPromise();
+          if (tagResult.error) {
+            setGlobalStatus(
+              withFailureDetail(
+                t("status.bulkTitleUpdateFailed"),
+                batchFailureDetail(tagResult.error),
+              ),
+            );
+            return;
+          }
+        }
+
+        if (!hasOptionChanges) {
+          await reloadTitles();
+          setSelectedTitleIds(new Set());
+          setBulkEditDialogOpen(false);
+          setGlobalStatus(
+            t("status.bulkTitleUpdateSuccess", { count: targets.length }),
+          );
+          return;
+        }
+
         const variables = Object.fromEntries(
           targets.map((title, index) => [
             `input${index}`,
@@ -4165,6 +4214,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       editDialogTitles,
       reloadTitles,
       setGlobalStatus,
+      setSelectedTitleIds,
       t,
     ],
   );

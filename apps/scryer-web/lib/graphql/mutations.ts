@@ -12,6 +12,7 @@ import {
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
   SUBTITLE_SETTINGS_FIELDS,
   TITLE_MUTATION_RESULT_FIELDS,
+  TITLE_TAG_DEFINITION_FIELDS,
 } from "./queries.ts";
 
 const AUTH_USER_FIELDS = `
@@ -1119,6 +1120,51 @@ export const upsertDelayProfileMutation = `mutation UpsertDelayProfile($input: D
 export const deleteDelayProfileMutation = `mutation DeleteDelayProfile($id: ID!) {
   deleteDelayProfile(id: $id) {
     id
+  }
+}`;
+
+/// A rename rewrites titles and delay profiles but never a rule source, so
+/// every registry write returns the counts the settings section warns with.
+const TITLE_TAG_REWRITE_COUNT_FIELDS = `
+      titles
+      delayProfiles
+      maintenanceRuleSets
+      releaseRuleSets
+      managedTagFilters`;
+
+export const createTitleTagDefinitionMutation = `mutation CreateTitleTagDefinition($input: CreateTitleTagDefinitionInput!) {
+  createTitleTagDefinition(input: $input) {
+    definition {${TITLE_TAG_DEFINITION_FIELDS}
+    }
+    counts {${TITLE_TAG_REWRITE_COUNT_FIELDS}
+    }
+  }
+}`;
+
+export const updateTitleTagDefinitionMutation = `mutation UpdateTitleTagDefinition($input: UpdateTitleTagDefinitionInput!) {
+  updateTitleTagDefinition(input: $input) {
+    definition {${TITLE_TAG_DEFINITION_FIELDS}
+    }
+    counts {${TITLE_TAG_REWRITE_COUNT_FIELDS}
+    }
+  }
+}`;
+
+export const deleteTitleTagDefinitionMutation = `mutation DeleteTitleTagDefinition($id: ID!) {
+  deleteTitleTagDefinition(id: $id) {
+    id
+    label
+    counts {${TITLE_TAG_REWRITE_COUNT_FIELDS}
+    }
+  }
+}`;
+
+/// A patch, not a replacement: reserved `scryer:` entries survive untouched,
+/// and one denied library leaves the whole set unchanged.
+export const updateTitleTagsMutation = `mutation UpdateTitleTags($input: UpdateTitleTagsInput!) {
+  updateTitleTags(input: $input) {
+    id
+    tags
   }
 }`;
 

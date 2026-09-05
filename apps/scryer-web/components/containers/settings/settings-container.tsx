@@ -21,6 +21,7 @@ import {
   ShieldAlert,
   Network,
   SlidersHorizontal,
+  Tag,
   Timer,
   UploadCloud,
   User,
@@ -94,6 +95,9 @@ const SettingsAcquisitionContainer = lazy(async () => ({
 }));
 const SettingsDelayProfilesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-delay-profiles-container")).SettingsDelayProfilesContainer,
+}));
+const SettingsTitleTagsContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-title-tags-container")).SettingsTitleTagsContainer,
 }));
 const SettingsSeedingProfilesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-seeding-profiles-container")).SettingsSeedingProfilesContainer,
@@ -586,6 +590,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                               ? t("settings.subtitles")
                               : settingsSection === "delayProfiles"
                                 ? t("settings.delayProfiles")
+                                : settingsSection === "titleTags"
+                                  ? t("settings.titleTags")
                                 : settingsSection === "acquisition"
                                   ? t("settings.acquisition")
                                   : t("settings.qualityProfiles");
@@ -612,6 +618,12 @@ export const SettingsContainer = memo(function SettingsContainer({
       section: "delayProfiles" as const,
       label: t("settings.delayProfiles"),
       icon: Timer,
+      visible: canManageCatalogSettings,
+    },
+    {
+      section: "titleTags" as const,
+      label: t("settings.titleTags"),
+      icon: Tag,
       visible: canManageCatalogSettings,
     },
     {
@@ -858,6 +870,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                 settingsSection !== "general" &&
                 settingsSection !== "qualityProfiles" &&
                 settingsSection !== "delayProfiles" &&
+                settingsSection !== "titleTags" &&
                 settingsSection !== "plugins" ? (
                   <p className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]">
                     {t("settings.sectionTitle", { section: settingsSectionLabel })}
@@ -963,6 +976,10 @@ export const SettingsContainer = memo(function SettingsContainer({
             />
           ) : settingsSection === "delayProfiles" ? (
             <SettingsDelayProfilesContainer />
+          ) : settingsSection === "titleTags" ? (
+            <SettingsTitleTagsContainer
+              canManageCatalogSettings={canManageCatalogSettings}
+            />
           ) : settingsSection === "acquisition" ? (
             <SettingsAcquisitionContainer />
           ) : (

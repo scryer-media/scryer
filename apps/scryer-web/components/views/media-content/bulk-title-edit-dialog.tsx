@@ -31,6 +31,14 @@ import {
   initialTitleEditDraft,
   type TitleEditDraft,
 } from "@/lib/utils/title-edit-dialog";
+import { TitleTagsPicker } from "@/components/common/title-tags-picker";
+import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
+import type { BulkTitleTagsDraft, TitleTagsDelta } from "@/lib/types/title-tags";
+import {
+  buildBulkTitleTagsDelta,
+  emptyBulkTitleTagsDraft,
+  hasBulkTitleTagsChanges,
+} from "@/lib/utils/title-tags";
 
 const UNCHANGED_VALUE = UNCHANGED_TITLE_EDIT_VALUE;
 const INHERIT_VALUE = INHERIT_TITLE_EDIT_VALUE;
@@ -45,7 +53,15 @@ type BulkTitleEditDialogProps = {
   qualityProfiles: ParsedQualityProfile[];
   rootFolders: LibraryRootRecord[];
   busy: boolean;
-  onSubmit: (changes: TitleOptionUpdates) => Promise<void> | void;
+  /**
+   * Applies the staged edits. Option changes go out as the per-title batch they
+   * always did; the tag delta goes out as one `updateTitleTags` call carrying
+   * every selected id, and is empty whenever both tag pickers are.
+   */
+  onSubmit: (
+    changes: TitleOptionUpdates,
+    tagChanges: TitleTagsDelta,
+  ) => Promise<void> | void;
   /**
    * Destination library shown beside the destination root (FR-010). Null when
    * the selection spans libraries, which is the FR-017 disabled case.
@@ -80,10 +96,16 @@ export function BulkTitleEditDialog({
     [],
   );
   const [draft, setDraft] = React.useState<TitleEditDraft>(initialDraft);
+  const [tagDraft, setTagDraft] = React.useState<BulkTitleTagsDraft>(
+    emptyBulkTitleTagsDraft,
+  );
+  const { definitions: tagDefinitions, loading: tagDefinitionsLoading } =
+    useTitleTagDefinitions();
 
   const isMovieView = view === "movies";
   const isAnimeView = view === "anime";
-  const hasPendingChange = hasTitleEditChanges(draft, initialDraft);
+  const hasPendingChange =
+    hasTitleEditChanges(draft, initialDraft) || hasBulkTitleTagsChanges(tagDraft);
   const folderLabel = React.useCallback(
     (path: string) => path.split("/").filter(Boolean).pop() ?? path,
     [],
@@ -104,6 +126,7 @@ export function BulkTitleEditDialog({
       return;
     }
     setDraft(initialDraft);
+    setTagDraft(emptyBulkTitleTagsDraft());
   }, [initialDraft, open]);
 
   const monitorOptions = React.useMemo(
@@ -145,12 +168,17 @@ export function BulkTitleEditDialog({
     [draft, initialDraft],
   );
 
+  const buildTagChanges = React.useCallback(
+    () => buildBulkTitleTagsDelta(tagDraft),
+    [tagDraft],
+  );
+
   const handleSubmit = React.useCallback(() => {
     if (!hasPendingChange || busy) {
       return;
     }
-    void Promise.resolve(onSubmit(buildChanges()));
-  }, [buildChanges, busy, hasPendingChange, onSubmit]);
+    void Promise.resolve(onSubmit(buildChanges(), buildTagChanges()));
+  }, [buildChanges, buildTagChanges, busy, hasPendingChange, onSubmit]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -459,6 +487,41 @@ export function BulkTitleEditDialog({
               </Select>
             </EditableField>
           ) : null}
+
+          {/* Both pickers are registry-backed and additive: they patch the
+              selection rather than replacing each title's bag, so a title
+              already carrying a queued label is simply left alone. A label held
+              by one picker is hidden from the other, because adding and
+              removing the same label in one submit is not an intent. */}
+          <EditableField label={t("title.bulkAddTags")}>
+            <TitleTagsPicker
+              value={tagDraft.add}
+              onChange={(labels) =>
+                setTagDraft((previous) => ({ ...previous, add: labels }))
+              }
+              definitions={tagDefinitions}
+              loading={tagDefinitionsLoading}
+              disabled={busy}
+              idPrefix="bulk-title-edit-add"
+              excludedLabels={tagDraft.remove}
+              emptyValueText={t("label.unchanged")}
+            />
+          </EditableField>
+
+          <EditableField label={t("title.bulkRemoveTags")}>
+            <TitleTagsPicker
+              value={tagDraft.remove}
+              onChange={(labels) =>
+                setTagDraft((previous) => ({ ...previous, remove: labels }))
+              }
+              definitions={tagDefinitions}
+              loading={tagDefinitionsLoading}
+              disabled={busy}
+              idPrefix="bulk-title-edit-remove"
+              excludedLabels={tagDraft.add}
+              emptyValueText={t("label.unchanged")}
+            />
+          </EditableField>
         </div>
 
         <DialogFooter>

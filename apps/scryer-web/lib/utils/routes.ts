@@ -79,6 +79,7 @@ export function canAccessSettingsSection(
       return canManageSystemSettings;
     case "qualityProfiles":
     case "delayProfiles":
+    case "titleTags":
     case "rules":
     case "maintenanceRules":
     case "post-processing":
