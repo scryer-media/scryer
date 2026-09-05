@@ -4009,6 +4009,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }]
     }
 
@@ -4402,6 +4403,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         });
 
         assert!(!validate_indexer_descriptor(
@@ -4422,6 +4424,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }
     }
 
@@ -4526,6 +4529,7 @@ mod tests {
             host_binding: Some(PluginHostBindingId::SmgOpenSubtitlesApiKey),
             options: vec![],
             help_text: None,
+            ..Default::default()
         }];
 
         assert!(validate_descriptor_for_type(
@@ -4554,6 +4558,7 @@ mod tests {
             host_binding: Some(PluginHostBindingId::SmgOpenSubtitlesApiKey),
             options: vec![],
             help_text: None,
+            ..Default::default()
         }];
 
         assert!(!validate_descriptor_for_type(
@@ -4580,6 +4585,7 @@ mod tests {
             host_binding: Some(PluginHostBindingId::SmgOpenSubtitlesApiKey),
             options: vec![],
             help_text: None,
+            ..Default::default()
         }];
 
         assert!(!validate_descriptor_for_type(

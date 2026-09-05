@@ -783,6 +783,9 @@ const PROVIDER_TYPE_FIELDS = `
       hostBinding
       options { value label configOverrides { key value } }
       helpText
+      visibleWhen { key op values }
+      requiredWhen { key op values }
+      advanced
     }`;
 
 export const SUBTITLE_SETTINGS_FIELDS = `

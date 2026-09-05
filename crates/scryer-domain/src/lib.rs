@@ -5446,6 +5446,8 @@ pub enum ConfigFieldType {
     Multiline,
     Bool,
     Select,
+    /// Enumerated selection rendered with a filter box.
+    FilteredSelect,
     Number,
     Path,
     Tag,
@@ -5459,6 +5461,7 @@ impl ConfigFieldType {
             Self::Multiline => "multiline",
             Self::Bool => "bool",
             Self::Select => "select",
+            Self::FilteredSelect => "filtered_select",
             Self::Number => "number",
             Self::Path => "path",
             Self::Tag => "tag",
@@ -5472,6 +5475,7 @@ impl ConfigFieldType {
             "multiline" => Some(Self::Multiline),
             "bool" => Some(Self::Bool),
             "select" => Some(Self::Select),
+            "filtered_select" => Some(Self::FilteredSelect),
             "number" => Some(Self::Number),
             "path" => Some(Self::Path),
             "tag" => Some(Self::Tag),
@@ -5533,7 +5537,59 @@ impl PluginHostBindingId {
 /// Describes a single configuration field a plugin expects.
 /// Used by the plugin system to advertise what config keys are needed,
 /// and by the frontend to render dynamic form fields.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// How a [`FieldCondition`] compares another field's value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionOp {
+    #[default]
+    Eq,
+    Ne,
+    In,
+    NotIn,
+    /// Holds when the referenced field has a non-blank value. Ignores `values`.
+    NonEmpty,
+}
+
+impl ConditionOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Eq => "eq",
+            Self::Ne => "ne",
+            Self::In => "in",
+            Self::NotIn => "not_in",
+            Self::NonEmpty => "non_empty",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "eq" => Some(Self::Eq),
+            "ne" => Some(Self::Ne),
+            "in" => Some(Self::In),
+            "not_in" => Some(Self::NotIn),
+            "non_empty" => Some(Self::NonEmpty),
+            _ => None,
+        }
+    }
+}
+
+/// A predicate over another configuration field's current value.
+///
+/// The host evaluates these, so the operator set is closed rather than an
+/// expression language: a plugin declares what it depends on, it does not run
+/// logic in the form.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FieldCondition {
+    /// Key of the field whose value is tested.
+    pub key: String,
+    pub op: ConditionOp,
+    /// Values compared against. `eq`/`ne` use the first, `in`/`not_in` the
+    /// whole set, and `non_empty` ignores it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigFieldDef {
     /// Config key name (e.g. "custom_endpoint"). Used as the JSON key in
     /// `config_json` and the Extism config key.
@@ -5557,6 +5613,16 @@ pub struct ConfigFieldDef {
     pub options: Vec<ConfigFieldOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_text: Option<String>,
+    /// Shown only while this holds. `None` means always shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<FieldCondition>,
+    /// Required while this holds, in addition to `required`. A field hidden by
+    /// `visible_when` is never required, whatever this says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<FieldCondition>,
+    /// Placed behind the form's advanced disclosure rather than shown up front.
+    #[serde(default)]
+    pub advanced: bool,
 }
 
 /// A single option for "select"-type config fields.

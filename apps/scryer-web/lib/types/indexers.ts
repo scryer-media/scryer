@@ -67,9 +67,22 @@ export type ConfigFieldTypeValue =
   | "MULTILINE"
   | "BOOL"
   | "SELECT"
+  | "FILTERED_SELECT"
   | "NUMBER"
   | "PATH"
   | "TAG";
+
+export type ConditionOpValue = "EQ" | "NE" | "IN" | "NOT_IN" | "NON_EMPTY";
+
+/// A predicate over another field's current value.
+///
+/// `EQ`/`NE` compare against the first entry of `values`, `IN`/`NOT_IN` against
+/// the whole set, and `NON_EMPTY` ignores it.
+export type FieldCondition = {
+  key: string;
+  op: ConditionOpValue;
+  values: string[];
+};
 
 export type ConfigFieldValueSourceValue = "USER" | "HOST_BINDING";
 export type ConfigFieldRoleValue = "CONNECTION_URL";
@@ -85,6 +98,13 @@ export type ConfigFieldDef = {
   hostBinding: string | null;
   options: ConfigFieldOption[];
   helpText: string | null;
+  /// Shown only while this holds; null means always shown.
+  visibleWhen: FieldCondition | null;
+  /// Required while this holds, on top of `required`. A field hidden by
+  /// `visibleWhen` is never required, whatever this says.
+  requiredWhen: FieldCondition | null;
+  /// Belongs behind the form's advanced disclosure rather than shown up front.
+  advanced: boolean;
 };
 
 export type ProviderTypeInfo = {

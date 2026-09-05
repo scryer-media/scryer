@@ -4420,6 +4420,7 @@ mod tests {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             },
             ConfigFieldDef {
                 key: "api_key".into(),
@@ -4432,6 +4433,7 @@ mod tests {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             },
             ConfigFieldDef {
                 key: "api_path".into(),
@@ -4444,6 +4446,7 @@ mod tests {
                 host_binding: None,
                 options: vec![],
                 help_text: None,
+                ..Default::default()
             },
         ];
 

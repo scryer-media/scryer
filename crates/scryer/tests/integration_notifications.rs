@@ -230,6 +230,7 @@ impl FakeNotificationProvider {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 },
                 ConfigFieldDef {
                     key: "api_key".to_string(),
@@ -242,6 +243,7 @@ impl FakeNotificationProvider {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 },
                 ConfigFieldDef {
                     key: "path_mappings".to_string(),
@@ -258,6 +260,7 @@ impl FakeNotificationProvider {
                         config_overrides: Default::default(),
                     }],
                     help_text: Some("One mapping per line.".to_string()),
+                    ..Default::default()
                 },
             ],
             supports_test: true,
