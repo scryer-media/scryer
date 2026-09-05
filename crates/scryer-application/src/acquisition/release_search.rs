@@ -151,15 +151,6 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
     pub(crate) absolute_episode: Option<u32>,
-    /// The wanted item lives in season 0 (specials/OVAs).
-    ///
-    /// Carried separately from `season` because the search parameters
-    /// deliberately leave season 0 out — a `season=0` query means "any season"
-    /// to most indexers. Without this, a specials-scoped search cannot tell a
-    /// season-0 episode from a subject with no season at all, and an `S01E02`
-    /// release whose episode number happens to match sails through the
-    /// numbering veto.
-    pub(crate) specials_scope: bool,
     pub(crate) subject_kind: ReleaseSearchSubjectKind,
     pub(crate) last_search_at: Option<String>,
     pub(crate) submission_scope: SubmissionScope,
@@ -1269,11 +1260,7 @@ fn candidate_numbering_contradicts_subject(
     candidate: &IndexerSearchResult,
     subject: &ResolvedReleaseSearchSubject,
 ) -> bool {
-    if subject.season.is_none()
-        && subject.episode.is_none()
-        && subject.absolute_episode.is_none()
-        && !subject.specials_scope
-    {
+    if subject.season.is_none() && subject.episode.is_none() && subject.absolute_episode.is_none() {
         return false;
     }
     let Some(parsed) = candidate.parsed_release_metadata.as_ref() else {
@@ -1290,14 +1277,8 @@ fn candidate_numbering_contradicts_subject(
             && subject.episode.is_none()
             && subject.absolute_episode.is_none());
     };
-    // A specials-scoped subject is season 0, whatever the search parameters
-    // left out. A release that names any other season is a different episode
-    // that happens to share a number.
-    if subject.specials_scope && episode.season.is_some_and(|season| season != 0) {
-        return true;
-    }
     crate::acquisition_coverage::parsed_numbering_contradicts_episode(
-        subject.season.or(subject.specials_scope.then_some(0)),
+        subject.season,
         subject.episode,
         subject.absolute_episode,
         episode,
@@ -2238,7 +2219,6 @@ impl AppUseCase {
             season: None,
             episode: None,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
             submission_scope: SubmissionScope::Title,
@@ -2374,7 +2354,6 @@ impl AppUseCase {
             season: Some(season_num),
             episode: Some(episode_num),
             absolute_episode,
-            specials_scope: season_num == 0,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
             submission_scope: episode_record
@@ -2442,7 +2421,6 @@ impl AppUseCase {
             season: Some(season_num),
             episode: None,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Season,
             last_search_at: item.last_search_at.clone(),
             submission_scope: collection_download_submission_scope_for_wanted_item(item, episode),
@@ -2518,7 +2496,6 @@ impl AppUseCase {
                 season: None,
                 episode: None,
                 absolute_episode: None,
-                specials_scope: false,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
                 submission_scope: SubmissionScope::SeriesMovie {
@@ -2591,16 +2568,6 @@ impl AppUseCase {
             season: query_result.season,
             episode: query_result.episode,
             absolute_episode,
-            // `build_search_queries` suppresses season 0 as a search parameter
-            // on purpose; the veto still has to know the wanted episode is a
-            // special, or a same-numbered season-1 release passes for it.
-            specials_scope: episode.is_some_and(|episode| {
-                episode
-                    .season_number
-                    .as_deref()
-                    .and_then(|value| value.trim().parse::<u32>().ok())
-                    == Some(0)
-            }),
             subject_kind: match item.media_type.as_str() {
                 "episode" => ReleaseSearchSubjectKind::Episode,
                 _ => ReleaseSearchSubjectKind::Title,
@@ -2844,7 +2811,6 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::EpisodeSet {
@@ -2927,16 +2893,15 @@ mod tests {
     }
 
     /// A season-0 wanted item must not accept a season-1 release that happens
-    /// to carry the same episode number. The search parameters deliberately
-    /// omit season 0, so the subject's `season` is `None` and the numbering
-    /// veto used to see nothing to contradict — which is how an `S01E02`
-    /// release was grabbed for a specials-scoped item.
+    /// to carry the same episode number, while a season-agnostic subject with
+    /// the same episode number still accepts it: the specials fix must not
+    /// bleed into subjects that never named a season.
     #[test]
-    fn a_specials_scoped_subject_rejects_a_season_one_release_with_the_same_number() {
+    fn a_season_zero_subject_rejects_a_season_one_release_with_the_same_number() {
         let title = make_title();
         let mut subject = episode_set_subject(&title, &["ep-s0e2"]);
+        subject.season = Some(0);
         subject.episode = Some(2);
-        subject.specials_scope = true;
 
         let season_one = make_candidate("Nightfall.S01E02.1080p.WEB-DL-FIXTUREGRP", None);
         assert!(candidate_numbering_contradicts_subject(
@@ -2947,7 +2912,7 @@ mod tests {
         let special = make_candidate("Nightfall.S00E02.1080p.WEB-DL-FIXTUREGRP", None);
         assert!(!candidate_numbering_contradicts_subject(&special, &subject));
 
-        // Without the specials marker the subject is season-agnostic and the
+        // Without a season the subject is season-agnostic and the
         // season-1 release is still accepted, exactly as before.
         let mut season_agnostic = episode_set_subject(&title, &["ep-2"]);
         season_agnostic.episode = Some(2);
@@ -3010,7 +2975,6 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -3089,7 +3053,6 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -3186,7 +3149,6 @@ mod tests {
             season,
             episode,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -4388,7 +4350,6 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
-            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -4481,7 +4442,6 @@ mod tests {
                 season: None,
                 episode: None,
                 absolute_episode: None,
-                specials_scope: false,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: None,
                 submission_scope: SubmissionScope::Title,
