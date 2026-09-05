@@ -680,8 +680,7 @@ pub(crate) fn movie_candidate_batch_search_keys(
     candidate: &PreparedMovieLibraryScanCandidate,
 ) -> AppResult<Vec<BatchMetadataSearchKey>> {
     let year_hint_variants = movie_candidate_year_hint_variants(candidate);
-    let mut keys =
-        Vec::with_capacity(candidate.search_candidates.len() * year_hint_variants.len());
+    let mut keys = Vec::with_capacity(candidate.search_candidates.len() * year_hint_variants.len());
 
     for year_hint in year_hint_variants {
         for search_candidate in &candidate.search_candidates {

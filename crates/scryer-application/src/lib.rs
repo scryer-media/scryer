@@ -87,6 +87,7 @@ pub mod upstream_scheduler;
 
 pub(crate) use acquisition::acquisition as acquisition_workflow;
 pub(crate) use acquisition::admission;
+pub(crate) use acquisition::anime_numbering;
 pub(crate) use acquisition::coverage as acquisition_coverage;
 pub(crate) use acquisition::decision_helpers as acquisition_decision_helpers;
 pub(crate) use acquisition::delay_profile;
@@ -604,13 +605,13 @@ pub use types::{
     OAuthRefreshTokenRecord, PasskeySummary, PendingImportBindingFilePreview,
     PendingImportBindingPreview, PendingImportConnection, PendingImportCounts, PendingImportItem,
     PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus,
-    PendingImportTitleSearchItem, PendingRelease,
-    PendingReleaseObservation, PendingReleaseRole, PendingReleaseStatus, PendingReleaseStatusCount,
-    PendingTitleHydration, PrimaryCollectionSummary, RecycleBinBatchJobAccepted,
-    RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
-    RecycleRestorePreviewItem, RecycledItem, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature, ResolvePendingImportResult,
-    RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
+    PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation, PendingReleaseRole,
+    PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
+    PrimaryCollectionSummary, RecycleBinBatchJobAccepted, RecycleBinSettings,
+    RecycleRestoreConflictPolicy, RecycleRestorePreview, RecycleRestorePreviewItem, RecycledItem,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord,
+    ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
+    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
     TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogFilterCounts,
     TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,

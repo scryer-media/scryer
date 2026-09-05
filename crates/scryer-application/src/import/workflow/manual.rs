@@ -1073,6 +1073,20 @@ async fn preview_manual_import(
         _ => None,
     };
 
+    // Loaded once for the whole preview: community (per-cour) anime numbering
+    // for this title, when SMG published one. `None` for every non-anime title
+    // and for anime whose community numbering matches the catalog's.
+    let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
+        app.services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(title_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        None
+    };
+
     // For each file, parse and attempt auto-match
     let mut previews = Vec::new();
     for candidate in &video_files {
@@ -1085,7 +1099,28 @@ async fn preview_manual_import(
 
         // File parsing is only for user-facing episode suggestions. It must
         // not become release/quality evidence for the later import.
-        let parsed = parsed_release_from_file_stem(path);
+        let mut parsed = parsed_release_from_file_stem(path);
+        // Translate community anime numbering into the catalog's own before the
+        // suggestion lookups, so a file named in per-cour numbering points at
+        // the episode the user actually has. Inert without a bridge.
+        let numbering = crate::anime_numbering::translate_release_numbering(
+            anime_numbering_bridge.as_ref(),
+            title,
+            available_episodes,
+            &mut parsed,
+            file_reference_date(path),
+        );
+        // Several readings fit equally well: suggest nothing rather than the
+        // wrong episode, and let the user pick.
+        let numbering_ambiguous = numbering.is_ambiguous();
+        if let Some(summary) = numbering.ambiguity_summary() {
+            tracing::debug!(
+                title_id = %title_id,
+                file = %path.display(),
+                readings = %summary,
+                "manual import: anime numbering is ambiguous; leaving the episode unselected"
+            );
+        }
         // The quality shown is the one the import will score: the release
         // evidence parsed with the title's canonical context, never the file
         // name.
@@ -1104,7 +1139,8 @@ async fn preview_manual_import(
                 .season
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "1".to_string());
-            if let Some(ep_num) = ep_meta.episode_numbers.first() {
+            if let Some(ep_num) = ep_meta.episode_numbers.first().filter(|_| !numbering_ambiguous)
+            {
                 let ep_str = ep_num.to_string();
                 if let Ok(Some(episode)) = app
                     .services
@@ -1139,6 +1175,7 @@ async fn preview_manual_import(
 
             // Anime absolute fallback
             if suggested_episode_id.is_none()
+                && !numbering_ambiguous
                 && let Some(abs) = ep_meta.absolute_episode
             {
                 let abs_str = abs.to_string();

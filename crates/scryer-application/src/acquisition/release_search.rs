@@ -183,6 +183,10 @@ pub(crate) enum ReleaseAutoDecisionCode {
     MinimumSeeders,
     PackBelowMissingThreshold,
     SubtitlesOnly,
+    /// The release's numbering has more than one equally-good reading under the
+    /// title's anime numbering bridge. A release nobody can place must not be
+    /// grabbed on a coin toss.
+    AnimeNumberingAmbiguous,
 }
 
 impl ReleaseAutoDecisionCode {
@@ -215,6 +219,7 @@ impl ReleaseAutoDecisionCode {
             "minimum_seeders" => Some(Self::MinimumSeeders),
             "pack_below_missing_threshold" => Some(Self::PackBelowMissingThreshold),
             "subtitles_only" => Some(Self::SubtitlesOnly),
+            "anime_numbering_ambiguous" => Some(Self::AnimeNumberingAmbiguous),
             _ => None,
         }
     }
@@ -246,6 +251,7 @@ impl ReleaseAutoDecisionCode {
             Self::MinimumSeeders => "minimum_seeders",
             Self::PackBelowMissingThreshold => "pack_below_missing_threshold",
             Self::SubtitlesOnly => "subtitles_only",
+            Self::AnimeNumberingAmbiguous => "anime_numbering_ambiguous",
         }
     }
 
@@ -292,6 +298,9 @@ impl ReleaseAutoDecisionCode {
                 "series pack does not meet the missing-episode threshold"
             }
             Self::SubtitlesOnly => "release carries subtitles only and no video",
+            Self::AnimeNumberingAmbiguous => {
+                "release numbering has several equally-good readings for this anime"
+            }
         }
     }
 
@@ -2132,9 +2141,10 @@ impl AppUseCase {
         };
 
         for candidate in &mut results {
-            if candidate.auto_decision_code.as_deref()
-                == Some(ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str())
-            {
+            if candidate.auto_decision_code.as_deref().is_some_and(|code| {
+                code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
+                    || code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
+            }) {
                 continue;
             }
             let code = active_pending_release_delay_code(
@@ -2502,7 +2512,26 @@ impl AppUseCase {
         item: &AcquisitionScopeState,
         episode: Option<&Episode>,
     ) -> ResolvedReleaseSearchSubject {
-        let query_result = build_search_queries(search_title, item, episode, &self.facet_registry);
+        // Anime whose community numbering differs from TVDB's needs the extra
+        // community-numbered query forms; every other title reads `None` here
+        // and searches exactly as before.
+        let anime_numbering_bridge = if search_title.facet == MediaFacet::Anime {
+            self.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&search_title.id)
+                .await
+                .unwrap_or_default()
+        } else {
+            None
+        };
+        let query_result = build_search_queries(
+            search_title,
+            item,
+            episode,
+            &self.facet_registry,
+            anime_numbering_bridge.as_ref(),
+        );
         let owner_facet = if item.media_type == "series_movie" {
             owner_title.facet.clone()
         } else {
@@ -2860,6 +2889,36 @@ mod tests {
         assert!(!candidate_matches_title_subject(
             &candidate,
             &canonical_title_evidence(&title)
+        ));
+    }
+
+    /// A season-0 wanted item must not accept a season-1 release that happens
+    /// to carry the same episode number, while a season-agnostic subject with
+    /// the same episode number still accepts it: the specials fix must not
+    /// bleed into subjects that never named a season.
+    #[test]
+    fn a_season_zero_subject_rejects_a_season_one_release_with_the_same_number() {
+        let title = make_title();
+        let mut subject = episode_set_subject(&title, &["ep-s0e2"]);
+        subject.season = Some(0);
+        subject.episode = Some(2);
+
+        let season_one = make_candidate("Nightfall.S01E02.1080p.WEB-DL-FIXTUREGRP", None);
+        assert!(candidate_numbering_contradicts_subject(
+            &season_one,
+            &subject
+        ));
+
+        let special = make_candidate("Nightfall.S00E02.1080p.WEB-DL-FIXTUREGRP", None);
+        assert!(!candidate_numbering_contradicts_subject(&special, &subject));
+
+        // Without a season the subject is season-agnostic and the
+        // season-1 release is still accepted, exactly as before.
+        let mut season_agnostic = episode_set_subject(&title, &["ep-2"]);
+        season_agnostic.episode = Some(2);
+        assert!(!candidate_numbering_contradicts_subject(
+            &season_one,
+            &season_agnostic
         ));
     }
 
@@ -3294,8 +3353,13 @@ mod tests {
         title.facet = MediaFacet::Anime;
         let (item, episode) = specials_wanted_item(&title, "0", "2");
 
-        let result =
-            build_search_queries(&title, &item, Some(&episode), &crate::FacetRegistry::new());
+        let result = build_search_queries(
+            &title,
+            &item,
+            Some(&episode),
+            &crate::FacetRegistry::new(),
+            None,
+        );
 
         assert_eq!(result.season, Some(0));
         assert_eq!(result.episode, Some(2));
@@ -3318,8 +3382,13 @@ mod tests {
         title.facet = MediaFacet::Anime;
         let (item, episode) = specials_wanted_item(&title, "2", "3");
 
-        let result =
-            build_search_queries(&title, &item, Some(&episode), &crate::FacetRegistry::new());
+        let result = build_search_queries(
+            &title,
+            &item,
+            Some(&episode),
+            &crate::FacetRegistry::new(),
+            None,
+        );
 
         assert_eq!(result.season, Some(2));
         assert_eq!(result.episode, Some(3));
