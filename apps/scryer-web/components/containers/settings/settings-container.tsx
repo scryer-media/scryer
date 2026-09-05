@@ -47,6 +47,7 @@ import {
   buildRulesPath,
   buildViewPath,
   indexerSettingsTabFromPath,
+  indexerSettingsTabsFor,
   maintenanceRulesSectionFromPath,
   rulesSectionFromPath,
   rulesSectionsFor,
@@ -168,15 +169,14 @@ const SUBTITLES_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
   railClass: "sticky top-[26px] z-auto min-w-[320px] max-w-[560px] flex-[1_1_560px]",
 };
 
-const INDEXER_SETTINGS_TABS: {
-  tab: IndexerSettingsTab;
-  labelKey: string;
-  icon: LucideIcon;
-}[] = [
-  { tab: "indexers", labelKey: "settings.indexers", icon: Database },
-  { tab: "search", labelKey: "settings.indexerSearch", icon: ScanSearch },
-  { tab: "seedingProfiles", labelKey: "settings.seedingProfiles", icon: UploadCloud },
-];
+const INDEXER_SETTINGS_TAB_ITEMS: Record<
+  IndexerSettingsTab,
+  { labelKey: string; icon: LucideIcon }
+> = {
+  indexers: { labelKey: "settings.indexers", icon: Database },
+  search: { labelKey: "settings.indexerSearch", icon: ScanSearch },
+  seedingProfiles: { labelKey: "settings.seedingProfiles", icon: UploadCloud },
+};
 
 /// Pane switcher for the Indexers page. An indexer and the seeding profile it
 /// applies are two views of the same subject, so they share a page instead of
@@ -184,9 +184,11 @@ const INDEXER_SETTINGS_TABS: {
 /// rail.
 function IndexerSettingsSubnav({
   activeTab,
+  tabs,
   t,
 }: {
   activeTab: IndexerSettingsTab;
+  tabs: IndexerSettingsTab[];
   t: ReturnType<typeof useTranslate>;
 }) {
   return (
@@ -196,14 +198,15 @@ function IndexerSettingsSubnav({
         className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
         aria-label={t("settings.indexers")}
       >
-        {INDEXER_SETTINGS_TABS.map((item) => {
+        {tabs.map((tab) => {
+          const item = INDEXER_SETTINGS_TAB_ITEMS[tab];
           const Icon = item.icon;
-          const active = activeTab === item.tab;
+          const active = activeTab === tab;
           return (
             <Link
-              key={item.tab}
-              id={selectorId("settings-indexers-subnav", item.tab)}
-              to={buildIndexerSettingsPath(item.tab)}
+              key={tab}
+              id={selectorId("settings-indexers-subnav", tab)}
+              to={buildIndexerSettingsPath(tab)}
               aria-current={active ? "page" : undefined}
               className={cn(
                 "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
@@ -395,6 +398,13 @@ export const SettingsContainer = memo(function SettingsContainer({
   const maintenanceRulesHidden =
     settingsSection === "maintenanceRules" && !experimentalFeaturesEnabled;
   const effectiveRulesSection = maintenanceRulesHidden ? "scoring" : rulesSection;
+  // Indexer search is on the same footing: with the switch off the Indexers
+  // page keeps its list and seeding profiles, and a held search link lands on
+  // the list.
+  const indexerSettingsTabs = indexerSettingsTabsFor(experimentalFeaturesEnabled);
+  const effectiveIndexerSettingsTab = indexerSettingsTabs.includes(indexerSettingsTab)
+    ? indexerSettingsTab
+    : "indexers";
   const [indexerDownloadClientMappingCatalogResource, setIndexerDownloadClientMappingCatalogResource] =
     useState<IndexerDownloadClientMappingCatalogResource>({
       catalog: null,
@@ -483,7 +493,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   // pane. The Search pane owns its full width (its own refine rail plus a
   // 1020px table), so the plugins rail stays with the provider panes.
   const showReferenceRail =
-    (settingsSection === "indexers" && indexerSettingsTab !== "search") ||
+    (settingsSection === "indexers" && effectiveIndexerSettingsTab !== "search") ||
     settingsSection === "downloadClients" ||
     settingsSection === "notifications" ||
     settingsSection === "subtitles";
@@ -678,8 +688,8 @@ export const SettingsContainer = memo(function SettingsContainer({
   // The Indexers page's panes are pages in their own right, so the header and
   // the breadcrumb name the pane rather than the section that hosts it.
   const activeIndexerTab =
-    settingsSection === "indexers" && indexerSettingsTab !== "indexers"
-      ? INDEXER_SETTINGS_TABS.find((item) => item.tab === indexerSettingsTab)
+    settingsSection === "indexers" && effectiveIndexerSettingsTab !== "indexers"
+      ? INDEXER_SETTINGS_TAB_ITEMS[effectiveIndexerSettingsTab]
       : undefined;
   // Same for the Maintenance Rules panes. The rule list is the page itself
   // rather than a pane of it, so it adds no crumb and keeps the page's icon.
@@ -762,7 +772,11 @@ export const SettingsContainer = memo(function SettingsContainer({
         </aside>
       ) : null}
       {settingsSection === "indexers" ? (
-        <IndexerSettingsSubnav activeTab={indexerSettingsTab} t={t} />
+        <IndexerSettingsSubnav
+          activeTab={effectiveIndexerSettingsTab}
+          tabs={indexerSettingsTabs}
+          t={t}
+        />
       ) : null}
       {isRulesSection ? (
         <RulesSubnav
@@ -911,13 +925,13 @@ export const SettingsContainer = memo(function SettingsContainer({
             <SettingsMediaServersContainer />
           ) : settingsSection === "indexers" ? (
             <>
-              {indexerSettingsTab === "seedingProfiles" ? (
+              {effectiveIndexerSettingsTab === "seedingProfiles" ? (
                 <SettingsSeedingProfilesContainer />
-              ) : indexerSettingsTab === "search" ? (
+              ) : effectiveIndexerSettingsTab === "search" ? (
                 <SettingsIndexerSearchContainer />
               ) : (
                 <SettingsIndexersContainer
-                  indexerSettingsTab={indexerSettingsTab}
+                  indexerSettingsTab={effectiveIndexerSettingsTab}
                   providerCatalogVersion={providerCatalogVersions.INDEXER}
                   indexerDownloadClientMappingCatalogResource={
                     indexerDownloadClientMappingCatalogResource

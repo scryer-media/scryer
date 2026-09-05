@@ -185,6 +185,20 @@ export function indexerSettingsTabFromPath(pathname: string): IndexerSettingsTab
   return INDEXER_TAB_BY_SEGMENT[segments[indexerAt + 1]?.toLowerCase() ?? ""] ?? "indexers";
 }
 
+/// Which panes the Indexers page offers on this instance.
+///
+/// Indexer search is still being finished, so it is a pane only when the
+/// instance has opted into experimental features. The indexer list is always
+/// present, so a held search link resolves there rather than 404ing or
+/// bouncing.
+export function indexerSettingsTabsFor(
+  experimentalFeaturesEnabled: boolean,
+): IndexerSettingsTab[] {
+  return experimentalFeaturesEnabled
+    ? ["indexers", "search", "seedingProfiles"]
+    : ["indexers", "seedingProfiles"];
+}
+
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {
   overview: "overview",
   import: "import",
