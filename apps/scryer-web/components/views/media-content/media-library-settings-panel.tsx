@@ -1159,6 +1159,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
       {headerActionsTarget && activeLibrary && mode !== "new"
         ? createPortal(
             <Button
+              id="media-library-scan"
               type="button"
               variant="outline"
               size="sm"
@@ -1177,7 +1178,12 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
         : null}
       <div id="media-library-settings-panel" className="space-y-[18px]">
           {scanSummary ? (
-            <p className="text-xs text-muted-foreground">{libraryScanSummaryText}</p>
+            <p
+              id="media-library-scan-summary"
+              className="text-xs text-muted-foreground"
+            >
+              {libraryScanSummaryText}
+            </p>
           ) : null}
           {scanNotice ? (
             <p className="text-xs text-destructive">{scanNotice}</p>
