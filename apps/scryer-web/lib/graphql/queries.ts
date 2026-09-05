@@ -303,6 +303,7 @@ const SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS = `
       monitoringOverride
       metadataActive
       monitored
+      tags
       movie {
         id
         title
@@ -591,6 +592,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     libraryId
     librarySlug
     monitored
+    tags
     playbackLinks {
       connectionId
       displayName
@@ -2849,6 +2851,21 @@ export const delayProfilesQuery = `query DelayProfiles {
   }
 }`;
 
+export const TITLE_TAG_DEFINITION_FIELDS = `
+    id
+    label
+    description
+    titleCount
+    seriesMovieCount
+    createdAt`;
+
+/// Readable by any authenticated caller: the picker and the catalog filter both
+/// need the vocabulary, and the vocabulary says nothing about any one title.
+export const titleTagDefinitionsQuery = `query TitleTagDefinitions {
+  titleTagDefinitions {${TITLE_TAG_DEFINITION_FIELDS}
+  }
+}`;
+
 export const SEEDING_PROFILE_FIELDS = `
     id
     name
@@ -3452,6 +3469,7 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
       kind
       schemaVersion
       targetQualityProfileId
+      tags
     }
     createdAt
     updatedAt`;
@@ -3487,6 +3505,7 @@ export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
       kind
       schemaVersion
       targetQualityProfileId
+      tags
     }`;
 
 export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
@@ -3508,6 +3527,7 @@ export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescrip
     timingMode
     allowedRepeatModes
     requiresTargetQualityProfile
+    requiresTags
   }
 }`;
 

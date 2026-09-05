@@ -858,6 +858,25 @@ pub struct TaggedAlias {
     pub language: String,
 }
 
+/// One admin-defined user tag.
+///
+/// Membership still lives as a label inside `Title::tags`; this registry is the
+/// gate that says which unprefixed labels may be written there at all. The
+/// `scryer:` namespace inside `Title::tags` is reserved for structured settings
+/// and is never represented here.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleTagDefinition {
+    pub id: String,
+    /// Normalized label: trimmed, lowercased, internal whitespace collapsed.
+    /// Unique across the registry, and the exact string stored in `Title::tags`.
+    pub label: String,
+    pub description: Option<String>,
+    /// `None` for labels the 0218 migration adopted from existing title bags.
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Title {
     pub id: String,
@@ -981,6 +1000,15 @@ pub struct SeriesMovieLink {
     pub metadata_active: bool,
     pub monitored: bool,
     pub legacy_collection_id: Option<String>,
+    /// User tags applied to this series movie, by label.
+    ///
+    /// A series movie is a link, not a title, so it carries its own bag rather
+    /// than borrowing the series title's: the same `movie_entities` row can be
+    /// linked from several series, and each placement is tagged on its own.
+    /// Same registry gate, same normalization, and the same reserved `scryer:`
+    /// namespace rule as `Title::tags`.
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

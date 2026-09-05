@@ -622,7 +622,7 @@ pub(super) fn personalized_section_results(
     // Animation" genre rail.
     sections.extend(label_affinity_sections(
         &visible_items,
-        &library_profile.tag_labels,
+        &library_profile.theme_labels,
         "theme",
         "BECAUSE_YOU_LIKE_TAG",
         "because_you_like_tag",
@@ -759,8 +759,16 @@ pub(super) fn discovery_item_is_anime(item: &DiscoveryItemRecord) -> bool {
             .any(|label| normalize_discovery_affinity_key(label) == "anime")
 }
 
+/// What an owner's library says they like, expressed only in canonical labels.
+///
+/// This deliberately carries no user tags. User tags are private catalog
+/// vocabulary an operator invented for their own workflow ("keep", "needs
+/// review"); feeding them into affinity would send them out with every
+/// discovery request and would compose rails out of labels that mean nothing to
+/// the metadata gateway. Both rail families are therefore sourced from the
+/// canonical tags SMG itself assigned.
 #[derive(Clone, Debug, Default)]
 pub(super) struct DiscoveryLibraryAffinityProfile {
     pub(super) genre_labels: Vec<String>,
-    pub(super) tag_labels: Vec<String>,
+    pub(super) theme_labels: Vec<String>,
 }

@@ -1,4 +1,4 @@
-//! Round-trips for the policy columns 0220 added to `media_requests` and for
+//! Round-trips for the policy columns 0221 added to `media_requests` and for
 //! the three history reads the request-fact builder needs (spec 0003 FR-030,
 //! FR-040, FR-050).
 

@@ -477,6 +477,38 @@ impl TitleMutations {
         Ok(from_title(&app, title))
     }
 
+    /// Add and remove user tags across a set of titles, returning the updated titles.
+    ///
+    /// A patch, not a replacement: reserved `scryer:` settings entries are left
+    /// exactly as they were, and the merge happens inside the store transaction
+    /// so a concurrent title-settings save cannot clobber it. Every title's
+    /// library is authorized before the first write, so a set containing one
+    /// title the caller cannot manage changes nothing at all.
+    async fn update_title_tags(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Titles to patch and the tag labels to add and remove.")]
+        input: UpdateTitleTagsInput,
+    ) -> GqlResult<Vec<TitlePayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title_ids = input
+            .title_ids
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let add = input.add.unwrap_or_default();
+        let remove = input.remove.unwrap_or_default();
+        let titles = app
+            .update_title_tags(&actor, &title_ids, &add, &remove)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(titles
+            .into_iter()
+            .map(|title| from_title(&app, title))
+            .collect())
+    }
+
     /// Set the primary media file for a movie title.
     async fn set_primary_movie_file(
         &self,

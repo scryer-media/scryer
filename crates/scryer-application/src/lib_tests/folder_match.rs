@@ -180,6 +180,18 @@ impl FolderMatchFixture {
         folder_path: &Path,
         tags: &[&str],
     ) -> Title {
+        // Creation is registry-gated, so whatever user labels a case asks for
+        // have to be defined before the title can be born carrying them.
+        // Reserved `scryer:` entries are settings and are not gated.
+        for tag in tags {
+            if crate::is_reserved_title_tag(tag) {
+                continue;
+            }
+            let _ = self
+                .app
+                .create_title_tag_definition(&self.user, tag, None)
+                .await;
+        }
         let title = self
             .app
             .add_title(

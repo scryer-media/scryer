@@ -211,6 +211,47 @@
           "field": "active_retention_claims",
           "type": "number",
           "descKey": "settings.refMaintFactsActiveRetentionClaims"
+        },
+        {
+          "field": "series_movies",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsSeriesMovies"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionSeriesMovies",
+      "path": "input.facts.series_movies[]",
+      "fields": [
+        {
+          "field": "link_id",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieLinkId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refMaintSeriesMovieYear"
+        },
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieMonitored"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieHasFile"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refMaintSeriesMovieTags"
         }
       ]
     },
@@ -398,6 +439,11 @@
           "field": "active_retention_claims",
           "type": "object",
           "descKey": "settings.refMaintFactsActiveRetentionClaims"
+        },
+        {
+          "field": "series_movies",
+          "type": "object",
+          "descKey": "settings.refMaintFactsSeriesMovies"
         }
       ]
     },
@@ -1100,6 +1146,68 @@
           "field": "reason",
           "type": "string?",
           "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsSeriesMovies",
+      "path": "input.observations.series_movies",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsSeriesMoviesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionObsSeriesMovies",
+      "path": "input.observations.series_movies.value[]",
+      "fields": [
+        {
+          "field": "link_id",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieLinkId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refMaintSeriesMovieYear"
+        },
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieMonitored"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieHasFile"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refMaintSeriesMovieTags"
         }
       ]
     },

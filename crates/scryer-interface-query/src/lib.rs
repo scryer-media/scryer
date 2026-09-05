@@ -234,6 +234,21 @@ fn title_catalog_tag_filter_keys(
     Ok(keys)
 }
 
+/// Normalize the requested user-tag labels the way the registry stores them,
+/// so a filter typed as `Needs  Review` finds the titles carrying
+/// `needs review`. Anything the registry could never hold — a blank label, the
+/// reserved namespace, an over-long label — is refused by name rather than
+/// silently matching nothing.
+fn title_catalog_user_tags(tags: Option<Vec<String>>) -> Result<Vec<String>, AppError> {
+    let tags = tags.unwrap_or_default();
+    if tags.is_empty() {
+        return Ok(Vec::new());
+    }
+    scryer_application::normalize_user_title_tags(&tags).map_err(|error| {
+        AppError::Validation(format!("title catalog tags entries are invalid: {error}"))
+    })
+}
+
 fn title_catalog_filter_from_input(
     filter: Option<TitleCatalogFilterInput>,
 ) -> Result<TitleCatalogFilter, AppError> {
@@ -274,6 +289,7 @@ fn title_catalog_filter_from_input(
         ),
         genre_tag_keys: title_catalog_tag_filter_keys("genreTagKeys", filter.genre_tag_keys)?,
         theme_tag_keys: title_catalog_tag_filter_keys("themeTagKeys", filter.theme_tag_keys)?,
+        user_tags: title_catalog_user_tags(filter.tags)?,
         minimum_year: filter.minimum_year,
         maximum_year: filter.maximum_year,
         minimum_rating,

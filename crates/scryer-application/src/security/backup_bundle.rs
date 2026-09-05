@@ -835,6 +835,13 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "lifecycle_claims",
         classification: BackupTableClassification::Export,
     },
+    // The admin-defined tag registry is user intent: every title and delay
+    // profile tag points at one of its rows, and a restore without it would
+    // refuse the very labels the restored titles carry.
+    BackupTableCatalogEntry {
+        table: "title_tag_definitions",
+        classification: BackupTableClassification::Export,
+    },
     // A manual-import selection is deliberate user intent — the files a user
     // picked and the targets they mapped them to — held until the import
     // executes, so it is backed up like every other download/import lifecycle

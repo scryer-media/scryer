@@ -417,8 +417,10 @@ pub(crate) const LIBRARY_SCAN_EPISODIC_FILE_ANALYSIS_CONCURRENCY_PER_WALK: usize
 pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 24;
 pub use acquisition::release_search::release_strategy_kind_for_label;
 pub use helpers::{
-    HashDomain, accepted_inputs_for_client, blake3_identity_hex, nice_thread,
-    normalize_release_name, normalize_release_password,
+    HashDomain, MAX_USER_TAGS_PER_TITLE, MAX_USER_TITLE_TAG_LEN, RESERVED_TITLE_TAG_PREFIX,
+    accepted_inputs_for_client, blake3_identity_hex, is_reserved_title_tag, nice_thread,
+    normalize_release_name, normalize_release_password, normalize_user_title_tag,
+    normalize_user_title_tags,
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,
@@ -670,14 +672,16 @@ pub use types::{
     TitleImageBlob, TitleImageKind, TitleImageSourceResult, TitleImageSyncTask,
     TitleImageVariantRecord, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
     TitleMetadataUpdate, TitleMovieMediaSummary, TitleQualitySummary, TitleRatingSummary,
-    TitleReleaseBlocklistEntry, TotpCredentialRecord, TotpEnrollmentChallengeRecord,
-    TotpEnrollmentComplete, TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord,
-    TotpStatus, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
-    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UpdateRecycleBinSettings, UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot,
-    VerificationSettings, VerifiedLocalCredentials, WantedKind, WantedStatusCount,
-    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
-    WebauthnChallengeType, WebauthnCredentialRecord,
+    TitleReleaseBlocklistEntry, TitleTagDefinitionSummary, TitleTagDefinitionUpdate,
+    TitleTagMembershipCounts, TitleTagRewriteCounts, TotpCredentialRecord,
+    TotpEnrollmentChallengeRecord, TotpEnrollmentComplete, TotpEnrollmentStart,
+    TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus, UiDateTimeFormat,
+    UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
+    UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
+    UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings,
+    VerifiedLocalCredentials, WantedKind, WantedStatusCount, WebauthnChallengePurpose,
+    WebauthnChallengeRecord, WebauthnChallengeStart, WebauthnChallengeType,
+    WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,

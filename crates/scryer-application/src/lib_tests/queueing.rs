@@ -3702,6 +3702,11 @@ async fn series_movie_wanted_subject_uses_parent_owner_when_title_facet_is_missi
     ));
     let (app, user) = bootstrap_with_search_settings_and_indexer(settings, indexer_client);
 
+    // Creation is registry-gated now, so the vocabulary has to exist before a
+    // title can be born carrying it.
+    app.create_title_tag_definition(&user, "anime-hd", None)
+        .await
+        .expect("tag should be defined");
     let title = app
         .add_title(
             &user,
@@ -3931,6 +3936,11 @@ async fn convergence_test_title_and_subject(
     Title,
     crate::acquisition_release_search::ResolvedReleaseSearchSubject,
 ) {
+    // Creation is registry-gated now, so the vocabulary has to exist before a
+    // title can be born carrying it.
+    app.create_title_tag_definition(user, "anime-hd", None)
+        .await
+        .expect("tag should be defined");
     let title = app
         .add_title(
             user,

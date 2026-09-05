@@ -42,6 +42,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { visibleIndexerConfigFields } from "@/lib/types";
 import type {
   IndexerRecord,
@@ -827,6 +828,9 @@ export function SettingsIndexersSection({
   startCreateIndexer,
 }: SettingsIndexersSectionProps) {
   const t = useTranslate();
+  // The search pane this jumps to exists only while experimental features are
+  // on, so the row action comes and goes with it.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [errorHistoryIndexer, setErrorHistoryIndexer] =
     React.useState<IndexerErrorHistoryScope | null>(null);
   const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
@@ -1182,7 +1186,8 @@ export function SettingsIndexersSection({
                       >
                         <Logs className="h-4 w-4" />
                       </IndexerActionButton>
-                      {indexer.isEnabled &&
+                      {experimentalFeaturesEnabled &&
+                      indexer.isEnabled &&
                       indexer.enableInteractiveSearch &&
                       !indexer.supportsManagedChildrenSync ? (
                         <IndexerActionButton

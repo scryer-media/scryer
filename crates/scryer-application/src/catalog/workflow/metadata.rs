@@ -594,6 +594,12 @@ impl AppUseCase {
         let mut tags = tags.map(|tags| crate::helpers::normalize_tags(&tags));
         if let Some(tags) = tags.as_mut() {
             self.canonicalize_title_quality_profile_tags(tags).await?;
+            // The whole-bag write is the other door into `titles.tags`, and it
+            // has to be gated exactly like the tag patch is. Reserved `scryer:`
+            // entries pass through untouched — this path is how per-title
+            // options are stored — but an unprefixed label the registry does not
+            // define is refused by name.
+            self.require_registered_title_tags(tags).await?;
         }
 
         let title = self

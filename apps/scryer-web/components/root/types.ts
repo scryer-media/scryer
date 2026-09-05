@@ -27,6 +27,7 @@ export type SettingsSection =
   | "proxies"
   | "qualityProfiles"
   | "delayProfiles"
+  | "titleTags"
   | "acquisition"
   | "rules"
   | "maintenanceRules"

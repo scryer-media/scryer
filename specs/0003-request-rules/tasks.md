@@ -29,7 +29,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` accepted by revie
 
 ## WP4 — Domain, migrations, stores, ports — landed 2026-09-05, reviewed and accepted
 - [x] Domain types (`RequestRuleSet`, `RequestRuleRevision`, `RequestRuleEvaluationMode`, `RequestRuleDecisionRecord`, `LifecycleClaim` + enums); `MediaRequest` + event data additive fields
-- [x] Migrations 0218/0219/0220 (SQLite + Postgres), manifest-registered; `resolved_by_user_id` was already nullable in both dialects
+- [x] Migrations 0219/0220/0221 (renumbered from 0218-0220 when title tags took 0218 on release-NEXT) (SQLite + Postgres), manifest-registered; `resolved_by_user_id` was already nullable in both dialects
 - [x] `RequestRuleSetStore`, `RequestRuleDecisionStore`, `LifecycleClaimStore`, request-store columns + history queries
 - [x] Ports, `AppServices` wiring (incl. integration harness), in-memory test repos
 - [x] Store tests on SQLite (Postgres twins env-gated, unverified locally); migration apply-then-validate test

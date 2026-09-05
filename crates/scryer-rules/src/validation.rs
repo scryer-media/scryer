@@ -1769,7 +1769,7 @@ mod tests {
     /// have to be changed together deliberately.
     #[test]
     fn every_pinned_maintenance_template_validates() {
-        let templates: [(&str, &str); 11] = [
+        let templates: [(&str, &str); 13] = [
             (
                 "dead-wanted",
                 "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
@@ -1813,6 +1813,14 @@ mod tests {
             (
                 "expired-request-leases",
                 "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n",
+            ),
+            (
+                "tagged-for-removal",
+                "package rules\nimport rego.v1\n\nmatch if {\n\t\"remove\" in input.facts.tags\n}\n",
+            ),
+            (
+                "flag-for-review",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tinput.facts.has_file\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.first_imported_at)\n\tage > 365 * day_ns\n}\n",
             ),
         ];
 

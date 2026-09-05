@@ -777,6 +777,7 @@ pub fn from_series_movie_link(
         monitoring_override: link.monitoring_override,
         metadata_active: link.metadata_active,
         monitored: link.monitored,
+        tags: link.tags,
     }
 }
 

@@ -394,6 +394,14 @@ export function buildRouteCommands({
           icon: Settings,
           onSelect: buildNavigate(onNavigate, "settings", "delayProfiles"),
         } satisfies RouteCommand, {
+          id: "settings-title-tags",
+          label: `${settingsGroupLabel} / ${t("settings.titleTags")}`,
+          description: t("settings.titleTags"),
+          groupLabel: settingsGroupLabel,
+          keywords: ["settings", "tags", "labels", "titles", "registry"],
+          icon: Settings,
+          onSelect: buildNavigate(onNavigate, "settings", "titleTags"),
+        } satisfies RouteCommand, {
           id: "settings-rules",
           label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.rulesScoring")}`,
           description: t("settings.rulesScoring"),

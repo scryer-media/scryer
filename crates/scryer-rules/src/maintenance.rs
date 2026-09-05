@@ -188,6 +188,14 @@ pub struct MaintenanceFactsDoc {
     pub request_lease_state: Observation<String>,
     pub request_lease_expires_at: Observation<String>,
     pub active_retention_claims: Observation<i64>,
+    /// The series movies linked to a show subject: one entry per
+    /// `series_movie_links` row, each with its own tags.
+    ///
+    /// Known and empty for a show with no linked movies — Scryer looked and
+    /// there are none — and absent for a movie subject, which cannot have them
+    /// at all. A rule reading it on a movie therefore sees a missing key rather
+    /// than being held.
+    pub series_movies: Observation<Vec<MaintenanceSeriesMovieDoc>>,
 }
 
 /// Facts that name, or are computed from, identifiable people.
@@ -209,6 +217,24 @@ pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
     "watched_by_any_requester",
     "watched_by_all_requesters",
 ];
+
+/// One series movie as a rule sees it.
+///
+/// A series movie is a link between a show and a shared movie record, not a
+/// title, so it has no library, no facet, and no id a title-scoped action could
+/// be pointed at. What it does have is its own tag bag, which is why it is here:
+/// `add_tags` and `remove_tags` act on the subject title only, so a rule that
+/// wants to reason about "this show has an untagged movie" needs to read the
+/// movies rather than act on them.
+#[derive(Debug, Clone, Serialize)]
+pub struct MaintenanceSeriesMovieDoc {
+    pub link_id: String,
+    pub name: String,
+    pub year: Option<i32>,
+    pub monitored: bool,
+    pub has_file: bool,
+    pub tags: Vec<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MaintenanceFileDoc {
@@ -546,6 +572,8 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             // date no instance ever produced.
             request_lease_expires_at: Observation::absent(),
             active_retention_claims: Observation::known(0),
+            // A movie subject: series movies do not apply to it at all.
+            series_movies: Observation::absent(),
         },
     }
 }

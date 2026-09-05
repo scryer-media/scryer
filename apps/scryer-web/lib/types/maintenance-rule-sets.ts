@@ -27,7 +27,9 @@ export type MaintenanceActionKind =
   | "UNMONITOR_SCOPE_DELETE_FILES"
   | "UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY"
   | "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY"
-  | "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED";
+  | "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED"
+  | "ADD_TAGS"
+  | "REMOVE_TAGS";
 
 export type MaintenancePreviewOutcome = "MATCH" | "NO_MATCH" | "UNKNOWN";
 
@@ -71,6 +73,9 @@ export type MaintenanceActionSpec = {
   kind: MaintenanceActionKind;
   schemaVersion: number;
   targetQualityProfileId: string | null;
+  /// Labels the tag actions write. Empty for every other kind, so a caller can
+  /// render "what would this rule do" without branching on the kind first.
+  tags: string[];
 };
 
 export type MaintenanceRuleSetDetail = {
@@ -87,6 +92,9 @@ export type MaintenanceActionDescriptor = {
   timingMode: string;
   allowedRepeatModes: string[];
   requiresTargetQualityProfile: boolean;
+  /// True for the tag actions, which need at least one registry-defined label
+  /// before the rule can be saved.
+  requiresTags: boolean;
 };
 
 export type MaintenanceRuleSetDraft = {
@@ -95,6 +103,10 @@ export type MaintenanceRuleSetDraft = {
   regoSource: string;
   actionKind: MaintenanceActionKind;
   targetQualityProfileId: string;
+  /// Labels a tag action writes. Held on the draft even while another action is
+  /// selected, so switching back and forth does not lose what was picked; the
+  /// input builder drops them for kinds that take none.
+  tags: string[];
   graceDays: number;
   libraryIds: string[];
 };

@@ -54,6 +54,7 @@ mod settings_and_writer;
 mod sql_runtime_gated_write;
 mod stores_migrations_regressions;
 mod title_images;
+mod title_tags;
 mod titles_metadata;
 mod wanted_items_and_search;
 mod workflow_operation;

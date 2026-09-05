@@ -1268,3 +1268,95 @@ async fn episode_counts_are_absent_for_movies() {
 
     assert_eq!(preview.titles[0].outcome, Some(MaintenanceOutcome::Match));
 }
+
+/// A show subject carries its series movies, tags and all; a movie subject does
+/// not carry the key at all. Both halves matter: the first is what a rule reads,
+/// and the second is what stops `not input.facts.series_movies` from holding
+/// every movie in the library.
+#[tokio::test]
+async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+    let movie = seed_title(&app, &user, "A Movie", true).await;
+    let series = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "A Series".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series");
+    app.create_title_tag_definition(&user, "keep", None)
+        .await
+        .expect("define tag");
+    let link = app
+        .services
+        .catalog
+        .shows
+        .upsert_series_movie_link(test_series_movie_link(
+            &series.id,
+            "A Series Movie",
+            Some(2024),
+            None,
+            None,
+        ))
+        .await
+        .expect("link a series movie");
+    app.update_series_movie_tags(
+        &user,
+        std::slice::from_ref(&link.id),
+        &["keep".to_string()],
+        &[],
+    )
+    .await
+    .expect("tag the series movie");
+
+    let matcher = "package whatever\n\
+         import rego.v1\n\n\
+         match if {\n\
+         \tsome series_movie in input.facts.series_movies\n\
+         \tseries_movie.name == \"A Series Movie\"\n\
+         \tseries_movie.year == 2024\n\
+         \tseries_movie.monitored\n\
+         \tseries_movie.has_file == false\n\
+         \t\"keep\" in series_movie.tags\n\
+         }\n\n\
+         match if {\n\
+         \tnot input.facts.series_movies\n\
+         }\n";
+
+    let preview = app
+        .preview_maintenance_rule(
+            &user,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Inline {
+                    rego_source: matcher.to_string(),
+                    action_spec: MaintenanceActionSpec::new(
+                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
+                    grace_days: 0,
+                },
+                selection: MaintenancePreviewSelection::Titles(vec![
+                    series.id.clone(),
+                    movie.id.clone(),
+                ]),
+            },
+        )
+        .await
+        .expect("preview");
+
+    // The show matches through its movie, the movie through the absent key.
+    for result in &preview.titles {
+        assert_eq!(
+            result.outcome,
+            Some(MaintenanceOutcome::Match),
+            "{:?}",
+            preview.titles
+        );
+    }
+}

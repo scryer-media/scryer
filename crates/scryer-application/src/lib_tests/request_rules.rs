@@ -763,6 +763,11 @@ async fn an_enforced_approval_creates_the_title_with_the_policy_tags_and_a_dorma
     enable_gate(&harness).await;
 
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    harness
+        .app
+        .create_title_tag_definition(&harness.manager, "auto-approved", None)
+        .await
+        .expect("the policy tag is defined in the registry");
     let request_id = submit(&harness, &library_id, 9045, Some(30)).await;
 
     let titles = harness.titles.store.lock().await;
@@ -1079,6 +1084,12 @@ async fn preflight_and_submit_agree_and_read_the_gateway_once() {
     .await;
     enable_gate(&harness).await;
 
+    harness
+        .app
+        .create_title_tag_definition(&harness.manager, "auto-approved", None)
+        .await
+        .expect("the policy tag is defined in the registry");
+
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut input = media_request_input(library_id, 9052);
     input.requested_lease_days = Some(21);
@@ -1149,6 +1160,11 @@ async fn a_human_approval_honours_a_lease_and_tag_override() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let request_id = submit(&harness, &library_id, 9054, Some(90)).await;
+    harness
+        .app
+        .create_title_tag_definition(&harness.manager, "approver tag", None)
+        .await
+        .expect("the approver's tag is defined in the registry");
 
     let outcome = harness
         .app
@@ -1202,6 +1218,92 @@ async fn an_approver_may_not_mint_a_reserved_tag() {
     assert!(
         matches!(error, AppError::Validation(ref message) if message.contains("scryer:")),
         "unexpected error: {error:?}"
+    );
+}
+
+/// A rule may name any label within the family's bounds, but titles only
+/// carry labels an administrator defined. The undefined one is dropped; the
+/// approval it rode on still lands, with the defined labels.
+#[tokio::test]
+async fn an_undefined_policy_tag_is_dropped_without_failing_the_approval() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9057))
+        .await
+        .expect("pre-flight should answer");
+    assert!(
+        preflight.tags.is_empty(),
+        "the banner shows what would land, not what the rule asked: {:?}",
+        preflight.tags
+    );
+    let request_id = submit(&harness, &library_id, 9057, None).await;
+
+    let titles = harness.titles.store.lock().await;
+    assert_eq!(titles.len(), 1, "the approval still created the title");
+    assert!(
+        !titles[0].tags.iter().any(|tag| tag == "auto-approved"),
+        "an undefined label never reaches the title: {:?}",
+        titles[0].tags
+    );
+    drop(titles);
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Approved);
+    assert!(
+        requests[0].policy_tags.is_empty(),
+        "the request records what was applied: {:?}",
+        requests[0].policy_tags
+    );
+    drop(requests);
+
+    // The trace still says what the rule asked for, so an operator can see
+    // the label they have not defined yet.
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces
+        .iter()
+        .find(|trace| trace.request_id == request_id)
+        .expect("the decision was traced");
+    assert_eq!(trace.tags, vec!["auto-approved"]);
+}
+
+/// An approver's own list is held to the same bar as the tag editor.
+#[tokio::test]
+async fn an_approver_may_not_apply_an_undefined_tag() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9058, None).await;
+
+    let error = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            Some(vec!["nobody defined this".to_string()]),
+        )
+        .await
+        .expect_err("an undefined label is refused, not silently dropped");
+    assert!(
+        matches!(error, AppError::Validation(ref message) if message.contains("not a defined tag")),
+        "unexpected error: {error:?}"
+    );
+    assert!(
+        harness.titles.store.lock().await.is_empty(),
+        "nothing was created"
     );
 }
 

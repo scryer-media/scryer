@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use async_graphql::{Context, Error, ID, Object, Result as GqlResult};
+use async_graphql::{Context, Error, ID, MaybeUndefined, Object, Result as GqlResult};
 use chrono::{DateTime, Utc};
 use scryer_application::{
     AcquisitionSettings as AppAcquisitionSettings, ApiKeyExpiryPreset as AppApiKeyExpiryPreset,
@@ -20,7 +20,8 @@ use scryer_application::{
 
 use super::{
     from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_ui_settings, from_verification_settings, into_oauth_client_kind, to_verification_depth,
+    from_title_tag_definition, from_title_tag_rewrite_counts, from_ui_settings,
+    from_verification_settings, into_oauth_client_kind, to_verification_depth,
     ui_settings_update_from_input,
 };
 use scryer_interface_core::{
@@ -1440,6 +1441,103 @@ impl SettingsMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(DelayProfileDeletionPayload { id: ID::from(id) })
+    }
+
+    /// Defines a new title tag after checking the catalog-settings permission.
+    ///
+    /// Deciding which tags exist is catalog configuration, exactly like a delay
+    /// profile. Deciding which titles carry them is title management and is
+    /// checked per library by `updateTitleTags` instead.
+    async fn create_title_tag_definition(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Label to define and an optional note; the label is normalized before it is stored."
+        )]
+        input: CreateTitleTagDefinitionInput,
+    ) -> GqlResult<TitleTagDefinitionMutationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
+                .await?;
+        let definition = app
+            .create_title_tag_definition(&actor, &input.label, input.description)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(TitleTagDefinitionMutationPayload {
+            // A tag nothing carries yet rewrote nothing, so the counts are the
+            // zero value rather than a separate payload shape.
+            definition: from_title_tag_definition(definition, 0, 0),
+            counts: from_title_tag_rewrite_counts(Default::default()),
+        })
+    }
+
+    /// Renames or re-describes a title tag after checking the catalog-settings permission.
+    ///
+    /// A rename rewrites every title and delay profile carrying the old label.
+    /// Rule sources are immutable and are never rewritten, so the returned
+    /// counts name how many rules referenced the old label and will stop
+    /// matching.
+    async fn update_title_tag_definition(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Tag identity plus the replacement label or description; omitted fields keep their current values."
+        )]
+        input: UpdateTitleTagDefinitionInput,
+    ) -> GqlResult<TitleTagDefinitionMutationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
+                .await?;
+        let description = match input.description {
+            MaybeUndefined::Undefined => None,
+            MaybeUndefined::Null => Some(None),
+            MaybeUndefined::Value(value) => Some(Some(value)),
+        };
+        let updated = app
+            .update_title_tag_definition(&actor, input.id.as_str(), input.label, description)
+            .await
+            .map_err(to_gql_error)?;
+        let title_count = updated.counts.titles;
+        let series_movie_count = updated.counts.series_movies;
+        Ok(TitleTagDefinitionMutationPayload {
+            definition: from_title_tag_definition(
+                updated.definition,
+                title_count,
+                series_movie_count,
+            ),
+            counts: from_title_tag_rewrite_counts(updated.counts),
+        })
+    }
+
+    /// Deletes a title tag and strips it from every title and delay profile.
+    async fn delete_title_tag_definition(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID of the title tag to delete.")] id: ID,
+    ) -> GqlResult<TitleTagDefinitionDeletionPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
+                .await?;
+        let id = id.to_string();
+        let definition = app
+            .title_tag_definitions(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .find(|summary| summary.definition.id == id)
+            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title tag {id}"))))?;
+        let counts = app
+            .delete_title_tag_definition(&actor, &id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(TitleTagDefinitionDeletionPayload {
+            id: ID::from(id),
+            label: definition.definition.label,
+            counts: from_title_tag_rewrite_counts(counts),
+        })
     }
 
     /// Saves media settings for one content scope, with nullable fields passed through as application update semantics.

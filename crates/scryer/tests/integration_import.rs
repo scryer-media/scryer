@@ -647,6 +647,7 @@ async fn seed_series_movie_link(
         metadata_active: true,
         monitored: true,
         legacy_collection_id: None,
+        tags: Vec::new(),
         created_at: now,
         updated_at: now,
     };

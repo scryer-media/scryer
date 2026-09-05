@@ -1945,7 +1945,8 @@ const en: LocaleDictionary = {
     "Normalized original title country, when metadata provides one",
   "settings.refCtxInferredOriginalAudioLanguage":
     "Normalized original audio language inferred for unlabeled releases",
-  "settings.refCtxTags": "User-defined tags on the title",
+  "settings.refCtxTags":
+    "User-defined tags on the title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refCtxHasExisting":
     "True when a file already exists for this title",
   "settings.refCtxExistingScore":
@@ -3807,7 +3808,8 @@ const en: LocaleDictionary = {
   "settings.refMaintLibraryName": "Display name of that library",
   "settings.refMaintSectionFacts": "— The fact snapshot; each fact is a plain value, and the key is missing when the fact is absent or could not be observed",
   "settings.refMaintFactsMonitored": "Whether the subject is monitored",
-  "settings.refMaintFactsTags": "Tags applied to the subject",
+  "settings.refMaintFactsTags":
+    "User-defined tags on the subject, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refMaintFactsQualityProfileId": "Quality profile the subject is assigned to",
   "settings.refMaintFactsAddedAt": "When the subject was added to the library",
   "settings.refMaintFactsAddedByUserId": "Which user added the subject; absent when a scan or discovery created it",
@@ -3843,7 +3845,8 @@ const en: LocaleDictionary = {
   "settings.refMaintObsObservedAt": "When the value was observed, if the source recorded a time",
   "settings.refMaintObsReason": "Stable machine code explaining why the fact is unknown, or why an absent fact has no value",
   "settings.refMaintFactsMonitoredValue": "True when the subject is monitored",
-  "settings.refMaintFactsTagsValue": "Tag names applied to the subject",
+  "settings.refMaintFactsTagsValue":
+    "Lowercase user-defined tag names from the admin tag registry; never reserved scryer: settings entries",
   "settings.refMaintFactsQualityProfileIdValue": "Identifier of the assigned quality profile",
   "settings.refMaintFactsAddedAtValue": "RFC3339 timestamp the subject was added",
   "settings.refMaintFactsAddedByUserIdValue": "Identifier of the user who added the subject; the reason is title_added_by_system when nobody did",
@@ -3882,6 +3885,25 @@ const en: LocaleDictionary = {
   "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
   "settings.refMaintFileSubtitleLanguages": "Subtitle languages present in the file",
   "settings.refMaintFileAddedAt": "RFC3339 timestamp the file was added",
+  "settings.refMaintFactsSeriesMovies":
+    "Movies linked into this show's timeline, each with its own tags. Present for shows only: the key is missing entirely for a movie subject, and known-empty for a show with no linked movies. add_tags and remove_tags never write these; they act on the subject title.",
+  "settings.refMaintFactsSeriesMoviesValue":
+    "One entry per linked movie; see input.observations.series_movies.value[] below",
+  "settings.refMaintSectionSeriesMovies": "— One entry per linked movie in input.facts.series_movies",
+  "settings.refMaintSectionObsSeriesMovies":
+    "— One entry per linked movie in input.observations.series_movies.value",
+  "settings.refMaintSeriesMovieLinkId": "Identifier of the series-movie link",
+  "settings.refMaintSeriesMovieName": "Title of the linked movie",
+  "settings.refMaintSeriesMovieYear": "Release year of the linked movie, when known",
+  "settings.refMaintSeriesMovieMonitored": "Whether acquisition is enabled for this linked movie",
+  "settings.refMaintSeriesMovieHasFile": "Whether this linked movie has a file on disk",
+  "settings.refMaintSeriesMovieTags":
+    "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
+  "settings.refMaintTagActionsTitle": "Tag actions",
+  "settings.refMaintTagActionsNote":
+    "add_tags and remove_tags write user tags on the matched title. Every label has to exist in the tag registry an administrator maintains in Settings, and labels are stored lowercase — a rule naming a tag that was deleted afterwards holds with tag_not_defined instead of writing it.",
+  "settings.refMaintTagOscillationNote":
+    "Two rules that write the opposite patch for the same label on the same title hold both candidates with tag_patch_conflict rather than letting whichever ran last win. A rule that adds a label and another that removes it on a later run is not caught that way: it is an authoring mistake that flips the tag back and forth forever, so scope the two so they cannot both match.",
 
   "settings.maintenanceTemplateGallery": "Starter templates",
   "settings.maintenanceTemplateGalleryDescription":
@@ -4693,6 +4715,66 @@ const en: LocaleDictionary = {
   "grabDialog.status.failed": "{{name}}: {{reason}}",
   "grabDialog.error.expired":
     "That release is no longer in a live search. Run the search again.",
+  // Title tags: the administrator-defined registry in Settings, the per-title
+  // picker, the bulk pickers, and the catalog filter.
+  "settings.titleTags": "Tags",
+  "settings.titleTagsExisting": "Defined tags",
+  "settings.titleTagsHelp": "Tags defined here are the only tags anyone can apply to a title. Renaming one rewrites every title and delay profile that carries it; deleting one strips it from every title.",
+  "settings.titleTagsNone": "No tags are defined yet.",
+  "settings.titleTagsLoadError": "Tags could not be loaded.",
+  "settings.titleTagLabelLabel": "Label",
+  "settings.titleTagLabelPlaceholder": "keep",
+  "settings.titleTagLabelHelp": "Stored in lowercase with extra spaces removed. Up to 64 characters.",
+  "settings.titleTagDescriptionLabel": "Description",
+  "settings.titleTagDescriptionPlaceholder": "What this tag is for (optional)",
+  "settings.titleTagTitleCount": "Titles",
+  "settings.titleTagCreate": "Define tag",
+  "settings.titleTagCreateNew": "Define a new tag",
+  "settings.titleTagEdit": "Edit tag",
+  "settings.titleTagSaved": "Tag saved.",
+  "settings.titleTagSaveError": "The tag could not be saved.",
+  "settings.titleTagDeleteError": "The tag could not be deleted.",
+  "settings.titleTagDeleted": "Deleted {{label}} from {{count}} titles.",
+  "settings.titleTagDeleteConfirmTitle": "Delete tag",
+  "settings.titleTagDeleteConfirm": "{{label}} is on {{count}} titles. Deleting it removes it from every one of them and from any delay profile that filters on it. Rules that name it stop matching.",
+  "settings.titleTagLabelRequired": "Enter a label for the tag.",
+  "settings.titleTagLabelReserved": "Labels cannot start with scryer:, which is reserved for settings Scryer writes itself.",
+  "settings.titleTagLabelTooLong": "A label can be at most 64 characters.",
+  "settings.titleTagLabelInvalid": "A label cannot contain control characters.",
+  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
+  "settings.titleTagRenameWarning": "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
+  "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} maintenance rule sets",
+  "settings.titleTagReferenceReleaseRuleSets": "{{count}} release rule sets",
+  "settings.titleTagReferenceManagedTagFilters": "{{count}} managed tag filters",
+  "title.tagsLabel": "Tags",
+  "title.tagsNone": "No tags",
+  "title.tagsAdd": "Add a tag…",
+  "title.tagsAllApplied": "Every defined tag is already applied",
+  "title.tagsRemove": "Remove {{label}}",
+  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.bulkAddTags": "Add tags",
+  "title.bulkRemoveTags": "Remove tags",
+  "title.catalogFilters.themes": "Themes",
+  "title.catalogFilters.selectThemes": "Select themes...",
+  "title.catalogFilters.userTags": "Tags",
+  "title.catalogFilters.selectUserTags": "Select tags...",
+
+  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // sentences carry the English string where no translation is available yet,
+  // the same way the WP3 block above does.
+  "settings.titleTagSeriesMovieCount": "Series movies",
+  "settings.maintenanceActionAddTags": "Add tags",
+  "settings.maintenanceActionRemoveTags": "Remove tags",
+  "settings.maintenanceRuleTags": "Tags",
+  "settings.maintenanceRuleTagsNone": "No tags picked yet",
+  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceCandidatesTagPatchAdd": "adds {{tags}}",
+  "settings.maintenanceCandidatesTagPatchRemove": "removes {{tags}}",
+  "settings.maintenanceTemplateTaggedForRemovalTitle": "Tagged for removal",
+  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateFlagForReviewTitle": "Flag for review",
+  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+
 };
 
 export default en;

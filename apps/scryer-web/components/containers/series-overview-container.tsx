@@ -223,6 +223,9 @@ export type SeriesMovieLink = {
   monitoringOverride: boolean | null;
   metadataActive: boolean;
   monitored: boolean;
+  /// User tags on the link itself. A series movie is not a title, so this is
+  /// its own bag rather than the series title's.
+  tags?: string[] | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -2062,6 +2065,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onSetCollectionMonitored={handleSetCollectionMonitored}
         onSetEpisodeMonitored={handleSetEpisodeMonitored}
         onSetSeriesMovieMonitored={handleSetSeriesMovieMonitored}
+        onSeriesMovieTagsChanged={refreshTitleDetail}
         onSetTitleMonitored={handleSetTitleMonitored}
         onSearchMonitored={handleSearchMonitored}
         onAutoSearchEpisode={handleAutoSearchEpisode}

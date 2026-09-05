@@ -56,6 +56,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sun,
+  Tag,
   TextSearch,
   Timer,
   Recycle,
@@ -274,6 +275,7 @@ const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "profile",
   "qualityProfiles",
   "delayProfiles",
+  "titleTags",
   "plugins",
 ];
 const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
@@ -365,6 +367,12 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
+    id: "titleTags",
+    label: (t) => t("settings.titleTags"),
+    icon: Tag,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
     id: "downloadClients",
     label: (t) => t("settings.downloadClients"),
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
@@ -440,6 +448,7 @@ const SETTINGS_NAV_GROUPS: Array<{
       "general",
       "qualityProfiles",
       "delayProfiles",
+      "titleTags",
       "plugins",
     ],
   },

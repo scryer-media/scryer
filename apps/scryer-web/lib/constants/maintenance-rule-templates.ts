@@ -26,6 +26,11 @@ export type MaintenanceRuleTemplate = {
   /// every shipped template: which profile to move a title to is a choice only
   /// the operator can make, so the editor asks for it before the rule saves.
   targetQualityProfileId?: string;
+  /// Prefilled tag labels for a tagging action. A template may name a label
+  /// that does not exist in the registry yet; the editor shows it as a picked
+  /// chip and the API refuses to save until an administrator defines it, which
+  /// is the correct order — the vocabulary is an administrator's decision.
+  tags?: string[];
   /// True when the template's action needs a target quality profile the
   /// operator still has to pick. Declared on the template rather than read from
   /// the action descriptors, because the gallery is static UI that renders the
@@ -157,6 +162,30 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     destructive: true,
     regoSource:
       "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n",
+  },
+  {
+    id: "tagged-for-removal",
+    name: "tagged_for_removal",
+    titleKey: "settings.maintenanceTemplateTaggedForRemovalTitle",
+    descriptionKey: "settings.maintenanceTemplateTaggedForRemovalDescription",
+    actionKind: "DELETE_TITLE_AND_FILES",
+    graceDays: 7,
+    subjectFacets: ["movie", "show"],
+    destructive: true,
+    regoSource:
+      "package rules\nimport rego.v1\n\nmatch if {\n\t\"remove\" in input.facts.tags\n}\n",
+  },
+  {
+    id: "flag-for-review",
+    name: "flag_for_review",
+    titleKey: "settings.maintenanceTemplateFlagForReviewTitle",
+    descriptionKey: "settings.maintenanceTemplateFlagForReviewDescription",
+    actionKind: "ADD_TAGS",
+    tags: ["needs-review"],
+    graceDays: 0,
+    subjectFacets: ["movie", "show"],
+    regoSource:
+      "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tinput.facts.has_file\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.first_imported_at)\n\tage > 365 * day_ns\n}\n",
   },
   {
     id: "no-quality-profile",

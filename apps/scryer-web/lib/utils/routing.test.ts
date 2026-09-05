@@ -6,6 +6,7 @@ import {
   buildOverviewDetailPath,
   buildRulesPath,
   indexerSettingsTabFromPath,
+  indexerSettingsTabsFor,
   maintenanceRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
@@ -332,6 +333,22 @@ test("rules pane paths round-trip through the section helpers", () => {
   assert.equal(maintenanceRulesSectionFromPath("/automation/rules/maintenance"), "rules");
   assert.equal(maintenanceRulesSectionFromPath("/automation/rules/scoring"), "rules");
   assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
+});
+
+test("indexerSettingsTabsFor drops search until experimental features are on", () => {
+  assert.deepEqual(indexerSettingsTabsFor(true), [
+    "indexers",
+    "search",
+    "seedingProfiles",
+  ]);
+  assert.deepEqual(indexerSettingsTabsFor(false), ["indexers", "seedingProfiles"]);
+  // The list and seeding profiles stay reachable either way, so a held search
+  // link has a pane to fall back to.
+  for (const enabled of [true, false]) {
+    assert.ok(indexerSettingsTabsFor(enabled).includes("indexers"));
+    assert.ok(indexerSettingsTabsFor(enabled).includes("seedingProfiles"));
+  }
+  assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
 });
 
 test("rulesSectionsFor drops maintenance and request rules until experimental features are on", () => {

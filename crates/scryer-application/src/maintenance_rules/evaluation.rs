@@ -33,6 +33,7 @@ use scryer_domain::{
 };
 use scryer_rules::maintenance::{
     MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, MaintenanceRulesEvaluator,
+    MaintenanceSeriesMovieDoc,
 };
 use serde::Serialize;
 use tracing::{debug, warn};
@@ -843,6 +844,7 @@ impl AppUseCase {
         let mut counts = RuleCounts::default();
         for chunk in titles.chunks(MAINTENANCE_EVALUATION_TITLE_CHUNK) {
             let files_by_title = self.maintenance_files_for_titles(chunk).await?;
+            let series_movies_by_title = self.maintenance_series_movies_for_titles(chunk).await?;
             let requesters_by_title = self.maintenance_requesters_for_titles(chunk).await?;
             let signals_by_title = self
                 .maintenance_watch_signals_for_titles(&watch_context, chunk)
@@ -892,6 +894,10 @@ impl AppUseCase {
                         people,
                         watch,
                         claims,
+                        series_movies_by_title
+                            .get(&title.id)
+                            .map(Vec::as_slice)
+                            .unwrap_or_default(),
                         libraries,
                         &excluded,
                         evaluation_time,
@@ -988,6 +994,7 @@ impl AppUseCase {
         people: MaintenanceTitlePeople<'_>,
         watch: MaintenanceTitleWatch<'_>,
         claims: MaintenanceTitleClaims<'_>,
+        series_movies: &[MaintenanceSeriesMovieDoc],
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         excluded: &HashSet<String>,
         evaluation_time: DateTime<Utc>,
@@ -1078,6 +1085,7 @@ impl AppUseCase {
             people,
             watch,
             claims,
+            series_movies,
         );
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;
@@ -1248,6 +1256,74 @@ impl AppUseCase {
                 .push(file);
         }
         Ok(files_by_title)
+    }
+
+    /// One batched series-movie load per chunk, grouped by series title.
+    ///
+    /// Two reads, mirroring how `files` is built: every link for the chunk in
+    /// one query, then the "which links have a file" answer per show. The
+    /// second is per title because that is the shape the port has, and it is
+    /// only asked for shows that actually carry links — a movie-only chunk
+    /// issues neither query.
+    pub(crate) async fn maintenance_series_movies_for_titles(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<HashMap<String, Vec<MaintenanceSeriesMovieDoc>>> {
+        let series_title_ids: Vec<String> = titles
+            .iter()
+            .filter(|title| !matches!(title.facet, scryer_domain::MediaFacet::Movie))
+            .map(|title| title.id.clone())
+            .collect();
+        if series_title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let links = self
+            .services
+            .catalog
+            .shows
+            .list_series_movie_links_for_titles(&series_title_ids)
+            .await?;
+        if links.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut linked_titles: Vec<String> = links
+            .iter()
+            .map(|link| link.series_title_id.clone())
+            .collect();
+        linked_titles.sort();
+        linked_titles.dedup();
+        let mut with_files: HashSet<String> = HashSet::new();
+        for title_id in &linked_titles {
+            with_files.extend(
+                self.services
+                    .library
+                    .media_files
+                    .list_series_movie_link_ids_with_files_for_title(title_id)
+                    .await?,
+            );
+        }
+
+        let mut by_title: HashMap<String, Vec<MaintenanceSeriesMovieDoc>> = HashMap::new();
+        for link in links {
+            by_title
+                .entry(link.series_title_id.clone())
+                .or_default()
+                .push(MaintenanceSeriesMovieDoc {
+                    has_file: with_files.contains(&link.id),
+                    link_id: link.id,
+                    name: link.movie.title,
+                    year: link.movie.year,
+                    monitored: link.monitored,
+                    tags: link
+                        .tags
+                        .into_iter()
+                        .filter(|tag| !crate::is_reserved_title_tag(tag))
+                        .collect(),
+                });
+        }
+        Ok(by_title)
     }
 
     /// One batched media-request load per chunk, keyed by title. A title is a

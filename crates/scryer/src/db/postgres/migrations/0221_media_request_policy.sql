@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0220_media_request_policy.sql.
+-- PostgreSQL twin of migrations/0221_media_request_policy.sql.
 -- Policy provenance and the requested/approved lease on a media request
 -- (spec 0003 FR-030, FR-040, FR-050).
 --

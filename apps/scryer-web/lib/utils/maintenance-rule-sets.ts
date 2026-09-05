@@ -11,6 +11,10 @@ import type {
   MaintenanceRuleSetDraft,
   MaintenanceRuleSetRecord,
 } from "@/lib/types/maintenance-rule-sets";
+// Relative rather than aliased on purpose: `node --test` runs these modules
+// without the bundler's path aliases, so a value import through `@/` would
+// resolve in the app and fail in the test runner.
+import { isReservedTitleTag, normalizeTitleTagLabel } from "./title-tags.ts";
 
 /// The API caps a preview run at 50 titles and defaults to 20.
 export const MAINTENANCE_PREVIEW_LIMIT_MAX = 50;
@@ -46,6 +50,7 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     regoSource: MAINTENANCE_STARTER_SOURCE,
     actionKind: DEFAULT_ACTION_KIND,
     targetQualityProfileId: "",
+    tags: [],
     graceDays: 0,
     libraryIds: [],
   };
@@ -60,6 +65,7 @@ export function maintenanceRuleDraftFromDetail(
     regoSource: detail.revision.regoSource,
     actionKind: detail.actionSpec.kind,
     targetQualityProfileId: detail.actionSpec.targetQualityProfileId ?? "",
+    tags: [...(detail.actionSpec.tags ?? [])],
     graceDays: detail.revision.graceDays,
     libraryIds: [...detail.ruleSet.libraryIds],
   };
@@ -74,9 +80,10 @@ export function copyMaintenanceRuleDraft(
   };
 }
 
-/// Action payload shared by create and matcher-update. `targetQualityProfileId`
-/// is only sent for actions that declare they need one, so switching away from
-/// a profile-changing action does not leave a stale profile on the rule.
+/// Action payload shared by create and matcher-update. Each parameter is only
+/// sent for actions that declare they need it, so switching away from a
+/// profile-changing or tagging action does not leave a stale parameter on the
+/// rule.
 export function maintenanceActionInput(
   draft: MaintenanceRuleSetDraft,
   descriptors: MaintenanceActionDescriptor[],
@@ -86,10 +93,23 @@ export function maintenanceActionInput(
     draft.actionKind,
   );
   const profileId = draft.targetQualityProfileId.trim();
+  const needsTags = actionRequiresTags(descriptors, draft.actionKind);
+  const tags = normalizedActionTags(draft.tags);
   return {
     kind: draft.actionKind,
     targetQualityProfileId: needsProfile && profileId ? profileId : undefined,
+    tags: needsTags ? tags : undefined,
   };
+}
+
+/// The labels a tag action would send: normalized the way the registry stores
+/// them, de-duplicated, and in a stable order so two drafts that mean the same
+/// thing produce the same revision.
+export function normalizedActionTags(tags: readonly string[]): string[] {
+  const normalized = tags
+    .map((tag) => normalizeTitleTagLabel(tag))
+    .filter((tag) => tag.length > 0 && !isReservedTitleTag(tag));
+  return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
 }
 
 export function createMaintenanceRuleSetInput(
@@ -172,6 +192,15 @@ export function actionRequiresTargetQualityProfile(
   kind: MaintenanceActionKind,
 ): boolean {
   return descriptorForActionKind(descriptors, kind)?.requiresTargetQualityProfile ?? false;
+}
+
+/// Whether the selected action needs tags. Read from the descriptor rather than
+/// from a hardcoded pair of kinds, the same way the profile field is.
+export function actionRequiresTags(
+  descriptors: MaintenanceActionDescriptor[],
+  kind: MaintenanceActionKind,
+): boolean {
+  return descriptorForActionKind(descriptors, kind)?.requiresTags ?? false;
 }
 
 export function clampMaintenancePreviewLimit(limit: number): number {
@@ -270,6 +299,8 @@ const ACTION_KIND_LABEL_KEYS: Record<MaintenanceActionKind, string> = {
     "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty",
   CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED:
     "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged",
+  ADD_TAGS: "settings.maintenanceActionAddTags",
+  REMOVE_TAGS: "settings.maintenanceActionRemoveTags",
 };
 
 /// Translation key for an action kind, or null when the API sends a kind this

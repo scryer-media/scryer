@@ -463,6 +463,20 @@ async fn seed_request_rule_gate_definition(ctx: &TestContext) {
         .expect("seed the request-rule gate definition");
 }
 
+/// Register `label` in the administrator tag registry, which is the only
+/// vocabulary a title may carry.
+async fn define_title_tag(ctx: &TestContext, label: &str) {
+    let response = gql(
+        ctx,
+        "mutation($input: CreateTitleTagDefinitionInput!) {
+            createTitleTagDefinition(input: $input) { definition { label } }
+        }",
+        json!({ "input": { "label": label } }),
+    )
+    .await;
+    assert_no_errors(&response);
+}
+
 async fn arm_gate(ctx: &TestContext, enabled: bool) {
     seed_request_rule_gate_definition(ctx).await;
     let body = gql(
@@ -1031,6 +1045,9 @@ async fn the_instance_gate_needs_system_settings_authority() {
 async fn an_enforced_approval_leases_the_title_and_explains_itself() {
     let ctx = TestContext::new().await;
     let requester = requester(&ctx, "approved-requester").await;
+    // Titles only carry registry-defined labels; a rule's tag that nobody
+    // defined is dropped at approval, so the label under test is defined first.
+    define_title_tag(&ctx, "auto-approved").await;
 
     let request = submit_under(&ctx, &requester, APPROVE_EVERYTHING, "ENFORCE", Some(30)).await;
 

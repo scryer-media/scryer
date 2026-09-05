@@ -417,8 +417,17 @@ impl AppUseCase {
             None => crate::request_rules::validate_lease_days(request.requested_lease_days)?,
         };
         let approved_tags = match tags {
-            Some(tags) => crate::request_rules::validate_tag_list(tags)?,
-            None => request.policy_tags.clone(),
+            // An approver's own list is held to the same bar as the tag editor:
+            // a label nobody defined is an error they can fix in Settings.
+            Some(tags) => {
+                let tags = crate::request_rules::validate_tag_list(tags)?;
+                self.require_registered_title_tags(&tags).await?;
+                tags
+            }
+            None => {
+                self.registered_policy_tags(&request.id, &request.policy_tags)
+                    .await?
+            }
         };
         let profile_reference_guard = self
             .runtime
@@ -713,15 +722,51 @@ impl AppUseCase {
         Ok(resolution.updated)
     }
 
+    /// The subset of `policy_tags` the tag registry defines.
+    ///
+    /// Rules may name any label within the family's bounds, but titles only
+    /// carry labels an administrator defined (the same gate `updateTitleTags`
+    /// enforces). An undefined label is dropped with a warning instead of
+    /// failing the approval: the rule's verdict stands, the tag does not.
+    async fn registered_policy_tags(
+        &self,
+        request_id: &str,
+        policy_tags: &[String],
+    ) -> AppResult<Vec<String>> {
+        if policy_tags.is_empty() {
+            return Ok(Vec::new());
+        }
+        let undefined = self.undefined_title_tag_labels(policy_tags).await?;
+        if undefined.is_empty() {
+            return Ok(policy_tags.to_vec());
+        }
+        tracing::warn!(
+            request_id,
+            dropped = ?undefined,
+            "request rule tags are not defined in the tag registry; applying the rest"
+        );
+        Ok(policy_tags
+            .iter()
+            .filter(|tag| !undefined.contains(tag))
+            .cloned()
+            .collect())
+    }
+
     async fn auto_approve_submitted_media_request(
         &self,
         actor: &User,
         request: MediaRequest,
-        provenance: RequestDecisionProvenance,
+        mut provenance: RequestDecisionProvenance,
     ) -> AppResult<()> {
         if request.status != MediaRequestStatus::Pending {
             return Ok(());
         }
+        // Only registry-defined labels reach the title; the rest are dropped
+        // here so a rule naming a tag nobody defined cannot fail the approval
+        // it just granted. The provenance carries what was actually applied.
+        provenance.policy_tags = self
+            .registered_policy_tags(&request.id, &provenance.policy_tags)
+            .await?;
 
         let approved_quality_profile_id = request
             .requested_quality_profile_id
@@ -1912,13 +1957,9 @@ fn media_request_to_new_title(
     // Policy and approver tags are plain labels beside the structured
     // `scryer:`-prefixed ones. The tag validator refuses that prefix, so a rule
     // can never mint a tag the resolver would read as a quality profile or a
-    // monitor type.
-    //
-    // TODO(title-tags registry): the sibling title-tags workstream has not
-    // landed in this worktree (`title_tag_definitions` does not exist yet), so
-    // there is nothing to validate these against beyond the family's own
-    // bounds. When it lands, both the policy tags and the approver override
-    // should be checked against the registry here.
+    // monitor type. Callers have already reduced them to registry-defined
+    // labels (`registered_policy_tags` / `require_registered_title_tags`), so
+    // title creation's own registry gate cannot refuse them here.
     for tag in policy_tags {
         let tag = tag.trim();
         if !tag.is_empty() && !tags.iter().any(|existing| existing == tag) {

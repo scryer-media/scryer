@@ -15,6 +15,10 @@ use crate::media::canonical_tags::{
     load_movie_entity_metadata_ratings, replace_movie_entity_metadata_ratings_tx,
 };
 use crate::media::title_credits::{load_movie_entity_credits, replace_movie_entity_credits_tx};
+// Series-movie tags are the same bag with the same rules as a title's, so the
+// patch, the per-owner cap, and the reserved-namespace guard are the title
+// store's function rather than a second copy that could drift from it.
+use crate::media::titles::store::apply_user_tag_patch;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTarget, SqlTx, StoreDatastore,
 };
@@ -26,7 +30,7 @@ const SERIES_MOVIE_LINK_COLUMNS: &str = "sml.id AS link_id, sml.series_title_id,
     sml.narrative_order, sml.after_season, sml.before_season, sml.linked_episode_id, \
     sml.association_confidence, sml.continuity_status, sml.movie_form, sml.confidence, \
     sml.signal_summary, sml.source, sml.monitoring_override, sml.metadata_active, \
-    sml.monitored AS link_monitored, sml.legacy_collection_id, \
+    sml.monitored AS link_monitored, sml.legacy_collection_id, sml.tags AS link_tags, \
     sml.created_at AS link_created_at, sml.updated_at AS link_updated_at, \
     me.id AS movie_id, me.title AS movie_title, me.sort_title AS movie_sort_title, \
     me.slug AS movie_slug, me.year AS movie_year, me.overview AS movie_overview, \
@@ -184,6 +188,59 @@ impl ShowRepository for ShowStore {
                 let retained_link_ids = retained_link_ids.clone();
                 Box::pin(async move {
                     delete_stale_series_movie_links_tx(tx, &title_id, &retained_link_ids).await
+                })
+            },
+        )
+        .await
+    }
+
+    async fn update_series_movie_link_user_tags(
+        &self,
+        link_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<SeriesMovieLink> {
+        let link_id = link_id.to_string();
+        let add = add.to_vec();
+        let remove = remove.to_vec();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "update_series_movie_link_user_tags",
+            move |tx| {
+                let link_id = link_id.clone();
+                let add = add.clone();
+                let remove = remove.clone();
+                Box::pin(async move {
+                    // Read-modify-write inside the transaction rather than a
+                    // whole-bag replace from a value the caller read earlier,
+                    // for the same reason the title patch does it: two
+                    // concurrent tag saves on one link must not lose each
+                    // other's half.
+                    let existing =
+                        load_series_movie_link_tx(tx, &link_id)
+                            .await?
+                            .ok_or_else(|| {
+                                AppError::NotFound(format!("series movie link {link_id}"))
+                            })?;
+                    let mut tags = existing.tags.clone();
+                    apply_user_tag_patch(&mut tags, &add, &remove)?;
+                    tx.execute(
+                        "UPDATE series_movie_links SET tags = {}, updated_at = {} WHERE id = {}",
+                        &[
+                            SqlArg::Json(
+                                serde_json::to_value(&tags)
+                                    .unwrap_or_else(|_| serde_json::Value::Array(Vec::new())),
+                            ),
+                            SqlArg::Timestamp(Utc::now()),
+                            SqlArg::Text(link_id.clone()),
+                        ],
+                    )
+                    .await?;
+                    load_series_movie_link_tx(tx, &link_id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::Repository("series movie tag patch returned no row".into())
+                        })
                 })
             },
         )
@@ -745,9 +802,9 @@ async fn upsert_series_movie_link_tx(
              id, series_title_id, movie_entity_id, placement, narrative_order, after_season,
              before_season, linked_episode_id, association_confidence, continuity_status,
              movie_form, confidence, signal_summary, source, monitoring_override, metadata_active,
-             monitored, legacy_collection_id, created_at, updated_at
+             monitored, legacy_collection_id, tags, created_at, updated_at
          ) VALUES (
-             {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+             {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
          )
          ON CONFLICT(id) DO UPDATE SET
              series_title_id = excluded.series_title_id,
@@ -768,6 +825,12 @@ async fn upsert_series_movie_link_tx(
              monitored = excluded.monitored,
              legacy_collection_id = COALESCE(excluded.legacy_collection_id, series_movie_links.legacy_collection_id),
              updated_at = excluded.updated_at",
+        // `tags` is deliberately absent from the DO UPDATE list. This upsert is
+        // the metadata-sync write: it runs on every hydration with whatever the
+        // provider reported, and operator tag membership is not something a
+        // provider reports. It is set on insert (so a caller creating a link
+        // with tags keeps them) and thereafter only
+        // `update_series_movie_link_user_tags` writes the column.
         &[
             SqlArg::Text(link.id.clone()),
             SqlArg::Text(link.series_title_id.clone()),
@@ -787,6 +850,10 @@ async fn upsert_series_movie_link_tx(
             SqlArg::Bool(link.metadata_active),
             SqlArg::Bool(link.monitored),
             SqlArg::OptText(link.legacy_collection_id.clone()),
+            SqlArg::Json(
+                serde_json::to_value(&link.tags)
+                    .unwrap_or_else(|_| serde_json::Value::Array(Vec::new())),
+            ),
             SqlArg::Timestamp(link.created_at),
             SqlArg::Timestamp(link.updated_at),
         ],
@@ -1849,9 +1916,23 @@ fn row_to_series_movie_link(row: &SqlRow) -> AppResult<SeriesMovieLink> {
         metadata_active: row.bool("metadata_active")?,
         monitored: row.bool("link_monitored")?,
         legacy_collection_id: row.opt_text("legacy_collection_id")?,
+        tags: decode_series_movie_link_tags(row)?,
         created_at: row.timestamp("link_created_at")?,
         updated_at: row.timestamp("link_updated_at")?,
     })
+}
+
+/// The link's tag bag, defaulting to empty.
+///
+/// A row written before migration 0218 reads as `[]` from the column default,
+/// and a bag that is not an array of strings is a corrupt row rather than a
+/// reason to fail the whole read: the link is still a real link, so it comes
+/// back untagged and the next tag write rewrites the column.
+fn decode_series_movie_link_tags(row: &SqlRow) -> AppResult<Vec<String>> {
+    Ok(row
+        .opt_json("link_tags")?
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default())
 }
 
 fn row_to_episode(row: &SqlRow) -> AppResult<Episode> {

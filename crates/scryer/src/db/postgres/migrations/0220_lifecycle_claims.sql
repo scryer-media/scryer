@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0219_lifecycle_claims.sql.
+-- PostgreSQL twin of migrations/0220_lifecycle_claims.sql.
 -- Title leases and keep claims (spec 0003 FR-041..FR-044, plan 0003 section 5).
 --
 -- No foreign key to `titles`: claims are history, release is an explicit state

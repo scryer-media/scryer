@@ -232,6 +232,8 @@ impl AppUseCase {
             &draft.action_spec,
             draft.grace_days,
         )?;
+        self.require_registered_action_tags(&draft.action_spec)
+            .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
 
@@ -300,6 +302,8 @@ impl AppUseCase {
             &draft.action_spec,
             draft.grace_days,
         )?;
+        self.require_registered_action_tags(&draft.action_spec)
+            .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
 
@@ -506,7 +510,9 @@ impl AppUseCase {
             }
         }
         // Preview must see exactly what the evaluator sees, so the same two
-        // batched people lookups run here, once for the whole selection.
+        // batched people lookups run here, once for the whole selection, and so
+        // does the series-movie load.
+        let series_movies_by_title = self.maintenance_series_movies_for_titles(&titles).await?;
         let requesters_by_title = self.maintenance_requesters_for_titles(&titles).await?;
         let usernames = self.maintenance_usernames_by_id().await?;
         // Watch signals go through the same run-scoped gate the evaluator uses,
@@ -566,8 +572,19 @@ impl AppUseCase {
                     .map(Vec::as_slice),
                 store_readable: claims_by_title.is_some(),
             };
-            let input =
-                build_title_input(evaluated_at, &title, &library, files, people, watch, claims);
+            let input = build_title_input(
+                evaluated_at,
+                &title,
+                &library,
+                files,
+                people,
+                watch,
+                claims,
+                series_movies_by_title
+                    .get(&title.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
 
             let evaluation = evaluator
                 .evaluate(&input)
@@ -771,6 +788,28 @@ impl AppUseCase {
                 )
             })
             .collect())
+    }
+}
+
+impl AppUseCase {
+    /// The registry half of tag-action validation.
+    ///
+    /// `MaintenanceActionSpec::validate` is static — shape, normalization, and
+    /// the per-title ceiling — because a stored spec is re-validated on every
+    /// read and must not need a database to be readable. Whether a label is
+    /// *defined* is a live question, so it is asked here, once, when a revision
+    /// is written, and asked again by the executor before it acts: a tag
+    /// deleted in between holds the candidate rather than writing a label the
+    /// assignment path would itself refuse.
+    async fn require_registered_action_tags(
+        &self,
+        action_spec: &MaintenanceActionSpec,
+    ) -> AppResult<()> {
+        let labels = action_spec.parameters.tag_labels();
+        if labels.is_empty() {
+            return Ok(());
+        }
+        self.require_registered_title_tags(labels).await
     }
 }
 

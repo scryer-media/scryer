@@ -452,7 +452,7 @@ impl MediaRequestRepository for MediaRequestStore {
 }
 
 /// Every read of `media_requests` selects the same column list, so the policy
-/// columns 0220 added cannot be picked up by one path and missed by another.
+/// columns 0221 added cannot be picked up by one path and missed by another.
 const REQUEST_COLUMNS: &str = "id, library_id, facet, status, identity_fingerprint, title,
         sort_title, slug, poster_url, background_url, year, overview, runtime_minutes, language,
         content_status, rating_summary_json,
@@ -949,7 +949,7 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
     })
 }
 
-/// Serialize a string list for one of the JSON text columns 0220 added.
+/// Serialize a string list for one of the JSON text columns 0221 added.
 fn json_array_text(values: &[String]) -> AppResult<String> {
     canonical_json_text(&values)
 }

@@ -670,6 +670,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // public types 737->738. The two switches themselves are additive fields on
     // the existing general settings payload and update input, so INPUT_OBJECT,
     // ENUM, mutation, and subscription counts are unchanged.
+    // Admin-defined title tags add the `titleTagDefinitions` registry read,
+    // which any authenticated caller may make because the tag picker and the
+    // catalog filter both need the vocabulary: query 151->152.
     // Request rules (spec 0003 section 7) add nine query roots: the three
     // authoring reads (`requestRuleSets`, `requestRuleSet`,
     // `requestRuleRevisions`), the instance gate, the two decision reads
@@ -677,7 +680,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Reference document, the requester pre-flight, and `titleClaims`.
     // Query 151->160.
     assert_eq!(
-        query_field_count, 160,
+        query_field_count, 161,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -688,12 +691,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Indexer search (spec 0002) adds two mutations on the interactive-search
     // job: issueInteractiveReleaseCandidateToken and queueUnlinkedRelease.
     // 216->218.
+    // Admin-defined title tags add four mutations: the per-title patch
+    // (updateTitleTags) plus the three registry writes beside the delay
+    // profiles (create/update/deleteTitleTagDefinition). 220->224.
+    // Series-movie tags add a fifth, updateSeriesMovieTags, beside
+    // setSeriesMovieMonitored: a series movie is a link row rather than a
+    // title, so its tag patch takes link ids and cannot ride updateTitleTags.
+    // 224->225.
     // Request rules add eleven mutations: six authoring roots (create, matcher
     // edit, metadata edit, mode, delete, validate), the author-side preview,
     // the instance gate, and the three administrator claim operations.
     // 220->231.
     assert_eq!(
-        mutation_field_count, 231,
+        mutation_field_count, 236,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -751,6 +761,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // census. Combined with the location-surface fold above, the totals are
     // public types 720->724, OBJECT 379->380, INPUT_OBJECT 191->193, and
     // ENUM 138->139.
+    // Admin-defined title tags add four objects (the definition, the rewrite
+    // counts, and the mutation and deletion payloads that carry them) and three
+    // inputs (create, update, and the per-title tag patch): OBJECT 388->392,
+    // INPUT_OBJECT 198->201, public types 738->745. `TitleCatalogFilterInput.tags`
+    // and the `updateTitleTags` result are additive on types that already
+    // exist, and no enum joins the schema.
+    // Series-movie tags and the maintenance tag actions add one input,
+    // UpdateSeriesMovieTagsInput: INPUT_OBJECT 201->202, public types 745->746.
+    // Everything else in that work is additive on types that already exist -
+    // `tags` on the series-movie link payload, the action spec and the action
+    // input, `seriesMovieCount` on the tag definition, `seriesMovies` on the
+    // rewrite counts, `requiresTags` on the action descriptor - and the two new
+    // action kinds are values inside the existing MaintenanceActionKind enum,
+    // so OBJECT and ENUM are unchanged.
     // Request rules add fourteen objects (rule set, revision, detail, delete
     // payload, validation payload, reason, vote, decision, author preview,
     // requester pre-flight, instance gates, title claim, media-request lease,
@@ -760,9 +784,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // claim enums): OBJECT 388->402, INPUT_OBJECT 198->209, ENUM 140->146,
     // public types 738->769. The additive fields on the existing media-request
     // payload and its three inputs add no type.
-    assert_eq!(public_types.len(), 769);
-    assert_eq!(kind_count("OBJECT"), 402);
-    assert_eq!(kind_count("INPUT_OBJECT"), 209);
+    assert_eq!(public_types.len(), 777);
+    assert_eq!(kind_count("OBJECT"), 406);
+    assert_eq!(kind_count("INPUT_OBJECT"), 213);
     assert_eq!(kind_count("ENUM"), 146);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);

@@ -907,6 +907,9 @@ async fn graphql_title_options_input_uses_root_folder_id() {
 async fn graphql_add_title_with_structured_options() {
     let ctx = TestContext::new().await;
     seed_title_quality_profiles(&ctx, &["anime-hd"]).await;
+    // Creation is registry-gated, so the user label this fixture carries has to
+    // be defined before a title can be born with it.
+    define_title_tag(&ctx, "favorite", None).await;
     let library = create_title_catalog_library(
         &ctx,
         "ANIME",
@@ -1597,6 +1600,9 @@ async fn graphql_add_movie_without_an_identity_parks_unhydrated() {
 #[tokio::test]
 async fn graphql_reused_add_applies_explicit_options_and_preserves_omitted_ones() {
     let ctx = TestContext::new().await;
+    // Creation is registry-gated, so the user label this fixture carries has to
+    // be defined before a title can be born with it.
+    define_title_tag(&ctx, "keep-me", None).await;
     let query = r#"mutation($input: AddTitleInput!) {
         addTitle(input: $input) {
             reusedExistingTitle
@@ -2918,6 +2924,9 @@ async fn graphql_set_title_monitored() {
 async fn graphql_update_title_structured_options_merge_with_existing_tags() {
     let ctx = TestContext::new().await;
     seed_title_quality_profiles(&ctx, &["anime-4k"]).await;
+    // Creation is registry-gated, so the user label this fixture carries has to
+    // be defined before a title can be born with it.
+    define_title_tag(&ctx, "favorite", None).await;
     let library = create_title_catalog_library(
         &ctx,
         "ANIME",
@@ -4378,4 +4387,611 @@ async fn graphql_series_titles_expose_series_facet() {
     let title = &titles[0];
     assert_eq!(title["name"], expected_name);
     assert_eq!(title["facet"], "SERIES");
+}
+
+// ---------------------------------------------------------------------------
+// Admin-defined title tags
+// ---------------------------------------------------------------------------
+
+/// A user who may manage titles in exactly one library and nothing else. No app
+/// permission at all, so the registry read still has to work for them while
+/// every registry write is refused.
+fn title_tag_manager_actor(library_id: &str) -> User {
+    User {
+        id: Id::new().0,
+        username: "title-tag-manager".to_string(),
+        password_hash: None,
+        password_change_required: false,
+        account_kind: Default::default(),
+        authorization: UserAuthorization {
+            app: AppPermissionMask::NONE,
+            libraries: HashMap::from([(
+                library_id.to_string(),
+                LibraryPermissionMask::from_permissions([
+                    LibraryPermission::View,
+                    LibraryPermission::ManageTitles,
+                ]),
+            )]),
+            default_library: LibraryPermissionMask::NONE,
+            actor_capabilities: scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
+            login_status: Default::default(),
+            loaded: true,
+        },
+    }
+}
+
+async fn define_title_tag(ctx: &TestContext, label: &str, description: Option<&str>) -> String {
+    let body = gql(
+        ctx,
+        r#"mutation($input: CreateTitleTagDefinitionInput!) {
+            createTitleTagDefinition(input: $input) {
+                definition { id label description titleCount }
+                counts { titles delayProfiles maintenanceRuleSets releaseRuleSets managedTagFilters }
+            }
+        }"#,
+        json!({ "input": { "label": label, "description": description } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let created = &body["data"]["createTitleTagDefinition"];
+    assert_eq!(created["definition"]["titleCount"], 0);
+    assert_eq!(created["counts"]["titles"], 0);
+    created["definition"]["id"]
+        .as_str()
+        .expect("title tag definition id")
+        .to_string()
+}
+
+async fn stored_title_tags(ctx: &TestContext, title_id: &str) -> Vec<String> {
+    let body = gql(
+        ctx,
+        r#"query($id: ID!) { title(id: $id) { tags } }"#,
+        json!({ "id": title_id }),
+    )
+    .await;
+    assert_no_errors(&body);
+    body["data"]["title"]["tags"]
+        .as_array()
+        .expect("title tags")
+        .iter()
+        .map(|tag| tag.as_str().expect("tag string").to_string())
+        .collect()
+}
+
+fn graphql_error_messages(body: &Value) -> String {
+    body["errors"]
+        .as_array()
+        .expect("expected GraphQL errors")
+        .iter()
+        .filter_map(|error| error["message"].as_str())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+#[tokio::test]
+async fn graphql_title_tag_registry_round_trips_with_rewrite_counts() {
+    let ctx = TestContext::new().await;
+    let library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Tag Registry Library",
+        &[("/tag-registry/movies", true)],
+    )
+    .await;
+    let library_id = library_id(&library);
+    let root_id = library_root_id(&library, "/tag-registry/movies");
+    let first =
+        add_catalog_filter_title(&ctx, "Tagged One", "992001", &library_id, &root_id, 2001).await;
+    let second =
+        add_catalog_filter_title(&ctx, "Tagged Two", "992002", &library_id, &root_id, 2002).await;
+
+    // The label is normalized on the way in, so the registry stores one
+    // canonical spelling however the operator typed it.
+    let definition_id = define_title_tag(&ctx, "  Needs   Review ", Some("  look at this  ")).await;
+    define_title_tag(&ctx, "keep", None).await;
+
+    let listed = gql(
+        &ctx,
+        r#"{ titleTagDefinitions { id label description titleCount } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let definitions = listed["data"]["titleTagDefinitions"]
+        .as_array()
+        .expect("title tag definitions");
+    let labels = definitions
+        .iter()
+        .map(|definition| definition["label"].as_str().expect("label"))
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["keep", "needs review"]);
+    let normalized = definitions
+        .iter()
+        .find(|definition| definition["label"] == "needs review")
+        .expect("the normalized definition");
+    assert_eq!(normalized["id"], definition_id.as_str());
+    assert_eq!(normalized["description"], "look at this");
+    assert_eq!(normalized["titleCount"], 0);
+
+    let assigned = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleTagsInput!) {
+            updateTitleTags(input: $input) { id tags }
+        }"#,
+        json!({
+            "input": {
+                "titleIds": [first, second],
+                // Typed the way an operator would, not the way it is stored.
+                "add": ["Needs Review"],
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&assigned);
+    let updated = assigned["data"]["updateTitleTags"]
+        .as_array()
+        .expect("updated titles");
+    assert_eq!(updated.len(), 2);
+    for title in updated {
+        assert_eq!(title["tags"], json!(["needs review"]));
+    }
+
+    let renamed = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleTagDefinitionInput!) {
+            updateTitleTagDefinition(input: $input) {
+                definition { id label description titleCount }
+                counts { titles delayProfiles maintenanceRuleSets releaseRuleSets managedTagFilters }
+            }
+        }"#,
+        json!({
+            "input": { "id": definition_id, "label": "Archive", "description": null }
+        }),
+    )
+    .await;
+    assert_no_errors(&renamed);
+    let renamed = &renamed["data"]["updateTitleTagDefinition"];
+    assert_eq!(renamed["definition"]["label"], "archive");
+    assert!(renamed["definition"]["description"].is_null());
+    assert_eq!(renamed["definition"]["titleCount"], 2);
+    assert_eq!(renamed["counts"]["titles"], 2);
+    assert_eq!(renamed["counts"]["delayProfiles"], 0);
+    // No rules exist in this fixture; the counts are the warning surface for
+    // sources a rename can never rewrite.
+    assert_eq!(renamed["counts"]["maintenanceRuleSets"], 0);
+    assert_eq!(renamed["counts"]["releaseRuleSets"], 0);
+    assert_eq!(renamed["counts"]["managedTagFilters"], 0);
+    assert_eq!(stored_title_tags(&ctx, &first).await, vec!["archive"]);
+    assert_eq!(stored_title_tags(&ctx, &second).await, vec!["archive"]);
+
+    let deleted = gql(
+        &ctx,
+        r#"mutation($id: ID!) {
+            deleteTitleTagDefinition(id: $id) {
+                id
+                label
+                counts { titles delayProfiles maintenanceRuleSets releaseRuleSets managedTagFilters }
+            }
+        }"#,
+        json!({ "id": definition_id }),
+    )
+    .await;
+    assert_no_errors(&deleted);
+    let deleted = &deleted["data"]["deleteTitleTagDefinition"];
+    assert_eq!(deleted["id"], definition_id.as_str());
+    assert_eq!(deleted["label"], "archive");
+    assert_eq!(deleted["counts"]["titles"], 2);
+
+    assert!(stored_title_tags(&ctx, &first).await.is_empty());
+    assert!(stored_title_tags(&ctx, &second).await.is_empty());
+    let remaining = gql(&ctx, r#"{ titleTagDefinitions { label } }"#, json!({})).await;
+    assert_no_errors(&remaining);
+    assert_eq!(
+        remaining["data"]["titleTagDefinitions"],
+        json!([{ "label": "keep" }])
+    );
+}
+
+#[tokio::test]
+async fn graphql_title_tag_writes_name_the_label_they_refuse() {
+    let ctx = TestContext::new().await;
+    let library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Tag Refusal Library",
+        &[("/tag-refusal/movies", true)],
+    )
+    .await;
+    let library_id = library_id(&library);
+    let root_id = library_root_id(&library, "/tag-refusal/movies");
+    let title_id = add_catalog_filter_title(
+        &ctx,
+        "Refusal Subject",
+        "992101",
+        &library_id,
+        &root_id,
+        2003,
+    )
+    .await;
+
+    let undefined = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleTagsInput!) {
+            updateTitleTags(input: $input) { id }
+        }"#,
+        json!({
+            "input": { "titleIds": [title_id], "add": ["not defined"] }
+        }),
+    )
+    .await;
+    let message = graphql_error_messages(&undefined);
+    assert!(
+        message.contains("not defined"),
+        "the refusal must name the label: {message}"
+    );
+    assert!(stored_title_tags(&ctx, &title_id).await.is_empty());
+
+    let reserved = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleTagsInput!) {
+            updateTitleTags(input: $input) { id }
+        }"#,
+        json!({
+            "input": { "titleIds": [title_id], "add": ["scryer:monitor-type:all"] }
+        }),
+    )
+    .await;
+    let message = graphql_error_messages(&reserved);
+    assert!(
+        message.contains("scryer:monitor-type:all") && message.contains("reserved"),
+        "the reserved-namespace refusal must name the label: {message}"
+    );
+    assert!(stored_title_tags(&ctx, &title_id).await.is_empty());
+
+    // Creation is gated the same way: a title may not be born carrying a label
+    // the registry never authorized.
+    let created = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) { title { id } }
+        }"#,
+        json!({
+            "input": {
+                "name": "Born Untagged",
+                "facet": "MOVIE",
+                "libraryId": library_id,
+                "monitored": true,
+                "tags": ["not defined"],
+                "externalIds": [{ "source": "tvdb", "value": "992102" }],
+                "options": { "rootFolderId": root_id }
+            }
+        }),
+    )
+    .await;
+    let message = graphql_error_messages(&created);
+    assert!(
+        message.contains("not defined"),
+        "the creation refusal must name the label: {message}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_bulk_title_tag_patch_writes_nothing_when_one_library_is_denied() {
+    let ctx = TestContext::new().await;
+    let allowed_library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Tag Allowed Library",
+        &[("/tag-rbac/allowed", true)],
+    )
+    .await;
+    let denied_library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Tag Denied Library",
+        &[("/tag-rbac/denied", true)],
+    )
+    .await;
+    let allowed_library_id = library_id(&allowed_library);
+    let denied_library_id = library_id(&denied_library);
+    let allowed_root_id = library_root_id(&allowed_library, "/tag-rbac/allowed");
+    let denied_root_id = library_root_id(&denied_library, "/tag-rbac/denied");
+    let allowed_title_id = add_catalog_filter_title(
+        &ctx,
+        "Allowed Tag Subject",
+        "992201",
+        &allowed_library_id,
+        &allowed_root_id,
+        2004,
+    )
+    .await;
+    let denied_title_id = add_catalog_filter_title(
+        &ctx,
+        "Denied Tag Subject",
+        "992202",
+        &denied_library_id,
+        &denied_root_id,
+        2005,
+    )
+    .await;
+    define_title_tag(&ctx, "keep", None).await;
+
+    let actor = title_tag_manager_actor(&allowed_library_id);
+    // The registry read is unprivileged, so a user with no app permission at
+    // all still gets the vocabulary the picker needs.
+    let vocabulary = schema_exec(
+        &ctx,
+        "{ titleTagDefinitions { label } }",
+        Some(actor.clone()),
+    )
+    .await;
+    assert_no_errors(&vocabulary);
+    assert_eq!(
+        vocabulary["data"]["titleTagDefinitions"],
+        json!([{ "label": "keep" }])
+    );
+
+    let denied = schema_exec(
+        &ctx,
+        &format!(
+            r#"mutation {{
+                updateTitleTags(input: {{
+                    titleIds: ["{allowed_title_id}", "{denied_title_id}"]
+                    add: ["keep"]
+                }}) {{ id }}
+            }}"#,
+        ),
+        Some(actor.clone()),
+    )
+    .await;
+    assert!(
+        denied.get("errors").is_some(),
+        "a bulk patch touching an unmanageable library must be refused: {denied}"
+    );
+    // Neither half landed: the authorization sweep runs before the first write.
+    assert!(stored_title_tags(&ctx, &allowed_title_id).await.is_empty());
+    assert!(stored_title_tags(&ctx, &denied_title_id).await.is_empty());
+
+    // The same patch scoped to the library the actor manages does land.
+    let allowed = schema_exec(
+        &ctx,
+        &format!(
+            r#"mutation {{
+                updateTitleTags(input: {{
+                    titleIds: ["{allowed_title_id}"]
+                    add: ["keep"]
+                }}) {{ id tags }}
+            }}"#,
+        ),
+        Some(actor.clone()),
+    )
+    .await;
+    assert_no_errors(&allowed);
+    assert_eq!(
+        allowed["data"]["updateTitleTags"],
+        json!([{ "id": allowed_title_id, "tags": ["keep"] }])
+    );
+
+    // Defining the vocabulary is catalog configuration, not title management.
+    let refused = schema_exec(
+        &ctx,
+        r#"mutation {
+            createTitleTagDefinition(input: { label: "unauthorized" }) {
+                definition { id }
+            }
+        }"#,
+        Some(actor),
+    )
+    .await;
+    assert!(
+        refused.get("errors").is_some(),
+        "a registry write without ManageCatalogSettings must be refused: {refused}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_title_catalog_filters_by_user_tag() {
+    let ctx = TestContext::new().await;
+    let library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Tag Filter Library",
+        &[("/tag-filter/movies", true)],
+    )
+    .await;
+    let library_id = library_id(&library);
+    let root_id = library_root_id(&library, "/tag-filter/movies");
+    let tagged = add_catalog_filter_title(
+        &ctx,
+        "Tag Filter Hit",
+        "992301",
+        &library_id,
+        &root_id,
+        2006,
+    )
+    .await;
+    let other_tagged = add_catalog_filter_title(
+        &ctx,
+        "Tag Filter Other",
+        "992302",
+        &library_id,
+        &root_id,
+        2007,
+    )
+    .await;
+    let untagged = add_catalog_filter_title(
+        &ctx,
+        "Tag Filter Miss",
+        "992303",
+        &library_id,
+        &root_id,
+        2008,
+    )
+    .await;
+    define_title_tag(&ctx, "keep", None).await;
+    define_title_tag(&ctx, "needs review", None).await;
+
+    let assigned = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleTagsInput!) {
+            updateTitleTags(input: $input) { id }
+        }"#,
+        json!({ "input": { "titleIds": [tagged], "add": ["keep"] } }),
+    )
+    .await;
+    assert_no_errors(&assigned);
+    let assigned = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleTagsInput!) {
+            updateTitleTags(input: $input) { id }
+        }"#,
+        json!({ "input": { "titleIds": [other_tagged], "add": ["needs review"] } }),
+    )
+    .await;
+    assert_no_errors(&assigned);
+
+    let filtered = gql(
+        &ctx,
+        r#"query($libraryIds: [ID!], $tags: [String!]) {
+            titles(facet: MOVIE, libraryIds: $libraryIds, filter: { tags: $tags }) {
+                items { id }
+                totalCount
+            }
+        }"#,
+        json!({ "libraryIds": [library_id], "tags": ["Keep"] }),
+    )
+    .await;
+    assert_no_errors(&filtered);
+    assert_eq!(filtered["data"]["titles"]["totalCount"], 1);
+    assert_eq!(filtered["data"]["titles"]["items"][0]["id"], tagged);
+
+    // Any-of, not all-of: two labels widen the result rather than narrowing it.
+    let widened = gql(
+        &ctx,
+        r#"query($libraryIds: [ID!], $tags: [String!]) {
+            titles(facet: MOVIE, libraryIds: $libraryIds, filter: { tags: $tags }) {
+                items { id }
+                totalCount
+            }
+        }"#,
+        json!({
+            "libraryIds": [library_id],
+            "tags": ["keep", "needs review"],
+        }),
+    )
+    .await;
+    assert_no_errors(&widened);
+    assert_eq!(widened["data"]["titles"]["totalCount"], 2);
+    let mut ids = widened["data"]["titles"]["items"]
+        .as_array()
+        .expect("filtered items")
+        .iter()
+        .map(|title| title["id"].as_str().expect("title id"))
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    let mut expected = vec![tagged.as_str(), other_tagged.as_str()];
+    expected.sort_unstable();
+    assert_eq!(ids, expected);
+    assert!(!ids.contains(&untagged.as_str()));
+
+    // An empty list is not a filter at all; every title comes back.
+    let unfiltered = gql(
+        &ctx,
+        r#"query($libraryIds: [ID!]) {
+            titles(facet: MOVIE, libraryIds: $libraryIds, filter: { tags: [] }) {
+                totalCount
+            }
+        }"#,
+        json!({ "libraryIds": [library_id] }),
+    )
+    .await;
+    assert_no_errors(&unfiltered);
+    assert_eq!(unfiltered["data"]["titles"]["totalCount"], 3);
+}
+
+#[tokio::test]
+async fn graphql_series_movie_tags_patch_the_link_and_count_apart_from_titles() {
+    let ctx = TestContext::new().await;
+    define_title_tag(&ctx, "keep", None).await;
+    let series = create_catalog_title(
+        &ctx,
+        "Tagged Series",
+        MediaFacet::Anime,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let link =
+        create_test_series_movie_link(&ctx, &series, "Tagged Series Movie", "7654305", None, None)
+            .await;
+
+    let update = r#"mutation($input: UpdateSeriesMovieTagsInput!) {
+        updateSeriesMovieTags(input: $input) { id tags }
+    }"#;
+
+    // A label the registry does not define is refused by name, exactly as it is
+    // on the title path.
+    let refused = gql(
+        &ctx,
+        update,
+        json!({ "input": { "seriesMovieLinkIds": [link.id], "add": ["never defined"] } }),
+    )
+    .await;
+    assert!(
+        graphql_error_messages(&refused).contains("is not a defined tag"),
+        "{refused}"
+    );
+
+    let assigned = gql(
+        &ctx,
+        update,
+        json!({ "input": { "seriesMovieLinkIds": [link.id], "add": ["  KEEP  "] } }),
+    )
+    .await;
+    assert_no_errors(&assigned);
+    assert_eq!(
+        assigned["data"]["updateSeriesMovieTags"][0]["tags"],
+        json!(["keep"])
+    );
+
+    // The link reads its bag back through the series overview, and the series
+    // title itself stays untagged: two owners, two bags.
+    let overview = gql(
+        &ctx,
+        r#"query($id: ID!) { title(id: $id) { tags seriesMovieLinks { id tags } } }"#,
+        json!({ "id": series.id }),
+    )
+    .await;
+    assert_no_errors(&overview);
+    assert_eq!(overview["data"]["title"]["tags"], json!([]));
+    assert_eq!(
+        overview["data"]["title"]["seriesMovieLinks"][0]["tags"],
+        json!(["keep"])
+    );
+
+    // The registry counts the two owners separately.
+    let listed = gql(
+        &ctx,
+        r#"{ titleTagDefinitions { label titleCount seriesMovieCount } }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let definition = &listed["data"]["titleTagDefinitions"][0];
+    assert_eq!(definition["label"], "keep");
+    assert_eq!(definition["titleCount"], 0);
+    assert_eq!(definition["seriesMovieCount"], 1);
+
+    let cleared = gql(
+        &ctx,
+        update,
+        json!({ "input": { "seriesMovieLinkIds": [link.id], "remove": ["keep"] } }),
+    )
+    .await;
+    assert_no_errors(&cleared);
+    assert_eq!(
+        cleared["data"]["updateSeriesMovieTags"][0]["tags"],
+        json!([])
+    );
 }

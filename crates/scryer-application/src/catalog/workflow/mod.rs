@@ -41,6 +41,7 @@ include!("queueing.rs");
 include!("monitoring.rs");
 include!("delete.rs");
 include!("metadata.rs");
+include!("title_tags.rs");
 include!("collections.rs");
 include!("permissions.rs");
 include!("tests.rs");

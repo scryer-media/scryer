@@ -21,7 +21,8 @@ use scryer_domain::{
 };
 use scryer_rules::maintenance::{
     MAINTENANCE_INPUT_SCHEMA_VERSION, MaintenanceFactsDoc, MaintenanceFileDoc, MaintenanceInput,
-    MaintenanceLibraryDoc, MaintenanceSubjectDoc, MaintenanceSubjectKind, Observation,
+    MaintenanceLibraryDoc, MaintenanceSeriesMovieDoc, MaintenanceSubjectDoc,
+    MaintenanceSubjectKind, Observation,
 };
 
 use crate::types::TitleMediaFile;
@@ -284,6 +285,7 @@ pub fn build_title_input(
     people: MaintenanceTitlePeople<'_>,
     watch: MaintenanceTitleWatch<'_>,
     claims: MaintenanceTitleClaims<'_>,
+    series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceInput {
     MaintenanceInput {
         schema_version: MAINTENANCE_INPUT_SCHEMA_VERSION,
@@ -301,7 +303,15 @@ pub fn build_title_input(
             id: library.id.clone(),
             name: library.name.clone(),
         },
-        facts: build_facts(evaluation_time, title, files, people, watch, claims),
+        facts: build_facts(
+            evaluation_time,
+            title,
+            files,
+            people,
+            watch,
+            claims,
+            series_movies,
+        ),
     }
 }
 
@@ -312,6 +322,7 @@ fn build_facts(
     people: MaintenanceTitlePeople<'_>,
     watch: MaintenanceTitleWatch<'_>,
     claims: MaintenanceTitleClaims<'_>,
+    series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceFactsDoc {
     let file_docs: Vec<MaintenanceFileDoc> = files.iter().map(file_doc).collect();
     let total_size: i64 = files.iter().map(|file| file.size_bytes).sum();
@@ -324,7 +335,7 @@ fn build_facts(
 
     MaintenanceFactsDoc {
         monitored: Observation::known(title.monitored),
-        tags: Observation::known(title.tags.clone()),
+        tags: Observation::known(user_title_tags(&title.tags)),
         quality_profile_id: quality_profile_observation(&title.tags),
         added_at: Observation::known(title.created_at.to_rfc3339()),
         added_by_user_id,
@@ -354,6 +365,7 @@ fn build_facts(
         request_lease_state: claim_facts.request_lease_state,
         request_lease_expires_at: claim_facts.request_lease_expires_at,
         active_retention_claims: claim_facts.active_retention_claims,
+        series_movies: series_movies_observation(&title.facet, series_movies),
     }
 }
 
@@ -456,6 +468,37 @@ fn claim_observations(
         request_lease_expires_at: expires_at,
         active_retention_claims: Observation::known(live_retention.len() as i64),
     }
+}
+
+/// The show's series movies, or a confirmed absence for a movie subject.
+///
+/// A movie has no series movies the way a movie has no episodes: the question
+/// does not apply, the source answered, and the rule sees a missing key rather
+/// than being held. A show with no linked movies is a known-empty list, so
+/// `count(input.facts.series_movies) == 0` is a decisive answer instead of
+/// something the engine holds on.
+fn series_movies_observation(
+    facet: &MediaFacet,
+    series_movies: &[MaintenanceSeriesMovieDoc],
+) -> Observation<Vec<MaintenanceSeriesMovieDoc>> {
+    match facet {
+        MediaFacet::Movie => Observation::absent(),
+        MediaFacet::Series | MediaFacet::Anime => Observation::known(series_movies.to_vec()),
+    }
+}
+
+/// The user-defined half of a title's tag bag.
+///
+/// `input.facts.tags` is the rule author's tag vocabulary, and that vocabulary
+/// is the admin registry. Reserved `scryer:` entries are per-title *settings*
+/// stored in the same bag; surfacing them here would let a rule read a quality
+/// profile or a monitor type through a fact named "tags", and every one of
+/// those settings already has its own fact or none at all on purpose.
+fn user_title_tags(tags: &[String]) -> Vec<String> {
+    tags.iter()
+        .filter(|tag| !crate::is_reserved_title_tag(tag))
+        .cloned()
+        .collect()
 }
 
 /// Known when the structured tag is present and non-empty; absent when the
@@ -862,6 +905,7 @@ mod tests {
             },
             MaintenanceTitleWatch { context, signals },
             MaintenanceTitleClaims::none(),
+            &[],
         );
         serde_json::to_value(input).expect("input serializes")
     }
@@ -892,6 +936,7 @@ mod tests {
                 claims: (!claims.is_empty()).then_some(claims),
                 store_readable,
             },
+            &[],
         );
         serde_json::to_value(input).expect("input serializes")
     }
@@ -1570,5 +1615,43 @@ mod tests {
                 "{fact}"
             );
         }
+    }
+
+    /// `input.facts.tags` is the rule author's tag vocabulary, and reserved
+    /// `scryer:` entries are settings that happen to share the storage. A rule
+    /// must never be able to read a quality profile or a monitor type through a
+    /// fact named "tags", and the structured entries must not push the user's
+    /// own labels around either.
+    #[test]
+    fn structured_settings_entries_never_appear_in_the_tags_fact() {
+        let mut subject = title(Some("user-1"));
+        subject.tags = vec![
+            "scryer:quality-profile:profile-one".to_string(),
+            "keep".to_string(),
+            "scryer:monitor-type:all".to_string(),
+            "needs review".to_string(),
+        ];
+
+        let doc = document(&subject, None, &usernames(&[]));
+
+        assert_eq!(
+            doc["facts"]["tags"],
+            serde_json::json!(["keep", "needs review"])
+        );
+        // The settings themselves are still readable through the fact that
+        // exists for them, so nothing is lost by filtering the bag.
+        assert_eq!(doc["facts"]["quality_profile_id"], "profile-one");
+    }
+
+    /// A title carrying settings and no user labels reports an empty list, not
+    /// a hold: "this title has no tags" is a confirmed answer.
+    #[test]
+    fn a_title_with_only_structured_entries_reports_an_empty_tags_fact() {
+        let mut subject = title(Some("user-1"));
+        subject.tags = vec!["scryer:monitor-specials:false".to_string()];
+
+        let doc = document(&subject, None, &usernames(&[]));
+
+        assert_eq!(doc["facts"]["tags"], serde_json::json!([]));
     }
 }

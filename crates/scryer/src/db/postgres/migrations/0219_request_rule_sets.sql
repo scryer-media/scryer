@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0218_request_rule_sets.sql.
+-- PostgreSQL twin of migrations/0219_request_rule_sets.sql.
 -- Request rules (spec 0003 section 6): rule sets, their append-only matcher
 -- revisions, and the durable trace of every evaluation.
 CREATE TABLE request_rule_sets (
