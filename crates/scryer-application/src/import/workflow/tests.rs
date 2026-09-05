@@ -1977,3 +1977,216 @@ mod pack_blocklist_ledger_tests {
 #[cfg(test)]
 #[path = "../app_usecase_import_tests.rs"]
 mod app_usecase_import_tests;
+
+#[cfg(test)]
+mod series_movie_naming_tests {
+    use super::{
+        match_series_movie_special_episode, series_movie_import_filename,
+        series_movie_season_episode_token,
+    };
+    use chrono::Utc;
+    use scryer_domain::{Episode, EpisodeType, MovieEntity};
+
+    fn movie(title: &str, digital_release_date: Option<&str>) -> MovieEntity {
+        let now = Utc::now();
+        MovieEntity {
+            id: "movie-1".into(),
+            title: title.into(),
+            sort_title: None,
+            slug: None,
+            year: Some(2024),
+            overview: None,
+            poster_url: None,
+            background_url: None,
+            language: None,
+            runtime_minutes: None,
+            content_status: None,
+            studio: None,
+            digital_release_date: digital_release_date.map(str::to_string),
+            imdb_id: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            mal_id: None,
+            anidb_id: None,
+            ratings: None,
+            credits: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn episode(
+        id: &str,
+        season: &str,
+        number: &str,
+        title: Option<&str>,
+        air_date: Option<&str>,
+    ) -> Episode {
+        Episode {
+            id: id.into(),
+            title_id: "title-1".into(),
+            collection_id: None,
+            episode_type: if season == "0" {
+                EpisodeType::Special
+            } else {
+                EpisodeType::Standard
+            },
+            episode_number: Some(number.into()),
+            season_number: Some(season.into()),
+            episode_label: None,
+            title: title.map(str::to_string),
+            air_date: air_date.map(str::to_string),
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn a_special_whose_name_matches_the_film_is_the_linked_episode() {
+        let episodes = vec![
+            episode("ep-s0e1", "0", "1", Some("Quiet Harbor: Prologue"), None),
+            episode("ep-s0e2", "0", "2", Some("quiet harbor - graduation"), None),
+        ];
+        let matched =
+            match_series_movie_special_episode(&movie("Quiet Harbor: Graduation", None), &episodes);
+        assert_eq!(matched.map(|episode| episode.id.as_str()), Some("ep-s0e2"));
+    }
+
+    #[test]
+    fn a_matching_name_outside_season_zero_is_never_taken() {
+        let episodes = vec![episode(
+            "ep-s1e2",
+            "1",
+            "2",
+            Some("Quiet Harbor: Graduation"),
+            None,
+        )];
+        assert!(
+            match_series_movie_special_episode(&movie("Quiet Harbor: Graduation", None), &episodes)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn two_specials_sharing_the_films_name_resolve_to_nothing() {
+        let episodes = vec![
+            episode(
+                "ep-s0e2",
+                "0",
+                "2",
+                Some("Quiet Harbor: Graduation"),
+                Some("2024-05-01"),
+            ),
+            episode(
+                "ep-s0e3",
+                "0",
+                "3",
+                Some("Quiet Harbor Graduation"),
+                Some("2024-05-01"),
+            ),
+        ];
+        assert!(
+            match_series_movie_special_episode(
+                &movie("Quiet Harbor: Graduation", Some("2024-05-01")),
+                &episodes,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn the_release_date_resolves_a_special_the_name_could_not() {
+        let episodes = vec![
+            episode("ep-s0e1", "0", "1", Some("Behind the Scenes"), Some("2023-01-02")),
+            episode(
+                "ep-s0e2",
+                "0",
+                "2",
+                Some("Theatrical Feature"),
+                Some("2024-05-01T00:00:00Z"),
+            ),
+        ];
+        let matched = match_series_movie_special_episode(
+            &movie("Quiet Harbor: Graduation", Some("2024-05-01")),
+            &episodes,
+        );
+        assert_eq!(matched.map(|episode| episode.id.as_str()), Some("ep-s0e2"));
+    }
+
+    #[test]
+    fn two_specials_sharing_the_release_date_resolve_to_nothing() {
+        let episodes = vec![
+            episode("ep-s0e1", "0", "1", Some("Part One"), Some("2024-05-01")),
+            episode("ep-s0e2", "0", "2", Some("Part Two"), Some("2024-05-01")),
+        ];
+        assert!(
+            match_series_movie_special_episode(
+                &movie("Quiet Harbor: Graduation", Some("2024-05-01")),
+                &episodes,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_film_yields_no_episode() {
+        let episodes = vec![episode(
+            "ep-s0e1",
+            "0",
+            "1",
+            Some("Behind the Scenes"),
+            Some("2023-01-02"),
+        )];
+        assert!(
+            match_series_movie_special_episode(
+                &movie("Quiet Harbor: Graduation", Some("2024-05-01")),
+                &episodes,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn the_season_episode_token_is_zero_padded_and_needs_both_numbers() {
+        assert_eq!(
+            series_movie_season_episode_token(&episode("ep-1", "0", "2", None, None)).as_deref(),
+            Some("S00E02")
+        );
+        let mut unnumbered = episode("ep-2", "0", "2", None, None);
+        unnumbered.episode_number = None;
+        assert!(series_movie_season_episode_token(&unnumbered).is_none());
+        let mut seasonless = episode("ep-3", "0", "2", None, None);
+        seasonless.season_number = None;
+        assert!(series_movie_season_episode_token(&seasonless).is_none());
+    }
+
+    #[test]
+    fn an_unresolved_film_renders_without_an_episode_token() {
+        assert_eq!(
+            series_movie_import_filename(
+                "Quiet Harbor",
+                Some("S00E02"),
+                "Quiet Harbor: Graduation",
+                "mkv",
+            ),
+            "Quiet Harbor - S00E02 - Quiet Harbor: Graduation.mkv"
+        );
+        assert_eq!(
+            series_movie_import_filename("Quiet Harbor", None, "Quiet Harbor: Graduation", "mkv"),
+            "Quiet Harbor - Quiet Harbor: Graduation.mkv"
+        );
+        assert_eq!(
+            series_movie_import_filename("Quiet Harbor", Some(""), "Quiet Harbor: Graduation", "mkv"),
+            "Quiet Harbor - Quiet Harbor: Graduation.mkv"
+        );
+    }
+}
