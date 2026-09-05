@@ -1578,15 +1578,19 @@ async fn hydrate_emby_parent_series(
         .collect::<Vec<_>>();
 
     for series_id in missing_series_ids {
-        let mut url = base_url
-            .join(&format!("Items/{series_id}"))
-            .map_err(|error| {
-                AppError::Repository(format!("invalid media server catalog URL: {error}"))
-            })?;
-        url.query_pairs_mut().append_pair(
-            "Fields",
-            "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
-        );
+        // Jellyfin 10.11 resolves a user before serving `GET /Items/{id}` and answers an
+        // API-key caller with 400 "Guid can't be empty". `GET /Items?Ids=` is the list
+        // endpoint the scan above already uses; it explicitly supports API keys without a
+        // user, so the parent series is fetched through it instead.
+        let mut url = base_url.join("Items").map_err(|error| {
+            AppError::Repository(format!("invalid media server catalog URL: {error}"))
+        })?;
+        url.query_pairs_mut()
+            .append_pair("Ids", &series_id)
+            .append_pair(
+                "Fields",
+                "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
+            );
         let response = client
             .get(url)
             .header("Accept", "application/json")
@@ -1605,14 +1609,21 @@ async fn hydrate_emby_parent_series(
                 response.status()
             )));
         }
-        let value = response.json::<Value>().await.map_err(|error| {
+        let page = response.json::<Value>().await.map_err(|error| {
             AppError::Repository(format!(
                 "invalid media server parent-series response: {error}"
             ))
         })?;
-        if let Some(series) = emby_catalog_item(&value)
-            && series.kind == MediaServerCatalogItemKind::Series
-        {
+        // A series that no longer exists yields an empty page rather than a 404.
+        let Some(series) = page
+            .get("Items")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(emby_catalog_item)
+        else {
+            continue;
+        };
+        if series.kind == MediaServerCatalogItemKind::Series {
             catalog.push(series);
         }
     }
@@ -2225,6 +2236,57 @@ mod tests {
             entries.last().and_then(|item| item.get("ratingKey")),
             Some(&json!("500"))
         );
+    }
+
+    #[tokio::test]
+    async fn jellyfin_catalog_resolves_parent_series_through_items_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Items"))
+            .and(query_param("Recursive", "true"))
+            .and(header("X-Emby-Token", "token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{
+                    "Id": "episode-1",
+                    "Type": "Episode",
+                    "SeriesId": "series-1",
+                    "ParentIndexNumber": 1,
+                    "IndexNumber": 2,
+                    "ProviderIds": {}
+                }],
+                "TotalRecordCount": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // Jellyfin 10.11 rejects `GET /Items/{id}` from an API-key caller with 400, so the
+        // parent series must come back through the list endpoint's `Ids=` filter.
+        Mock::given(method("GET"))
+            .and(path("/Items"))
+            .and(query_param("Ids", "series-1"))
+            .and(header("X-Emby-Token", "token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{
+                    "Id": "series-1",
+                    "Type": "Series",
+                    "ProviderIds": { "Tvdb": "999" }
+                }],
+                "TotalRecordCount": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let catalog = scan_emby_catalog(&generic_reqwest_client(), &server.uri(), "token", false)
+            .await
+            .expect("scan Jellyfin catalog");
+
+        assert_eq!(catalog.len(), 2);
+        let series = catalog
+            .iter()
+            .find(|item| item.kind == MediaServerCatalogItemKind::Series)
+            .expect("parent series hydrated");
+        assert_eq!(series.provider_item_id, "series-1");
     }
 
     #[tokio::test]
