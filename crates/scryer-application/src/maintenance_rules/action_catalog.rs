@@ -50,6 +50,10 @@ pub enum MaintenanceActionKind {
     /// On the next action-handler pass, change the quality profile and search
     /// only when the current profile differs from the target.
     ChangeQualityProfileAndSearchIfChanged,
+    /// Add the configured user tags to the matched title.
+    AddTags,
+    /// Remove the configured user tags from the matched title.
+    RemoveTags,
 }
 
 impl MaintenanceActionKind {
@@ -64,6 +68,8 @@ impl MaintenanceActionKind {
         Self::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty,
         Self::UnmonitorSeasonThenUnmonitorShowIfEmpty,
         Self::ChangeQualityProfileAndSearchIfChanged,
+        Self::AddTags,
+        Self::RemoveTags,
     ];
 
     /// The static descriptor for this kind.
@@ -96,6 +102,8 @@ impl MaintenanceActionKind {
             Self::ChangeQualityProfileAndSearchIfChanged => {
                 "change_quality_profile_and_search_if_changed"
             }
+            Self::AddTags => "add_tags",
+            Self::RemoveTags => "remove_tags",
         }
     }
 
@@ -349,6 +357,36 @@ const CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED: MaintenanceActionDescriptor 
         allowed_repeat_modes: ONCE_PER_MATCH_ONLY,
     };
 
+/// Tag writes are catalog state and nothing else: no file moves, no
+/// acquisition, no monitoring change. `catalog_intent` is the effect class that
+/// says "this changed something Scryer stores about the title", and `low` is the
+/// risk class for reversible Scryer state — removing a tag the rule added is one
+/// click, and no media becomes unavailable either way.
+///
+/// `ensure_state` rather than `once_per_match`: the desired postcondition is
+/// "these labels are (not) on the title", so a title someone re-tagged by hand
+/// should be corrected again on the next pass rather than left drifted because a
+/// generation already ran.
+const ADD_TAGS: MaintenanceActionDescriptor = MaintenanceActionDescriptor {
+    kind: MaintenanceActionKind::AddTags,
+    schema_version: MAINTENANCE_ACTION_SCHEMA_VERSION,
+    supported_subjects: TITLE_SUBJECTS,
+    effect_classes: CATALOG_INTENT,
+    risk_class: MaintenanceRiskClass::Low,
+    timing_mode: MaintenanceTimingMode::AfterGrace,
+    allowed_repeat_modes: ENSURE_STATE_ONLY,
+};
+
+const REMOVE_TAGS: MaintenanceActionDescriptor = MaintenanceActionDescriptor {
+    kind: MaintenanceActionKind::RemoveTags,
+    schema_version: MAINTENANCE_ACTION_SCHEMA_VERSION,
+    supported_subjects: TITLE_SUBJECTS,
+    effect_classes: CATALOG_INTENT,
+    risk_class: MaintenanceRiskClass::Low,
+    timing_mode: MaintenanceTimingMode::AfterGrace,
+    allowed_repeat_modes: ENSURE_STATE_ONLY,
+};
+
 static ACTION_CATALOG: &[MaintenanceActionDescriptor] = &[
     DO_NOTHING,
     UNMONITOR_SCOPE_KEEP_FILES,
@@ -359,6 +397,8 @@ static ACTION_CATALOG: &[MaintenanceActionDescriptor] = &[
     UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY,
     UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY,
     CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED,
+    ADD_TAGS,
+    REMOVE_TAGS,
 ];
 
 /// The static action registry (RFC 9.2). GraphQL may later expose these
@@ -387,6 +427,8 @@ pub fn descriptor_for(kind: MaintenanceActionKind) -> &'static MaintenanceAction
         MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
             &CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED
         }
+        MaintenanceActionKind::AddTags => &ADD_TAGS,
+        MaintenanceActionKind::RemoveTags => &REMOVE_TAGS,
     }
 }
 
@@ -405,6 +447,14 @@ pub enum MaintenanceActionParameters {
     ChangeQualityProfile {
         target_quality_profile_id: String,
     },
+    /// Labels the tag actions add or remove. Which of the two a spec means is
+    /// carried by its `kind`, so one payload shape serves both and a rule that
+    /// adds `x` and one that removes `x` are the same object with a different
+    /// verb — which is what makes the executor's conflict check a simple
+    /// comparison.
+    Tags {
+        tags: Vec<String>,
+    },
 }
 
 impl MaintenanceActionParameters {
@@ -412,16 +462,28 @@ impl MaintenanceActionParameters {
         matches!(self, Self::None)
     }
 
+    /// The labels this payload carries, or an empty slice for every other
+    /// shape. Callers that only need "what would this write" — the executor's
+    /// conflict scan and the registry re-check — read this rather than
+    /// destructuring.
+    pub fn tag_labels(&self) -> &[String] {
+        match self {
+            Self::Tags { tags } => tags,
+            _ => &[],
+        }
+    }
+
     /// Whether this payload's shape is the one `kind` requires.
     fn matches_kind(&self, kind: MaintenanceActionKind) -> bool {
-        matches!(
-            (kind, self),
-            (
-                MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
-                Self::ChangeQualityProfile { .. }
-            )
-        ) || (kind != MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged
-            && self.is_none())
+        match kind {
+            MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
+                matches!(self, Self::ChangeQualityProfile { .. })
+            }
+            MaintenanceActionKind::AddTags | MaintenanceActionKind::RemoveTags => {
+                matches!(self, Self::Tags { .. })
+            }
+            _ => self.is_none(),
+        }
     }
 }
 
@@ -442,9 +504,11 @@ pub struct MaintenanceActionSpec {
 impl MaintenanceActionSpec {
     /// A parameterless spec at the current schema version.
     ///
-    /// Passing [`MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged`]
-    /// builds a spec that [`Self::validate`] rejects; use
-    /// [`Self::change_quality_profile`] instead.
+    /// Passing [`MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged`],
+    /// [`MaintenanceActionKind::AddTags`], or
+    /// [`MaintenanceActionKind::RemoveTags`] builds a spec that
+    /// [`Self::validate`] rejects; use [`Self::change_quality_profile`] or
+    /// [`Self::tags`] instead.
     pub fn new(kind: MaintenanceActionKind) -> Self {
         Self {
             kind,
@@ -461,6 +525,20 @@ impl MaintenanceActionSpec {
             parameters: MaintenanceActionParameters::ChangeQualityProfile {
                 target_quality_profile_id: target_quality_profile_id.into(),
             },
+        }
+    }
+
+    /// A tag spec at the current schema version.
+    ///
+    /// `kind` must be [`MaintenanceActionKind::AddTags`] or
+    /// [`MaintenanceActionKind::RemoveTags`]; any other kind produces a spec
+    /// [`Self::validate`] refuses, exactly as the quality-profile constructor
+    /// does.
+    pub fn tags(kind: MaintenanceActionKind, tags: Vec<String>) -> Self {
+        Self {
+            kind,
+            schema_version: MAINTENANCE_ACTION_SCHEMA_VERSION,
+            parameters: MaintenanceActionParameters::Tags { tags },
         }
     }
 
@@ -503,6 +581,10 @@ impl MaintenanceActionSpec {
             return Err(MaintenanceActionSpecError::EmptyQualityProfileTarget);
         }
 
+        if let MaintenanceActionParameters::Tags { tags } = &self.parameters {
+            validate_action_tag_labels(tags)?;
+        }
+
         Ok(())
     }
 }
@@ -528,6 +610,66 @@ pub enum MaintenanceActionSpecError {
 
     #[error("target quality profile id must not be empty")]
     EmptyQualityProfileTarget,
+
+    #[error("a tag action must name at least one tag")]
+    EmptyTagList,
+
+    #[error("'{label}' is not a usable tag: {reason}")]
+    InvalidTagLabel { label: String, reason: String },
+
+    #[error("a tag action may name at most {maximum} tags, and this one names {found}")]
+    TooManyTags { found: usize, maximum: usize },
+
+    #[error("'{label}' is named twice in the same tag action")]
+    DuplicateTagLabel { label: String },
+}
+
+/// Static half of tag-parameter validation: shape, normalization, and the
+/// per-title ceiling.
+///
+/// It is deliberately the same normalizer the assignment path uses, so a label
+/// that a human could type into the tag picker is exactly the set of labels a
+/// rule can be authored against, and a stored spec can never carry a spelling
+/// that would never match a bag. Whether the label is *defined* is the other
+/// half of the check and cannot live here: it needs the registry, so the
+/// application service performs it before a revision is written and the
+/// executor re-performs it before it acts.
+fn validate_action_tag_labels(tags: &[String]) -> Result<(), MaintenanceActionSpecError> {
+    if tags.is_empty() {
+        return Err(MaintenanceActionSpecError::EmptyTagList);
+    }
+    if tags.len() > crate::MAX_USER_TAGS_PER_TITLE {
+        return Err(MaintenanceActionSpecError::TooManyTags {
+            found: tags.len(),
+            maximum: crate::MAX_USER_TAGS_PER_TITLE,
+        });
+    }
+    let mut seen = std::collections::HashSet::new();
+    for label in tags {
+        let normalized = crate::normalize_user_title_tag(label).map_err(|reason| {
+            MaintenanceActionSpecError::InvalidTagLabel {
+                label: label.clone(),
+                reason,
+            }
+        })?;
+        if &normalized != label {
+            // Stored specs carry the normal form only. Accepting `Needs  Review`
+            // here and normalizing it silently would leave the operator's editor
+            // and the stored rule disagreeing about what the rule says.
+            return Err(MaintenanceActionSpecError::InvalidTagLabel {
+                label: label.clone(),
+                reason: format!(
+                    "tags are stored lowercase and trimmed, so this must be '{normalized}'"
+                ),
+            });
+        }
+        if !seen.insert(normalized) {
+            return Err(MaintenanceActionSpecError::DuplicateTagLabel {
+                label: label.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -549,14 +691,20 @@ mod tests {
             K::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty => &[Season],
             K::UnmonitorSeasonThenUnmonitorShowIfEmpty => &[Season],
             K::ChangeQualityProfileAndSearchIfChanged => &[Movie, Show],
+            K::AddTags => &[Movie, Show],
+            K::RemoveTags => &[Movie, Show],
         }
     }
 
     fn spec_for(kind: MaintenanceActionKind) -> MaintenanceActionSpec {
-        if kind == MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged {
-            MaintenanceActionSpec::change_quality_profile("profile-1")
-        } else {
-            MaintenanceActionSpec::new(kind)
+        match kind {
+            MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
+                MaintenanceActionSpec::change_quality_profile("profile-1")
+            }
+            MaintenanceActionKind::AddTags | MaintenanceActionKind::RemoveTags => {
+                MaintenanceActionSpec::tags(kind, vec!["needs review".to_string()])
+            }
+            _ => MaintenanceActionSpec::new(kind),
         }
     }
 
@@ -735,6 +883,8 @@ mod tests {
                 MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
                 "change_quality_profile_and_search_if_changed",
             ),
+            (MaintenanceActionKind::AddTags, "add_tags"),
+            (MaintenanceActionKind::RemoveTags, "remove_tags"),
         ];
         assert_eq!(expected.len(), MaintenanceActionKind::ALL.len());
         for (kind, wire) in expected {
@@ -971,6 +1121,95 @@ mod tests {
             Err(MaintenanceActionSpecError::ParameterShapeMismatch {
                 kind: MaintenanceActionKind::DeleteTitleAndFiles,
             })
+        );
+    }
+
+    #[test]
+    fn tag_specs_pin_their_stored_shape() {
+        assert_eq!(
+            serde_json::to_string(&MaintenanceActionSpec::tags(
+                MaintenanceActionKind::AddTags,
+                vec!["needs review".to_string()]
+            ))
+            .unwrap(),
+            r#"{"kind":"add_tags","schema_version":1,"parameters":{"tags":{"tags":["needs review"]}}}"#
+        );
+    }
+
+    #[test]
+    fn validate_rejects_unusable_tag_parameters() {
+        use MaintenanceActionKind::{AddTags, RemoveTags};
+
+        // A tag action with no tags does nothing at all; that is a mistake in
+        // the rule, not a no-op to store.
+        for kind in [AddTags, RemoveTags] {
+            assert_eq!(
+                MaintenanceActionSpec::tags(kind, Vec::new())
+                    .validate(MaintenanceSubjectKind::Movie),
+                Err(MaintenanceActionSpecError::EmptyTagList)
+            );
+            // The parameterless constructor is the wrong shape for a tag kind.
+            assert_eq!(
+                MaintenanceActionSpec::new(kind).validate(MaintenanceSubjectKind::Movie),
+                Err(MaintenanceActionSpecError::ParameterShapeMismatch { kind })
+            );
+        }
+
+        // Membership is by exact label, so a spelling the assignment path would
+        // normalize is refused rather than silently rewritten.
+        assert!(matches!(
+            MaintenanceActionSpec::tags(AddTags, vec!["Needs  Review".to_string()])
+                .validate(MaintenanceSubjectKind::Show),
+            Err(MaintenanceActionSpecError::InvalidTagLabel { .. })
+        ));
+        // The reserved namespace is settings, never a user tag.
+        assert!(matches!(
+            MaintenanceActionSpec::tags(AddTags, vec!["scryer:monitor-type:all".to_string()])
+                .validate(MaintenanceSubjectKind::Show),
+            Err(MaintenanceActionSpecError::InvalidTagLabel { .. })
+        ));
+        assert_eq!(
+            MaintenanceActionSpec::tags(RemoveTags, vec!["keep".to_string(), "keep".to_string()])
+                .validate(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSpecError::DuplicateTagLabel {
+                label: "keep".to_string()
+            })
+        );
+        let too_many: Vec<String> = (0..=crate::MAX_USER_TAGS_PER_TITLE)
+            .map(|index| format!("tag-{index}"))
+            .collect();
+        assert_eq!(
+            MaintenanceActionSpec::tags(AddTags, too_many.clone())
+                .validate(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSpecError::TooManyTags {
+                found: too_many.len(),
+                maximum: crate::MAX_USER_TAGS_PER_TITLE,
+            })
+        );
+    }
+
+    #[test]
+    fn tag_labels_reads_only_the_tag_payload() {
+        assert_eq!(
+            MaintenanceActionSpec::tags(
+                MaintenanceActionKind::RemoveTags,
+                vec!["keep".to_string()]
+            )
+            .parameters
+            .tag_labels(),
+            ["keep".to_string()]
+        );
+        assert!(
+            MaintenanceActionSpec::change_quality_profile("hd-1080p")
+                .parameters
+                .tag_labels()
+                .is_empty()
+        );
+        assert!(
+            MaintenanceActionSpec::new(MaintenanceActionKind::DoNothing)
+                .parameters
+                .tag_labels()
+                .is_empty()
         );
     }
 

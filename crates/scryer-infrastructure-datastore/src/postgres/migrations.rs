@@ -530,6 +530,10 @@ async fn run_postgres_rust_hook(
         "migrate_synthetic_root_ids" => {
             crate::migrations::synthetic_root_ids::migrate_synthetic_root_ids_postgres(tx).await
         }
+        "adopt_existing_title_tag_definitions" => {
+            crate::migrations::title_tag_definitions::adopt_existing_title_tag_definitions_postgres(tx)
+                .await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

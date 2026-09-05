@@ -16,17 +16,27 @@ import { TitleRatingsStrip } from "../title-ratings-strip";
 import { TitleCastStrip } from "../title-cast-strip";
 import { TitleDubCastStrip } from "../title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
+import { SeriesMovieTagsEditor } from "@/components/common/title-tags-picker";
 
 type SeriesMoviePanelProps = {
   link: SeriesMovieLink;
   hasFile?: boolean;
   filesOnDisk?: ReactNode;
+  /**
+   * Present when the viewer may manage this series' titles. Absent hides the
+   * picker entirely rather than rendering a disabled one: the same rule the
+   * monitoring toggle beside it follows.
+   */
+  onTagsChanged?: () => Promise<void> | void;
+  canManageTags?: boolean;
 };
 
 export function SeriesMoviePanel({
   link,
   hasFile,
   filesOnDisk,
+  onTagsChanged,
+  canManageTags = false,
 }: SeriesMoviePanelProps) {
   const t = useTranslate();
   const movie = link.movie;
@@ -94,6 +104,16 @@ export function SeriesMoviePanel({
           </div>
         </div>
       </div>
+      {canManageTags ? (
+        <div className="max-w-md">
+          <SeriesMovieTagsEditor
+            seriesMovieLinkId={link.id}
+            tags={link.tags}
+            idPrefix={`series-movie-${link.id}`}
+            onLinkChanged={onTagsChanged}
+          />
+        </div>
+      ) : null}
       {filesOnDisk}
       <TitleCastStrip credits={titleCastOriginalCredits(movie.credits)} />
       <TitleDubCastStrip credits={movie.credits} />

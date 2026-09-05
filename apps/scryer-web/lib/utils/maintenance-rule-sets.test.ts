@@ -17,6 +17,7 @@ import {
   MAINTENANCE_PREVIEW_LIMIT_MAX,
   MAINTENANCE_STARTER_SOURCE,
   actionKindLabelKey,
+  actionRequiresTags,
   actionRequiresTargetQualityProfile,
   armingOptionsFor,
   candidateStateBadgeTone,
@@ -60,6 +61,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     timingMode: "IMMEDIATE",
     allowedRepeatModes: ["ONCE"],
     requiresTargetQualityProfile: false,
+    requiresTags: false,
   },
   {
     kind: "DELETE_TITLE_AND_FILES",
@@ -69,6 +71,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     timingMode: "GRACE",
     allowedRepeatModes: ["ONCE"],
     requiresTargetQualityProfile: false,
+    requiresTags: false,
   },
   {
     kind: "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY",
@@ -78,6 +81,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     timingMode: "GRACE",
     allowedRepeatModes: ["ONCE"],
     requiresTargetQualityProfile: false,
+    requiresTags: false,
   },
   {
     kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
@@ -87,6 +91,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     timingMode: "GRACE",
     allowedRepeatModes: ["EVERY_RUN"],
     requiresTargetQualityProfile: true,
+    requiresTags: false,
   },
 ];
 
@@ -106,6 +111,7 @@ const detail: MaintenanceRuleSetDetail = {
       kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
       schemaVersion: 1,
       targetQualityProfileId: "profile-uhd",
+      tags: [],
     },
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-02T00:00:00Z",
@@ -124,6 +130,7 @@ const detail: MaintenanceRuleSetDetail = {
     kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
     schemaVersion: 1,
     targetQualityProfileId: "profile-7",
+    tags: [],
   },
 };
 
@@ -171,6 +178,7 @@ test("create input carries the action and drops empty optional fields", () => {
   assert.deepEqual(input.action, {
     kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
     targetQualityProfileId: "profile-7",
+    tags: undefined,
   });
   assert.equal(input.graceDays, 14);
   assert.equal(Object.hasOwn(input, "enabled"), false);
@@ -183,7 +191,73 @@ test("an action that does not take a profile never sends a stale profile id", ()
   assert.deepEqual(input.action, {
     kind: "DELETE_TITLE_AND_FILES",
     targetQualityProfileId: undefined,
+    tags: undefined,
   });
+});
+
+test("a tag action sends normalized, deduplicated labels and nothing else", () => {
+  const tagDescriptors: MaintenanceActionDescriptor[] = [
+    ...descriptors,
+    {
+      kind: "ADD_TAGS",
+      supportedSubjects: ["MOVIE", "SHOW"],
+      riskClass: "LOW",
+      effectClasses: ["catalog_intent"],
+      timingMode: "after_grace",
+      allowedRepeatModes: ["ensure_state"],
+      requiresTargetQualityProfile: false,
+      requiresTags: true,
+    },
+  ];
+  const draft = {
+    ...maintenanceRuleDraftFromDetail(detail),
+    actionKind: "ADD_TAGS" as const,
+    tags: ["  Needs   Review ", "keep", "needs review", "scryer:monitor-type:all"],
+  };
+
+  assert.deepEqual(createMaintenanceRuleSetInput(draft, tagDescriptors).action, {
+    kind: "ADD_TAGS",
+    // The profile the draft still carries from the previous action is dropped.
+    targetQualityProfileId: undefined,
+    tags: ["keep", "needs review"],
+  });
+
+  // Switching back to an action that takes no tags drops them the same way.
+  assert.deepEqual(
+    createMaintenanceRuleSetInput(
+      { ...draft, actionKind: "DELETE_TITLE_AND_FILES" as const },
+      tagDescriptors,
+    ).action,
+    {
+      kind: "DELETE_TITLE_AND_FILES",
+      targetQualityProfileId: undefined,
+      tags: undefined,
+    },
+  );
+  assert.equal(actionRequiresTags(tagDescriptors, "ADD_TAGS"), true);
+  assert.equal(actionRequiresTags(tagDescriptors, "DELETE_TITLE_AND_FILES"), false);
+});
+
+test("the tag actions are offerable for a title rule", () => {
+  const tagDescriptors: MaintenanceActionDescriptor[] = [
+    ...descriptors,
+    {
+      kind: "REMOVE_TAGS",
+      supportedSubjects: ["MOVIE", "SHOW"],
+      riskClass: "LOW",
+      effectClasses: ["catalog_intent"],
+      timingMode: "after_grace",
+      allowedRepeatModes: ["ensure_state"],
+      requiresTargetQualityProfile: false,
+      requiresTags: true,
+    },
+  ];
+  assert.equal(
+    titleScopedActionDescriptors(tagDescriptors)
+      .map((descriptor) => descriptor.kind)
+      .includes("REMOVE_TAGS"),
+    true,
+  );
 });
 
 test("matcher and metadata updates split along the API's versioned and unversioned halves", () => {
@@ -235,6 +309,7 @@ test("an action the backend's title executor cannot run is never offered", () =>
       timingMode: "GRACE",
       allowedRepeatModes: ["ONCE"],
       requiresTargetQualityProfile: false,
+      requiresTags: false,
     },
   ];
 

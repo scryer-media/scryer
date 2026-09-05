@@ -2199,6 +2199,7 @@ async fn create_test_series_movie_link(
         metadata_active: true,
         monitored: true,
         legacy_collection_id,
+        tags: Vec::new(),
         created_at: now,
         updated_at: now,
     };

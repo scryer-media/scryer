@@ -335,7 +335,8 @@ pub(super) fn catalog_personalized_groups(
     // composer (`personalized_section_results`): theme/tag groups claim titles
     // before the broader genre groups, and neither may comingle Western animation
     // with anime. The two surfaces must not disagree about what a rail means.
-    for label in canonical_affinity_labels_for_profile(items, &library_profile.tag_labels, "theme")
+    for label in
+        canonical_affinity_labels_for_profile(items, &library_profile.theme_labels, "theme")
     {
         if groups.len() >= max_groups {
             return;

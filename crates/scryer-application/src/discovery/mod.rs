@@ -1192,7 +1192,16 @@ impl AppUseCase {
                 |title| canonical_tag_labels(&title.canonical_tags, "genre"),
                 2,
             ),
-            tag_labels: top_owned_title_labels(&titles, |title| title.tags.iter(), 2),
+            // Theme affinity used to be read out of `title.tags`, which is the
+            // one place a user's own tag vocabulary lives. Tags are private
+            // catalog state and are never sent to SMG, so the theme rails are
+            // sourced from canonical theme tags, exactly as the genre rails are
+            // sourced from canonical genre tags.
+            theme_labels: top_owned_title_labels(
+                &titles,
+                |title| canonical_tag_labels(&title.canonical_tags, "theme"),
+                2,
+            ),
         })
     }
 }

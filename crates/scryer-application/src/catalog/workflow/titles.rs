@@ -853,6 +853,20 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<AddTitleOutcome> {
+        // Creation is the third door into `titles.tags`, alongside the tag patch
+        // and the whole-bag `updateTitle(tags:)` write, and it is gated exactly
+        // like them: a title may not be born carrying a label the registry does
+        // not define. Reserved `scryer:` entries pass through — that is how the
+        // add flow stores per-title options.
+        //
+        // The gate sits here rather than at the shared `new_title_for_library`
+        // chokepoint on purpose. This is the operator-facing creation path
+        // (`addTitle` and `addTitleAndQueueDownload`); library scans, pending
+        // imports, and media-request approvals reach titles by other routes and
+        // only ever emit reserved entries, so gating them would add a registry
+        // read to every scan for no reachable case.
+        self.require_registered_title_tags(&crate::helpers::normalize_tags(&request.tags))
+            .await?;
         let created = self
             .create_title_without_hydration_with_options_patch_in_library(
                 actor,

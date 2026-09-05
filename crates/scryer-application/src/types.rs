@@ -860,9 +860,68 @@ pub struct TitleCatalogFilter {
     pub root_folder_ids: Vec<String>,
     pub genre_tag_keys: Vec<String>,
     pub theme_tag_keys: Vec<String>,
+    /// Normalized user-tag labels, matched any-of against `titles.tags`. These
+    /// are registry labels, not the SMG-derived canonical keys the two
+    /// `*_tag_keys` lists above carry.
+    pub user_tags: Vec<String>,
     pub minimum_year: Option<i32>,
     pub maximum_year: Option<i32>,
     pub minimum_rating: Option<f64>,
+}
+
+/// A registry row plus how many titles currently carry its label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleTagDefinitionSummary {
+    pub definition: scryer_domain::TitleTagDefinition,
+    pub title_count: u64,
+    /// Series movies carrying the label. Counted separately from `title_count`
+    /// because a series movie is a link row rather than a title: the two are
+    /// different objects an operator manages in different places, and summing
+    /// them would claim a rename touched titles it never saw.
+    pub series_movie_count: u64,
+}
+
+/// How much membership a registry write moved, per owner kind.
+///
+/// Titles and series-movie links are two independent bags, so a rename that
+/// rewrote one and not the other has to be able to say so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TitleTagMembershipCounts {
+    pub titles: u64,
+    pub series_movies: u64,
+}
+
+/// What a rename or delete actually rewrote.
+///
+/// `titles` and `delay_profiles` are rewrites the operation performed. The last
+/// three are references it found and deliberately did *not* rewrite: Rego
+/// revisions are immutable and managed tag filters are SMG-owned, so a rule that
+/// named the old label stops matching rather than silently changing meaning.
+///
+/// The three reference counts are kept apart rather than summed so the warning
+/// can name what the operator has to go and look at: a maintenance rule, a
+/// release rule, or a managed pack's tag filter are three different places.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleTagRewriteCounts {
+    pub titles: u64,
+    /// Series-movie links rewritten. A second membership bag, so a rename that
+    /// touched no title can still have touched series movies.
+    pub series_movies: u64,
+    pub delay_profiles: u64,
+    pub maintenance_rule_sets: u64,
+    pub release_rule_sets: u64,
+    /// Release rule sets whose managed `tag_filter` list carries the label.
+    /// A managed pack can appear here and in `release_rule_sets` at once; the
+    /// two answer different questions.
+    pub managed_tag_filters: u64,
+}
+
+/// Outcome of a registry rename/describe: the row as it now stands, and what
+/// the write touched or merely noticed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleTagDefinitionUpdate {
+    pub definition: scryer_domain::TitleTagDefinition,
+    pub counts: TitleTagRewriteCounts,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

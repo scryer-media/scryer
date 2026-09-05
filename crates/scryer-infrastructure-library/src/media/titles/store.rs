@@ -2,17 +2,20 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
     AppError, AppResult, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord, CreateTitleOutcome,
-    MetadataFieldUpdate, PendingImportStatus, PendingTitleHydration, SortDirection,
-    TitleArtworkUrlUpdate, TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogFilterCounts,
-    TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
-    TitleCatalogTagFilterOption, TitleCredit, TitleDeletePreviewInfo, TitleExternalIdLookup,
-    TitleExternalIdLookupMatch, TitleMetadataUpdate, TitleOptionsPatch, TitleRatingSummary,
-    TitleRepository,
+    MAX_USER_TAGS_PER_TITLE, MetadataFieldUpdate, PendingImportStatus, PendingTitleHydration,
+    SortDirection, TitleArtworkUrlUpdate, TitleCatalogContentStatus, TitleCatalogFilter,
+    TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort,
+    TitleCatalogSortKey, TitleCatalogTagFilterOption, TitleCredit, TitleDeletePreviewInfo,
+    TitleExternalIdLookup, TitleExternalIdLookupMatch, TitleMetadataUpdate, TitleOptionsPatch,
+    TitleRatingSummary, TitleRepository, TitleTagDefinitionSummary, TitleTagMembershipCounts,
+    is_reserved_title_tag,
     persisted_records::{
         PersistedTitleDecodeOptions, PersistedTitleReadMode, finalize_persisted_title,
     },
 };
-use scryer_domain::{ExternalId, MediaFacet, MonitorSelection, Title, title_catalog_sort_key};
+use scryer_domain::{
+    ExternalId, MediaFacet, MonitorSelection, Title, TitleTagDefinition, title_catalog_sort_key,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use sqlx::{QueryBuilder, Row, Sqlite, postgres::PgRow};
@@ -352,6 +355,201 @@ impl TitleRepository for TitleStore {
             }
         }
         Ok(count)
+    }
+
+    async fn list_title_tag_definitions(&self) -> AppResult<Vec<TitleTagDefinitionSummary>> {
+        let dialect = title_catalog_dialect_for_datastore(&self.datastore);
+        let sql = format!(
+            "SELECT {TITLE_TAG_DEFINITION_COLUMNS},
+                    (SELECT COUNT(*)
+                       FROM titles
+                      WHERE {}) AS title_count,
+                    (SELECT COUNT(*)
+                       FROM series_movie_links
+                      WHERE {}) AS series_movie_count
+               FROM title_tag_definitions AS tag_definition
+              ORDER BY tag_definition.label",
+            title_tag_membership_predicate(dialect, "tag_definition.label"),
+            series_movie_link_tag_membership_predicate(dialect, "tag_definition.label")
+        );
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[]).await?;
+        rows.iter()
+            .map(|row| {
+                Ok(TitleTagDefinitionSummary {
+                    definition: decode_title_tag_definition(row)?,
+                    title_count: row.i64("title_count")?.max(0) as u64,
+                    series_movie_count: row.i64("series_movie_count")?.max(0) as u64,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_title_tag_labels(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT label FROM title_tag_definitions ORDER BY label",
+            &[],
+        )
+        .await?;
+        rows.iter().map(|row| row.text("label")).collect()
+    }
+
+    async fn get_title_tag_definition(&self, id: &str) -> AppResult<Option<TitleTagDefinition>> {
+        let sql = format!(
+            "SELECT {TITLE_TAG_DEFINITION_COLUMNS}
+               FROM title_tag_definitions AS tag_definition
+              WHERE tag_definition.id = {{}}"
+        );
+        SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?
+        .as_ref()
+        .map(decode_title_tag_definition)
+        .transpose()
+    }
+
+    async fn create_title_tag_definition(
+        &self,
+        definition: &TitleTagDefinition,
+    ) -> AppResult<TitleTagDefinition> {
+        let definition = definition.clone();
+        SqlRuntime::run_in_transaction(&self.datastore, "create_title_tag_definition", move |tx| {
+            let definition = definition.clone();
+            Box::pin(async move {
+                if load_title_tag_definition_by_label_tx(tx, &definition.label)
+                    .await?
+                    .is_some()
+                {
+                    return Err(duplicate_title_tag_label_error(&definition.label));
+                }
+                tx.execute(
+                    "INSERT INTO title_tag_definitions
+                         (id, label, description, created_by, created_at, updated_at)
+                     VALUES ({}, {}, {}, {}, {}, {})",
+                    &[
+                        SqlArg::Text(definition.id.clone()),
+                        SqlArg::Text(definition.label.clone()),
+                        SqlArg::OptText(definition.description.clone()),
+                        SqlArg::OptText(definition.created_by.clone()),
+                        SqlArg::Timestamp(definition.created_at),
+                        SqlArg::Timestamp(definition.updated_at),
+                    ],
+                )
+                .await?;
+                load_title_tag_definition_tx_or_not_found(tx, &definition.id).await
+            })
+        })
+        .await
+    }
+
+    async fn update_title_tag_definition(
+        &self,
+        id: &str,
+        label: Option<String>,
+        description: Option<Option<String>>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<(TitleTagDefinition, TitleTagMembershipCounts)> {
+        let id = id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "update_title_tag_definition", move |tx| {
+            let id = id.clone();
+            let label = label.clone();
+            let description = description.clone();
+            Box::pin(async move {
+                let existing = load_title_tag_definition_tx_or_not_found(tx, &id).await?;
+                let next_label = label.clone().unwrap_or_else(|| existing.label.clone());
+                if next_label != existing.label
+                    && let Some(conflict) =
+                        load_title_tag_definition_by_label_tx(tx, &next_label).await?
+                    && conflict.id != existing.id
+                {
+                    return Err(duplicate_title_tag_label_error(&next_label));
+                }
+
+                tx.execute(
+                    "UPDATE title_tag_definitions
+                        SET label = {}, description = {}, updated_at = {}
+                      WHERE id = {}",
+                    &[
+                        SqlArg::Text(next_label.clone()),
+                        SqlArg::OptText(
+                            description
+                                .clone()
+                                .unwrap_or_else(|| existing.description.clone()),
+                        ),
+                        SqlArg::Timestamp(updated_at),
+                        SqlArg::Text(existing.id.clone()),
+                    ],
+                )
+                .await?;
+
+                // Membership is stored by label, so a rename is only real once
+                // every bag carrying the old label carries the new one. Both
+                // halves are in this transaction: a partial rename would orphan
+                // memberships against a registry row that no longer names them.
+                let membership = if next_label == existing.label {
+                    TitleTagMembershipCounts::default()
+                } else {
+                    rewrite_title_tag_label_tx(tx, &existing.label, Some(&next_label)).await?
+                };
+
+                Ok((
+                    load_title_tag_definition_tx_or_not_found(tx, &existing.id).await?,
+                    membership,
+                ))
+            })
+        })
+        .await
+    }
+
+    async fn delete_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<(TitleTagDefinition, TitleTagMembershipCounts)> {
+        let id = id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_title_tag_definition", move |tx| {
+            let id = id.clone();
+            Box::pin(async move {
+                let existing = load_title_tag_definition_tx_or_not_found(tx, &id).await?;
+                let membership = rewrite_title_tag_label_tx(tx, &existing.label, None).await?;
+                tx.execute(
+                    "DELETE FROM title_tag_definitions WHERE id = {}",
+                    &[SqlArg::Text(existing.id.clone())],
+                )
+                .await?;
+                Ok((existing, membership))
+            })
+        })
+        .await
+    }
+
+    async fn update_user_tags(
+        &self,
+        title_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Title> {
+        let title_id = title_id.to_string();
+        let add = add.to_vec();
+        let remove = remove.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "update_title_user_tags", move |tx| {
+            let title_id = title_id.clone();
+            let add = add.clone();
+            let remove = remove.clone();
+            Box::pin(async move {
+                // Read-modify-write inside the transaction, never a whole-bag
+                // replace from a value the caller read earlier: an options save
+                // that rewrote a `scryer:` entry between the two must not be
+                // clobbered by a tag save, and vice versa.
+                let mut title = load_title_canonical_tx_or_not_found(tx, &title_id, true).await?;
+                apply_user_tag_patch(&mut title.tags, &add, &remove)?;
+                persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await?;
+                load_title_tx_or_not_found(tx, &title_id, true).await
+            })
+        })
+        .await
     }
 
     async fn list_without_external_ids(
@@ -2270,14 +2468,293 @@ fn merge_title_external_ids(target: &mut Vec<ExternalId>, incoming: Vec<External
     }
 }
 
+/// Merge incoming tags into an existing bag.
+///
+/// Reserved `scryer:` entries are single-valued settings, so an incoming
+/// `scryer:monitor-type:all` replaces whatever `scryer:monitor-type:` the bag
+/// already carried. User tags have no such structure: `needs review` shares no
+/// namespace with anything, and treating the last colon in an arbitrary label as
+/// a namespace separator would let one user tag silently evict another. So the
+/// prefix replacement is confined to the reserved namespace, and an incoming
+/// user tag is a plain set insert.
 fn merge_title_tags(target: &mut Vec<String>, incoming: Vec<String>) {
     for tag in incoming {
-        if let Some(colon_pos) = tag.rfind(':') {
-            let prefix = &tag[..=colon_pos];
-            target.retain(|candidate| !candidate.starts_with(prefix));
+        if is_reserved_title_tag(&tag) {
+            if let Some(colon_pos) = tag.rfind(':') {
+                let prefix = &tag[..=colon_pos];
+                target.retain(|candidate| !candidate.starts_with(prefix));
+            }
+            target.push(tag);
+            continue;
         }
-        target.push(tag);
+        if !target.iter().any(|candidate| candidate == &tag) {
+            target.push(tag);
+        }
     }
+}
+
+const TITLE_TAG_DEFINITION_COLUMNS: &str = "tag_definition.id AS id,
+    tag_definition.label AS label,
+    tag_definition.description AS description,
+    tag_definition.created_by AS created_by,
+    tag_definition.created_at AS created_at,
+    tag_definition.updated_at AS updated_at";
+
+fn decode_title_tag_definition(row: &SqlRow) -> AppResult<TitleTagDefinition> {
+    Ok(TitleTagDefinition {
+        id: row.text("id")?,
+        label: row.text("label")?,
+        description: row.opt_text("description")?,
+        created_by: row.opt_text("created_by")?,
+        created_at: row.timestamp("created_at")?,
+        updated_at: row.timestamp("updated_at")?,
+    })
+}
+
+fn duplicate_title_tag_label_error(label: &str) -> AppError {
+    AppError::Validation(format!("a tag named '{label}' already exists"))
+}
+
+/// `EXISTS` predicate over one title's tag bag, comparing every element against
+/// `value_expression`. The JSON-bag idiom is the only thing that differs between
+/// the two engines here.
+fn title_tag_membership_predicate(
+    dialect: TitleCatalogSqlDialect,
+    value_expression: &str,
+) -> String {
+    tag_membership_predicate(dialect, "titles.tags", value_expression)
+}
+
+/// The same predicate over a series-movie link's own bag.
+///
+/// A series movie is a link row, not a title, so registry counts, renames, and
+/// deletes have to reach two bags rather than one.
+fn series_movie_link_tag_membership_predicate(
+    dialect: TitleCatalogSqlDialect,
+    value_expression: &str,
+) -> String {
+    tag_membership_predicate(dialect, "series_movie_links.tags", value_expression)
+}
+
+/// `EXISTS` predicate over any JSON tag bag, comparing every element against
+/// `value_expression`.
+fn tag_membership_predicate(
+    dialect: TitleCatalogSqlDialect,
+    bag_expression: &str,
+    value_expression: &str,
+) -> String {
+    match dialect {
+        TitleCatalogSqlDialect::Sqlite => format!(
+            "EXISTS (
+                SELECT 1
+                  FROM json_each({bag_expression}) AS membership_tag
+                 WHERE membership_tag.value = {value_expression}
+            )"
+        ),
+        TitleCatalogSqlDialect::Postgres => format!(
+            "EXISTS (
+                SELECT 1
+                  FROM jsonb_array_elements_text({bag_expression}) AS membership_tag(value)
+                 WHERE membership_tag.value = {value_expression}
+            )"
+        ),
+    }
+}
+
+async fn load_title_tag_definition_tx(
+    tx: &mut SqlTx<'_>,
+    id: &str,
+) -> AppResult<Option<TitleTagDefinition>> {
+    let sql = format!(
+        "SELECT {TITLE_TAG_DEFINITION_COLUMNS}
+           FROM title_tag_definitions AS tag_definition
+          WHERE tag_definition.id = {{}}"
+    );
+    SqlRuntime::fetch_optional(SqlExec::Tx(tx), &sql, &[SqlArg::Text(id.to_string())])
+        .await?
+        .as_ref()
+        .map(decode_title_tag_definition)
+        .transpose()
+}
+
+async fn load_title_tag_definition_tx_or_not_found(
+    tx: &mut SqlTx<'_>,
+    id: &str,
+) -> AppResult<TitleTagDefinition> {
+    load_title_tag_definition_tx(tx, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))
+}
+
+async fn load_title_tag_definition_by_label_tx(
+    tx: &mut SqlTx<'_>,
+    label: &str,
+) -> AppResult<Option<TitleTagDefinition>> {
+    let sql = format!(
+        "SELECT {TITLE_TAG_DEFINITION_COLUMNS}
+           FROM title_tag_definitions AS tag_definition
+          WHERE tag_definition.label = {{}}"
+    );
+    SqlRuntime::fetch_optional(SqlExec::Tx(tx), &sql, &[SqlArg::Text(label.to_string())])
+        .await?
+        .as_ref()
+        .map(decode_title_tag_definition)
+        .transpose()
+}
+
+/// Rewrite `label` to `replacement` (or drop it) in every title bag and every
+/// series-movie link bag carrying it, returning how many of each changed.
+///
+/// The title bag is rewritten through the normal title write rather than with
+/// engine-specific JSON surgery: rename and delete are admin-only and rare, and
+/// going through `persist_title_tx` keeps the search and external-id projections
+/// consistent with the row, which raw JSON mutation would silently skip. A link
+/// row has no projections at all, so its bag is written directly.
+async fn rewrite_title_tag_label_tx(
+    tx: &mut SqlTx<'_>,
+    label: &str,
+    replacement: Option<&str>,
+) -> AppResult<TitleTagMembershipCounts> {
+    let dialect = match &*tx {
+        SqlTx::Sqlite(_) => TitleCatalogSqlDialect::Sqlite,
+        SqlTx::Postgres(_) => TitleCatalogSqlDialect::Postgres,
+    };
+    let sql = format!(
+        "SELECT id FROM titles WHERE {} ORDER BY id",
+        title_tag_membership_predicate(dialect, "{}")
+    );
+    let rows =
+        SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &[SqlArg::Text(label.to_string())]).await?;
+    let title_ids = rows
+        .iter()
+        .map(|row| row.text("id"))
+        .collect::<AppResult<Vec<_>>>()?;
+
+    let mut rewritten = 0_u64;
+    for title_id in title_ids {
+        let mut title = load_title_canonical_tx_or_not_found(tx, &title_id, true).await?;
+        let before = title.tags.clone();
+        title.tags.retain(|tag| tag != label);
+        if let Some(replacement) = replacement
+            && !title.tags.iter().any(|tag| tag == replacement)
+        {
+            title.tags.push(replacement.to_string());
+        }
+        if title.tags == before {
+            continue;
+        }
+        persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await?;
+        rewritten += 1;
+    }
+
+    let series_movies = rewrite_series_movie_link_tag_label_tx(tx, label, replacement).await?;
+    Ok(TitleTagMembershipCounts {
+        titles: rewritten,
+        series_movies,
+    })
+}
+
+/// The series-movie half of a rename or delete: rewrite `label` in every link
+/// bag carrying it, returning how many links changed.
+async fn rewrite_series_movie_link_tag_label_tx(
+    tx: &mut SqlTx<'_>,
+    label: &str,
+    replacement: Option<&str>,
+) -> AppResult<u64> {
+    let dialect = match &*tx {
+        SqlTx::Sqlite(_) => TitleCatalogSqlDialect::Sqlite,
+        SqlTx::Postgres(_) => TitleCatalogSqlDialect::Postgres,
+    };
+    let sql = format!(
+        "SELECT id, tags FROM series_movie_links WHERE {} ORDER BY id",
+        series_movie_link_tag_membership_predicate(dialect, "{}")
+    );
+    let rows =
+        SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &[SqlArg::Text(label.to_string())]).await?;
+    let links = rows
+        .iter()
+        .map(|row| {
+            let id = row.text("id")?;
+            let tags = decode_series_movie_link_tag_bag(row)?;
+            Ok((id, tags))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+
+    let mut rewritten = 0_u64;
+    for (link_id, mut tags) in links {
+        let before = tags.clone();
+        tags.retain(|tag| tag != label);
+        if let Some(replacement) = replacement
+            && !tags.iter().any(|tag| tag == replacement)
+        {
+            tags.push(replacement.to_string());
+        }
+        if tags == before {
+            continue;
+        }
+        write_series_movie_link_tag_bag_tx(tx, &link_id, &tags).await?;
+        rewritten += 1;
+    }
+    Ok(rewritten)
+}
+
+/// One series-movie link's stored bag. A malformed value reads as empty rather
+/// than failing the whole rename: the rewrite's job is to remove a label, and a
+/// bag that cannot be parsed does not carry one.
+fn decode_series_movie_link_tag_bag(row: &SqlRow) -> AppResult<Vec<String>> {
+    Ok(row
+        .opt_json("tags")?
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default())
+}
+
+async fn write_series_movie_link_tag_bag_tx(
+    tx: &mut SqlTx<'_>,
+    link_id: &str,
+    tags: &[String],
+) -> AppResult<()> {
+    tx.execute(
+        "UPDATE series_movie_links SET tags = {}, updated_at = {} WHERE id = {}",
+        &[
+            SqlArg::Json(
+                serde_json::to_value(tags).unwrap_or_else(|_| JsonValue::Array(Vec::new())),
+            ),
+            SqlArg::Timestamp(Utc::now()),
+            SqlArg::Text(link_id.to_string()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Apply an add/remove patch to a stored tag bag.
+///
+/// Removals run first so a label named in both lists survives, which is what an
+/// "add these, remove those" form submitting its whole state means. Reserved
+/// entries are never removed and never counted against the per-title ceiling:
+/// they are settings, not membership.
+pub(crate) fn apply_user_tag_patch(
+    tags: &mut Vec<String>,
+    add: &[String],
+    remove: &[String],
+) -> AppResult<()> {
+    tags.retain(|tag| is_reserved_title_tag(tag) || !remove.iter().any(|removed| removed == tag));
+    for label in add {
+        if !tags.iter().any(|tag| tag == label) {
+            tags.push(label.clone());
+        }
+    }
+
+    let user_tag_count = tags
+        .iter()
+        .filter(|tag| !is_reserved_title_tag(tag))
+        .count();
+    if user_tag_count > MAX_USER_TAGS_PER_TITLE {
+        return Err(AppError::Validation(format!(
+            "a title can carry at most {MAX_USER_TAGS_PER_TITLE} tags; this change would leave it with {user_tag_count}"
+        )));
+    }
+    Ok(())
 }
 
 fn build_name_filtered_title_list_sql(
@@ -2353,9 +2830,11 @@ fn build_title_catalog_count_sql(
     library_ids: &[String],
     query: Option<&str>,
     filter: &TitleCatalogFilter,
+    dialect: TitleCatalogSqlDialect,
 ) -> (String, Vec<SqlArg>) {
     let mut sql = "SELECT COUNT(*) AS count FROM titles".to_string();
-    let (where_sql, args) = build_title_catalog_where_sql(facet, library_ids, query, filter);
+    let (where_sql, args) =
+        build_title_catalog_where_sql(facet, library_ids, query, filter, dialect);
     if !where_sql.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_sql);
@@ -2370,7 +2849,13 @@ async fn fetch_title_catalog_count(
     query: Option<&str>,
     filter: &TitleCatalogFilter,
 ) -> AppResult<usize> {
-    let (sql, args) = build_title_catalog_count_sql(facet, library_ids, query, filter);
+    let (sql, args) = build_title_catalog_count_sql(
+        facet,
+        library_ids,
+        query,
+        filter,
+        title_catalog_dialect_for_datastore(datastore),
+    );
     Ok(
         SqlRuntime::fetch_optional(datastore.read_exec(), &sql, &args)
             .await?
@@ -2581,7 +3066,8 @@ fn build_title_catalog_page_sql(
 ) -> (String, Vec<SqlArg>) {
     let mut sql = format!("SELECT {TITLE_COLUMNS} FROM titles");
     sql.push_str(&build_title_catalog_sort_join_sql(sort.key, dialect));
-    let (where_sql, mut args) = build_title_catalog_where_sql(facet, library_ids, query, filter);
+    let (where_sql, mut args) =
+        build_title_catalog_where_sql(facet, library_ids, query, filter, dialect);
     if !where_sql.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_sql);
@@ -2599,6 +3085,7 @@ fn build_title_catalog_where_sql(
     library_ids: &[String],
     query: Option<&str>,
     filter: &TitleCatalogFilter,
+    dialect: TitleCatalogSqlDialect,
 ) -> (String, Vec<SqlArg>) {
     let mut clauses = Vec::<String>::new();
     let mut args = Vec::new();
@@ -2647,6 +3134,12 @@ fn build_title_catalog_where_sql(
     }
     if let Some(clause) =
         title_catalog_tag_filter_clause("theme", &filter.theme_tag_keys, &mut args)
+    {
+        clauses.push(clause);
+    }
+
+    if let Some(clause) =
+        title_catalog_user_tag_filter_clause(dialect, &filter.user_tags, &mut args)
     {
         clauses.push(clause);
     }
@@ -2705,6 +3198,41 @@ fn title_catalog_tag_filter_clause(
                AND catalog_tag.tag_key IN ({placeholders})
         )"
     ))
+}
+
+/// Any-of over the user-tag half of `titles.tags`.
+///
+/// Membership is stored by label, so this compares the bag directly instead of
+/// joining `title_tag_definitions`: a filter is a read, and a label the registry
+/// no longer defines simply matches nothing once the delete has stripped it.
+fn title_catalog_user_tag_filter_clause(
+    dialect: TitleCatalogSqlDialect,
+    labels: &[String],
+    args: &mut Vec<SqlArg>,
+) -> Option<String> {
+    if labels.is_empty() {
+        return None;
+    }
+    let placeholders = std::iter::repeat_n("{}", labels.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    args.extend(labels.iter().cloned().map(SqlArg::Text));
+    Some(match dialect {
+        TitleCatalogSqlDialect::Sqlite => format!(
+            "EXISTS (
+                SELECT 1
+                  FROM json_each(titles.tags) AS catalog_user_tag
+                 WHERE catalog_user_tag.value IN ({placeholders})
+            )"
+        ),
+        TitleCatalogSqlDialect::Postgres => format!(
+            "EXISTS (
+                SELECT 1
+                  FROM jsonb_array_elements_text(titles.tags) AS catalog_user_tag(value)
+                 WHERE catalog_user_tag.value IN ({placeholders})
+            )"
+        ),
+    })
 }
 
 fn title_catalog_content_status_values(statuses: &[TitleCatalogContentStatus]) -> Vec<String> {
@@ -4104,6 +4632,7 @@ mod tests {
             root_folder_ids: vec!["root-1".to_string(), "root-2".to_string()],
             genre_tag_keys: vec!["canonical:genre:alpha".to_string()],
             theme_tag_keys: vec!["canonical:theme:beta".to_string()],
+            user_tags: Vec::new(),
             minimum_year: Some(2000),
             maximum_year: Some(2020),
             minimum_rating: Some(7.5),
@@ -4114,6 +4643,7 @@ mod tests {
             &["library-1".to_string()],
             Some("sample"),
             &filter,
+            TitleCatalogSqlDialect::Sqlite,
         );
 
         assert!(sql.contains("titles.root_folder_id IN"));
@@ -4127,6 +4657,146 @@ mod tests {
         assert!(sql.contains("monitored = {}"));
         assert!(sql.contains("LOWER(TRIM(COALESCE(content_status, ''))) IN"));
         assert_eq!(args.len(), 15);
+    }
+
+    #[test]
+    fn title_catalog_where_sql_filters_user_tags_any_of_per_dialect() {
+        let filter = TitleCatalogFilter {
+            user_tags: vec!["keep".to_string(), "needs review".to_string()],
+            ..TitleCatalogFilter::default()
+        };
+
+        let (sqlite_sql, sqlite_args) = build_title_catalog_where_sql(
+            None,
+            &["library-1".to_string()],
+            None,
+            &filter,
+            TitleCatalogSqlDialect::Sqlite,
+        );
+        assert!(
+            sqlite_sql.contains("FROM json_each(titles.tags) AS catalog_user_tag"),
+            "{sqlite_sql}"
+        );
+        assert!(sqlite_sql.contains("catalog_user_tag.value IN ({}, {})"));
+        // The label bag is the only thing consulted: a user-tag filter must not
+        // reach for the SMG-owned canonical tag table.
+        assert!(!sqlite_sql.contains("title_metadata_tags"));
+        assert_eq!(sqlite_args.len(), 3);
+
+        let (postgres_sql, postgres_args) = build_title_catalog_where_sql(
+            None,
+            &["library-1".to_string()],
+            None,
+            &filter,
+            TitleCatalogSqlDialect::Postgres,
+        );
+        assert!(
+            postgres_sql
+                .contains("FROM jsonb_array_elements_text(titles.tags) AS catalog_user_tag(value)"),
+            "{postgres_sql}"
+        );
+        assert_eq!(postgres_args.len(), 3);
+
+        // No labels means no clause at all, not an always-false one.
+        let (empty_sql, empty_args) = build_title_catalog_where_sql(
+            None,
+            &["library-1".to_string()],
+            None,
+            &TitleCatalogFilter::default(),
+            TitleCatalogSqlDialect::Sqlite,
+        );
+        assert!(!empty_sql.contains("catalog_user_tag"));
+        assert_eq!(empty_args.len(), 1);
+    }
+
+    #[test]
+    fn merging_tags_replaces_reserved_settings_but_never_evicts_a_user_tag() {
+        // `scryer:` entries are single-valued settings: a new monitor type
+        // replaces the old one.
+        let mut tags = vec![
+            "scryer:monitor-type:all".to_string(),
+            "keep".to_string(),
+            "season 1: the beginning".to_string(),
+        ];
+        merge_title_tags(
+            &mut tags,
+            vec![
+                "scryer:monitor-type:future".to_string(),
+                "needs review".to_string(),
+            ],
+        );
+        assert_eq!(
+            tags,
+            vec![
+                "keep".to_string(),
+                // A colon inside a user label is just a character. Before the
+                // narrowing, this tag's "season 1:" prefix would have evicted
+                // nothing here but would evict any sibling sharing it.
+                "season 1: the beginning".to_string(),
+                "scryer:monitor-type:future".to_string(),
+                "needs review".to_string(),
+            ]
+        );
+
+        // Two user labels sharing a colon prefix coexist.
+        let mut colliding = vec!["arc 1: setup".to_string()];
+        merge_title_tags(&mut colliding, vec!["arc 1: payoff".to_string()]);
+        assert_eq!(
+            colliding,
+            vec!["arc 1: setup".to_string(), "arc 1: payoff".to_string()]
+        );
+
+        // Re-adding a user tag is idempotent rather than duplicating it.
+        let mut repeated = vec!["keep".to_string()];
+        merge_title_tags(&mut repeated, vec!["keep".to_string()]);
+        assert_eq!(repeated, vec!["keep".to_string()]);
+    }
+
+    #[test]
+    fn user_tag_patch_preserves_reserved_entries_and_enforces_the_ceiling() {
+        let mut tags = vec![
+            "scryer:quality-profile:1080p".to_string(),
+            "keep".to_string(),
+            "needs review".to_string(),
+        ];
+        apply_user_tag_patch(
+            &mut tags,
+            &["watched".to_string(), "keep".to_string()],
+            &["needs review".to_string(), "keep".to_string()],
+        )
+        .expect("patch should apply");
+        // Removals run first and the additions are re-appended, so a label
+        // named in both lists survives (at the end of the bag); the reserved
+        // entry is untouched by either list.
+        assert_eq!(
+            tags,
+            vec![
+                "scryer:quality-profile:1080p".to_string(),
+                "watched".to_string(),
+                "keep".to_string(),
+            ]
+        );
+
+        // A caller cannot remove a reserved settings entry through the tag door.
+        let mut reserved = vec!["scryer:monitor-type:all".to_string()];
+        apply_user_tag_patch(&mut reserved, &[], &["scryer:monitor-type:all".to_string()])
+            .expect("patch should apply");
+        assert_eq!(reserved, vec!["scryer:monitor-type:all".to_string()]);
+
+        // Reserved entries do not count against the per-title ceiling.
+        let mut full = (0..MAX_USER_TAGS_PER_TITLE)
+            .map(|index| format!("tag {index}"))
+            .collect::<Vec<_>>();
+        full.push("scryer:monitor-type:all".to_string());
+        assert!(apply_user_tag_patch(&mut full, &[], &[]).is_ok());
+        let error = apply_user_tag_patch(&mut full, &["one too many".to_string()], &[])
+            .expect_err("the ceiling must be enforced");
+        assert!(
+            error
+                .to_string()
+                .contains(&MAX_USER_TAGS_PER_TITLE.to_string()),
+            "{error}"
+        );
     }
 
     #[test]

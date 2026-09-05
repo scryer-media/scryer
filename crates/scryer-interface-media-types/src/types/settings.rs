@@ -4,7 +4,7 @@ use super::{
     RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
     VerificationDepthValue,
 };
-use async_graphql::{Enum, ID, InputObject, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 #[derive(SimpleObject, Clone)]
@@ -492,6 +492,82 @@ pub struct DelayProfilePayload {
 pub struct DelayProfileDeletionPayload {
     /// Deleted delay-profile ID.
     pub id: ID,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Administrator-defined title tag and how many titles currently carry it.
+pub struct TitleTagDefinitionPayload {
+    /// Title-tag definition ID.
+    pub id: ID,
+    /// Normalized label stored on every title carrying this tag; lowercase, with internal whitespace collapsed.
+    pub label: String,
+    /// Operator-facing note about what the tag is for, or null when none was written.
+    pub description: Option<String>,
+    /// Number of titles currently carrying the label.
+    pub title_count: i32,
+    /// Number of series movies currently carrying the label. Counted separately from `titleCount`: a series movie is a link inside a series, not a title of its own.
+    pub series_movie_count: i32,
+    /// Time the tag was defined, in UTC.
+    pub created_at: DateTime<Utc>,
+    /// Time the tag was last renamed or re-described, in UTC.
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What a title-tag rename or deletion rewrote, and what it only found.
+pub struct TitleTagRewriteCountsPayload {
+    /// Titles whose tag list was rewritten.
+    pub titles: i32,
+    /// Series movies whose tag list was rewritten.
+    pub series_movies: i32,
+    /// Delay profiles whose tag list was rewritten.
+    pub delay_profiles: i32,
+    /// Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+    pub maintenance_rule_sets: i32,
+    /// Release rule sets whose rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+    pub release_rule_sets: i32,
+    /// Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.
+    pub managed_tag_filters: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A saved title-tag definition together with what the save rewrote.
+pub struct TitleTagDefinitionMutationPayload {
+    /// The definition as it now stands.
+    pub definition: TitleTagDefinitionPayload,
+    /// Rewrite and reference counts; all zero when a tag is created or only its description changed.
+    pub counts: TitleTagRewriteCountsPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Identity of a deleted title tag and what the deletion cleaned up.
+pub struct TitleTagDefinitionDeletionPayload {
+    /// Deleted title-tag definition ID.
+    pub id: ID,
+    /// Label the deleted tag carried.
+    pub label: String,
+    /// Rewrite and reference counts for the deletion.
+    pub counts: TitleTagRewriteCountsPayload,
+}
+
+#[derive(InputObject, Clone)]
+/// New title tag to define.
+pub struct CreateTitleTagDefinitionInput {
+    /// Label to define; trimmed, lowercased, and whitespace-collapsed before it is stored, and rejected when it uses the reserved `scryer:` prefix.
+    pub label: String,
+    /// Optional operator-facing note about what the tag is for.
+    pub description: Option<String>,
+}
+
+#[derive(InputObject, Clone)]
+/// Title-tag rename or description change.
+pub struct UpdateTitleTagDefinitionInput {
+    /// Title-tag definition to change.
+    pub id: ID,
+    /// Replacement label; omitted or null leaves the label alone. A rename rewrites every title and delay profile carrying the old label.
+    pub label: Option<String>,
+    /// Replacement description; omitted leaves it alone, and null clears it.
+    pub description: MaybeUndefined<String>,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -2221,7 +2221,7 @@ const ru: LocaleDictionary = {
         "Нормализованный язык оригинальной звуковой дорожки, определённый для релизов без явной маркировки",
 
     "settings.refCtxTags":
-        "Пользовательские теги, назначенные материалу",
+        "Пользовательские теги материала в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
 
     "settings.refCtxHasExisting":
         "Истинно, если для этого материала уже существует файл",
@@ -5114,7 +5114,8 @@ const ru: LocaleDictionary = {
     "settings.refMaintLibraryName": "Отображаемое имя этой библиотеки",
     "settings.refMaintSectionFacts": "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
     "settings.refMaintFactsMonitored": "Отслеживается ли субъект",
-    "settings.refMaintFactsTags": "Теги, назначенные субъекту",
+    "settings.refMaintFactsTags":
+        "Пользовательские теги субъекта в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
     "settings.refMaintFactsQualityProfileId": "Профиль качества, назначенный субъекту",
     "settings.refMaintFactsAddedAt": "Когда субъект был добавлен в библиотеку",
     "settings.refMaintFactsAddedByUserId": "Какой пользователь добавил субъект; отсутствует, если его создало сканирование или обнаружение",
@@ -5142,7 +5143,8 @@ const ru: LocaleDictionary = {
     "settings.refMaintObsObservedAt": "Когда значение было получено, если источник записал время",
     "settings.refMaintObsReason": "Устойчивый машинный код, объясняющий, почему факт неизвестен или почему у отсутствующего факта нет значения",
     "settings.refMaintFactsMonitoredValue": "True, когда субъект отслеживается",
-    "settings.refMaintFactsTagsValue": "Имена тегов, назначенных субъекту",
+    "settings.refMaintFactsTagsValue":
+        "Имена пользовательских тегов в нижнем регистре из реестра тегов администратора; никогда не служебные записи с префиксом scryer:",
     "settings.refMaintFactsQualityProfileIdValue": "Идентификатор назначенного профиля качества",
     "settings.refMaintFactsAddedAtValue": "Метка времени RFC3339 добавления субъекта",
     "settings.refMaintFactsAddedByUserIdValue": "Идентификатор пользователя, добавившего субъект; причина title_added_by_system, если этого не сделал никто",
@@ -5173,6 +5175,26 @@ const ru: LocaleDictionary = {
     "settings.refMaintFileAudioLanguages": "Языки аудиодорожек в файле",
     "settings.refMaintFileSubtitleLanguages": "Языки субтитров в файле",
     "settings.refMaintFileAddedAt": "Метка времени RFC3339 добавления файла",
+    "settings.refMaintFactsSeriesMovies":
+      "Фильмы, привязанные к таймлайну сериала, каждый со своими тегами. Только для сериалов: у фильма этот ключ отсутствует, а у сериала без привязанных фильмов он известен и пуст. add_tags и remove_tags никогда не пишут сюда — они действуют на сам тайтл.",
+    "settings.refMaintFactsSeriesMoviesValue":
+      "По одной записи на привязанный фильм; см. input.observations.series_movies.value[] ниже",
+    "settings.refMaintSectionSeriesMovies":
+      "— По одной записи на привязанный фильм в input.facts.series_movies",
+    "settings.refMaintSectionObsSeriesMovies":
+      "— По одной записи на привязанный фильм в input.observations.series_movies.value",
+    "settings.refMaintSeriesMovieLinkId": "Идентификатор связи сериала и фильма",
+    "settings.refMaintSeriesMovieName": "Название привязанного фильма",
+    "settings.refMaintSeriesMovieYear": "Год выпуска привязанного фильма, если известен",
+    "settings.refMaintSeriesMovieMonitored": "Включено ли получение для этого привязанного фильма",
+    "settings.refMaintSeriesMovieHasFile": "Есть ли у этого привязанного фильма файл на диске",
+    "settings.refMaintSeriesMovieTags":
+      "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
+    "settings.refMaintTagActionsTitle": "Действия с тегами",
+    "settings.refMaintTagActionsNote":
+      "add_tags и remove_tags записывают пользовательские теги на совпавший тайтл. Каждая метка должна существовать в реестре тегов, который администратор ведёт в настройках, и хранится в нижнем регистре: правило, называющее удалённый тег, удерживается с причиной tag_not_defined вместо записи.",
+    "settings.refMaintTagOscillationNote":
+      "Два правила, записывающие противоположные изменения одной метки на одном тайтле, удерживают обоих кандидатов с причиной tag_patch_conflict, а не отдают победу тому, кто отработал последним. Правило, которое добавляет метку, и другое, которое снимает её на следующем прогоне, так не ловится: это ошибка автора, из-за которой тег переключается бесконечно, поэтому ограничьте их так, чтобы они не совпадали одновременно.",
 
     "settings.maintenanceTemplateGallery": "Готовые шаблоны",
     "settings.maintenanceTemplateGalleryDescription":
@@ -5633,6 +5655,66 @@ const ru: LocaleDictionary = {
   "grabDialog.status.failed": "{{name}}: {{reason}}",
   "grabDialog.error.expired":
     "Этого релиза больше нет в активном поиске. Запустите поиск снова.",
+  // Title tags: the administrator-defined registry in Settings, the per-title
+  // picker, the bulk pickers, and the catalog filter.
+  "settings.titleTags": "Теги",
+  "settings.titleTagsExisting": "Заданные теги",
+  "settings.titleTagsHelp": "Tags defined here are the only tags anyone can apply to a title. Renaming one rewrites every title and delay profile that carries it; deleting one strips it from every title.",
+  "settings.titleTagsNone": "Теги ещё не заданы.",
+  "settings.titleTagsLoadError": "Не удалось загрузить теги.",
+  "settings.titleTagLabelLabel": "Метка",
+  "settings.titleTagLabelPlaceholder": "keep",
+  "settings.titleTagLabelHelp": "Stored in lowercase with extra spaces removed. Up to 64 characters.",
+  "settings.titleTagDescriptionLabel": "Описание",
+  "settings.titleTagDescriptionPlaceholder": "Для чего нужен этот тег (необязательно)",
+  "settings.titleTagTitleCount": "Тайтлы",
+  "settings.titleTagCreate": "Задать тег",
+  "settings.titleTagCreateNew": "Задать новый тег",
+  "settings.titleTagEdit": "Изменить тег",
+  "settings.titleTagSaved": "Тег сохранён.",
+  "settings.titleTagSaveError": "Не удалось сохранить тег.",
+  "settings.titleTagDeleteError": "Не удалось удалить тег.",
+  "settings.titleTagDeleted": "Deleted {{label}} from {{count}} titles.",
+  "settings.titleTagDeleteConfirmTitle": "Удалить тег",
+  "settings.titleTagDeleteConfirm": "{{label}} is on {{count}} titles. Deleting it removes it from every one of them and from any delay profile that filters on it. Rules that name it stop matching.",
+  "settings.titleTagLabelRequired": "Введите метку для тега.",
+  "settings.titleTagLabelReserved": "Labels cannot start with scryer:, which is reserved for settings Scryer writes itself.",
+  "settings.titleTagLabelTooLong": "Метка не может быть длиннее 64 символов.",
+  "settings.titleTagLabelInvalid": "A label cannot contain control characters.",
+  "settings.titleTagRenameSummary": "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
+  "settings.titleTagRenameWarning": "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
+  "settings.titleTagReferenceMaintenanceRuleSets": "наборы правил обслуживания: {{count}}",
+  "settings.titleTagReferenceReleaseRuleSets": "наборы правил релизов: {{count}}",
+  "settings.titleTagReferenceManagedTagFilters": "управляемые фильтры тегов: {{count}}",
+  "title.tagsLabel": "Теги",
+  "title.tagsNone": "Тегов нет",
+  "title.tagsAdd": "Добавить тег…",
+  "title.tagsAllApplied": "Every defined tag is already applied",
+  "title.tagsRemove": "Убрать {{label}}",
+  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.bulkAddTags": "Добавить теги",
+  "title.bulkRemoveTags": "Убрать теги",
+  "title.catalogFilters.themes": "Темы",
+  "title.catalogFilters.selectThemes": "Выберите темы...",
+  "title.catalogFilters.userTags": "Теги",
+  "title.catalogFilters.selectUserTags": "Выберите теги...",
+
+  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // sentences carry the English string where no translation is available yet,
+  // the same way the WP3 block above does.
+  "settings.titleTagSeriesMovieCount": "Фильмы сериала",
+  "settings.maintenanceActionAddTags": "Добавить теги",
+  "settings.maintenanceActionRemoveTags": "Удалить теги",
+  "settings.maintenanceRuleTags": "Теги",
+  "settings.maintenanceRuleTagsNone": "Теги ещё не выбраны",
+  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceCandidatesTagPatchAdd": "добавляет {{tags}}",
+  "settings.maintenanceCandidatesTagPatchRemove": "удаляет {{tags}}",
+  "settings.maintenanceTemplateTaggedForRemovalTitle": "Помечено к удалению",
+  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateFlagForReviewTitle": "Пометить для проверки",
+  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+
 };
 
 export default ru;

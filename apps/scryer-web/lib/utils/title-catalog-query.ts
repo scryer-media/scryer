@@ -1,3 +1,5 @@
+import { userTitleTags } from "./title-tags.ts";
+
 export type TitleCatalogQuickFilters = {
   monitored: boolean;
   unmonitored: boolean;
@@ -9,6 +11,13 @@ export type TitleCatalogAdvancedFilters = {
   rootFolderIds: string[];
   genreTagKeys: string[];
   themeTagKeys: string[];
+  /**
+   * Administrator-defined user tags, any-of. Distinct from the two canonical
+   * tag key lists above: those are SMG-derived genre and theme keys, these are
+   * labels from the title-tag registry and travel as
+   * `TitleCatalogFilterInput.tags`.
+   */
+  userTagLabels: string[];
   minimumYear: number | null;
   maximumYear: number | null;
   minimumRating: number | null;
@@ -54,6 +63,7 @@ export const EMPTY_TITLE_ADVANCED_FILTERS: TitleCatalogAdvancedFilters = {
   rootFolderIds: [],
   genreTagKeys: [],
   themeTagKeys: [],
+  userTagLabels: [],
   minimumYear: null,
   maximumYear: null,
   minimumRating: null,
@@ -163,6 +173,9 @@ export function titleCatalogFilterInput(
   const rootFolderIds = [...advancedFilters.rootFolderIds].sort();
   const genreTagKeys = [...advancedFilters.genreTagKeys].sort();
   const themeTagKeys = [...advancedFilters.themeTagKeys].sort();
+  // User tags reach the wire in the registry's own normal form, so a stale
+  // persisted filter and a freshly picked one produce the same query key.
+  const tags = userTitleTags(advancedFilters.userTagLabels);
   const minimumRating =
     advancedFilters.minimumRating != null && advancedFilters.minimumRating > 0
       ? advancedFilters.minimumRating
@@ -174,6 +187,7 @@ export function titleCatalogFilterInput(
     rootFolderIds.length === 0 &&
     genreTagKeys.length === 0 &&
     themeTagKeys.length === 0 &&
+    tags.length === 0 &&
     advancedFilters.minimumYear === null &&
     advancedFilters.maximumYear === null &&
     minimumRating === null
@@ -187,6 +201,7 @@ export function titleCatalogFilterInput(
     ...(rootFolderIds.length > 0 ? { rootFolderIds } : {}),
     ...(genreTagKeys.length > 0 ? { genreTagKeys } : {}),
     ...(themeTagKeys.length > 0 ? { themeTagKeys } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
     ...(advancedFilters.minimumYear !== null
       ? { minimumYear: advancedFilters.minimumYear }
       : {}),

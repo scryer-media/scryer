@@ -62,6 +62,25 @@ fn canonical_genre_tags(labels: &[&str]) -> Vec<CanonicalMediaTag> {
         .collect()
 }
 
+fn canonical_theme_tags(labels: &[&str]) -> Vec<CanonicalMediaTag> {
+    labels
+        .iter()
+        .map(|label| CanonicalMediaTag {
+            key: format!(
+                "canonical:theme:{}",
+                label.to_ascii_lowercase().replace(' ', "-")
+            ),
+            category: "theme".to_string(),
+            name: (*label).to_string(),
+            confidence: Some(1.0),
+            sources: Vec::new(),
+            source_tag_keys: Vec::new(),
+            is_adult: false,
+            is_spoiler: false,
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
@@ -78,6 +97,12 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
     owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror", "Isekai"]));
+    // The user-tag bag is deliberately populated and deliberately ignored:
+    // affinity is sourced from canonical tags only, and nothing tag-related
+    // leaves the instance.
     owned_drama_sci_fi.tags = vec!["horror".to_string(), "isekai".to_string()];
     let mut owned_drama = test_title(
         "owned-2",
@@ -87,6 +112,9 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     );
     owned_drama.library_id = visible_movie_library_id.clone();
     owned_drama.canonical_tags = canonical_genre_tags(&["Drama"]);
+    owned_drama
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror"]));
     owned_drama.tags = vec!["horror".to_string()];
     let mut owned_sci_fi = test_title(
         "owned-3",
@@ -96,6 +124,9 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
     owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Isekai"]));
     owned_sci_fi.tags = vec!["isekai".to_string()];
     titles
         .store
@@ -214,6 +245,12 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
     owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror", "Isekai"]));
+    // The user-tag bag is deliberately populated and deliberately ignored:
+    // affinity is sourced from canonical tags only, and nothing tag-related
+    // leaves the instance.
     owned_drama_sci_fi.tags = vec!["horror".to_string(), "isekai".to_string()];
     let mut owned_drama = test_title(
         "owned-2",
@@ -223,6 +260,9 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     );
     owned_drama.library_id = visible_movie_library_id.clone();
     owned_drama.canonical_tags = canonical_genre_tags(&["Drama"]);
+    owned_drama
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror"]));
     owned_drama.tags = vec!["horror".to_string()];
     let mut owned_sci_fi = test_title(
         "owned-3",
@@ -232,6 +272,9 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
     owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Isekai"]));
     owned_sci_fi.tags = vec!["isekai".to_string()];
     titles
         .store

@@ -176,7 +176,19 @@ pub(crate) fn build_rule_input(
             original_country: title_language_context.original_country,
             inferred_original_audio_language: title_language_context
                 .inferred_original_audio_language,
-            tags: context.title_tags.to_vec(),
+            // User-defined labels only. Reserved `scryer:` entries share the
+            // storage but are per-title settings, and a release rule reading a
+            // quality profile or a monitor type out of a field called `tags`
+            // would be reading a setting the profile system already applied.
+            // The full bag is still available where it is actually needed —
+            // `title_audio_language_context` above reads the anime entries
+            // straight from `context.title_tags`.
+            tags: context
+                .title_tags
+                .iter()
+                .filter(|tag| !crate::is_reserved_title_tag(tag))
+                .cloned()
+                .collect(),
             has_existing_file: context.has_existing_file,
             existing_score: context.existing_score,
             search_mode: context.search_mode.to_string(),
@@ -613,5 +625,57 @@ mod tests {
         assert_eq!(value["release"]["has_release_group"], false);
         assert_eq!(value["release"]["is_obfuscated"], true);
         assert_eq!(value["release"]["is_retagged"], true);
+    }
+    /// `title.tags` on the release-rule context is the admin registry's
+    /// vocabulary, not the whole storage bag. A reserved entry reaching a rule
+    /// here would let a release rule branch on a per-title setting the profile
+    /// system already applied.
+    #[test]
+    fn structured_settings_entries_never_reach_the_context_tags() {
+        let title_tags = [
+            "scryer:quality-profile:profile-one".to_string(),
+            "keep".to_string(),
+            "scryer:anime-media-type:tv".to_string(),
+            "anime-hd".to_string(),
+            "needs review".to_string(),
+        ];
+        let input = build_rule_input(
+            &test_parsed(),
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                is_password_protected: None,
+                extra: None,
+                indexer_languages: None,
+            },
+            RuleContextInfo {
+                title_id: Some("title-1"),
+                library_name: Some("Movies"),
+                category: Some("movie"),
+                original_language: None,
+                original_country: None,
+                title_tags: &title_tags,
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        let value = serde_json::to_value(input).unwrap();
+        assert_eq!(
+            value["context"]["tags"],
+            serde_json::json!(["keep", "anime-hd", "needs review"])
+        );
+        // The unfiltered bag is still read where it matters: it drives the
+        // language context, which is why the filter lives here and not at the
+        // caller.
+        assert_eq!(value["context"]["is_anime"], true);
     }
 }

@@ -75,6 +75,29 @@ function ActionKindLabel({ kind }: { kind: string }) {
   return <>{labelKey ? t(labelKey) : kind}</>;
 }
 
+/// The labels a tag action would write on the candidate's subject. Rendered
+/// beside the action name because "add tags" on its own does not say which
+/// tags, and that is the whole of what the action does.
+function TagPatchSummary({
+  patch,
+}: {
+  patch: { kind: string; tags: string[] } | undefined;
+}) {
+  const t = useTranslate();
+  if (!patch || patch.tags.length === 0) {
+    return null;
+  }
+  const key =
+    patch.kind === "REMOVE_TAGS"
+      ? "settings.maintenanceCandidatesTagPatchRemove"
+      : "settings.maintenanceCandidatesTagPatchAdd";
+  return (
+    <span className="text-xs text-muted-foreground">
+      {t(key, { tags: patch.tags.join(", ") })}
+    </span>
+  );
+}
+
 /// Run statuses are free-form strings on the API. An unrecognized one renders
 /// as itself instead of vanishing into an empty cell.
 function RunStatusBadge({ status }: { status: string }) {
@@ -258,6 +281,21 @@ export function MaintenanceCandidatesPanel({
   /// A candidate carries no mode of its own; the shadow marker comes from the
   /// rule that opened it, which is why this admin view always asks for shadow
   /// candidates and then labels them here.
+  // What a tag rule would write, keyed by rule so a candidate row can say
+  // "add needs-review" rather than only naming the action. The rule records
+  // already carry the action spec of the revision in force, so this costs no
+  // extra request.
+  const tagPatchByRuleId = React.useMemo(() => {
+    const patches = new Map<string, { kind: string; tags: string[] }>();
+    for (const record of ruleSetRecords) {
+      const tags = record.actionSpec?.tags ?? [];
+      if (tags.length > 0) {
+        patches.set(record.id, { kind: record.actionSpec.kind, tags });
+      }
+    }
+    return patches;
+  }, [ruleSetRecords]);
+
   const shadowRuleIds = React.useMemo(
     () =>
       new Set(
@@ -394,6 +432,9 @@ export function MaintenanceCandidatesPanel({
                         <span className="text-xs">
                           <ActionKindLabel kind={candidate.actionKind} />
                         </span>
+                        <TagPatchSummary
+                          patch={tagPatchByRuleId.get(candidate.ruleSetId)}
+                        />
                       </div>
                     </TableCell>
                     <TableCell>

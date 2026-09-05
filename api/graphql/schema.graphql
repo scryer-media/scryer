@@ -2407,6 +2407,20 @@ input CreateSubtitleProviderConfigInput {
 }
 
 """
+New title tag to define.
+"""
+input CreateTitleTagDefinitionInput {
+	"""
+	Label to define; trimmed, lowercased, and whitespace-collapsed before it is stored, and rejected when it uses the reserved `scryer:` prefix.
+	"""
+	label: String!
+	"""
+	Optional operator-facing note about what the tag is for.
+	"""
+	description: String
+}
+
+"""
 New user account and permission grants.
 """
 input CreateUserInput {
@@ -11194,6 +11208,10 @@ type MaintenanceActionDescriptor {
 	Whether configuring the action requires a target quality profile.
 	"""
 	requiresTargetQualityProfile: Boolean!
+	"""
+	Whether configuring the action requires at least one title tag.
+	"""
+	requiresTags: Boolean!
 }
 
 """
@@ -11209,6 +11227,12 @@ input MaintenanceActionInput {
 	rejected for every other kind.
 	"""
 	targetQualityProfileId: String
+	"""
+	Tags to add or remove. Required by the tag actions, ignored by every
+	other kind, and rejected unless every label is already defined in the
+	title-tag registry.
+	"""
+	tags: [String!]
 }
 
 """
@@ -11254,6 +11278,14 @@ enum MaintenanceActionKind {
 	differs from the target.
 	"""
 	CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED
+	"""
+	Add the configured user tags to the matched title.
+	"""
+	ADD_TAGS
+	"""
+	Remove the configured user tags from the matched title.
+	"""
+	REMOVE_TAGS
 }
 
 """
@@ -11331,6 +11363,11 @@ type MaintenanceActionSpec {
 	for every other kind.
 	"""
 	targetQualityProfileId: String
+	"""
+	Tags the action writes, set only for the tag actions and empty for every
+	other kind. Labels are registry-defined and stored lowercase.
+	"""
+	tags: [String!]!
 }
 
 """
@@ -13619,6 +13656,21 @@ type MutationRoot {
 		input: UpdateTitleInput!
 	): TitlePayload!
 	"""
+	Add and remove user tags across a set of titles, returning the updated titles.
+	
+	A patch, not a replacement: reserved `scryer:` settings entries are left
+	exactly as they were, and the merge happens inside the store transaction
+	so a concurrent title-settings save cannot clobber it. Every title's
+	library is authorized before the first write, so a set containing one
+	title the caller cannot manage changes nothing at all.
+	"""
+	updateTitleTags(
+		"""
+		Titles to patch and the tag labels to add and remove.
+		"""
+		input: UpdateTitleTagsInput!
+	): [TitlePayload!]!
+	"""
 	Set the primary media file for a movie title.
 	"""
 	setPrimaryMovieFile(
@@ -13712,6 +13764,22 @@ type MutationRoot {
 		"""
 		input: SetSeriesMovieMonitoredInput!
 	): SeriesMovieLinkPayload!
+	"""
+	Adds and/or removes user tags across a set of series movies.
+	
+	Series-movie tags live on the link rather than on a title, so this is a
+	separate mutation from `updateTitleTags`. The rules are the same ones:
+	labels must already exist in the title-tag registry, they are normalized
+	before they are stored, removals are applied before additions, and every
+	link's series is checked for title-management rights before the first
+	write.
+	"""
+	updateSeriesMovieTags(
+		"""
+		Series movies to patch plus the labels to add and remove.
+		"""
+		input: UpdateSeriesMovieTagsInput!
+	): [SeriesMovieLinkPayload!]!
 	"""
 	Queue the release represented by a signed candidate token for an existing title.
 	Returns a job id when accepted or a conflict payload when the submission scope is busy.
@@ -14289,6 +14357,42 @@ type MutationRoot {
 		"""
 		id: ID!
 	): DelayProfileDeletionPayload!
+	"""
+	Defines a new title tag after checking the catalog-settings permission.
+	
+	Deciding which tags exist is catalog configuration, exactly like a delay
+	profile. Deciding which titles carry them is title management and is
+	checked per library by `updateTitleTags` instead.
+	"""
+	createTitleTagDefinition(
+		"""
+		Label to define and an optional note; the label is normalized before it is stored.
+		"""
+		input: CreateTitleTagDefinitionInput!
+	): TitleTagDefinitionMutationPayload!
+	"""
+	Renames or re-describes a title tag after checking the catalog-settings permission.
+	
+	A rename rewrites every title and delay profile carrying the old label.
+	Rule sources are immutable and are never rewritten, so the returned
+	counts name how many rules referenced the old label and will stop
+	matching.
+	"""
+	updateTitleTagDefinition(
+		"""
+		Tag identity plus the replacement label or description; omitted fields keep their current values.
+		"""
+		input: UpdateTitleTagDefinitionInput!
+	): TitleTagDefinitionMutationPayload!
+	"""
+	Deletes a title tag and strips it from every title and delay profile.
+	"""
+	deleteTitleTagDefinition(
+		"""
+		ID of the title tag to delete.
+		"""
+		id: ID!
+	): TitleTagDefinitionDeletionPayload!
 	"""
 	Saves media settings for one content scope, with nullable fields passed through as application update semantics.
 	"""
@@ -18472,6 +18576,14 @@ type QueryRoot {
 	"""
 	delayProfiles: [DelayProfilePayload!]!
 	"""
+	Lists every administrator-defined title tag with the number of titles carrying it.
+	
+	Readable by any authenticated caller: the tag picker and the catalog
+	filter both need the vocabulary, and the vocabulary says nothing about
+	any particular title.
+	"""
+	titleTagDefinitions: [TitleTagDefinitionPayload!]!
+	"""
 	Returns media settings for the requested content scope.
 	"""
 	mediaSettings(
@@ -20629,6 +20741,10 @@ type SeriesMovieLinkPayload {
 	Whether acquisition and monitoring are enabled for this link.
 	"""
 	monitored: Boolean!
+	"""
+	User tags applied to this series movie. Defined in the title-tag registry and stored on the link, not on the series title.
+	"""
+	tags: [String!]!
 }
 
 """
@@ -21878,6 +21994,10 @@ input TitleCatalogFilterInput {
 	"""
 	themeTagKeys: [String!]
 	"""
+	Restrict results to titles carrying at least one of these user-defined tag labels; null or empty leaves all titles included. Labels are normalized the way the tag registry stores them, and reserved `scryer:` entries are rejected.
+	"""
+	tags: [String!]
+	"""
 	Inclusive lower bound for release year; null imposes no lower bound.
 	"""
 	minimumYear: Int
@@ -22734,7 +22854,7 @@ type TitlePayload {
 	"""
 	monitored: Boolean!
 	"""
-	Source tag values associated with the title.
+	User-defined tags plus reserved `scryer:` settings entries.
 	"""
 	tags: [String!]!
 	"""
@@ -23098,6 +23218,102 @@ type TitleScopePayload {
 	Always true when this marker is emitted.
 	"""
 	wholeTitle: Boolean!
+}
+
+"""
+Identity of a deleted title tag and what the deletion cleaned up.
+"""
+type TitleTagDefinitionDeletionPayload {
+	"""
+	Deleted title-tag definition ID.
+	"""
+	id: ID!
+	"""
+	Label the deleted tag carried.
+	"""
+	label: String!
+	"""
+	Rewrite and reference counts for the deletion.
+	"""
+	counts: TitleTagRewriteCountsPayload!
+}
+
+"""
+A saved title-tag definition together with what the save rewrote.
+"""
+type TitleTagDefinitionMutationPayload {
+	"""
+	The definition as it now stands.
+	"""
+	definition: TitleTagDefinitionPayload!
+	"""
+	Rewrite and reference counts; all zero when a tag is created or only its description changed.
+	"""
+	counts: TitleTagRewriteCountsPayload!
+}
+
+"""
+Administrator-defined title tag and how many titles currently carry it.
+"""
+type TitleTagDefinitionPayload {
+	"""
+	Title-tag definition ID.
+	"""
+	id: ID!
+	"""
+	Normalized label stored on every title carrying this tag; lowercase, with internal whitespace collapsed.
+	"""
+	label: String!
+	"""
+	Operator-facing note about what the tag is for, or null when none was written.
+	"""
+	description: String
+	"""
+	Number of titles currently carrying the label.
+	"""
+	titleCount: Int!
+	"""
+	Number of series movies currently carrying the label. Counted separately from `titleCount`: a series movie is a link inside a series, not a title of its own.
+	"""
+	seriesMovieCount: Int!
+	"""
+	Time the tag was defined, in UTC.
+	"""
+	createdAt: DateTime!
+	"""
+	Time the tag was last renamed or re-described, in UTC.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+What a title-tag rename or deletion rewrote, and what it only found.
+"""
+type TitleTagRewriteCountsPayload {
+	"""
+	Titles whose tag list was rewritten.
+	"""
+	titles: Int!
+	"""
+	Series movies whose tag list was rewritten.
+	"""
+	seriesMovies: Int!
+	"""
+	Delay profiles whose tag list was rewritten.
+	"""
+	delayProfiles: Int!
+	"""
+	Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+	"""
+	maintenanceRuleSets: Int!
+	"""
+	Release rule sets whose rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+	"""
+	releaseRuleSets: Int!
+	"""
+	Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.
+	"""
+	managedTagFilters: Int!
 }
 
 """
@@ -24492,6 +24708,24 @@ input UpdateSeedingProfileInput {
 }
 
 """
+User-tag additions and removals applied across a set of series movies.
+"""
+input UpdateSeriesMovieTagsInput {
+	"""
+	Series-movie links to patch. Each link's series is checked for title-management rights before the first write, so a set spanning a library the caller cannot manage changes nothing.
+	"""
+	seriesMovieLinkIds: [ID!]!
+	"""
+	Labels to add. Each must already be defined in the title-tag registry, and reserved `scryer:` entries are rejected.
+	"""
+	add: [String!]
+	"""
+	Labels to remove. A label the registry no longer defines may still be removed, so a deleted tag can always be cleared off a series movie.
+	"""
+	remove: [String!]
+}
+
+"""
 TLS certificate and private-key filesystem paths.
 """
 input UpdateServiceSettingsInput {
@@ -24617,6 +24851,42 @@ input UpdateTitleInput {
 	Optional title settings patch.
 	"""
 	options: TitleOptionsInput
+}
+
+"""
+Title-tag rename or description change.
+"""
+input UpdateTitleTagDefinitionInput {
+	"""
+	Title-tag definition to change.
+	"""
+	id: ID!
+	"""
+	Replacement label; omitted or null leaves the label alone. A rename rewrites every title and delay profile carrying the old label.
+	"""
+	label: String
+	"""
+	Replacement description; omitted leaves it alone, and null clears it.
+	"""
+	description: String
+}
+
+"""
+User-tag additions and removals applied across a set of titles.
+"""
+input UpdateTitleTagsInput {
+	"""
+	Titles to patch. Every title's library is checked before the first write, so a set containing one title the caller cannot manage changes nothing.
+	"""
+	titleIds: [ID!]!
+	"""
+	Labels to add. Each must already be defined in the title-tag registry, and reserved `scryer:` entries are rejected.
+	"""
+	add: [String!]
+	"""
+	Labels to remove. A label the registry no longer defines may still be removed, so a deleted tag can always be cleared off a title.
+	"""
+	remove: [String!]
 }
 
 """

@@ -5255,3 +5255,118 @@ async fn migration_0206_rebuilds_media_requests_without_losing_child_rows() {
     drop(pool);
     let _ = std::fs::remove_file(db);
 }
+
+#[tokio::test]
+async fn migration_0218_creates_the_tag_registry_and_adopts_the_labels_already_in_the_bags() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    // Only the columns the hook reads and writes. Three shapes matter: a clean
+    // user label, a reserved settings entry that must never be registered, and
+    // a label whose stored spelling does not match its normalized form.
+    sqlx::raw_sql(
+        "CREATE TABLE titles (
+             id TEXT PRIMARY KEY NOT NULL,
+             name TEXT NOT NULL,
+             tags TEXT NOT NULL DEFAULT '[]'
+         );
+         INSERT INTO titles (id, name, tags) VALUES
+             ('title-one', 'Alpha', '[\"keep\", \"scryer:monitor-type:all\"]'),
+             ('title-two', 'Bravo', '[\"Needs  Review\", \"keep\"]'),
+             ('title-three', 'Charlie', '[\"scryer:quality-profile:1080p\"]');
+         CREATE TABLE series_movie_links (
+             id TEXT PRIMARY KEY NOT NULL,
+             series_title_id TEXT NOT NULL
+         );
+         INSERT INTO series_movie_links (id, series_title_id) VALUES
+             ('link-one', 'title-one');",
+    )
+    .execute(&pool)
+    .await
+    .expect("initialize the pre-0218 shape");
+
+    run_embedded_migration(
+        &pool,
+        include_str!("../../../scryer/src/db/migrations/0218_title_tag_definitions.sql"),
+    )
+    .await;
+
+    let mut tx = pool.begin().await.expect("hook transaction should open");
+    scryer_infrastructure_datastore::migrations::title_tag_definitions::adopt_existing_title_tag_definitions_sqlite(&mut tx)
+        .await
+        .expect("adoption hook should run");
+    tx.commit().await.expect("hook transaction should commit");
+
+    let labels: Vec<String> =
+        sqlx::query_scalar("SELECT label FROM title_tag_definitions ORDER BY label")
+            .fetch_all(&pool)
+            .await
+            .expect("registry should read back");
+    assert_eq!(
+        labels,
+        vec!["keep".to_string(), "needs review".to_string()],
+        "only user labels are adopted, and they arrive normalized"
+    );
+
+    // Nothing that lives in the reserved namespace is ever a registry row.
+    let reserved: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM title_tag_definitions WHERE label LIKE 'scryer:%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read registry");
+    assert_eq!(reserved, 0);
+
+    // Membership is by label, so the bag entry that did not match its
+    // normalized form was rewritten to match the row that was registered.
+    let rewritten: String = sqlx::query_scalar("SELECT tags FROM titles WHERE id = 'title-two'")
+        .fetch_one(&pool)
+        .await
+        .expect("read rewritten bag");
+    assert_eq!(rewritten, "[\"needs review\",\"keep\"]");
+
+    // A bag that was already clean is left byte-for-byte alone.
+    let untouched: String = sqlx::query_scalar("SELECT tags FROM titles WHERE id = 'title-one'")
+        .fetch_one(&pool)
+        .await
+        .expect("read untouched bag");
+    assert_eq!(untouched, "[\"keep\", \"scryer:monitor-type:all\"]");
+
+    // Ids are label-derived, so the same catalog on either engine adopts the
+    // same rows; re-running the hook is a no-op rather than a duplicate.
+    let ids_before: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM title_tag_definitions ORDER BY label")
+            .fetch_all(&pool)
+            .await
+            .expect("read ids");
+    let mut tx = pool.begin().await.expect("hook transaction should open");
+    scryer_infrastructure_datastore::migrations::title_tag_definitions::adopt_existing_title_tag_definitions_sqlite(&mut tx)
+        .await
+        .expect("adoption hook should be idempotent");
+    tx.commit().await.expect("hook transaction should commit");
+    let ids_after: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM title_tag_definitions ORDER BY label")
+            .fetch_all(&pool)
+            .await
+            .expect("read ids");
+    assert_eq!(ids_before, ids_after);
+
+    // Series-movie membership is a second bag on the link row, and an existing
+    // link starts empty rather than null: readers decode it with no fallback.
+    let link_tags: String =
+        sqlx::query_scalar("SELECT tags FROM series_movie_links WHERE id = 'link-one'")
+            .fetch_one(&pool)
+            .await
+            .expect("read series movie link bag");
+    assert_eq!(link_tags, "[]");
+
+    // The unique index is what makes the label the join key against the bag.
+    let duplicate = sqlx::query(
+        "INSERT INTO title_tag_definitions (id, label) VALUES ('tag-duplicate', 'keep')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(duplicate.is_err(), "labels must be unique");
+}

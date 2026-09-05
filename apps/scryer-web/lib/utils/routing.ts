@@ -27,6 +27,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   proxies: "proxies",
   qualityProfiles: "quality-profiles",
   delayProfiles: "delay-profiles",
+  titleTags: "tags",
   acquisition: "acquisition",
   rules: "rules",
   maintenanceRules: "maintenance-rules",
@@ -405,6 +406,9 @@ const LOCAL_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   qualityprofiles: "qualityProfiles",
   "delay-profiles": "delayProfiles",
   delayprofiles: "delayProfiles",
+  tags: "titleTags",
+  "title-tags": "titleTags",
+  titletags: "titleTags",
   plugins: "plugins",
 };
 const SYSTEM_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {

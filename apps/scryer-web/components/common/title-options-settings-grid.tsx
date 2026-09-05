@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
+import { TitleTagsEditor } from "@/components/common/title-tags-picker";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -30,6 +31,11 @@ const INHERIT_VALUE = "__inherit__";
 export type InlineTitleSettingsTitle = {
   id: string;
   facet: string;
+  /**
+   * The title's raw tag bag: user labels plus reserved `scryer:` settings
+   * entries. The picker shows only the user half and patches it by difference.
+   */
+  tags?: string[] | null;
   metadataLanguage?: string | null;
   metadataLanguageOverride?: string | null;
   effectiveMetadataLanguage?: string | null;
@@ -461,6 +467,19 @@ export function TitleOptionsSettingsGrid({
           </div>
         </>
       ) : null}
+
+      {/* Tags sit with the other per-title settings so both the movie panel and
+          the series panel get them from this one grid. They span the row
+          because the chip list grows with the number of tags applied. */}
+      <div className="min-w-0 md:col-span-2 xl:col-span-4">
+        <TitleTagsEditor
+          titleId={title.id}
+          tags={title.tags}
+          idPrefix={idPrefix}
+          onTitleChanged={onTitleChanged}
+          disabled={saving}
+        />
+      </div>
     </div>
   );
 }

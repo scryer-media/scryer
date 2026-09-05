@@ -22,7 +22,7 @@
 //! [`AppUseCase::delete_title_by_policy`], whose fingerprint check is the same
 //! one the human deletion dialog uses.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Duration, Utc};
 use scryer_domain::{
@@ -117,6 +117,8 @@ pub const EXECUTABLE_TITLE_RULE_ACTIONS: &[MaintenanceActionKind] = &[
     MaintenanceActionKind::DeleteTitleAndFiles,
     MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
     MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
+    MaintenanceActionKind::AddTags,
+    MaintenanceActionKind::RemoveTags,
 ];
 
 /// The refusal both the authoring check and the executor's rejection arm speak,
@@ -165,6 +167,18 @@ pub mod execution_reason {
     /// An attempt's worker stopped before it finished; the abandoned lease was
     /// reclaimed and its `running` action-run row closed out.
     pub const LEASE_RECLAIMED: &str = "lease_reclaimed";
+    /// A tag the action writes is no longer in the title-tag registry — an
+    /// administrator deleted it after the rule was authored. The candidate
+    /// holds rather than failing: redefining the tag makes the rule work again,
+    /// and writing a label nothing defines would put the catalog in a state the
+    /// assignment path itself refuses.
+    pub const TAG_NOT_DEFINED: &str = "tag_not_defined";
+    /// Another rule in this same pass would write the opposite patch for the
+    /// same label on this title. Both candidates hold: whichever ran last would
+    /// win, so the outcome would depend on rule order rather than on what the
+    /// operator asked for, and that is an authoring mistake to surface rather
+    /// than a race to resolve.
+    pub const TAG_PATCH_CONFLICT: &str = "tag_patch_conflict";
 }
 
 /// Job report for [`JobKey::LifecycleActionHandling`], serialized onto the run.
@@ -414,6 +428,12 @@ impl AppUseCase {
         let mut high_risk_executed = 0usize;
         let mut high_risk_failures = 0usize;
 
+        // Every rule that could run this pass is resolved first, in one place.
+        // The tag-conflict scan below has to know what *other* rules are about
+        // to write before the first of them writes anything, and resolving a
+        // rule means reading its current revision — so the alternative is
+        // reading every revision twice.
+        let mut eligible_rules = Vec::new();
         for rule_set in rule_sets {
             if !rule_set.enabled
                 || rule_set.evaluation_mode != MaintenanceEvaluationMode::Observe
@@ -453,6 +473,19 @@ impl AppUseCase {
                 continue;
             }
             report.rules_eligible += 1;
+            eligible_rules.push((detail, kind));
+        }
+
+        // Titles two rules would tag in opposite directions this pass. Computed
+        // before any of them acts, so both sides hold rather than the later one
+        // silently undoing the earlier one.
+        let tag_conflicts = self
+            .maintenance_tag_patch_conflicts(&eligible_rules, now)
+            .await;
+
+        for (detail, kind) in eligible_rules {
+            let descriptor = descriptor_for(kind);
+            let high_risk = descriptor.risk_class == MaintenanceRiskClass::High;
 
             // One compile per rule; every candidate's fresh re-evaluation
             // shares it.
@@ -498,7 +531,12 @@ impl AppUseCase {
                 report.candidates_considered += 1;
                 let outcome = self
                     .execute_one_maintenance_candidate(
-                        &detail, kind, &engine, candidate, &libraries,
+                        &detail,
+                        kind,
+                        &engine,
+                        candidate,
+                        &libraries,
+                        &tag_conflicts,
                     )
                     .await;
                 match outcome {
@@ -536,6 +574,80 @@ impl AppUseCase {
         Ok(report)
     }
 
+    /// Title ids no tag action may write this pass, because two rules disagree
+    /// about the same label on them.
+    ///
+    /// "Disagree" is exact: one rule's `add_tags` and another's `remove_tags`
+    /// naming the same label, with both rules holding a due candidate for the
+    /// same title. Two rules that add different labels, or that patch different
+    /// titles, are not a conflict and both proceed — the bag is a set, and
+    /// disjoint edits to a set commute.
+    ///
+    /// Nothing here resolves the disagreement. Whichever rule ran last would
+    /// win, which makes the catalog depend on rule iteration order; the honest
+    /// answer is to hold both sides with a reason the operator can act on.
+    ///
+    /// The scan re-lists due candidates for tag rules only. That is one extra
+    /// bounded read per tag rule per pass, and it buys a decision made before
+    /// the first write instead of after it.
+    async fn maintenance_tag_patch_conflicts(
+        &self,
+        eligible_rules: &[(MaintenanceRuleSetDetail, MaintenanceActionKind)],
+        now: chrono::DateTime<Utc>,
+    ) -> HashSet<String> {
+        let mut added: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut removed: HashMap<String, HashSet<String>> = HashMap::new();
+
+        for (detail, kind) in eligible_rules {
+            let labels = detail.action_spec.parameters.tag_labels();
+            if labels.is_empty() {
+                continue;
+            }
+            let due = match self
+                .services
+                .customization
+                .maintenance_evaluation
+                .list_due_candidates(
+                    &detail.rule_set.id,
+                    now,
+                    now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN * 2,
+                )
+                .await
+            {
+                Ok(due) => due,
+                Err(error) => {
+                    // An unreadable selection means this rule's contribution to
+                    // the conflict picture is unknown. The pass still runs: the
+                    // same read fails again in the main loop and holds the
+                    // candidates there, with a reason of its own.
+                    warn!(error = %error, "could not scan a tag rule for patch conflicts");
+                    continue;
+                }
+            };
+            let side = if *kind == MaintenanceActionKind::AddTags {
+                &mut added
+            } else {
+                &mut removed
+            };
+            for candidate in due {
+                side.entry(candidate.title_id)
+                    .or_default()
+                    .extend(labels.iter().cloned());
+            }
+        }
+
+        added
+            .iter()
+            .filter(|(title_id, adds)| {
+                removed
+                    .get(*title_id)
+                    .is_some_and(|removes| adds.iter().any(|label| removes.contains(label)))
+            })
+            .map(|(title_id, _)| title_id.clone())
+            .collect()
+    }
+
     /// Lease, recheck, and act on one candidate.
     async fn execute_one_maintenance_candidate(
         &self,
@@ -544,6 +656,7 @@ impl AppUseCase {
         engine: &MaintenanceRulesEngine,
         candidate: LifecycleCandidate,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
+        tag_conflicts: &HashSet<String>,
     ) -> AppResult<CandidateOutcome> {
         let now = Utc::now();
         let candidates = &self.services.customization.maintenance_evaluation;
@@ -631,7 +744,13 @@ impl AppUseCase {
         };
 
         let decision = self
-            .maintenance_execution_safety_checks(engine, &candidate, libraries)
+            .maintenance_execution_safety_checks(
+                detail,
+                engine,
+                &candidate,
+                libraries,
+                tag_conflicts,
+            )
             .await;
 
         // Idempotency protects mutations, not evidence: a hold re-checks every
@@ -892,9 +1011,11 @@ impl AppUseCase {
     /// cancel rather than a hold, and the environment holds last.
     async fn maintenance_execution_safety_checks(
         &self,
+        detail: &MaintenanceRuleSetDetail,
         engine: &MaintenanceRulesEngine,
         candidate: &LifecycleCandidate,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
+        tag_conflicts: &HashSet<String>,
     ) -> SafetyDecision {
         // (1) Re-read the rule and the gates: both can move between selection
         // and execution, and a lowered gate must stop a leased worker before
@@ -934,6 +1055,29 @@ impl AppUseCase {
             };
         if !still_eligible {
             return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+        }
+
+        // (1b) Tag actions: the vocabulary has to still exist, and no sibling
+        // rule may be about to write the opposite patch on this title.
+        //
+        // Both checks belong here rather than in the action itself, because a
+        // hold from here costs no attempt: these are conditions that a later
+        // pass can find changed — an administrator redefines the tag, or the
+        // conflicting rule is disarmed — and burning the three-attempt budget
+        // on them would turn a fixable authoring problem into a terminally
+        // failed candidate.
+        let tag_labels = detail.action_spec.parameters.tag_labels();
+        if !tag_labels.is_empty() {
+            if tag_conflicts.contains(&candidate.title_id) {
+                return SafetyDecision::Hold(execution_reason::TAG_PATCH_CONFLICT);
+            }
+            match self.undefined_title_tag_labels(tag_labels).await {
+                Ok(undefined) if !undefined.is_empty() => {
+                    return SafetyDecision::Hold(execution_reason::TAG_NOT_DEFINED);
+                }
+                Ok(_) => {}
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
         }
 
         // (2) Exclusions recheck.
@@ -1017,6 +1161,15 @@ impl AppUseCase {
             .get(&title.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        // The same series-movie load the evaluator does, so the re-evaluation
+        // at execution time reads the identical fact document.
+        let series_movies_by_title = match self
+            .maintenance_series_movies_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(series_movies) => series_movies,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
         // A people lookup that fails holds, like every other unresolvable
         // signal on this path: re-evaluating on a fact snapshot Scryer could
         // not fully assemble is how an action fires on evidence it never had.
@@ -1053,7 +1206,18 @@ impl AppUseCase {
             context: &watch_context,
             signals: signals_by_title.get(&title.id).map(Vec::as_slice),
         };
-        let input = build_title_input(Utc::now(), &title, &library, files, people, watch);
+        let input = build_title_input(
+            Utc::now(),
+            &title,
+            &library,
+            files,
+            people,
+            watch,
+            series_movies_by_title
+                .get(&title.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
         let outcome = engine
             .evaluator()
             .evaluate(&input)
@@ -1125,6 +1289,9 @@ impl AppUseCase {
                 self.execute_profile_change_and_search(detail, candidate, title, &actor)
                     .await
             }
+            MaintenanceActionKind::AddTags | MaintenanceActionKind::RemoveTags => {
+                self.execute_tag_patch(detail, kind, title, &actor).await
+            }
             MaintenanceActionKind::DeleteTitleAndFiles => {
                 let preview = self.preview_delete_title_files(&actor, &title.id).await?;
                 let authorization = PolicyDeleteAuthorization {
@@ -1177,6 +1344,72 @@ impl AppUseCase {
                 Err(AppError::Validation(title_rule_action_not_executable(kind)))
             }
         }
+    }
+
+    /// Apply the rule's tag patch to the subject title.
+    ///
+    /// One `update_title_tags` call as the system actor, which is the same
+    /// application operation the tag picker and the bulk dialog drive: the
+    /// registry gate, the normalization, the reserved-namespace guard, the
+    /// per-title ceiling, and the in-transaction merge that keeps a concurrent
+    /// options save from clobbering the bag are all that call's, not
+    /// reimplemented here.
+    ///
+    /// `already_satisfied` is a real postcondition check rather than a
+    /// first-attempt special case: the action is `ensure_state`, so "every
+    /// label is already on (or already off) the title" is exactly the state it
+    /// exists to ensure, and reporting it as executed would claim a mutation
+    /// that did not happen.
+    async fn execute_tag_patch(
+        &self,
+        detail: &MaintenanceRuleSetDetail,
+        kind: MaintenanceActionKind,
+        title: &Title,
+        actor: &User,
+    ) -> AppResult<ActionResult> {
+        let MaintenanceActionParameters::Tags { tags } = &detail.action_spec.parameters else {
+            return Err(AppError::Validation(
+                "tag action has no tags configured".to_string(),
+            ));
+        };
+        let adding = kind == MaintenanceActionKind::AddTags;
+        let present = |label: &String| title.tags.iter().any(|tag| tag == label);
+        let pending: Vec<String> = tags
+            .iter()
+            .filter(|label| {
+                if adding {
+                    !present(label)
+                } else {
+                    present(label)
+                }
+            })
+            .cloned()
+            .collect();
+
+        if pending.is_empty() {
+            return Ok(ActionResult::AlreadySatisfied {
+                detail: serde_json::json!({
+                    "tags": tags,
+                    "operation": kind.as_wire_str(),
+                }),
+            });
+        }
+
+        let (add, remove): (&[String], &[String]) = if adding {
+            (&pending, &[])
+        } else {
+            (&[], &pending)
+        };
+        self.update_title_tags(actor, std::slice::from_ref(&title.id), add, remove)
+            .await?;
+
+        Ok(ActionResult::Executed {
+            detail: serde_json::json!({
+                "tags": tags,
+                "changed_tags": pending,
+                "operation": kind.as_wire_str(),
+            }),
+        })
     }
 
     /// RFC 9.3's combined profile workflow: change the profile only when it
@@ -1320,15 +1553,19 @@ mod tests {
     ];
 
     fn spec_for(kind: MaintenanceActionKind) -> MaintenanceActionSpec {
-        if kind == MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged {
-            MaintenanceActionSpec::change_quality_profile("profile-1")
-        } else {
-            MaintenanceActionSpec::new(kind)
+        match kind {
+            MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
+                MaintenanceActionSpec::change_quality_profile("profile-1")
+            }
+            MaintenanceActionKind::AddTags | MaintenanceActionKind::RemoveTags => {
+                MaintenanceActionSpec::tags(kind, vec!["needs review".to_string()])
+            }
+            _ => MaintenanceActionSpec::new(kind),
         }
     }
 
     /// Every catalog kind is either dispatched by the title executor or refused
-    /// by it, and authoring answers identically for all nine.
+    /// by it, and authoring answers identically for every one of them.
     ///
     /// This is the mechanical link the `unmonitor_show_delete_existing_files`
     /// trap needed: it was savable (show-subject, so the descriptor check passed)

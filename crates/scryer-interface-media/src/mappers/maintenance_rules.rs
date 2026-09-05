@@ -121,6 +121,8 @@ pub fn maintenance_action_kind_value(kind: AppActionKind) -> MaintenanceActionKi
         AppActionKind::ChangeQualityProfileAndSearchIfChanged => {
             MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged
         }
+        AppActionKind::AddTags => MaintenanceActionKind::AddTags,
+        AppActionKind::RemoveTags => MaintenanceActionKind::RemoveTags,
     }
 }
 
@@ -147,6 +149,8 @@ pub fn maintenance_action_kind_into_application(kind: MaintenanceActionKind) -> 
         MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
             AppActionKind::ChangeQualityProfileAndSearchIfChanged
         }
+        MaintenanceActionKind::AddTags => AppActionKind::AddTags,
+        MaintenanceActionKind::RemoveTags => AppActionKind::RemoveTags,
     }
 }
 
@@ -253,11 +257,12 @@ pub fn from_maintenance_action_spec(spec: &AppActionSpec) -> MaintenanceActionSp
         kind: maintenance_action_kind_value(spec.kind),
         schema_version: to_graphql_int(i64::from(spec.schema_version)),
         target_quality_profile_id: match &spec.parameters {
-            AppActionParameters::None => None,
             AppActionParameters::ChangeQualityProfile {
                 target_quality_profile_id,
             } => Some(target_quality_profile_id.clone()),
+            AppActionParameters::None | AppActionParameters::Tags { .. } => None,
         },
+        tags: spec.parameters.tag_labels().to_vec(),
     }
 }
 
@@ -294,6 +299,10 @@ fn from_maintenance_action_descriptor(
             .collect(),
         requires_target_quality_profile: descriptor.kind
             == AppActionKind::ChangeQualityProfileAndSearchIfChanged,
+        requires_tags: matches!(
+            descriptor.kind,
+            AppActionKind::AddTags | AppActionKind::RemoveTags
+        ),
     }
 }
 
@@ -461,11 +470,17 @@ pub fn from_maintenance_evaluation_trigger(
 /// parameterless kind is dropped, because the catalog has nowhere to put it.
 pub fn maintenance_action_spec_from_input(input: MaintenanceActionInput) -> AppActionSpec {
     let kind = maintenance_action_kind_into_application(input.kind);
-    match (kind, input.target_quality_profile_id) {
-        (AppActionKind::ChangeQualityProfileAndSearchIfChanged, Some(target)) => {
-            AppActionSpec::change_quality_profile(target)
+    match kind {
+        AppActionKind::ChangeQualityProfileAndSearchIfChanged => {
+            match input.target_quality_profile_id {
+                Some(target) => AppActionSpec::change_quality_profile(target),
+                None => AppActionSpec::new(kind),
+            }
         }
-        (kind, _) => AppActionSpec::new(kind),
+        AppActionKind::AddTags | AppActionKind::RemoveTags => {
+            AppActionSpec::tags(kind, input.tags.unwrap_or_default())
+        }
+        kind => AppActionSpec::new(kind),
     }
 }
 
@@ -534,6 +549,7 @@ mod tests {
         let quality = maintenance_action_spec_from_input(MaintenanceActionInput {
             kind: MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
             target_quality_profile_id: Some("hd-1080p".to_string()),
+            tags: None,
         });
         assert_eq!(
             quality,
@@ -546,6 +562,7 @@ mod tests {
         let missing_target = maintenance_action_spec_from_input(MaintenanceActionInput {
             kind: MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
             target_quality_profile_id: None,
+            tags: None,
         });
         assert!(
             missing_target.validate(AppSubjectKind::Movie).is_err(),
@@ -555,11 +572,44 @@ mod tests {
         let parameterless = maintenance_action_spec_from_input(MaintenanceActionInput {
             kind: MaintenanceActionKind::DeleteTitleAndFiles,
             target_quality_profile_id: Some("hd-1080p".to_string()),
+            tags: Some(vec!["keep".to_string()]),
         });
         assert_eq!(
             parameterless,
-            AppActionSpec::new(AppActionKind::DeleteTitleAndFiles)
+            AppActionSpec::new(AppActionKind::DeleteTitleAndFiles),
+            "parameters the kind cannot hold are dropped rather than smuggled through"
         );
+    }
+
+    #[test]
+    fn action_input_maps_tags_only_onto_the_tag_kinds() {
+        for kind in [
+            MaintenanceActionKind::AddTags,
+            MaintenanceActionKind::RemoveTags,
+        ] {
+            let spec = maintenance_action_spec_from_input(MaintenanceActionInput {
+                kind,
+                target_quality_profile_id: Some("hd-1080p".to_string()),
+                tags: Some(vec!["needs review".to_string()]),
+            });
+            assert_eq!(
+                spec,
+                AppActionSpec::tags(
+                    maintenance_action_kind_into_application(kind),
+                    vec!["needs review".to_string()]
+                )
+            );
+            assert!(spec.validate(AppSubjectKind::Show).is_ok());
+        }
+
+        // No resolver-side gate here either: an empty tag list has to fail in
+        // the same validation that guards a stored revision.
+        let missing = maintenance_action_spec_from_input(MaintenanceActionInput {
+            kind: MaintenanceActionKind::AddTags,
+            target_quality_profile_id: None,
+            tags: None,
+        });
+        assert!(missing.validate(AppSubjectKind::Movie).is_err());
     }
 
     #[test]
