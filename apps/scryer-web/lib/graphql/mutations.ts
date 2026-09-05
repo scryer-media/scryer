@@ -854,6 +854,7 @@ export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($in
   updateGeneralSettings(input: $input) {
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    srrdbFilenameRecoveryEnabled
     keepHistoryForever
     historyRetentionDays
     imageCacheMaxSizeMb

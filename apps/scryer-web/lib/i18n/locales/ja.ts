@@ -678,6 +678,10 @@ const ja: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "パーソナライズされたディスカバリー",
   "settings.personalizedDiscoveryHelp":
     "ライブラリの概要をメタデータゲートウェイに送信し、所有している作品に基づいてディスカバリーがタイトルを推薦できるようにします。オフにすると、ディスカバリーは公開フィードのみを使用します。",
+  "settings.srrdbFilenameRecoveryLabel":
+    "srrdb.com で難読化されたファイル名を復元",
+  "settings.srrdbFilenameRecoveryHelp":
+    "SABnzbd または NZBGet からの自動インポートに難読化された名前の動画ファイルが含まれる場合、Scryer は各ファイルの CRC-32 チェックサムとサイズをサードパーティのサービスである srrdb.com に送信し、元のファイル名を照会します。ライブラリやファイルに関するそれ以外の情報は送信されません。ディスク上のファイルの名前が変更されることはありません。",
   "discovery.personalizedDisabled": "このインスタンスではパーソナライズされたディスカバリーが無効になっています。",
   "settings.keepHistoryForever": "履歴を無期限に保持",
   "settings.historyRetentionDaysHeader": "履歴を保持する期間",

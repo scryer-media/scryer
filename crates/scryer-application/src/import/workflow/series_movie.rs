@@ -197,7 +197,7 @@ struct ImportRejectionContext<'a> {
 struct CompletedImportTarget {
     title: scryer_domain::Title,
     is_series: bool,
-    video_files: Vec<PathBuf>,
+    video_files: Vec<ImportVideoFile>,
     extracted_dir: Option<PathBuf>,
     series_movie_link_id: Option<String>,
 }
@@ -421,7 +421,15 @@ async fn try_match_titleless_archive_from_inner_video(
         .titles
         .list_for_matching(None, None)
         .await?;
-    for candidate in title_evidence_candidates_from_video_files(&video_files) {
+    // The titleless-archive probe predates filename recovery and is untouched
+    // by it: SAB and NZBGet unpack before Scryer sees the download, so the
+    // gated clients never reach this path.
+    let probe_files: Vec<ImportVideoFile> = video_files
+        .iter()
+        .cloned()
+        .map(ImportVideoFile::physical)
+        .collect();
+    for candidate in title_evidence_candidates_from_video_files(&probe_files) {
         if let Some(title) =
             resolve_title_from_release_candidate(&titles, &candidate, Some(facet.as_str()))
         {
@@ -494,6 +502,10 @@ async fn resolve_completed_import_target(
     let mut title = None;
     let dest_dir = Path::new(&completed.dest_dir);
     let mut extracted_dir: Option<PathBuf> = None;
+    // One srrdb session for this whole `run_import` call: the setting is read
+    // at most once, results are reused between the titleless probe below and
+    // the final file list, and one outage stops the rest of this import.
+    let mut srrdb = SrrdbFilenameRecovery::default();
     if let Some(manual_title_id) = manual_title_id.map(str::trim).filter(|id| !id.is_empty()) {
         if let Some(submission_title_id) = release_evidence.title_id()
             && submission_title_id != manual_title_id
@@ -560,6 +572,42 @@ async fn resolve_completed_import_target(
         if let Some(archive_match) = archive_match? {
             title = Some(archive_match.title);
             extracted_dir = Some(archive_match.extracted_dir);
+        }
+    }
+
+    if title.is_none() {
+        // Last resort before giving up: the download's own video files carry no
+        // title signal, so ask srrdb for their original names and try the
+        // ordinary release-candidate match again with those. The results are
+        // memoized and reused by the file list built further down.
+        let probe_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
+        let probe_files = find_video_files(probe_dir, true)
+            .ok()
+            .filter(|files| !files.is_empty())
+            .or_else(|| find_video_files(probe_dir, false).ok())
+            .unwrap_or_default();
+        if !probe_files.is_empty() {
+            // Nothing has identified the title, so every obfuscated-stem file
+            // has to speak for itself.
+            let enriched = srrdb.enrich(app, completed, probe_files, true).await;
+            if enriched.iter().any(|file| file.logical_name.is_some()) {
+                let titles = app
+                    .services
+                    .catalog
+                    .titles
+                    .list_for_matching(None, None)
+                    .await?;
+                for candidate in title_evidence_candidates_from_video_files(&enriched) {
+                    if let Some(matched) = resolve_title_from_release_candidate(
+                        &titles,
+                        &candidate,
+                        release_evidence.facet(),
+                    ) {
+                        title = Some(matched);
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -691,6 +739,27 @@ async fn resolve_completed_import_target(
             return Err(error);
         }
     };
+    // Reuses anything the titleless probe already resolved; only files it never
+    // saw are hashed and looked up here.
+    //
+    // Whether a file needs a name of its own is a property of this download,
+    // not of its folder. A multi-file series pack always does: whatever named
+    // the release says which title and season, never which member is which
+    // episode, and `file_episode_identity_for_title` reads only the file stem.
+    // Otherwise it needs one only when the release name itself is unusable:
+    // with a single video file and a usable release name the release name
+    // already carries the episode or the year and the quality, planning
+    // proceeds on it today, and hashing plus a third-party request would buy
+    // nothing.
+    let release_evidence_title_unusable = release_evidence
+        .release_title(None)
+        .as_deref()
+        .and_then(parse_usable_release_title)
+        .is_none();
+    let needs_own_name = (is_series && video_files.len() > 1) || release_evidence_title_unusable;
+    let video_files = srrdb
+        .enrich(app, completed, video_files, needs_own_name)
+        .await;
 
     if video_files.is_empty() {
         if let Some(ref dir) = extracted_dir {
@@ -1207,12 +1276,16 @@ async fn import_movie_download(
     import_id: &str,
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
     started_at: chrono::DateTime<Utc>,
     runtime_sample_mode: crate::post_download_gate::RuntimeSampleValidationMode,
 ) -> AppResult<ImportResult> {
-    let source_video = pick_largest_file(video_files)?;
-    let source_title = release_evidence.release_title(Some(&source_video));
+    let largest = pick_largest_import_video_file(video_files)?;
+    // Only release parsing reads the recovered name; every path below is the
+    // physical file.
+    let parse_video = largest.parse_path().into_owned();
+    let source_video = largest.physical;
+    let source_title = release_evidence.release_title(Some(&parse_video));
     let source_size = std::fs::metadata(&source_video)
         .map(|m| m.len() as i64)
         .unwrap_or(0);
@@ -1226,7 +1299,7 @@ async fn import_movie_download(
     } = resolve_import_paths(app, title).await?;
 
     let parsed =
-        build_augmented_movie_import_metadata_for_title(&source_video, release_evidence, title);
+        build_augmented_movie_import_metadata_for_title(&parse_video, release_evidence, title);
     let existing_files = app
         .services
         .library
@@ -1927,7 +2000,7 @@ async fn import_series_movie_download(
     import_id: &str,
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
     started_at: chrono::DateTime<Utc>,
     series_movie_link_id: &str,
     runtime_sample_mode: crate::post_download_gate::RuntimeSampleValidationMode,
@@ -1978,8 +2051,12 @@ async fn import_series_movie_download(
     };
     let movie = &link.movie;
 
-    let source_video = pick_largest_file(video_files)?;
-    let source_title = release_evidence.release_title(Some(&source_video));
+    let largest = pick_largest_import_video_file(video_files)?;
+    // Only release parsing reads the recovered name; every path below is the
+    // physical file.
+    let parse_video = largest.parse_path().into_owned();
+    let source_video = largest.physical;
+    let source_title = release_evidence.release_title(Some(&parse_video));
     let source_size = std::fs::metadata(&source_video)
         .map(|m| m.len() as i64)
         .unwrap_or(0);
@@ -1998,7 +2075,7 @@ async fn import_series_movie_download(
     // ids), so the import parse must use that same identity for parity.
     let search_title = crate::acquisition_release_search::series_movie_search_title(title, &link);
     let parsed = build_augmented_movie_import_metadata_for_title(
-        &source_video,
+        &parse_video,
         release_evidence,
         &search_title,
     );

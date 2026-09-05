@@ -12,9 +12,9 @@ use scryer_application::testing::AppUseCaseTestExt;
 use scryer_application::{
     AcquisitionScopeStateRepository, BlocklistRepository, ClientJobLocator,
     DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionPurpose,
-    DownloadSubmissionRepository, ImportRepository, LibraryRepository, LibraryRootDraft,
-    MediaFileRepository, ReleaseAttemptRepository, SaveQualityProfileSettings, ShowRepository,
-    SubmissionScope, TitleRepository, import_completed_download,
+    DownloadSubmissionRepository, ImportArtifactRepository, ImportRepository, LibraryRepository,
+    LibraryRootDraft, MediaFileRepository, ReleaseAttemptRepository, SaveQualityProfileSettings,
+    ShowRepository, SubmissionScope, TitleRepository, import_completed_download,
 };
 use scryer_domain::{
     Collection, CompletedDownload, DownloadClientConfig, DownloadClientStatus, Episode, Id,
@@ -2694,4 +2694,530 @@ async fn completed_manual_import_recovery_query_only_returns_records_inside_the_
         .await
         .expect("list completed manual imports outside the window");
     assert!(outside_window.is_empty(), "{outside_window:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// srrdb filename recovery
+// ---------------------------------------------------------------------------
+
+/// A recorded srrdb port that answers by file size.
+///
+/// The real adapter keys on CRC-32 plus size; the CRC helper is crate private,
+/// so these fixtures give every member a distinct byte length and the fake
+/// answers on that. The CRC each call carries is still asserted to be the
+/// 8-digit uppercase hex the API expects.
+#[derive(Default)]
+struct RecordingSrrdbLookup {
+    calls: std::sync::Mutex<Vec<(String, u64)>>,
+    names_by_size: std::collections::HashMap<u64, String>,
+}
+
+impl RecordingSrrdbLookup {
+    fn new(names_by_size: &[(u64, &str)]) -> Arc<Self> {
+        Arc::new(Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            names_by_size: names_by_size
+                .iter()
+                .map(|(size, name)| (*size, (*name).to_string()))
+                .collect(),
+        })
+    }
+
+    fn calls(&self) -> Vec<(String, u64)> {
+        self.calls.lock().expect("srrdb call log").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl scryer_application::SrrdbFilenameLookup for RecordingSrrdbLookup {
+    async fn recover_filename(
+        &self,
+        crc32_hex: &str,
+        size_bytes: u64,
+    ) -> Result<Option<String>, scryer_application::SrrdbOutage> {
+        assert_eq!(
+            crc32_hex.len(),
+            8,
+            "srrdb takes an 8 digit CRC: {crc32_hex:?}"
+        );
+        assert!(
+            crc32_hex
+                .chars()
+                .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_lowercase()),
+            "srrdb takes uppercase hex: {crc32_hex:?}"
+        );
+        self.calls
+            .lock()
+            .expect("srrdb call log")
+            .push((crc32_hex.to_string(), size_bytes));
+        Ok(self.names_by_size.get(&size_bytes).cloned())
+    }
+}
+
+/// `app_with_real_imports` plus the srrdb port, with the admin switch on.
+async fn app_with_srrdb_recovery(
+    ctx: &TestContext,
+    lookup: Arc<RecordingSrrdbLookup>,
+) -> scryer_application::AppUseCase {
+    ctx.settings_store
+        .batch_ensure_setting_definitions(vec![SettingDefinitionSeed {
+            category: "general".into(),
+            scope: "system".into(),
+            key_name: scryer_application::SRRDB_FILENAME_RECOVERY_ENABLED_KEY.into(),
+            data_type: "boolean".into(),
+            default_value_json: "false".into(),
+            is_sensitive: false,
+            validation_json: None,
+        }])
+        .await
+        .expect("seed srrdb filename recovery setting definition");
+    scryer_application::SettingsRepository::upsert_setting_json(
+        &*ctx.settings_store,
+        scryer_application::SETTINGS_SCOPE_SYSTEM,
+        scryer_application::SRRDB_FILENAME_RECOVERY_ENABLED_KEY,
+        None,
+        "true".to_string(),
+        "integration_test",
+        None,
+    )
+    .await
+    .expect("enable srrdb filename recovery");
+
+    let app = app_with_real_imports(ctx).await;
+    app.with_test_overrides(|builder| {
+        builder
+            .with_srrdb_filename_lookup(lookup as Arc<dyn scryer_application::SrrdbFilenameLookup>)
+    })
+}
+
+/// Extend `path` to exactly `target_len` bytes so each pack member has a size
+/// of its own and survives the series sample-size filter.
+fn pad_file_to(path: &Path, target_len: u64) -> u64 {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open fixture for padding");
+    file.seek(SeekFrom::Start(target_len - 1))
+        .expect("seek fixture");
+    file.write_all(&[0]).expect("extend fixture");
+    drop(file);
+    let len = std::fs::metadata(path).expect("fixture size").len();
+    assert_eq!(len, target_len);
+    len
+}
+
+/// An obfuscated pack: physical names carry no title signal at all.
+const OBFUSCATED_PACK: [&str; 3] = [
+    "a1b2c3d4e5f6a7b8c9d0.mkv",
+    "b2c3d4e5f6a7b8c9d0e1.mkv",
+    "c3d4e5f6a7b8c9d0e1f2.mkv",
+];
+
+#[tokio::test]
+async fn automatic_import_places_a_fully_obfuscated_pack_from_srrdb_recovered_names() {
+    let ctx = TestContext::new().await;
+    // The release folder is obfuscated too, so nothing but the recovered names
+    // can tell these three files apart.
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let source_dir = source_root.path().join("d4e5f6a7b8c9d0e1f2a3");
+    std::fs::create_dir(&source_dir).expect("create obfuscated release folder");
+    let sizes: Vec<u64> = OBFUSCATED_PACK
+        .iter()
+        .enumerate()
+        .map(|(index, member)| {
+            let path = copy_fixture(&source_dir, "h264_aac.mkv", member);
+            pad_file_to(&path, (52 + index as u64) * 1024 * 1024)
+        })
+        .collect();
+    let lookup = RecordingSrrdbLookup::new(&[
+        (
+            sizes[0],
+            "Recovered.Pals.S01E01.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+        (
+            sizes[1],
+            "Recovered.Pals.S01E02.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+        (
+            sizes[2],
+            "Recovered.Pals.S01E03.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+    ]);
+    let app = app_with_srrdb_recovery(&ctx, lookup.clone()).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_short_form_series_title(
+        &ctx,
+        "title-srrdb-pack",
+        "Recovered Pals",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode_1 = seed_short_form_series_episode(&ctx, &title).await;
+    let collection_id = episode_1.collection_id.as_deref().expect("collection id");
+    let episode_2 = seed_second_short_form_series_episode(&ctx, &title, collection_id).await;
+    let episode_3 =
+        seed_series_episode_in_collection(&ctx, &title, collection_id, 3, Some(60)).await;
+    let completed = scryer_completed(
+        "dl-srrdb-pack",
+        source_dir.to_str().unwrap(),
+        &title.id,
+        "series",
+    );
+
+    let result = import_completed_download(&app, &user, &completed)
+        .await
+        .expect("import obfuscated series pack");
+
+    assert_eq!(
+        result.decision,
+        ImportDecision::Imported,
+        "unexpected obfuscated pack import result: {result:?}"
+    );
+    assert_eq!(
+        lookup.calls().len(),
+        3,
+        "every obfuscated member must be recovered: {:?}",
+        lookup.calls()
+    );
+    let media_files = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(media_files.len(), 3, "{media_files:#?}");
+    let episode_ids = media_files
+        .iter()
+        .filter_map(|media_file| media_file.episode_id.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        episode_ids,
+        std::collections::BTreeSet::from([
+            episode_1.id.as_str(),
+            episode_2.id.as_str(),
+            episode_3.id.as_str(),
+        ]),
+        "the recovered names are what place each member on its episode"
+    );
+}
+
+#[tokio::test]
+async fn automatic_import_places_an_obfuscated_pack_under_a_properly_named_release() {
+    // The common real-world shape: the indexer's NZB carried the proper
+    // release name, so the client unpacked into a well-named folder and
+    // reports that name for the download, but the archive members inside are
+    // obfuscated. The release name says which title and season; it never says
+    // which member is which episode. Every member still has to be recovered.
+    let ctx = TestContext::new().await;
+    let release = "Harbor.Pals.S01.1080p.WEB-DL.H264-LANTERNS";
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let source_dir = source_root.path().join(release);
+    std::fs::create_dir(&source_dir).expect("create named release folder");
+    let members: Vec<PathBuf> = OBFUSCATED_PACK
+        .iter()
+        .map(|member| copy_fixture(&source_dir, "h264_aac.mkv", member))
+        .collect();
+    let sizes: Vec<u64> = members
+        .iter()
+        .enumerate()
+        .map(|(index, path)| pad_file_to(path, (58 + index as u64) * 1024 * 1024))
+        .collect();
+    let lookup = RecordingSrrdbLookup::new(&[
+        (
+            sizes[0],
+            "Harbor.Pals.S01E01.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+        (
+            sizes[1],
+            "Harbor.Pals.S01E02.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+        (
+            sizes[2],
+            "Harbor.Pals.S01E03.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+    ]);
+    let app = app_with_srrdb_recovery(&ctx, lookup.clone()).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_short_form_series_title(
+        &ctx,
+        "title-srrdb-named-folder",
+        "Harbor Pals",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode_1 = seed_short_form_series_episode(&ctx, &title).await;
+    let collection_id = episode_1.collection_id.as_deref().expect("collection id");
+    let episode_2 = seed_second_short_form_series_episode(&ctx, &title, collection_id).await;
+    let episode_3 =
+        seed_series_episode_in_collection(&ctx, &title, collection_id, 3, Some(60)).await;
+    let mut completed = scryer_completed(
+        "dl-srrdb-named-folder",
+        source_dir.to_str().unwrap(),
+        &title.id,
+        "series",
+    );
+    // What SABnzbd and NZBGet report for a download whose NZB was properly
+    // named: the release, not an obfuscated job name.
+    completed.release_name = Some(release.to_string());
+
+    let result = import_completed_download(&app, &user, &completed)
+        .await
+        .expect("import obfuscated pack under a named release");
+
+    assert_eq!(
+        result.decision,
+        ImportDecision::Imported,
+        "unexpected named-release pack import result: {result:?}"
+    );
+    assert_eq!(
+        lookup.calls().len(),
+        3,
+        "a well-named release does not tell a member which episode it is: {:?}",
+        lookup.calls()
+    );
+    for member in &members {
+        assert!(
+            member.exists(),
+            "no source file is ever renamed: {}",
+            member.display()
+        );
+    }
+    let media_files = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(media_files.len(), 3, "{media_files:#?}");
+    let episode_ids = media_files
+        .iter()
+        .filter_map(|media_file| media_file.episode_id.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        episode_ids,
+        std::collections::BTreeSet::from([
+            episode_1.id.as_str(),
+            episode_2.id.as_str(),
+            episode_3.id.as_str(),
+        ]),
+        "the recovered names are what place each member on its episode"
+    );
+}
+
+#[tokio::test]
+async fn automatic_import_parks_the_pack_member_srrdb_cannot_recover() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let source_dir = source_root.path().join("e5f6a7b8c9d0e1f2a3b4");
+    std::fs::create_dir(&source_dir).expect("create obfuscated release folder");
+    let sizes: Vec<u64> = OBFUSCATED_PACK
+        .iter()
+        .enumerate()
+        .map(|(index, member)| {
+            let path = copy_fixture(&source_dir, "h264_aac.mkv", member);
+            pad_file_to(&path, (55 + index as u64) * 1024 * 1024)
+        })
+        .collect();
+    // The third member is a miss: srrdb has nothing unambiguous for it.
+    let lookup = RecordingSrrdbLookup::new(&[
+        (
+            sizes[0],
+            "Parked.Pals.S01E01.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+        (
+            sizes[1],
+            "Parked.Pals.S01E02.1080p.WEB-DL.H264-LANTERNS.mkv",
+        ),
+    ]);
+    let app = app_with_srrdb_recovery(&ctx, lookup.clone()).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_short_form_series_title(
+        &ctx,
+        "title-srrdb-partial-pack",
+        "Parked Pals",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode_1 = seed_short_form_series_episode(&ctx, &title).await;
+    let collection_id = episode_1.collection_id.as_deref().expect("collection id");
+    let episode_2 = seed_second_short_form_series_episode(&ctx, &title, collection_id).await;
+    let episode_3 =
+        seed_series_episode_in_collection(&ctx, &title, collection_id, 3, Some(60)).await;
+    let completed = scryer_completed(
+        "dl-srrdb-partial-pack",
+        source_dir.to_str().unwrap(),
+        &title.id,
+        "series",
+    );
+
+    let result = import_completed_download(&app, &user, &completed)
+        .await
+        .expect("import partially recovered series pack");
+
+    assert_eq!(lookup.calls().len(), 3, "{:?}", lookup.calls());
+    let media_files = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    let episode_ids = media_files
+        .iter()
+        .filter_map(|media_file| media_file.episode_id.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        episode_ids,
+        std::collections::BTreeSet::from([episode_1.id.as_str(), episode_2.id.as_str()]),
+        "the recovered members import; the unrecovered one must not be guessed: {result:?}"
+    );
+    assert!(
+        !episode_ids.contains(episode_3.id.as_str()),
+        "an unrecovered member parks for manual import instead of landing somewhere"
+    );
+    assert!(
+        source_dir.join(OBFUSCATED_PACK[2]).exists(),
+        "the parked member stays on disk under its physical name"
+    );
+}
+
+#[tokio::test]
+async fn manual_import_never_asks_srrdb_for_a_filename() {
+    let ctx = TestContext::new().await;
+    let lookup = RecordingSrrdbLookup::new(&[]);
+    let app = app_with_srrdb_recovery(&ctx, lookup.clone()).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let source_dir = source_root.path().join("f6a7b8c9d0e1f2a3b4c5");
+    std::fs::create_dir(&source_dir).expect("create obfuscated release folder");
+    let source_file_1 = copy_fixture(&source_dir, "h264_aac.mkv", OBFUSCATED_PACK[0]);
+    let source_file_2 = copy_fixture(&source_dir, "h264_aac.mkv", OBFUSCATED_PACK[1]);
+    pad_file_to(&source_file_1, 58 * 1024 * 1024);
+    pad_file_to(&source_file_2, 59 * 1024 * 1024);
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_series_title(
+        &ctx,
+        "title-srrdb-manual",
+        "Manual Pals",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode_1 = seed_series_episode(&ctx, &title).await;
+    let episode_2 = seed_second_series_episode(
+        &ctx,
+        &title,
+        episode_1.collection_id.as_deref().expect("collection id"),
+    )
+    .await;
+    let completed = scryer_completed(
+        "dl-srrdb-manual",
+        source_dir.to_str().unwrap(),
+        &title.id,
+        "series",
+    );
+    let import_id = queue_import_record(&ctx, &completed).await;
+
+    let results = scryer_application::execute_manual_import(
+        &app,
+        &user,
+        &import_id,
+        &title.id,
+        Some(&completed),
+        vec![
+            scryer_application::ManualImportFileMapping {
+                file_path: source_file_1.to_string_lossy().to_string(),
+                episode_id: Some(episode_1.id.clone()),
+                series_movie_link_id: None,
+            },
+            scryer_application::ManualImportFileMapping {
+                file_path: source_file_2.to_string_lossy().to_string(),
+                episode_id: Some(episode_2.id.clone()),
+                series_movie_link_id: None,
+            },
+        ],
+        Some(source_dir.clone()),
+    )
+    .await
+    .expect("execute manual import of obfuscated files");
+
+    assert!(
+        results.iter().all(|result| result.success),
+        "manual mapping is explicit and must not need srrdb: {results:#?}"
+    );
+    assert!(
+        lookup.calls().is_empty(),
+        "manual import never asks a third party what a file is called: {:?}",
+        lookup.calls()
+    );
+}
+
+#[tokio::test]
+async fn a_titleless_obfuscated_download_matches_and_imports_on_its_recovered_name() {
+    let ctx = TestContext::new().await;
+    // Nothing binds this download to a title: no Scryer parameters, an
+    // obfuscated release folder and an obfuscated member. The recovered name
+    // is the only title signal that exists.
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let source_dir = source_root.path().join("a7b8c9d0e1f2a3b4c5d6");
+    std::fs::create_dir(&source_dir).expect("create obfuscated release folder");
+    let source_file = copy_fixture(&source_dir, "h264_aac.mkv", OBFUSCATED_PACK[0]);
+    let size = pad_file_to(&source_file, 61 * 1024 * 1024);
+    let lookup = RecordingSrrdbLookup::new(&[(
+        size,
+        "Titleless.Pals.S01E01.1080p.WEB-DL.H264-LANTERNS.mkv",
+    )]);
+    let app = app_with_srrdb_recovery(&ctx, lookup.clone()).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_short_form_series_title(
+        &ctx,
+        "title-srrdb-titleless",
+        "Titleless Pals",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode = seed_short_form_series_episode(&ctx, &title).await;
+    let completed = CompletedDownload {
+        client_type: "sabnzbd".to_string(),
+        client_id: "test-client".to_string(),
+        download_client_item_id: "dl-srrdb-titleless".to_string(),
+        download_id: None,
+        name: "a7b8c9d0e1f2a3b4c5d6".to_string(),
+        release_name: None,
+        dest_dir: source_dir.to_str().unwrap().to_string(),
+        category: None,
+        size_bytes: None,
+        completed_at: None,
+        parameters: vec![],
+    };
+
+    let result = import_completed_download(&app, &user, &completed)
+        .await
+        .expect("import titleless obfuscated download");
+
+    assert_eq!(
+        result.decision,
+        ImportDecision::Imported,
+        "the recovered name must be enough to match and import: {result:?}"
+    );
+    assert_eq!(result.title_id.as_deref(), Some(title.id.as_str()));
+    assert_eq!(result.episode_ids, vec![episode.id.clone()]);
+
+    // The file on disk is never renamed: what the import recorded having read
+    // is the physical name, not the name srrdb handed back.
+    let artifacts = ImportStore::new(ctx.db.datastore())
+        .list_by_source_identity(&ClientJobLocator::for_import_artifact(
+            Some(&completed.client_id),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        ))
+        .await
+        .expect("list import artifacts");
+    assert_eq!(artifacts.len(), 1, "{artifacts:#?}");
+    assert_eq!(
+        artifacts[0].normalized_file_name,
+        OBFUSCATED_PACK[0].to_ascii_lowercase(),
+        "the artifact records the physical file name: {artifacts:#?}"
+    );
 }

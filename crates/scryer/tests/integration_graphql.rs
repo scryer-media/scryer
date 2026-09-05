@@ -1312,6 +1312,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "general".into(),
                 scope: "system".into(),
+                key_name: "imports.srrdb_filename_recovery.enabled".into(),
+                data_type: "boolean".into(),
+                default_value_json: "false".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "general".into(),
+                scope: "system".into(),
                 key_name: "history.keep_forever".into(),
                 data_type: "boolean".into(),
                 default_value_json: "false".into(),

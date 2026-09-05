@@ -6812,6 +6812,10 @@ type GeneralSettingsPayload {
 	"""
 	personalizedDiscoveryEnabled: Boolean!
 	"""
+	Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames.
+	"""
+	srrdbFilenameRecoveryEnabled: Boolean!
+	"""
 	Whether import history is retained indefinitely.
 	"""
 	keepHistoryForever: Boolean!
@@ -23699,6 +23703,10 @@ input UpdateGeneralSettingsInput {
 	Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.
 	"""
 	personalizedDiscoveryEnabled: Boolean
+	"""
+	Whether automatic SABnzbd and NZBGet imports may ask srrdb.com to recover obfuscated filenames. Omission preserves the saved setting.
+	"""
+	srrdbFilenameRecoveryEnabled: Boolean
 	"""
 	Whether history is retained without expiry.
 	"""

@@ -253,6 +253,7 @@ fn from_general_settings(settings: scryer_application::GeneralSettings) -> Gener
     GeneralSettingsPayload {
         experimental_features_enabled: settings.experimental_features_enabled,
         personalized_discovery_enabled: settings.personalized_discovery_enabled,
+        srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
         keep_history_forever: settings.keep_history_forever,
         history_retention_days: settings.history_retention_days,
         image_cache_max_size_mb: settings.image_cache_max_size_mb,

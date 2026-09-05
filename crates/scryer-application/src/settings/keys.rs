@@ -47,6 +47,10 @@ pub const EXPERIMENTAL_FEATURES_ENABLED_KEY: &str = "ui.experimental_features_en
 // gateway. Stored in the positive sense; absent row means enabled, so existing
 // installs keep personalized discovery working with no data change.
 pub const DISCOVERY_PERSONALIZED_ENABLED_KEY: &str = "discovery.personalized_enabled";
+// Instance-wide opt in for asking srrdb.com to recover obfuscated filenames
+// during automatic SABnzbd/NZBGet imports. Absent row means disabled, so no
+// install talks to the third-party service until an administrator opts in.
+pub const SRRDB_FILENAME_RECOVERY_ENABLED_KEY: &str = "imports.srrdb_filename_recovery.enabled";
 pub const HISTORY_KEEP_FOREVER_KEY: &str = "history.keep_forever";
 pub const HISTORY_RETENTION_DAYS_KEY: &str = "history.retention_days";
 pub const IMAGE_CACHE_MAX_SIZE_MB_KEY: &str = "images.cache.max_size_mb";

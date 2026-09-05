@@ -96,6 +96,10 @@ pub struct AppIntegrationServices {
     pub(crate) subtitle_plugin_provider: RuntimeFeature<Arc<dyn SubtitlePluginProvider>>,
     pub(crate) archive_extractor_plugin_provider:
         RuntimeFeature<Arc<dyn ArchiveExtractorPluginProvider>>,
+    /// srrdb.com filename recovery for obfuscated automatic imports. Disabled
+    /// in every assembly that does not wire the production adapter, which is
+    /// indistinguishable from the admin setting being off.
+    pub(crate) srrdb_filename_lookup: RuntimeFeature<Arc<dyn crate::ports::SrrdbFilenameLookup>>,
     /// Live playback observation across the media-server connections above
     /// (RFC 137 §9.10, WP-G). Read-only; consulted by maintenance safety.
     pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
@@ -346,6 +350,7 @@ impl AppServices {
                 download_client_plugin_provider: RuntimeFeature::Disabled,
                 subtitle_plugin_provider: RuntimeFeature::Disabled,
                 archive_extractor_plugin_provider: RuntimeFeature::Disabled,
+                srrdb_filename_lookup: RuntimeFeature::Disabled,
                 media_server_playback_probe: Arc::new(
                     null_repositories::NullMediaServerPlaybackProbe,
                 ),

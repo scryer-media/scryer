@@ -187,6 +187,7 @@ fn summarize_plugin_http_trusted_certificates(
 pub struct GeneralSettings {
     pub experimental_features_enabled: bool,
     pub personalized_discovery_enabled: bool,
+    pub srrdb_filename_recovery_enabled: bool,
     pub keep_history_forever: bool,
     pub history_retention_days: i32,
     pub image_cache_max_size_mb: i32,
@@ -219,6 +220,7 @@ pub struct BackupSettings {
 pub struct UpdateGeneralSettings {
     pub experimental_features_enabled: Option<bool>,
     pub personalized_discovery_enabled: Option<bool>,
+    pub srrdb_filename_recovery_enabled: Option<bool>,
     pub keep_history_forever: Option<bool>,
     pub history_retention_days: Option<i32>,
     pub image_cache_max_size_mb: Option<i32>,
@@ -311,6 +313,16 @@ impl AppUseCase {
             .unwrap_or(true))
     }
 
+    /// Instance-wide opt in for asking srrdb.com to recover obfuscated
+    /// filenames during automatic SABnzbd/NZBGet imports. This is the single
+    /// place the default lives.
+    pub async fn srrdb_filename_recovery_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(SRRDB_FILENAME_RECOVERY_ENABLED_KEY, None)
+            .await?
+            .unwrap_or(false))
+    }
+
     /// Read both instance-wide switches. The actor is taken to prove a session
     /// exists; there is deliberately no app-permission check, because the
     /// gated surfaces are used by non-administrators.
@@ -326,6 +338,7 @@ impl AppUseCase {
     async fn load_general_settings(&self) -> AppResult<GeneralSettings> {
         let experimental_features_enabled = self.experimental_features_enabled().await?;
         let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
+        let srrdb_filename_recovery_enabled = self.srrdb_filename_recovery_enabled().await?;
         let keep_history_forever = self
             .read_setting_bool_value(HISTORY_KEEP_FOREVER_KEY, None)
             .await?
@@ -369,6 +382,7 @@ impl AppUseCase {
         Ok(GeneralSettings {
             experimental_features_enabled,
             personalized_discovery_enabled,
+            srrdb_filename_recovery_enabled,
             keep_history_forever,
             history_retention_days,
             image_cache_max_size_mb,
@@ -507,6 +521,9 @@ impl AppUseCase {
         let personalized_discovery_enabled = input
             .personalized_discovery_enabled
             .unwrap_or(current.personalized_discovery_enabled);
+        let srrdb_filename_recovery_enabled = input
+            .srrdb_filename_recovery_enabled
+            .unwrap_or(current.srrdb_filename_recovery_enabled);
         let keep_history_forever = input
             .keep_history_forever
             .unwrap_or(current.keep_history_forever);
@@ -562,6 +579,15 @@ impl AppUseCase {
             )
             .await?;
             changed_keys.push(DISCOVERY_PERSONALIZED_ENABLED_KEY.to_string());
+        }
+        if input.srrdb_filename_recovery_enabled.is_some() {
+            self.upsert_system_setting_json(
+                SRRDB_FILENAME_RECOVERY_ENABLED_KEY,
+                &srrdb_filename_recovery_enabled,
+                Some(actor.id.clone()),
+            )
+            .await?;
+            changed_keys.push(SRRDB_FILENAME_RECOVERY_ENABLED_KEY.to_string());
         }
         if input.keep_history_forever.is_some() {
             self.upsert_system_setting_json(
@@ -621,6 +647,7 @@ impl AppUseCase {
         Ok(GeneralSettings {
             experimental_features_enabled,
             personalized_discovery_enabled,
+            srrdb_filename_recovery_enabled,
             keep_history_forever,
             history_retention_days,
             image_cache_max_size_mb,

@@ -2651,7 +2651,9 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                     import_id,
                     completed,
                     release_evidence,
-                    std::slice::from_ref(&source),
+                    // Manual import never asks srrdb: an operator already told
+                    // Scryer what this file is.
+                    std::slice::from_ref(&ImportVideoFile::physical(source.clone())),
                     Utc::now(),
                     // An operator picked this file. The same bypass the manual
                     // episode path passes: no automatic sample rail, and no

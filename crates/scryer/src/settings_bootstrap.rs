@@ -264,6 +264,18 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "true",
             is_sensitive: false,
         },
+        // Instance-wide opt in for asking srrdb.com to recover obfuscated
+        // filenames during automatic SABnzbd/NZBGet imports. Seeded false so no
+        // install contacts the third-party service until an administrator opts
+        // in.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SRRDB_FILENAME_RECOVERY_ENABLED_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
@@ -2414,6 +2426,18 @@ mod tests {
                 && seed.key_name == scryer_application::DISCOVERY_PERSONALIZED_ENABLED_KEY
                 && seed.data_type == "boolean"
                 && seed.default_value_json == "true"
+                && !seed.is_sensitive
+        }));
+    }
+
+    #[test]
+    fn service_setting_seeds_include_srrdb_filename_recovery_default() {
+        assert!(service_setting_seeds().iter().any(|seed| {
+            seed.category == SETTINGS_CATEGORY_GENERAL
+                && seed.scope == SETTINGS_SCOPE_SYSTEM
+                && seed.key_name == scryer_application::SRRDB_FILENAME_RECOVERY_ENABLED_KEY
+                && seed.data_type == "boolean"
+                && seed.default_value_json == "false"
                 && !seed.is_sensitive
         }));
     }

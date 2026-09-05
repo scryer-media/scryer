@@ -1010,7 +1010,9 @@ fn title_evidence_candidates_from_video_files_uses_immediate_parent_for_obfuscat
         release_dir.join("aUUKqrO833LbSr7VlByumnR24y7ULADpVJ7K0FTnPhPMqpp0KIIaLSLYXJmyjm.mkv");
     std::fs::write(&file_path, b"movie").expect("write file");
 
-    let candidates = title_evidence_candidates_from_video_files(&[file_path]);
+    let candidates = title_evidence_candidates_from_video_files(&[
+        ImportVideoFile::physical(file_path),
+    ]);
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(
@@ -1028,7 +1030,9 @@ fn title_evidence_candidates_from_video_files_prefers_usable_file_name() {
     let file_path = release_dir.join("Paper.Lantern.2012.1080p.BluRay.x264-GRP.mkv");
     std::fs::write(&file_path, b"movie").expect("write file");
 
-    let candidates = title_evidence_candidates_from_video_files(&[file_path]);
+    let candidates = title_evidence_candidates_from_video_files(&[
+        ImportVideoFile::physical(file_path),
+    ]);
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].normalized_title, "PAPER LANTERN");

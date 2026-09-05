@@ -685,6 +685,10 @@ const de: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Personalisierte Entdeckung",
   "settings.personalizedDiscoveryHelp":
     "Sendet eine Zusammenfassung Ihrer Bibliothek an das Metadaten-Gateway, damit die Entdeckung Titel auf Basis Ihres Bestands empfehlen kann. Deaktivieren Sie dies, um die Entdeckung auf öffentliche Feeds zu beschränken.",
+  "settings.srrdbFilenameRecoveryLabel":
+    "Verschleierte Dateinamen über srrdb.com wiederherstellen",
+  "settings.srrdbFilenameRecoveryHelp":
+    "Wenn ein automatischer Import aus SABnzbd oder NZBGet Videodateien mit verschleierten Namen enthält, sendet Scryer die CRC-32-Prüfsumme und die Größe jeder Datei an srrdb.com, einen Drittanbieterdienst, um den ursprünglichen Dateinamen nachzuschlagen. Sonst wird nichts über Ihre Bibliothek oder die Datei gesendet. Dateien auf der Festplatte werden niemals umbenannt.",
   "discovery.personalizedDisabled":
     "Die personalisierte Entdeckung ist für diese Instanz deaktiviert.",
   "settings.keepHistoryForever": "Verlauf dauerhaft aufbewahren",

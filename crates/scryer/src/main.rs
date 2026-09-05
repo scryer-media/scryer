@@ -1156,6 +1156,13 @@ async fn bootstrap_application(
         ));
     let archive_extractor_plugin_provider: Arc<dyn ArchiveExtractorPluginProvider> =
         dynamic_archive_extractor_plugin_provider.clone();
+    // Wired unconditionally; the admin setting (default off) is what decides
+    // whether an import ever asks it anything.
+    let srrdb_filename_lookup: Arc<dyn scryer_application::SrrdbFilenameLookup> =
+        Arc::new(scryer_application::SrrdbHttpFilenameLookup::new(
+            url::Url::parse(scryer_application::SRRDB_API_BASE_URL)
+                .expect("srrdb API base URL is a constant and must parse"),
+        ));
     let download_client_plugin_provider: Arc<dyn DownloadClientPluginProvider> =
         Arc::new(scryer_plugins::DynamicDownloadClientPluginProvider::new(
             scryer_plugins::build_download_client_plugin_provider_from_runtime_plugins(
@@ -1373,6 +1380,7 @@ async fn bootstrap_application(
         .with_subtitle_provider_configs(subtitle_provider_configs)
         .with_subtitle_plugin_provider(subtitle_plugin_provider)
         .with_archive_extractor_plugin_provider(archive_extractor_plugin_provider)
+        .with_srrdb_filename_lookup(srrdb_filename_lookup)
         .with_notification_provider(Arc::new(notif_provider))
         .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
         .with_tracked_download_handle(TrackedDownloadHandle::new(tracked_download_tx))

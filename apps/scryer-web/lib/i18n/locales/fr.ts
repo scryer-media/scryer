@@ -695,6 +695,10 @@ const fr: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Découverte personnalisée",
   "settings.personalizedDiscoveryHelp":
     "Envoie un résumé de votre bibliothèque à la passerelle de métadonnées afin que la Découverte puisse recommander des titres en fonction de ce que vous possédez. Désactivez cette option pour limiter la Découverte aux flux publics.",
+  "settings.srrdbFilenameRecoveryLabel":
+    "Récupérer les noms de fichiers obfusqués depuis srrdb.com",
+  "settings.srrdbFilenameRecoveryHelp":
+    "Lorsqu'un import automatique depuis SABnzbd ou NZBGet contient des fichiers vidéo aux noms obfusqués, Scryer envoie la somme de contrôle CRC-32 et la taille de chaque fichier à srrdb.com, un service tiers, afin de retrouver le nom d'origine. Rien d'autre concernant votre bibliothèque ou le fichier n'est envoyé. Les fichiers sur le disque ne sont jamais renommés.",
   "discovery.personalizedDisabled":
     "La découverte personnalisée est désactivée pour cette instance.",
   "settings.keepHistoryForever": "Conserver l’historique indéfiniment",

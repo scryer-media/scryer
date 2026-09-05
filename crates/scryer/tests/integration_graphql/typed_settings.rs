@@ -717,6 +717,7 @@ async fn graphql_typed_general_settings_defaults() {
           generalSettings {
             experimentalFeaturesEnabled
             personalizedDiscoveryEnabled
+            srrdbFilenameRecoveryEnabled
             keepHistoryForever
             historyRetentionDays
             imageCacheMaxSizeMb
@@ -743,6 +744,10 @@ async fn graphql_typed_general_settings_defaults() {
         read["data"]["generalSettings"]["personalizedDiscoveryEnabled"],
         true
     );
+    assert_eq!(
+        read["data"]["generalSettings"]["srrdbFilenameRecoveryEnabled"],
+        false
+    );
     assert_eq!(read["data"]["generalSettings"]["keepHistoryForever"], false);
     assert_eq!(read["data"]["generalSettings"]["historyRetentionDays"], 180);
     assert_eq!(read["data"]["generalSettings"]["imageCacheMaxSizeMb"], 256);
@@ -760,6 +765,116 @@ async fn graphql_typed_general_settings_defaults() {
     assert_eq!(
         read["data"]["generalSettings"]["pluginHttpTrustedCertificates"],
         json!([])
+    );
+}
+
+#[tokio::test]
+async fn graphql_typed_general_settings_srrdb_filename_recovery_round_trips() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let defaults = gql(
+        &ctx,
+        r#"
+        query GeneralSettings {
+          generalSettings {
+            srrdbFilenameRecoveryEnabled
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&defaults);
+    assert_eq!(
+        defaults["data"]["generalSettings"]["srrdbFilenameRecoveryEnabled"],
+        false
+    );
+
+    let update = gql(
+        &ctx,
+        r#"
+        mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
+          updateGeneralSettings(input: $input) {
+            srrdbFilenameRecoveryEnabled
+            historyRetentionDays
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "srrdbFilenameRecoveryEnabled": true
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+    assert_eq!(
+        update["data"]["updateGeneralSettings"]["srrdbFilenameRecoveryEnabled"],
+        true
+    );
+    // Untouched fields keep their stored values through a partial update.
+    assert_eq!(
+        update["data"]["updateGeneralSettings"]["historyRetentionDays"],
+        180
+    );
+
+    let read = gql(
+        &ctx,
+        r#"
+        query GeneralSettings {
+          generalSettings {
+            srrdbFilenameRecoveryEnabled
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["generalSettings"]["srrdbFilenameRecoveryEnabled"],
+        true
+    );
+
+    let restore = gql(
+        &ctx,
+        r#"
+        mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
+          updateGeneralSettings(input: $input) {
+            srrdbFilenameRecoveryEnabled
+          }
+        }
+        "#,
+        json!({
+          "input": {
+            "srrdbFilenameRecoveryEnabled": false
+          }
+        }),
+    )
+    .await;
+    assert_no_errors(&restore);
+    assert_eq!(
+        restore["data"]["updateGeneralSettings"]["srrdbFilenameRecoveryEnabled"],
+        false
+    );
+
+    let final_read = gql(
+        &ctx,
+        r#"
+        query GeneralSettings {
+          generalSettings {
+            srrdbFilenameRecoveryEnabled
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&final_read);
+    assert_eq!(
+        final_read["data"]["generalSettings"]["srrdbFilenameRecoveryEnabled"],
+        false
     );
 }
 
@@ -902,8 +1017,7 @@ async fn graphql_instance_features_readable_without_manage_system_settings() {
     .await;
     assert_graphql_field_denied(&denied, "generalSettings");
 
-    let defaults =
-        gql_with_token(&ctx, INSTANCE_FEATURES_QUERY, json!({}), &viewer_token).await;
+    let defaults = gql_with_token(&ctx, INSTANCE_FEATURES_QUERY, json!({}), &viewer_token).await;
     assert_no_errors(&defaults);
     assert_eq!(
         defaults["data"]["instanceFeatures"]["experimentalFeaturesEnabled"],
