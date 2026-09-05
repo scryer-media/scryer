@@ -16,7 +16,7 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 blake3 = "1"
 chrono = { workspace = true }
-libsqlite3-sys = { version = "0.37.0", default-features = false, features = ["bundled"] }
+libsqlite3-sys = { version = "0.38.0", default-features = false, features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -25,7 +25,7 @@ tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { workspace = true }
@@ -42,7 +42,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 toml = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 scryer-infrastructure-configuration = { path = "../scryer-infrastructure-configuration" }

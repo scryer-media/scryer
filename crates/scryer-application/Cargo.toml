@@ -67,9 +67,9 @@ sha2 = { version = "0.11", optional = true }
 brotli = { version = "8", optional = true }
 tar = "0.4"
 flate2 = "1"
-zstd = { version = "0.13", default-features = false, optional = true }
+zstd = { version = "0.14", default-features = false, optional = true }
 lzma-rs = { version = "0.3", optional = true }
-par2-rs = { version = "0.7.1", optional = true }
+par2-rs = { version = "0.10.0", optional = true }
 tempfile = "3"
 chardetng = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }
@@ -83,7 +83,7 @@ sigstore = { version = "0.14", default-features = false, features = ["sigstore-t
 sigstore_protobuf_specs = { version = "0.5.2", optional = true }
 rustls-pki-types = "1"
 rustls-webpki = { version = "0.103", default-features = false, features = ["std", "aws-lc-rs"], optional = true }
-x509-cert = { version = "0.2", default-features = false, features = ["pem", "sct", "std"], optional = true }
+x509-cert = { version = "0.3", default-features = false, features = ["pem", "sct", "std"], optional = true }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]
