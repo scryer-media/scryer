@@ -60,6 +60,10 @@ impl LibraryTitleWalk {
 pub(crate) struct LibraryQueryEvidence {
     pub(crate) queries: Vec<String>,
     pub(crate) year: Option<u32>,
+    /// Year derived from the containing folder alone, independent of the
+    /// `year` selection order above. Scans use it to retry a metadata lookup
+    /// when the filename year and the folder year disagree.
+    pub(crate) folder_year: Option<u32>,
     pub(crate) file_walk: Option<LibraryTitleWalk>,
     pub(crate) folder_walk: Option<LibraryTitleWalk>,
 }
@@ -494,6 +498,11 @@ fn build_library_query_evidence(
         push_unique_literal_query(&mut queries, raw_folder_query);
     }
 
+    let folder_derived_year = folder_walk
+        .as_ref()
+        .and_then(|walk| walk.year)
+        .or(folder_year);
+
     let year = file_walk
         .as_ref()
         .and_then(|walk| walk.year)
@@ -503,13 +512,13 @@ fn build_library_query_evidence(
                 .flatten()
                 .and_then(|year| u32::try_from(year).ok())
         })
-        .or_else(|| folder_walk.as_ref().and_then(|walk| walk.year))
-        .or(folder_year);
+        .or(folder_derived_year);
 
     QueryEvidenceBuild {
         evidence: LibraryQueryEvidence {
             queries,
             year,
+            folder_year: folder_derived_year,
             file_walk,
             folder_walk,
         },

@@ -679,6 +679,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // (`requestRuleDecision`, `requestRuleDecisions`), the Rules Context
     // Reference document, the requester pre-flight, and `titleClaims`.
     // Query 151->160.
+    // In-library pending-import candidates add
+    // MetadataSearchItemPayload.existingTitleId and
+    // ResolvePendingImportInput.attachToExistingTitle. Both hang off existing
+    // types, so no census counts change.
     assert_eq!(
         query_field_count, 161,
         "query fields: {query_field_names:?}"

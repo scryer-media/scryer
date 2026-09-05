@@ -2166,6 +2166,7 @@ mod tests {
             identity_hint: None,
             query: query.to_string(),
             year_hint,
+            year_hint_variants: vec![year_hint],
             query_variants: vec![query.to_string()],
             search_candidates: Vec::new(),
             metadata_lookup_attempted: true,

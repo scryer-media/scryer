@@ -66,6 +66,7 @@ type MetadataSearchResult = {
   language: string | null;
   runtimeMinutes: number | null;
   sortTitle: string | null;
+  existingTitleId?: string | null;
 };
 
 type ExternalIdInput = {
@@ -370,7 +371,9 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
     status: PendingImportStatus;
   } | null>(null);
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [searchYear, setSearchYear] = React.useState<number | null>(null);
   const [searchResults, setSearchResults] = React.useState<MetadataSearchResult[]>([]);
+  const [searchError, setSearchError] = React.useState<string | null>(null);
   const [searching, setSearching] = React.useState(false);
   const [bindingPreview, setBindingPreview] = React.useState<PendingImportBindingPreview | null>(null);
   const [bindingLoading, setBindingLoading] = React.useState(false);
@@ -431,7 +434,9 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
   const clearActiveItem = React.useCallback(() => {
     setActiveItemRef(null);
     setSearchQuery("");
+    setSearchYear(null);
     setSearchResults([]);
+    setSearchError(null);
     setSearching(false);
     setBindingPreview(null);
     setBindingLoading(false);
@@ -592,12 +597,14 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
   React.useEffect(() => {
     if (!activeItemRef) {
       setSearchResults([]);
+      setSearchError(null);
       setSearching(false);
       return;
     }
 
     if (!searchQuery.trim()) {
       setSearchResults([]);
+      setSearchError(null);
       setSearching(false);
       return;
     }
@@ -612,7 +619,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
           pendingImportId: activeItemRef.id,
           query: searchQuery.trim(),
           limit: 8,
-          year: activeItem?.yearHint ?? null,
+          year: searchYear,
         }, { fetch: abortableFetch })
         .toPromise()
         .then(({ data, error: queryError }) => {
@@ -624,15 +631,18 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
           }
           const items = (data?.pendingImportTitleSearch ?? []) as MetadataSearchResult[];
           setSearchResults(items);
+          setSearchError(null);
         })
         .catch((err: unknown) => {
           if (!active || isAbortError(err)) {
             return;
           }
+          const message = err instanceof Error ? err.message : t("pendingImports.searchFailed");
           setSearchResults([]);
-          setGlobalStatus(
-            err instanceof Error ? err.message : t("pendingImports.searchFailed"),
-          );
+          // Surfaced inline on the card too: a failed request must not read as
+          // "no metadata matches found".
+          setSearchError(message);
+          setGlobalStatus(message);
         })
         .finally(() => {
           if (active) {
@@ -647,10 +657,10 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       abortController.abort();
     };
   }, [
-    activeItem?.yearHint,
     activeItemRef,
     client,
     searchQuery,
+    searchYear,
     setGlobalStatus,
     t,
   ]);
@@ -674,6 +684,10 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
   const handleOpenSearch = React.useCallback((item: PendingImportItem) => {
     setActiveItemRef({ id: item.id, status: item.status });
     setSearchResults([]);
+    setSearchError(null);
+    // Seed the visible year filter from the scan's hint; the user can widen the
+    // search by clearing it.
+    setSearchYear(typeof item.yearHint === "number" ? item.yearHint : null);
     setBindingPreview(null);
     setBindingError(null);
     setSelectedEpisodeIds([]);
@@ -784,10 +798,15 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
     }
   }, [librarySlugById]);
 
-  const handleResolve = React.useCallback(async (selectedResult: MetadataSearchResult) => {
+  const handleResolve = React.useCallback(async (
+    selectedResult: MetadataSearchResult,
+    options?: { attachToExistingTitle?: boolean },
+  ) => {
     if (!activeItem) {
       return;
     }
+
+    const attachToExistingTitle = options?.attachToExistingTitle ?? false;
 
     const itemId = activeItem.id;
     if (inFlightPendingImportActionsRef.current.has(itemId)) {
@@ -802,6 +821,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
           input: {
             pendingImportId: itemId,
             title: buildPendingImportResolveTitleInput(activeItem, selectedResult),
+            attachToExistingTitle,
           },
         })
         .toPromise();
@@ -816,9 +836,14 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       }
 
       setGlobalStatus(
-        t("pendingImports.resolveSuccess", {
-          name: mutationResult?.title?.name?.trim() || activeItem.displayName,
-        }),
+        t(
+          attachToExistingTitle
+            ? "pendingImports.attachSuccess"
+            : "pendingImports.resolveSuccess",
+          {
+            name: mutationResult?.title?.name?.trim() || activeItem.displayName,
+          },
+        ),
       );
       clearActiveItem();
     } catch (err) {
@@ -1009,7 +1034,9 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
             expandedBindingSeasonKeys={expandedBindingSeasonKeys}
             selectedEpisodeIds={selectedEpisodeIds}
             searchQuery={searchQuery}
+            searchYear={searchYear}
             searchResults={searchResults}
+            searchError={searchError}
             searching={searching}
             formatBindingEpisodeDisplay={(episode) =>
               formatBindingEpisodeDisplay(episode, t)
@@ -1022,6 +1049,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
             onSetSelectedEpisodeIds={setSelectedEpisodeIds}
             onSetExpandedBindingSeasonKeys={setExpandedBindingSeasonKeys}
             onSearchQueryChange={setSearchQuery}
+            onSearchYearChange={setSearchYear}
             onClearActiveItem={clearActiveItem}
           />
         );
@@ -1042,8 +1070,10 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
     ignoringItemId,
     libraryNameById,
     resolvingItemId,
+    searchError,
     searchQuery,
     searchResults,
+    searchYear,
     searching,
     selectedEpisodeIds,
     t,
