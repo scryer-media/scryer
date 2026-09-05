@@ -282,7 +282,18 @@ pub(crate) fn normalize_indexer_config_json(
             );
         }
 
-        if field.required && config_value_is_empty(object.get(&field.key)) {
+        // Requiredness is read through the shared evaluator rather than off
+        // `required` alone: a field the form is hiding must not be demanded
+        // here, or the operator is left with an error about a field they
+        // cannot see.
+        let value_of = |key: &str| {
+            object
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+        };
+        if scryer_domain::config_field_is_required(field, value_of)
+            && config_value_is_empty(object.get(&field.key))
+        {
             return Err(AppError::Validation(format!(
                 "{} is required",
                 field.label.trim()

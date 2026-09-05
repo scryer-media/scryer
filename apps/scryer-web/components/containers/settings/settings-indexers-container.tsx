@@ -25,6 +25,10 @@ import type {
   IndexerDownloadClientMappingCatalog,
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
+import {
+  isConfigFieldRequired,
+  isConfigFieldVisible,
+} from "@/lib/utils/provider-config-fields";
 import { runConnectionFeedback } from "@/lib/utils/connection-feedback";
 import { normalizeIndexerConfigValues } from "@/lib/utils/url-input";
 import {
@@ -104,6 +108,12 @@ function serializeConfigValues(
       continue;
     }
 
+    // Hidden fields keep their draft value so toggling the field they depend on
+    // does not lose typing, but they are not part of what gets saved.
+    if (!isConfigFieldVisible(field, configValues)) {
+      continue;
+    }
+
     const isStoredSecret =
       field.fieldType === "PASSWORD" && storedSecretKeySet.has(field.key);
     let nextValue =
@@ -171,7 +181,12 @@ function findMissingRequiredConfigField(
 ): ConfigFieldDef | null {
   const storedSecretKeySet = new Set(storedSecretKeys);
   for (const field of fields) {
-    if (!field.required || field.valueSource === "HOST_BINDING") {
+    // Through the shared evaluator: a hidden field is never missing, and
+    // `required_when` can raise one that declared `required: false`.
+    if (
+      field.valueSource === "HOST_BINDING" ||
+      !isConfigFieldRequired(field, configValues)
+    ) {
       continue;
     }
 

@@ -5625,6 +5625,55 @@ pub struct ConfigFieldDef {
     pub advanced: bool,
 }
 
+impl FieldCondition {
+    /// Whether this holds, given the current value of the field it references.
+    ///
+    /// Values are trimmed and an absent value is treated as empty, so a field
+    /// that was never filled in reads the same as one cleared by hand.
+    pub fn holds(&self, referenced_value: Option<&str>) -> bool {
+        let value = referenced_value.map(str::trim).unwrap_or("");
+        match self.op {
+            ConditionOp::Eq => self.values.first().is_some_and(|first| first == value),
+            ConditionOp::Ne => !self.values.first().is_some_and(|first| first == value),
+            ConditionOp::In => self.values.iter().any(|candidate| candidate == value),
+            ConditionOp::NotIn => !self.values.iter().any(|candidate| candidate == value),
+            ConditionOp::NonEmpty => !value.is_empty(),
+        }
+    }
+}
+
+/// Whether a field should be shown, given a way to read the other fields.
+///
+/// This and [`config_field_is_required`] are the only place these conditions
+/// are interpreted on the host. The web client mirrors them exactly; a form
+/// that hid a field while the host still demanded it would be unfixable from
+/// the UI.
+pub fn config_field_is_visible<'a>(
+    field: &ConfigFieldDef,
+    value_of: impl Fn(&str) -> Option<&'a str>,
+) -> bool {
+    field
+        .visible_when
+        .as_ref()
+        .is_none_or(|condition| condition.holds(value_of(&condition.key)))
+}
+
+/// Whether a field must carry a value. A field the form is not showing never
+/// does, whatever it declared.
+pub fn config_field_is_required<'a>(
+    field: &ConfigFieldDef,
+    value_of: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> bool {
+    if !config_field_is_visible(field, value_of) {
+        return false;
+    }
+    field.required
+        || field
+            .required_when
+            .as_ref()
+            .is_some_and(|condition| condition.holds(value_of(&condition.key)))
+}
+
 /// A single option for "select"-type config fields.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigFieldOption {

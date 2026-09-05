@@ -18,7 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { type ConfigFieldDef, visibleIndexerConfigFields } from "@/lib/types";
-import { splitAdvancedConfigFields } from "@/lib/utils/provider-config-fields";
+import {
+  resolveConfigFieldsForValues,
+  splitAdvancedConfigFields,
+} from "@/lib/utils/provider-config-fields";
 import { cn } from "@/lib/utils";
 
 interface ProviderOption {
@@ -156,7 +159,9 @@ export function SetupIndexerView({
     selectedProvider?.configFields ?? [],
   );
   const { standard: standardProviderFields, advanced: advancedProviderFields } =
-    splitAdvancedConfigFields(selectedProviderFields);
+    splitAdvancedConfigFields(
+      resolveConfigFieldsForValues(selectedProviderFields, configValues),
+    );
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const hasMissingRequiredField = selectedProviderFields.some((field) =>
     isMissingRequiredField(field, configValues),

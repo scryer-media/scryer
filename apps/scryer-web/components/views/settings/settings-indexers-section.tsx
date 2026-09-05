@@ -60,7 +60,10 @@ import type {
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { splitAdvancedConfigFields } from "@/lib/utils/provider-config-fields";
+import {
+  resolveConfigFieldsForValues,
+  splitAdvancedConfigFields,
+} from "@/lib/utils/provider-config-fields";
 import { buildIndexerSettingsPath } from "@/lib/utils/routing";
 import { applyIndexerConfigOption } from "@/lib/utils/indexer-setup";
 import { cn } from "@/lib/utils";
@@ -858,10 +861,18 @@ export function SettingsIndexersSection({
     [selectedProvider],
   );
 
+  // Conditions are resolved against the draft, so a field appears or becomes
+  // required the moment the field it depends on changes.
   const { standard: standardProviderFields, advanced: advancedProviderFields } =
     React.useMemo(
-      () => splitAdvancedConfigFields(selectedProviderFields),
-      [selectedProviderFields],
+      () =>
+        splitAdvancedConfigFields(
+          resolveConfigFieldsForValues(
+            selectedProviderFields,
+            indexerDraft.configValues,
+          ),
+        ),
+      [indexerDraft.configValues, selectedProviderFields],
     );
   const [advancedConfigOpen, setAdvancedConfigOpen] = React.useState(false);
 

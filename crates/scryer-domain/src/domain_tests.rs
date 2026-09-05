@@ -846,3 +846,126 @@ fn seeding_domain_event_types_round_trip_and_match_their_payloads() {
         completed
     );
 }
+
+/// These mirror `provider-config-fields.test.ts` in the web client. The two
+/// evaluators have to agree: the form decides what to show and the host decides
+/// what to accept, and a disagreement leaves an operator staring at an error
+/// about a field they cannot see.
+mod config_field_conditions {
+    use crate::{
+        ConditionOp, ConfigFieldDef, FieldCondition, config_field_is_required,
+        config_field_is_visible,
+    };
+    use std::collections::HashMap;
+
+    fn values() -> HashMap<&'static str, &'static str> {
+        HashMap::from([
+            ("definition", "custom"),
+            ("cookie", "  "),
+            ("profile_id", "nzbgeek"),
+        ])
+    }
+
+    fn condition(key: &str, op: ConditionOp, values: &[&str]) -> FieldCondition {
+        FieldCondition {
+            key: key.to_string(),
+            op,
+            values: values.iter().map(|value| value.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn each_operator_matches_the_client() {
+        let values = values();
+        let holds = |key: &str, op: ConditionOp, expected: &[&str]| {
+            condition(key, op, expected).holds(values.get(key).copied())
+        };
+
+        assert!(holds("definition", ConditionOp::Eq, &["custom"]));
+        assert!(!holds("definition", ConditionOp::Eq, &["byo"]));
+        assert!(holds("definition", ConditionOp::Ne, &["byo"]));
+        assert!(holds(
+            "profile_id",
+            ConditionOp::In,
+            &["nzbgeek", "drunkenslug"]
+        ));
+        assert!(!holds("profile_id", ConditionOp::In, &["drunkenslug"]));
+        assert!(holds("profile_id", ConditionOp::NotIn, &["drunkenslug"]));
+        // whitespace-only reads as empty, matching the client's trim
+        assert!(!holds("cookie", ConditionOp::NonEmpty, &[]));
+        assert!(holds("definition", ConditionOp::NonEmpty, &[]));
+        // a field that was never filled in reads the same as one cleared by hand
+        assert!(!holds("never_set", ConditionOp::NonEmpty, &[]));
+        assert!(holds("never_set", ConditionOp::Eq, &[""]));
+    }
+
+    #[test]
+    fn a_hidden_field_is_never_required() {
+        let field = ConfigFieldDef {
+            key: "definition_yaml".to_string(),
+            required: true,
+            visible_when: Some(condition("definition", ConditionOp::Eq, &["custom"])),
+            ..Default::default()
+        };
+
+        let custom = |key: &str| {
+            if key == "definition" {
+                Some("custom")
+            } else {
+                None
+            }
+        };
+        assert!(config_field_is_visible(&field, custom));
+        assert!(config_field_is_required(&field, custom));
+
+        let bundled = |key: &str| {
+            if key == "definition" {
+                Some("aether")
+            } else {
+                None
+            }
+        };
+        assert!(!config_field_is_visible(&field, bundled));
+        assert!(!config_field_is_required(&field, bundled));
+    }
+
+    #[test]
+    fn required_when_raises_a_field_that_declared_it_optional() {
+        let field = ConfigFieldDef {
+            key: "api_key".to_string(),
+            required: false,
+            required_when: Some(condition("profile_id", ConditionOp::In, &["nzbgeek"])),
+            ..Default::default()
+        };
+
+        let keyed = |key: &str| {
+            if key == "profile_id" {
+                Some("nzbgeek")
+            } else {
+                None
+            }
+        };
+        assert!(config_field_is_required(&field, keyed));
+
+        let unkeyed = |key: &str| {
+            if key == "profile_id" {
+                Some("custom")
+            } else {
+                None
+            }
+        };
+        assert!(!config_field_is_required(&field, unkeyed));
+    }
+
+    #[test]
+    fn a_field_declaring_nothing_is_shown_and_keeps_its_own_requiredness() {
+        let field = ConfigFieldDef {
+            key: "base_url".to_string(),
+            required: true,
+            ..Default::default()
+        };
+        let none = |_: &str| None;
+        assert!(config_field_is_visible(&field, none));
+        assert!(config_field_is_required(&field, none));
+    }
+}
