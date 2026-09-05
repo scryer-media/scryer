@@ -7194,6 +7194,36 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
     }
 }
 
+/// An outage-class srrdb failure: a timeout, a transport error, a 429, or a
+/// 5xx. It is the only signal that makes a caller stop asking within one
+/// import; every other failure is an ordinary miss and answers `Ok(None)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SrrdbOutage;
+
+impl std::fmt::Display for SrrdbOutage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("srrdb lookup is unavailable")
+    }
+}
+
+impl std::error::Error for SrrdbOutage {}
+
+/// Recovers the original filename of an obfuscated extracted file.
+///
+/// The recovered name is a parsing input only; nothing here ever touches the
+/// filesystem.
+#[async_trait]
+pub trait SrrdbFilenameLookup: Send + Sync {
+    /// Ok(None) for every miss/ambiguity/failure; Err only for outage-class
+    /// failures the caller should stop retrying within this import (timeout,
+    /// transport, 429, 5xx).
+    async fn recover_filename(
+        &self,
+        crc32_hex: &str,
+        size_bytes: u64,
+    ) -> Result<Option<String>, SrrdbOutage>;
+}
+
 #[async_trait]
 pub trait NotificationChannelRepository: Send + Sync {
     async fn list_channels(&self) -> AppResult<Vec<scryer_domain::NotificationChannelConfig>>;

@@ -244,6 +244,24 @@ export function SettingsOverviewSection({
                 {t("settings.personalizedDiscoveryHelp")}
               </p>
             </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <Label>{t("settings.srrdbFilenameRecoveryLabel")}</Label>
+                <SettingsToggleSwitch
+                  checked={generalSettings.srrdbFilenameRecoveryEnabled}
+                  ariaLabel={t("settings.srrdbFilenameRecoveryLabel")}
+                  disabled={generalSaving}
+                  onChange={(nextValue) => {
+                    updateGeneralSettings({ srrdbFilenameRecoveryEnabled: nextValue });
+                    onGeneralSettingsCommit({ srrdbFilenameRecoveryEnabled: nextValue });
+                  }}
+                />
+              </div>
+              <p className="text-muted-foreground">
+                {t("settings.srrdbFilenameRecoveryHelp")}
+              </p>
+            </div>
           </>
         )}
       </div>

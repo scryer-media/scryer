@@ -684,6 +684,10 @@ const it: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Scoperta personalizzata",
   "settings.personalizedDiscoveryHelp":
     "Invia un riepilogo della tua libreria al gateway dei metadati in modo che Scoperta possa consigliare titoli in base a ciò che possiedi. Disattivala per limitare Scoperta ai feed pubblici.",
+  "settings.srrdbFilenameRecoveryLabel":
+    "Recupera i nomi file offuscati da srrdb.com",
+  "settings.srrdbFilenameRecoveryHelp":
+    "Quando un'importazione automatica da SABnzbd o NZBGet contiene file video con nomi offuscati, Scryer invia il checksum CRC-32 e la dimensione di ogni file a srrdb.com, un servizio di terze parti, per cercare il nome originale. Non viene inviato nient'altro sulla tua libreria o sul file. I file sul disco non vengono mai rinominati.",
   "discovery.personalizedDisabled":
     "La scoperta personalizzata è disattivata per questa istanza.",
   "settings.keepHistoryForever": "Conserva la cronologia per sempre",

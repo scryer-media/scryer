@@ -66,7 +66,7 @@ async fn import_series_download(
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
     source_root: &Path,
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
     started_at: chrono::DateTime<Utc>,
 ) -> AppResult<ImportResult> {
     let ImportPathSettings {
@@ -149,7 +149,7 @@ async fn import_series_download(
             expected_episode_ids.as_ref(),
             pack_plan
                 .as_ref()
-                .and_then(|plan| plan.disposition_for(source_video)),
+                .and_then(|plan| plan.disposition_for(source_video.path())),
             video_file_count,
             &mut blocklist_ledger,
         )
@@ -216,7 +216,7 @@ async fn import_series_download(
             Err(err) => {
                 tracing::warn!(
                     error = %err,
-                    file = %source_video.display(),
+                    file = %source_video.path().display(),
                     title = %title.name,
                     "failed to import episode file"
                 );
@@ -1375,7 +1375,7 @@ async fn import_single_episode_file(
     title_folder_path: &Path,
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
-    source_video: &Path,
+    source_video: &ImportVideoFile,
     quality_profile: &crate::QualityProfile,
     nfo_enabled: bool,
     expected_episode_ids: Option<&HashSet<String>>,
@@ -1383,11 +1383,17 @@ async fn import_single_episode_file(
     video_file_count: usize,
     blocklist_ledger: &mut DownloadBlocklistLedger,
 ) -> AppResult<EpisodeImportOutcome> {
+    // The physical path is what every transfer, artifact and cleanup call sees.
+    // `parse_video` differs from it only when srrdb recovered the original
+    // filename, and only identity parsing ever reads it.
+    let parse_video = source_video.parse_path();
+    let parse_video = parse_video.as_ref();
+    let source_video = source_video.path();
     // Sonarr's `OtherVideoFiles`: with more than one (non-sample) video in the
     // download, each file must identify itself.
     let other_video_files = video_file_count > 1;
     let parsed = build_augmented_episode_import_metadata_for_title(
-        source_video,
+        parse_video,
         release_evidence,
         title,
         other_video_files,
@@ -1463,7 +1469,7 @@ async fn import_single_episode_file(
             || episode.air_date.is_some()
             || episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
     };
-    let file_episode = file_episode_identity_for_title(source_video, title);
+    let file_episode = file_episode_identity_for_title(parse_video, title);
     let identity_episode = file_episode
         .as_ref()
         .filter(|episode| episode_is_resolvable(episode))
@@ -1490,7 +1496,7 @@ async fn import_single_episode_file(
                 app,
                 title,
                 release_evidence,
-                source_video,
+                parse_video,
                 other_video_files,
             )
             .await?
@@ -1514,7 +1520,7 @@ async fn import_single_episode_file(
         return Ok(EpisodeImportOutcome::Skipped {
             message: unresolved_episode_import_message(
                 &parsed,
-                source_video,
+                parse_video,
                 release_evidence,
                 video_file_count,
             ),
@@ -1576,7 +1582,7 @@ async fn import_single_episode_file(
         let obfuscated_message = if other_video_files {
             None
         } else {
-            ambiguous_obfuscated_episode_message(source_video, release_evidence, video_file_count)
+            ambiguous_obfuscated_episode_message(parse_video, release_evidence, video_file_count)
         };
         persist_file_import_artifact(
             app,
@@ -1697,7 +1703,7 @@ async fn import_single_episode_file(
                 );
                 blocklist_ledger.record_import_blocklist(
                     &release_evidence
-                        .release_title(Some(source_video))
+                        .release_title(Some(parse_video))
                         .unwrap_or_default(),
                     source_video,
                     &target_episode_ids,
@@ -1821,7 +1827,7 @@ async fn import_single_episode_file(
                 crate::import_decide::RejectionDisposition::Blocklist
             ) {
                 let source_title = release_evidence
-                    .release_title(Some(source_video))
+                    .release_title(Some(parse_video))
                     .unwrap_or_default();
                 blocklist_ledger.record_rejection(
                     &source_title,

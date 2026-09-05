@@ -1,4 +1,5 @@
 use crate::helpers::parse_usable_release_title;
+use crate::import::srrdb::{crc32_iso_hdlc_of_file, srrdb_lookup_applies};
 #[cfg(test)]
 use crate::import_title_resolution::normalize_imdb_id;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
@@ -27,6 +28,7 @@ use scryer_domain::{
     ImportSkipReason, ImportStatus, ImportType, MediaFacet, Title, TrackedDownloadState, User,
     is_video_file,
 };
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

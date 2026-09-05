@@ -663,6 +663,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // payload and create input: ENUM +1, public types +1.
     // Totals: query 149->150, mutation 219->220, OBJECT 381->387,
     // INPUT_OBJECT 194->198, ENUM 139->140, public types 726->737.
+    // The srrdb filename recovery switch is an additive field on the existing
+    // general settings payload and update input, so no census count moves.
     // The instance-wide feature switches add the actor-only `instanceFeatures`
     // query and its `InstanceFeaturesPayload`: query 150->151, OBJECT 387->388,
     // public types 737->738. The two switches themselves are additive fields on
@@ -5841,6 +5843,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(general_names.contains(&"historyRetentionDays"));
     assert!(general_names.contains(&"experimentalFeaturesEnabled"));
     assert!(general_names.contains(&"personalizedDiscoveryEnabled"));
+    assert!(general_names.contains(&"srrdbFilenameRecoveryEnabled"));
 
     let media_fields = body["data"]["mediaSettings"]["fields"]
         .as_array()
@@ -6047,4 +6050,5 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(general_input_names.contains(&"historyRetentionDays"));
     assert!(general_input_names.contains(&"experimentalFeaturesEnabled"));
     assert!(general_input_names.contains(&"personalizedDiscoveryEnabled"));
+    assert!(general_input_names.contains(&"srrdbFilenameRecoveryEnabled"));
 }

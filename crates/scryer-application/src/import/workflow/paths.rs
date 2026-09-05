@@ -661,13 +661,254 @@ fn parsed_usable_release_from_file_stem(path: &Path) -> Option<ParsedReleaseMeta
     parse_usable_release_title(stem.as_str())
 }
 
+/// A video file an import is about to process, plus the name parsing should
+/// read for it.
+///
+/// `physical` is the only path that ever reaches the filesystem: every fs,
+/// artifact, move and cleanup call takes [`ImportVideoFile::path`]. A
+/// `logical_name` is set only when srrdb recovered the original scene filename
+/// for an obfuscated member, and it exists purely so title matching, episode
+/// identity, pack planning and the movie fallback have something to parse. The
+/// file on disk is never renamed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportVideoFile {
+    pub(crate) physical: PathBuf,
+    pub(crate) logical_name: Option<String>,
+}
+
+impl ImportVideoFile {
+    /// A file with no recovered name: parsing reads the physical name, which is
+    /// what every import did before filename recovery existed.
+    pub(crate) fn physical(physical: PathBuf) -> Self {
+        Self {
+            physical,
+            logical_name: None,
+        }
+    }
+
+    /// The path on disk. Every filesystem, artifact, move and cleanup call uses
+    /// this and nothing else.
+    pub(crate) fn path(&self) -> &Path {
+        &self.physical
+    }
+
+    /// The file name parsing should read: the recovered original name when
+    /// there is one, else the physical file name.
+    pub(crate) fn parse_name(&self) -> Cow<'_, str> {
+        match self.logical_name.as_deref() {
+            Some(logical_name) => Cow::Borrowed(logical_name),
+            None => self.physical.file_name().map_or_else(
+                || Cow::Borrowed(""),
+                |name| match name.to_str() {
+                    Some(name) => Cow::Borrowed(name),
+                    None => Cow::Owned(name.to_string_lossy().into_owned()),
+                },
+            ),
+        }
+    }
+
+    /// A parse-only path: the physical parent carrying [`Self::parse_name`].
+    ///
+    /// This exists so the existing `&Path` stem and parent-folder helpers keep
+    /// working unchanged. It must never be handed to the filesystem; use
+    /// [`Self::path`] for that.
+    pub(crate) fn parse_path(&self) -> Cow<'_, Path> {
+        if self.logical_name.is_none() {
+            return Cow::Borrowed(self.physical.as_path());
+        }
+        let parse_name = self.parse_name();
+        let parse_name: &str = &parse_name;
+        Cow::Owned(match self.physical.parent() {
+            Some(parent) => parent.join(parse_name),
+            None => PathBuf::from(parse_name),
+        })
+    }
+}
+
+/// srrdb filename recovery for one `run_import` call.
+///
+/// Everything about it is per-import and in memory: the admin setting is read
+/// at most once, results are memoized by physical path so the titleless probe
+/// and the final file list never look the same file up twice, and the first
+/// outage-class failure trips the breaker for the rest of this import. A retry
+/// starts from scratch.
+#[derive(Default)]
+struct SrrdbFilenameRecovery {
+    /// `None` until the admin setting has been read.
+    enabled: Option<bool>,
+    /// Physical path to the recovered name, or `None` for a file that was
+    /// looked up and produced nothing. Absent means never looked up.
+    resolved: HashMap<PathBuf, Option<String>>,
+    /// Set by the first timeout, transport failure, 429 or 5xx.
+    tripped: bool,
+}
+
+impl SrrdbFilenameRecovery {
+    /// Whether this file has to be hashed and looked up.
+    ///
+    /// Two things must both hold. The file must carry no usable title signal
+    /// in its own stem: a member that already names itself needs no help, and
+    /// asking would be a third-party request for nothing. And the caller must
+    /// say this file needs a name *of its own* — `needs_own_name` — because a
+    /// well-named parent folder or release name identifies the title and
+    /// season but never says which member is which episode. The caller owns
+    /// that judgement; see the two `enrich` call sites in
+    /// `resolve_completed_import_target`.
+    fn is_candidate(path: &Path, needs_own_name: bool) -> bool {
+        if !needs_own_name {
+            return false;
+        }
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("strm"))
+        {
+            return false;
+        }
+        parsed_usable_release_from_file_stem(path).is_none()
+    }
+
+    /// Pair each physical video file with the name parsing should read.
+    ///
+    /// `needs_own_name` is the caller's judgement that these files have to
+    /// identify themselves individually; see [`Self::is_candidate`]. Names
+    /// already memoized by an earlier pass are reapplied either way, so a file
+    /// recovered by the titleless probe keeps its name here for free.
+    ///
+    /// Every failure of any kind yields a file with no recovered name, which is
+    /// byte for byte what this import would have done with the feature off.
+    async fn enrich(
+        &mut self,
+        app: &AppUseCase,
+        completed: &CompletedDownload,
+        video_files: Vec<PathBuf>,
+        needs_own_name: bool,
+    ) -> Vec<ImportVideoFile> {
+        let mut files: Vec<ImportVideoFile> = video_files
+            .into_iter()
+            .map(ImportVideoFile::physical)
+            .collect();
+
+        // The port is absent in every assembly that does not wire the
+        // production adapter, which is indistinguishable from the switch being
+        // off: no setting read, no hashing, no request.
+        let Some(lookup) = app
+            .services
+            .integrations
+            .srrdb_filename_lookup
+            .available()
+            .cloned()
+        else {
+            return files;
+        };
+
+        let enabled = match self.enabled {
+            Some(enabled) => enabled,
+            None => {
+                let enabled = app.srrdb_filename_recovery_enabled().await.unwrap_or(false);
+                self.enabled = Some(enabled);
+                enabled
+            }
+        };
+        if !srrdb_lookup_applies(enabled, &completed.client_type) {
+            return files;
+        }
+
+        for file in &mut files {
+            if let Some(cached) = self.resolved.get(&file.physical) {
+                file.logical_name = cached.clone();
+                continue;
+            }
+            if !Self::is_candidate(&file.physical, needs_own_name) {
+                continue;
+            }
+            if self.tripped {
+                tracing::debug!(
+                    file = %file.physical.display(),
+                    "srrdb filename recovery skipped: the lookup is unavailable for this import"
+                );
+                continue;
+            }
+
+            let hash_path = file.physical.clone();
+            let hashed = tokio::task::spawn_blocking(move || crc32_iso_hdlc_of_file(&hash_path))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result.map_err(|error| error.to_string()));
+            let (crc, size_bytes) = match hashed {
+                Ok(hashed) => hashed,
+                Err(error) => {
+                    tracing::debug!(
+                        file = %file.physical.display(),
+                        error = %error,
+                        "srrdb filename recovery skipped: could not checksum the file"
+                    );
+                    self.resolved.insert(file.physical.clone(), None);
+                    continue;
+                }
+            };
+            let crc32_hex = format!("{crc:08X}");
+
+            match lookup.recover_filename(&crc32_hex, size_bytes).await {
+                Err(_) => {
+                    self.tripped = true;
+                    tracing::debug!(
+                        file = %file.physical.display(),
+                        crc32_hex,
+                        "srrdb filename recovery unavailable; skipping the rest of this import"
+                    );
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        file = %file.physical.display(),
+                        crc32_hex,
+                        size_bytes,
+                        "srrdb had no unambiguous original filename for this file"
+                    );
+                    self.resolved.insert(file.physical.clone(), None);
+                }
+                Ok(Some(recovered)) => {
+                    tracing::info!(
+                        physical_name = %file.physical.display(),
+                        logical_name = %recovered,
+                        crc32_hex,
+                        size_bytes,
+                        "recovered the original filename for an obfuscated import file"
+                    );
+                    self.resolved
+                        .insert(file.physical.clone(), Some(recovered.clone()));
+                    file.logical_name = Some(recovered);
+                }
+            }
+        }
+
+        files
+    }
+}
+
+/// The largest file by on-disk size, which is the release claim when nothing
+/// else names the download.
+fn pick_largest_import_video_file(files: &[ImportVideoFile]) -> AppResult<ImportVideoFile> {
+    files
+        .iter()
+        .max_by_key(|file| {
+            std::fs::metadata(file.path())
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+        })
+        .cloned()
+        .ok_or_else(|| AppError::Repository("no files to pick from".to_string()))
+}
+
 fn title_evidence_candidates_from_video_files(
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
 ) -> Vec<ParsedReleaseMetadata> {
     let mut candidates = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for video_file in video_files {
+        let video_file = video_file.parse_path();
+        let video_file = video_file.as_ref();
         let candidate = parsed_usable_release_from_file_stem(video_file)
             .or_else(|| parsed_usable_release_from_parent_folder(video_file));
 

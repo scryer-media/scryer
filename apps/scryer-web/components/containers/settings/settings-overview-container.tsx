@@ -32,6 +32,7 @@ import type {
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   experimentalFeaturesEnabled: false,
   personalizedDiscoveryEnabled: true,
+  srrdbFilenameRecoveryEnabled: false,
   keepHistoryForever: false,
   historyRetentionDays: 180,
   imageCacheMaxSizeMb: 256,

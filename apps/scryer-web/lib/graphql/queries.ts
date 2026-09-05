@@ -2697,6 +2697,7 @@ export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
+    srrdbFilenameRecoveryEnabled
     keepHistoryForever
     historyRetentionDays
     imageCacheMaxSizeMb

@@ -1052,6 +1052,10 @@ const en: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "Personalized discovery",
   "settings.personalizedDiscoveryHelp":
     "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
+  "settings.srrdbFilenameRecoveryLabel":
+    "Recover obfuscated filenames from srrdb.com",
+  "settings.srrdbFilenameRecoveryHelp":
+    "When an automatic import from SABnzbd or NZBGet contains video files with obfuscated names, Scryer sends each file's CRC-32 checksum and size to srrdb.com, a third-party service, to look up the original filename. Nothing else about your library or the file is sent. Files on disk are never renamed.",
   "discovery.personalizedDisabled":
     "Personalized discovery is turned off for this instance.",
   "settings.keepHistoryForever": "Keep history forever",

@@ -669,6 +669,10 @@ const ko: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "개인화된 발견",
   "settings.personalizedDiscoveryHelp":
     "라이브러리 요약을 메타데이터 게이트웨이로 보내 보유한 작품을 기준으로 발견이 타이틀을 추천할 수 있게 합니다. 끄면 발견은 공개 피드만 사용합니다.",
+  "settings.srrdbFilenameRecoveryLabel":
+    "srrdb.com에서 난독화된 파일 이름 복구",
+  "settings.srrdbFilenameRecoveryHelp":
+    "SABnzbd 또는 NZBGet의 자동 가져오기에 난독화된 이름의 동영상 파일이 포함된 경우, Scryer는 각 파일의 CRC-32 체크섬과 크기를 제3자 서비스인 srrdb.com으로 보내 원래 파일 이름을 조회합니다. 라이브러리나 파일에 대한 다른 정보는 전송되지 않습니다. 디스크의 파일 이름은 절대 변경되지 않습니다.",
   "discovery.personalizedDisabled": "이 인스턴스에서는 개인화된 발견이 꺼져 있습니다.",
   "settings.keepHistoryForever": "기록을 영구히 보존",
   "settings.historyRetentionDaysHeader": "기록 보존 기간",

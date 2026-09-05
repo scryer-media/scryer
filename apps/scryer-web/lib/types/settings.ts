@@ -33,6 +33,7 @@ export type AcquisitionSettings = {
 export type GeneralSettings = {
   experimentalFeaturesEnabled: boolean;
   personalizedDiscoveryEnabled: boolean;
+  srrdbFilenameRecoveryEnabled: boolean;
   keepHistoryForever: boolean;
   historyRetentionDays: number;
   imageCacheMaxSizeMb: number;
@@ -48,6 +49,7 @@ export type GeneralSettingsUpdate = Partial<
     GeneralSettings,
     | "experimentalFeaturesEnabled"
     | "personalizedDiscoveryEnabled"
+    | "srrdbFilenameRecoveryEnabled"
     | "keepHistoryForever"
     | "historyRetentionDays"
     | "imageCacheMaxSizeMb"

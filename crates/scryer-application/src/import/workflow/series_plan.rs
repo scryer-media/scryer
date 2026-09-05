@@ -109,7 +109,7 @@ async fn build_episode_pack_import_plan(
     title: &scryer_domain::Title,
     release_evidence: &ReleaseEvidence,
     source_root: &Path,
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
     expected_episode_ids: Option<&HashSet<String>>,
 ) -> AppResult<Option<EpisodePackImportPlan>> {
     let Some(pack) = verified_episode_pack(release_evidence, title) else {
@@ -123,7 +123,11 @@ async fn build_episode_pack_import_plan(
         .await?;
 
     let mut drafts = Vec::with_capacity(video_files.len());
-    for source_path in video_files {
+    for video_file in video_files {
+        // Planning reads the recovered name when srrdb supplied one; the plan
+        // is still keyed by the physical path below.
+        let source_path = video_file.parse_path();
+        let source_path = source_path.as_ref();
         let draft = if pack.is_extras_release {
             PlannedMemberDraft::Hold {
                 episodes: Vec::new(),
@@ -172,9 +176,9 @@ async fn build_episode_pack_import_plan(
     hold_duplicate_pack_episode_mappings(&mut drafts);
 
     let mut plan = EpisodePackImportPlan::default();
-    for (source_path, draft) in video_files.iter().cloned().zip(drafts) {
+    for (video_file, draft) in video_files.iter().zip(drafts) {
         let disposition = finalize_pack_member_disposition(draft, &pack);
-        plan.members.insert(source_path, disposition);
+        plan.members.insert(video_file.physical.clone(), disposition);
     }
     Ok(Some(plan))
 }

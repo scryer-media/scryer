@@ -615,6 +615,11 @@ impl AppServicesBuilder {
         integrations.archive_extractor_plugin_provider,
         Arc<dyn ArchiveExtractorPluginProvider>
     );
+    app_services_builder_runtime_feature_setter!(
+        with_srrdb_filename_lookup,
+        integrations.srrdb_filename_lookup,
+        Arc<dyn crate::ports::SrrdbFilenameLookup>
+    );
     // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────
     app_services_builder_setter!(
         with_media_server_playback_probe,
