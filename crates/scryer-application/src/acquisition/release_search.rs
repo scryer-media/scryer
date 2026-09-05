@@ -3353,8 +3353,13 @@ mod tests {
         title.facet = MediaFacet::Anime;
         let (item, episode) = specials_wanted_item(&title, "0", "2");
 
-        let result =
-            build_search_queries(&title, &item, Some(&episode), &crate::FacetRegistry::new());
+        let result = build_search_queries(
+            &title,
+            &item,
+            Some(&episode),
+            &crate::FacetRegistry::new(),
+            None,
+        );
 
         assert_eq!(result.season, Some(0));
         assert_eq!(result.episode, Some(2));
@@ -3377,8 +3382,13 @@ mod tests {
         title.facet = MediaFacet::Anime;
         let (item, episode) = specials_wanted_item(&title, "2", "3");
 
-        let result =
-            build_search_queries(&title, &item, Some(&episode), &crate::FacetRegistry::new());
+        let result = build_search_queries(
+            &title,
+            &item,
+            Some(&episode),
+            &crate::FacetRegistry::new(),
+            None,
+        );
 
         assert_eq!(result.season, Some(2));
         assert_eq!(result.episode, Some(3));
