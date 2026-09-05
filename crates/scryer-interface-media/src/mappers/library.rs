@@ -263,7 +263,19 @@ fn from_credit(
     }
 }
 
-pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaRequestPayload {
+/// Project one media request.
+///
+/// `policy` carries the decision trace and the lease claim, which live in other
+/// tables and are therefore read by the caller in one batch rather than one
+/// query per row (see `AppUseCase::media_request_policy_facts`). Passing `None`
+/// projects the request with no lease and no decision — exactly what a request
+/// that was never evaluated looks like — so a call site that has no use for the
+/// policy detail pays nothing for it.
+pub fn from_media_request(
+    app: &AppUseCase,
+    request: MediaRequest,
+    policy: Option<&scryer_application::request_rules::MediaRequestPolicyFacts>,
+) -> MediaRequestPayload {
     let owner_id = request.id.to_string();
     let poster_url = app.media_image_url(
         request.poster_url.as_deref(),
@@ -288,6 +300,13 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
                 "w1280",
             )
         });
+    let policy_projection = super::request_rules::project_media_request_policy(&request, policy);
+    let metadata = super::request_rules::from_media_request_metadata(
+        &scryer_application::MediaRequestMetadataSnapshotExt::metadata_snapshot(&request),
+    );
+    let requested_lease_days = request.requested_lease_days;
+    let approved_lease_days = request.approved_lease_days;
+    let policy_tags = request.policy_tags.clone();
     let rating_summary = request.rating_summary;
     MediaRequestPayload {
         id: request.id.into(),
@@ -355,6 +374,14 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         created_by_user_id: request.created_by_user_id.into(),
         created_at: request.created_at,
         updated_at: request.updated_at,
+        requested_lease_days: requested_lease_days
+            .map(|days| i32::try_from(days).unwrap_or(i32::MAX)),
+        approved_lease_days: approved_lease_days
+            .map(|days| i32::try_from(days).unwrap_or(i32::MAX)),
+        lease: policy_projection.lease,
+        decision: policy_projection.decision,
+        policy_tags,
+        metadata,
     }
 }
 

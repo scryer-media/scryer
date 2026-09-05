@@ -39,8 +39,9 @@ use tracing::{debug, warn};
 
 use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch, MaintenanceWatchContext,
-    WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness, build_title_input, unknown_reason,
+    MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
+    MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness, build_title_input,
+    unknown_reason,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
 use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
@@ -182,6 +183,12 @@ pub struct MaintenanceEvaluationReport {
     pub candidates_superseded: i64,
     pub candidates_excluded: i64,
     pub candidates_held: i64,
+    /// Lease bookkeeping (spec 0003 FR-041). Both counts are produced before
+    /// the evaluation gate is even read, because a lease's clock is not an
+    /// opinion the operator armed: it runs whether or not any rule is allowed
+    /// to look at it.
+    pub leases_expired: u64,
+    pub leases_activated: u64,
 }
 
 /// Per-rule tallies, kept separate from the report so one rule's failure cannot
@@ -628,10 +635,20 @@ impl AppUseCase {
 
 impl AppUseCase {
     /// Job body for [`JobKey::MaintenanceRuleEvaluation`].
+    ///
+    /// Lease bookkeeping runs first and unconditionally. Expiring a lapsed
+    /// lease and starting a dormant one are not evaluation — they are the clock
+    /// the requester was promised — so they must not be hostage to the
+    /// instance's evaluation gate, which an operator turns off to stop *rules*
+    /// from deciding things.
     pub(crate) async fn run_maintenance_rule_evaluation_job(
         &self,
     ) -> AppResult<MaintenanceEvaluationReport> {
-        self.evaluate_maintenance_rules(None).await
+        let (leases_expired, leases_activated) = self.reconcile_lifecycle_claims(Utc::now()).await;
+        let mut report = self.evaluate_maintenance_rules(None).await?;
+        report.leases_expired = leases_expired;
+        report.leases_activated = leases_activated;
+        Ok(report)
     }
 
     /// One evaluation pass over every enabled rule, or over one named rule.
@@ -830,6 +847,22 @@ impl AppUseCase {
             let signals_by_title = self
                 .maintenance_watch_signals_for_titles(&watch_context, chunk)
                 .await?;
+            // A claim store that cannot be read poisons the claim facts for the
+            // whole chunk rather than failing the rule: the facts then read
+            // unknown, and any rule that touches one is held. Failing the pass
+            // instead would stop every *other* rule too, including the ones
+            // that never mention a lease.
+            let claims_by_title = match self.maintenance_claims_for_titles(chunk).await {
+                Ok(claims) => Some(claims),
+                Err(error) => {
+                    warn!(
+                        rule_set_id = rule_set.id.as_str(),
+                        error = %error,
+                        "could not read lifecycle claims; claim facts are unknown for this chunk"
+                    );
+                    None
+                }
+            };
             for title in chunk {
                 let files = files_by_title
                     .get(&title.id)
@@ -843,6 +876,13 @@ impl AppUseCase {
                     context: &watch_context,
                     signals: signals_by_title.get(&title.id).map(Vec::as_slice),
                 };
+                let claims = MaintenanceTitleClaims {
+                    claims: claims_by_title
+                        .as_ref()
+                        .and_then(|claims| claims.get(&title.id))
+                        .map(Vec::as_slice),
+                    store_readable: claims_by_title.is_some(),
+                };
                 if let Err(error) = self
                     .reconcile_maintenance_title(
                         detail,
@@ -851,6 +891,7 @@ impl AppUseCase {
                         files,
                         people,
                         watch,
+                        claims,
                         libraries,
                         &excluded,
                         evaluation_time,
@@ -946,6 +987,7 @@ impl AppUseCase {
         files: &[crate::types::TitleMediaFile],
         people: MaintenanceTitlePeople<'_>,
         watch: MaintenanceTitleWatch<'_>,
+        claims: MaintenanceTitleClaims<'_>,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         excluded: &HashSet<String>,
         evaluation_time: DateTime<Utc>,
@@ -1028,7 +1070,15 @@ impl AppUseCase {
                 id: title.library_id.clone(),
                 name: String::new(),
             });
-        let input = build_title_input(evaluation_time, title, &library, files, people, watch);
+        let input = build_title_input(
+            evaluation_time,
+            title,
+            &library,
+            files,
+            people,
+            watch,
+            claims,
+        );
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;
 
@@ -1216,6 +1266,36 @@ impl AppUseCase {
             .media_requests
             .requester_user_ids_by_title_ids(&title_ids)
             .await
+    }
+
+    /// One batched lifecycle-claim load per chunk, keyed by title.
+    ///
+    /// Two reads, merged: the live claims of every kind (which is what a keep
+    /// claim and a running lease look like) and the retention history (which is
+    /// what a *lapsed* lease looks like — the live read cannot see it, and
+    /// without it "expired" and "never had one" are the same answer). Merged
+    /// rather than handed over separately because the fact builder asks one
+    /// question of them — is anything holding this title, and if not, did
+    /// something used to.
+    pub(crate) async fn maintenance_claims_for_titles(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::LifecycleClaim>>> {
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let claims = &self.services.catalog.lifecycle_claims;
+        let mut by_title = claims.list_live_for_titles(&title_ids).await?;
+        for (title_id, history) in claims.list_retention_history_for_titles(&title_ids).await? {
+            let entry = by_title.entry(title_id).or_default();
+            for claim in history {
+                if !entry.iter().any(|stored| stored.id == claim.id) {
+                    entry.push(claim);
+                }
+            }
+        }
+        Ok(by_title)
     }
 
     /// The watch-signal gate and participant roster, read once per rule.

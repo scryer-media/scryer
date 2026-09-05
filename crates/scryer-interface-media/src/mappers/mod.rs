@@ -39,6 +39,7 @@ mod identity;
 mod library;
 mod location;
 mod maintenance_rules;
+mod request_rules;
 mod runtime;
 mod scalars;
 
@@ -49,6 +50,7 @@ pub use identity::*;
 pub use library::*;
 pub use location::*;
 pub use maintenance_rules::*;
+pub use request_rules::*;
 pub use runtime::*;
 pub use scalars::parse_iso_date;
 

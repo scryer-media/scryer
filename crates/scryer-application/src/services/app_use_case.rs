@@ -208,6 +208,12 @@ impl AppUseCase {
         }
         self.maybe_accelerate_discovery_sync_for_scan_completion(stored)
             .await;
+        // A request lease's clock starts at the title's first import (spec 0003
+        // FR-041). Hooked to the event rather than to the five import paths
+        // that append it, so a new import path inherits the behaviour instead
+        // of silently leaving leases dormant.
+        self.maybe_activate_lifecycle_claims_for_import(stored)
+            .await;
     }
 
     pub async fn append_domain_events(
@@ -268,6 +274,7 @@ impl AppUseCase {
         for event in &stored {
             self.maybe_accelerate_discovery_sync_for_scan_completion(event)
                 .await;
+            self.maybe_activate_lifecycle_claims_for_import(event).await;
         }
         Ok(stored)
     }

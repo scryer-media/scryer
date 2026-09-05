@@ -1,10 +1,14 @@
+use crate::policy::engine::{PolicyEngine, PolicyEvaluator, RuleHandle};
+use crate::policy::{PolicyFamily, PolicyRecord};
 use crate::runtime::{self, RuntimeLimits};
 use crate::validation;
-use regorus::{Engine, Value};
+use regorus::Value;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::warn;
+
+#[cfg(test)]
+use regorus::Engine;
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -299,6 +303,10 @@ pub fn strip_editor_source(rego_source: &str) -> String {
     }
 }
 
+/// Package prefix for user-authored release scoring policies. Stored source
+/// carries it and persisted score fingerprints depend on it, so it is frozen.
+pub(crate) const USER_PACKAGE_PREFIX: &str = "scryer.rules.user";
+
 const SCORE_ENTRY_WRAPPER_RULE_PREFIX: &str = "__scryer_eval_score_entry";
 
 fn score_entry_wrapper_rule_name(rule_id: &str) -> String {
@@ -328,6 +336,140 @@ pub(crate) fn score_entry_wrapper_policy_path(rule_id: &str) -> String {
     format!("internal/{rule_id}_score_entry_wrapper.rego")
 }
 
+// ── ReleaseFamily (the shared policy core, specialized) ─────────────────────
+
+/// The release-scoring policy family.
+///
+/// Release has no fact envelopes and no hold: every field of a release document
+/// is either present or absent, and absence is an answer. What it does have,
+/// and maintenance does not, is per-rule applicability (facets) and a managed
+/// origin whose scores are held to a contract at build and at evaluation.
+pub struct ReleaseFamily;
+
+/// Per-rule metadata the release family carries alongside each loaded policy.
+#[derive(Debug, Clone)]
+pub struct ReleaseRuleExtra {
+    /// Facets this rule applies to. Empty means every facet.
+    pub applied_facets: Vec<String>,
+    pub origin: PolicyOrigin,
+}
+
+impl PolicyRecord for UserPolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn rego_source(&self) -> &str {
+        &self.rego_source
+    }
+}
+
+impl PolicyFamily for ReleaseFamily {
+    const NAME: &'static str = "release";
+    const USER_PACKAGE_PREFIX: &'static str = USER_PACKAGE_PREFIX;
+    /// The score-entry wrapper is a completing rule inside the user's own
+    /// package rather than a separate module, so the two prefixes coincide.
+    const WRAPPER_PACKAGE_PREFIX: &'static str = USER_PACKAGE_PREFIX;
+    /// Release scoring has always handed Regorus whatever the input document
+    /// serialized to, with no size check — it predates this core. Turning the
+    /// bound on would make a large-enough document start failing where it used
+    /// to score, which is a behaviour change and therefore a deliberate
+    /// decision for someone to make on its own merits, not a side effect of a
+    /// refactor. Until then the release family stays byte-identical to what it
+    /// was: unbounded. Every other family bounds its input.
+    const BOUND_INPUT: bool = false;
+
+    type Policy = UserPolicy;
+    type Input = UserRuleInput;
+    type Decision = Vec<UserRuleEntry>;
+    type RuleExtra = ReleaseRuleExtra;
+    type EvalContext = str;
+    type EvalError = RuleEvalError;
+
+    fn limits() -> RuntimeLimits {
+        RuntimeLimits::release_defaults()
+    }
+
+    fn user_policy_path(rule_id: &str) -> String {
+        format!("user/{rule_id}.rego")
+    }
+
+    fn wrapper_policy_path(rule_id: &str) -> String {
+        score_entry_wrapper_policy_path(rule_id)
+    }
+
+    fn wrapper_source(rule_id: &str) -> String {
+        score_entry_wrapper_source(rule_id)
+    }
+
+    fn wrapper_rule_path(rule_id: &str) -> String {
+        score_entry_wrapper_rule_path(rule_id)
+    }
+
+    fn rule_extra(policy: &Self::Policy) -> Self::RuleExtra {
+        ReleaseRuleExtra {
+            applied_facets: policy.applied_facets.clone(),
+            origin: policy.origin,
+        }
+    }
+
+    /// A managed pack is checked before it is ever added to the engine: a pack
+    /// that does not validate must not load at all.
+    fn prepare_policy(policy: &Self::Policy) -> Result<(), RulesError> {
+        if policy.origin == PolicyOrigin::System {
+            let validation = validation::validate_managed_rule(&policy.rego_source, &policy.id)?;
+            if !validation.valid {
+                return Err(RulesError::InvalidOutput(validation.errors.join("; ")));
+            }
+        }
+        Ok(())
+    }
+
+    /// Release never holds: it has no observation envelopes to hold on.
+    fn held_decision(_reason_codes: Vec<String>) -> Self::Decision {
+        Vec::new()
+    }
+
+    /// Rules that are scoped to other facets are skipped entirely.
+    fn applies(extra: &Self::RuleExtra, facet: &Self::EvalContext) -> bool {
+        extra.applied_facets.is_empty() || extra.applied_facets.iter().any(|f| f == facet)
+    }
+
+    fn decode(
+        value: &Value,
+        rule_id: &str,
+        rule_name: &str,
+        extra: &Self::RuleExtra,
+    ) -> Result<Self::Decision, String> {
+        Ok(UserRulesEvaluator::extract_entries(
+            value,
+            rule_id,
+            rule_name,
+            extra.origin,
+        ))
+    }
+
+    fn post_decode(decision: &Self::Decision, extra: &Self::RuleExtra) -> Result<(), String> {
+        if extra.origin == PolicyOrigin::System {
+            validate_managed_entries(decision)?;
+        }
+        Ok(())
+    }
+
+    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+        RuleEvalError {
+            rule_set_id: rule.id.clone(),
+            rule_set_name: rule.name.clone(),
+            origin: rule.extra.origin,
+            message,
+        }
+    }
+}
+
 // ── UserRulesEngine (thread-safe factory) ───────────────────────────────────
 
 /// Pre-compiled Regorus engine holding all active user rules.
@@ -338,73 +480,9 @@ pub(crate) fn score_entry_wrapper_policy_path(rule_id: &str) -> String {
 ///
 /// `Engine` is `Send + Sync`, so the `Arc` wrapper is safe for sharing across
 /// async tasks.
-#[derive(Clone)]
-pub struct UserRulesEngine {
-    template: Arc<Engine>,
-    /// (rule_id, rule_name, applied_facets, origin) tuples in policy order.
-    rules: Vec<(String, String, Vec<String>, PolicyOrigin)>,
-}
+pub type UserRulesEngine = PolicyEngine<ReleaseFamily>;
 
 impl UserRulesEngine {
-    /// Build an engine from a set of user-authored policies.
-    /// Returns an empty engine if `policies` is empty.
-    pub fn build(policies: &[UserPolicy]) -> Result<Self, RulesError> {
-        let mut engine = runtime::configured_engine(&RuntimeLimits::release_defaults());
-
-        let mut rules = Vec::new();
-
-        for policy in policies {
-            if policy.origin == PolicyOrigin::System {
-                let validation =
-                    validation::validate_managed_rule(&policy.rego_source, &policy.id)?;
-                if !validation.valid {
-                    return Err(RulesError::InvalidOutput(validation.errors.join("; ")));
-                }
-            }
-            let path = format!("user/{}.rego", policy.id);
-            engine
-                .add_policy(path, policy.rego_source.clone())
-                .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            engine
-                .add_policy(
-                    score_entry_wrapper_policy_path(&policy.id),
-                    score_entry_wrapper_source(&policy.id),
-                )
-                .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            rules.push((
-                policy.id.clone(),
-                policy.name.clone(),
-                policy.applied_facets.clone(),
-                policy.origin,
-            ));
-        }
-
-        Ok(Self {
-            template: Arc::new(engine),
-            rules,
-        })
-    }
-
-    /// Build an empty engine (no user rules).
-    pub fn empty() -> Self {
-        Self {
-            template: Arc::new(runtime::configured_engine(
-                &RuntimeLimits::release_defaults(),
-            )),
-            rules: Vec::new(),
-        }
-    }
-
-    /// True when no user rules are loaded. Callers should skip evaluation entirely.
-    pub fn is_empty(&self) -> bool {
-        self.rules.is_empty()
-    }
-
-    /// Number of active user rules.
-    pub fn rule_count(&self) -> usize {
-        self.rules.len()
-    }
-
     /// A stable description of which rules are loaded, in policy order.
     ///
     /// Scores produced under one rule set must not be compared against scores
@@ -413,19 +491,18 @@ impl UserRulesEngine {
     /// changing a rule's expression without changing its identity is covered by
     /// the caller's own algorithm version.
     pub fn rule_identity(&self) -> String {
-        self.rules
+        self.rules()
             .iter()
-            .map(|(id, _, facets, origin)| format!("{id}:{origin:?}:{}", facets.join("+")))
+            .map(|rule| {
+                let origin = rule.extra.origin;
+                format!(
+                    "{}:{origin:?}:{}",
+                    rule.id,
+                    rule.extra.applied_facets.join("+")
+                )
+            })
             .collect::<Vec<_>>()
             .join("|")
-    }
-
-    /// Create an evaluator for a single search batch.
-    pub fn evaluator(&self) -> UserRulesEvaluator {
-        UserRulesEvaluator {
-            engine: (*self.template).clone(),
-            rules: self.rules.clone(),
-        }
     }
 }
 
@@ -435,10 +512,7 @@ impl UserRulesEngine {
 ///
 /// Create one per `search_and_score_releases` call, reuse across all releases
 /// in the batch.
-pub struct UserRulesEvaluator {
-    engine: Engine,
-    rules: Vec<(String, String, Vec<String>, PolicyOrigin)>,
-}
+pub type UserRulesEvaluator = PolicyEvaluator<ReleaseFamily>;
 
 impl UserRulesEvaluator {
     /// Evaluate all user rules against one release candidate.
@@ -454,61 +528,15 @@ impl UserRulesEvaluator {
         input: &UserRuleInput,
         facet: &str,
     ) -> Result<EvalResult, RulesError> {
-        let mut result = EvalResult {
-            entries: Vec::new(),
-            errors: Vec::new(),
-        };
-
-        if self.rules.is_empty() {
-            return Ok(result);
-        }
-
-        let input_value = serde_json::to_value(input)?;
-        self.engine.set_input(input_value.into());
-
-        for (rule_id, rule_name, applied_facets, origin) in &self.rules {
-            // Skip rules that are scoped to other facets.
-            if !applied_facets.is_empty() && !applied_facets.iter().any(|f| f == facet) {
-                continue;
-            }
-
-            match self
-                .engine
-                .eval_rule(score_entry_wrapper_rule_path(rule_id))
-            {
-                Ok(value) => {
-                    let entries = Self::extract_entries(&value, rule_id, rule_name, *origin);
-                    if *origin == PolicyOrigin::System
-                        && let Err(message) = validate_managed_entries(&entries)
-                    {
-                        warn!(rule_id = rule_id.as_str(), %message, "managed rule evaluation rejected");
-                        result.errors.push(RuleEvalError {
-                            rule_set_id: rule_id.clone(),
-                            rule_set_name: rule_name.clone(),
-                            origin: *origin,
-                            message,
-                        });
-                    } else {
-                        result.entries.extend(entries);
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        rule_id = rule_id.as_str(),
-                        error = %e,
-                        "user rule evaluation failed, skipping"
-                    );
-                    result.errors.push(RuleEvalError {
-                        rule_set_id: rule_id.clone(),
-                        rule_set_name: rule_name.clone(),
-                        origin: *origin,
-                        message: e.to_string(),
-                    });
-                }
-            }
-        }
-
-        Ok(result)
+        let outcome = self.evaluate_policies(input, facet)?;
+        Ok(EvalResult {
+            entries: outcome
+                .records
+                .into_iter()
+                .flat_map(|record| record.decision)
+                .collect(),
+            errors: outcome.errors,
+        })
     }
 
     /// Extract score_entry map from the Rego evaluation result.

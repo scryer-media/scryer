@@ -21,15 +21,28 @@
 //! have to be literal and why `input` cannot be imported.
 
 use crate::RulesError;
-use crate::runtime::{self, RuntimeLimits};
+use crate::policy::decode::decode_reasons;
+use crate::policy::engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
+use crate::policy::observation::serialize_fact_namespaces;
+use crate::policy::wrapper::{WrapperField, object_wrapper_source};
+use crate::policy::{PolicyFamily, PolicyRecord};
+use crate::runtime::RuntimeLimits;
 use crate::validation;
 use chrono::{DateTime, Utc};
-use regorus::{Engine, Value};
+use regorus::Value;
 use serde::Serialize;
 use serde::ser::{SerializeStruct, Serializer};
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use tracing::warn;
+use std::collections::BTreeSet;
+
+#[cfg(test)]
+use crate::policy::decode::{MAX_REASON_CODE_LEN, MAX_REASON_CODES};
+#[cfg(test)]
+use crate::runtime;
+
+/// Three-valued availability envelope wrapping every maintenance fact. Owned by
+/// the shared policy core; re-exported here because maintenance facts are what
+/// it was written for and what most callers reach for it through.
+pub use crate::policy::observation::Observation;
 
 // ── Contract constants ──────────────────────────────────────────────────────
 
@@ -42,11 +55,6 @@ use tracing::warn;
 /// that need to tell those two apart.
 pub const MAINTENANCE_INPUT_SCHEMA_VERSION: u32 = 2;
 
-/// Status string an [`Observation`] serializes when Scryer could not find out.
-const UNKNOWN_STATUS: &str = "unknown";
-/// Status string an [`Observation`] serializes when it carries a value.
-const KNOWN_STATUS: &str = "known";
-
 /// Package prefix for user-authored maintenance matchers.
 pub(crate) const USER_PACKAGE_PREFIX: &str = "scryer.maintenance.user";
 
@@ -55,94 +63,10 @@ pub(crate) const USER_PACKAGE_PREFIX: &str = "scryer.maintenance.user";
 /// it inside that package would make the module self-referential.
 const WRAPPER_PACKAGE_PREFIX: &str = "scryer.maintenance.wrapper";
 
-/// Bounds on the reason codes a rule may emit. Reason codes are persisted on
-/// candidates and rendered in the UI, so an unbounded list is a storage and
-/// display hazard rather than a useful signal.
-const MAX_REASON_CODES: usize = 32;
-const MAX_REASON_CODE_LEN: usize = 120;
-
-// ── Observation envelope ────────────────────────────────────────────────────
-
-/// Three-valued availability envelope wrapping every maintenance fact.
-///
-/// `Absent` means the source completed and confirmed there is no value.
-/// `Unknown` means Scryer cannot know — the data is stale, unmapped,
-/// unsupported, forbidden, or the lookup failed. An unknown fact is never
-/// coerced to `false`, `0`, or `""`; rules that need certainty must test
-/// `status` explicitly.
-///
-/// `Absent` may also carry a `reason`, using the same stable code vocabulary as
-/// `Unknown`. It answers a different question — *why is there no value*, not
-/// *why could Scryer not look* — and is optional, so an absence with nothing
-/// useful to say still serializes without the field.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum Observation<T: Serialize> {
-    Known {
-        value: T,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        observed_at: Option<String>,
-    },
-    Absent {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        observed_at: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
-    },
-    Unknown {
-        reason: String,
-    },
-}
-
-impl<T: Serialize> Observation<T> {
-    /// A value Scryer observed, with no recorded observation time.
-    pub fn known(value: T) -> Self {
-        Self::Known {
-            value,
-            observed_at: None,
-        }
-    }
-
-    /// A value Scryer observed at a specific RFC3339 timestamp.
-    pub fn known_at(value: T, observed_at: impl Into<String>) -> Self {
-        Self::Known {
-            value,
-            observed_at: Some(observed_at.into()),
-        }
-    }
-
-    /// Confirmed absence: the source answered, and there is no value.
-    pub fn absent() -> Self {
-        Self::Absent {
-            observed_at: None,
-            reason: None,
-        }
-    }
-
-    /// Confirmed absence, with the time the source answered.
-    pub fn absent_at(observed_at: impl Into<String>) -> Self {
-        Self::Absent {
-            observed_at: Some(observed_at.into()),
-            reason: None,
-        }
-    }
-
-    /// Confirmed absence, carrying the stable machine code that explains why
-    /// there is no value. Still an absence: the source answered.
-    pub fn absent_because(reason: impl Into<String>) -> Self {
-        Self::Absent {
-            observed_at: None,
-            reason: Some(reason.into()),
-        }
-    }
-
-    /// Scryer cannot know the answer. `reason` is a stable machine code.
-    pub fn unknown(reason: impl Into<String>) -> Self {
-        Self::Unknown {
-            reason: reason.into(),
-        }
-    }
-}
+/// The head an author writes to hold a subject themselves. Maintenance says
+/// `unknown if { … }`; the name is a per-family parameter of the policy core,
+/// and the request family says `manual if { … }` instead.
+const HOLD_RULE_NAME: &str = "unknown";
 
 // ── Input document ──────────────────────────────────────────────────────────
 
@@ -167,53 +91,10 @@ pub struct MaintenanceInput {
     pub facts: MaintenanceFactsDoc,
 }
 
-/// One serialized fact snapshot: the envelope map and the bare map derived
-/// from it.
-pub(crate) struct SerializedFacts {
-    /// `input.observations` — every fact, envelope and all.
-    pub(crate) observations: serde_json::Map<String, serde_json::Value>,
-    /// `input.facts` — known facts only, unwrapped. An absent or unknown fact
-    /// is a missing key, so `not input.facts.added_by_user_id` matches both a
-    /// system-added title and one Scryer could not resolve; the engine deals
-    /// with the second case before the rule ever runs.
-    pub(crate) facts: serde_json::Map<String, serde_json::Value>,
-}
-
-impl MaintenanceFactsDoc {
-    /// Serialize the snapshot into both namespaces.
-    pub(crate) fn serialize_namespaces(&self) -> Result<SerializedFacts, serde_json::Error> {
-        let observations = match serde_json::to_value(self)? {
-            serde_json::Value::Object(map) => map,
-            other => {
-                return Err(serde::ser::Error::custom(format!(
-                    "fact snapshot must serialize to an object, got {other}"
-                )));
-            }
-        };
-        let facts = observations
-            .iter()
-            .filter_map(|(name, envelope)| {
-                if envelope.get("status").and_then(serde_json::Value::as_str) != Some(KNOWN_STATUS)
-                {
-                    return None;
-                }
-                let value = envelope.get("value")?;
-                Some((name.clone(), value.clone()))
-            })
-            .collect();
-        Ok(SerializedFacts {
-            observations,
-            facts,
-        })
-    }
-}
-
 impl Serialize for MaintenanceInput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let namespaces = self
-            .facts
-            .serialize_namespaces()
-            .map_err(serde::ser::Error::custom)?;
+        let namespaces =
+            serialize_fact_namespaces(&self.facts).map_err(serde::ser::Error::custom)?;
         let mut state = serializer.serialize_struct("MaintenanceInput", 6)?;
         state.serialize_field("schema_version", &self.schema_version)?;
         state.serialize_field("evaluation_time", &self.evaluation_time)?;
@@ -293,6 +174,20 @@ pub struct MaintenanceFactsDoc {
     pub last_watched_at: Observation<String>,
     pub watched_by_any_requester: Observation<bool>,
     pub watched_by_all_requesters: Observation<bool>,
+    /// Lifecycle claims (spec 0003 FR-041..FR-044). A claim is what a request
+    /// approval leaves behind on the title, and these four say whether one
+    /// still holds it. Every one of them is unknown when the claim store could
+    /// not be read for the pass: a rule that deletes on "the lease expired"
+    /// must be held rather than told there is no lease.
+    ///
+    /// `request_lease_state` is one of `none`, `dormant`, `active`, `expired`,
+    /// aggregated over the title's retention claims; expiry is derived against
+    /// the evaluation clock, so a lease whose window elapsed reads as expired
+    /// before the sweep that flips the row has run.
+    pub keep_claim_active: Observation<bool>,
+    pub request_lease_state: Observation<String>,
+    pub request_lease_expires_at: Observation<String>,
+    pub active_retention_claims: Observation<i64>,
 }
 
 /// Facts that name, or are computed from, identifiable people.
@@ -346,13 +241,7 @@ pub struct MaintenanceDecision {
 
 /// One rule's decision, attributed to the exact policy revision that produced
 /// it via `policy_content_hash`.
-#[derive(Debug, Clone)]
-pub struct MaintenanceEvalRecord {
-    pub rule_set_id: String,
-    pub rule_set_name: String,
-    pub policy_content_hash: String,
-    pub decision: MaintenanceDecision,
-}
+pub type MaintenanceEvalRecord = EvalRecord<MaintenanceDecision>;
 
 /// A per-rule failure. A rule that errors produces no record at all, so it can
 /// never advance a candidate.
@@ -363,18 +252,18 @@ pub struct MaintenanceEvalError {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct MaintenanceEvalResult {
-    pub records: Vec<MaintenanceEvalRecord>,
-    pub errors: Vec<MaintenanceEvalError>,
-}
+pub type MaintenanceEvalResult = EvalOutcome<MaintenanceDecision, MaintenanceEvalError>;
 
 // ── Package rewriting and wrapper generation ────────────────────────────────
 
 /// Rewrite (or insert) the package declaration so stored maintenance source
 /// always carries the maintenance prefix plus the system-assigned rule ID.
 pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
-    runtime::rewrite_package_declaration_with_prefix(rego_source, USER_PACKAGE_PREFIX, rule_id)
+    crate::runtime::rewrite_package_declaration_with_prefix(
+        rego_source,
+        USER_PACKAGE_PREFIX,
+        rule_id,
+    )
 }
 
 /// Source for the generated evaluation entry point.
@@ -385,14 +274,16 @@ pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
 /// A `match` that is defined but not boolean survives to the host, which
 /// rejects it rather than coercing it.
 pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
-    format!(
-        "package {WRAPPER_PACKAGE_PREFIX}.{rule_id}\n\
-         import rego.v1\n\n\
-         decision := {{\n\
-         \t\"matched\": object.get(data.{USER_PACKAGE_PREFIX}.{rule_id}, \"match\", false),\n\
-         \t\"unknown\": object.get(data.{USER_PACKAGE_PREFIX}.{rule_id}, \"unknown\", false),\n\
-         \t\"reasons\": object.get(data.{USER_PACKAGE_PREFIX}.{rule_id}, \"reasons\", []),\n\
-         }}\n"
+    object_wrapper_source(
+        WRAPPER_PACKAGE_PREFIX,
+        USER_PACKAGE_PREFIX,
+        rule_id,
+        "decision",
+        &[
+            WrapperField::new("matched", "match", "false"),
+            WrapperField::new("unknown", HOLD_RULE_NAME, "false"),
+            WrapperField::new("reasons", "reasons", "[]"),
+        ],
     )
 }
 
@@ -418,109 +309,109 @@ pub struct MaintenancePolicy {
     pub rego_source: String,
 }
 
-#[derive(Debug, Clone)]
-struct MaintenanceRuleHandle {
-    id: String,
-    name: String,
-    content_hash: String,
-    /// Facts this matcher reads through `input.facts.*`, resolved statically at
-    /// build time. Empty for a matcher that reads only subject, library, or
-    /// `input.observations.*`.
-    referenced_facts: BTreeSet<String>,
+/// The maintenance policy family: what the shared core needs to know to run
+/// maintenance matchers, and nothing else.
+pub struct MaintenanceFamily;
+
+impl PolicyRecord for MaintenancePolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn rego_source(&self) -> &str {
+        &self.rego_source
+    }
+}
+
+impl PolicyFamily for MaintenanceFamily {
+    const NAME: &'static str = "maintenance";
+    const USER_PACKAGE_PREFIX: &'static str = USER_PACKAGE_PREFIX;
+    const WRAPPER_PACKAGE_PREFIX: &'static str = WRAPPER_PACKAGE_PREFIX;
+    /// Host-derived unknownness is the whole point of the maintenance family:
+    /// a matcher that reads a fact Scryer could not observe is held before it
+    /// is consulted.
+    const TRACKS_REFERENCED_FACTS: bool = true;
+
+    type Policy = MaintenancePolicy;
+    type Input = MaintenanceInput;
+    type Decision = MaintenanceDecision;
+    type RuleExtra = ();
+    type EvalContext = ();
+    type EvalError = MaintenanceEvalError;
+
+    fn limits() -> RuntimeLimits {
+        RuntimeLimits::maintenance_defaults()
+    }
+
+    fn user_policy_path(rule_id: &str) -> String {
+        user_policy_path(rule_id)
+    }
+
+    fn wrapper_policy_path(rule_id: &str) -> String {
+        decision_wrapper_policy_path(rule_id)
+    }
+
+    fn wrapper_source(rule_id: &str) -> String {
+        decision_wrapper_source(rule_id)
+    }
+
+    fn wrapper_rule_path(rule_id: &str) -> String {
+        decision_wrapper_rule_path(rule_id)
+    }
+
+    fn rule_extra(_policy: &Self::Policy) -> Self::RuleExtra {}
+
+    /// A matcher whose fact dependencies cannot be read off its source must not
+    /// load at all: the host could not then tell whether it is deciding on
+    /// evidence Scryer actually has.
+    fn referenced_facts(
+        policy: &Self::Policy,
+        policy_path: &str,
+    ) -> Result<BTreeSet<String>, String> {
+        validation::maintenance_fact_references(&policy.rego_source, policy_path)
+    }
+
+    fn hold_rule_name() -> Option<&'static str> {
+        Some(HOLD_RULE_NAME)
+    }
+
+    fn held_decision(reason_codes: Vec<String>) -> Self::Decision {
+        MaintenanceDecision {
+            outcome: MaintenanceOutcome::Unknown,
+            reason_codes,
+        }
+    }
+
+    fn decode(
+        value: &Value,
+        _rule_id: &str,
+        _rule_name: &str,
+        _extra: &Self::RuleExtra,
+    ) -> Result<Self::Decision, String> {
+        decode_decision(value)
+    }
+
+    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+        MaintenanceEvalError {
+            rule_set_id: rule.id.clone(),
+            rule_set_name: rule.name.clone(),
+            message,
+        }
+    }
 }
 
 /// Pre-compiled engine holding every active maintenance matcher.
 ///
 /// Built once per rule-set revision and shared; evaluators are cheap clones
 /// created per evaluation run.
-#[derive(Clone)]
-pub struct MaintenanceRulesEngine {
-    template: Arc<Engine>,
-    rules: Vec<MaintenanceRuleHandle>,
-    limits: RuntimeLimits,
-}
-
-impl MaintenanceRulesEngine {
-    /// Build an engine under the standard maintenance limits.
-    pub fn build(policies: &[MaintenancePolicy]) -> Result<Self, RulesError> {
-        Self::build_with_limits(policies, RuntimeLimits::maintenance_defaults())
-    }
-
-    /// Build an engine under caller-supplied limits. Exists so tests can prove
-    /// the execution budget is enforced without waiting out the real one.
-    pub fn build_with_limits(
-        policies: &[MaintenancePolicy],
-        limits: RuntimeLimits,
-    ) -> Result<Self, RulesError> {
-        let mut engine = runtime::configured_engine(&limits);
-        let mut rules = Vec::with_capacity(policies.len());
-
-        for policy in policies {
-            let policy_path = user_policy_path(&policy.id);
-            engine
-                .add_policy(policy_path.clone(), policy.rego_source.clone())
-                .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            engine
-                .add_policy(
-                    decision_wrapper_policy_path(&policy.id),
-                    decision_wrapper_source(&policy.id),
-                )
-                .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            // A matcher whose fact dependencies cannot be read off its source
-            // must not load at all: the host could not then tell whether it is
-            // deciding on evidence Scryer actually has.
-            let referenced_facts =
-                validation::maintenance_fact_references(&policy.rego_source, &policy_path)
-                    .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
-            rules.push(MaintenanceRuleHandle {
-                id: policy.id.clone(),
-                name: policy.name.clone(),
-                content_hash: runtime::content_hash(&policy.rego_source),
-                referenced_facts,
-            });
-        }
-
-        Ok(Self {
-            template: Arc::new(engine),
-            rules,
-            limits,
-        })
-    }
-
-    pub fn empty() -> Self {
-        let limits = RuntimeLimits::maintenance_defaults();
-        Self {
-            template: Arc::new(runtime::configured_engine(&limits)),
-            rules: Vec::new(),
-            limits,
-        }
-    }
-
-    /// True when no matchers are loaded. Callers should skip evaluation.
-    pub fn is_empty(&self) -> bool {
-        self.rules.is_empty()
-    }
-
-    pub fn rule_count(&self) -> usize {
-        self.rules.len()
-    }
-
-    /// Create an evaluator for a single evaluation run.
-    pub fn evaluator(&self) -> MaintenanceRulesEvaluator {
-        MaintenanceRulesEvaluator {
-            engine: (*self.template).clone(),
-            rules: self.rules.clone(),
-            limits: self.limits,
-        }
-    }
-}
+pub type MaintenanceRulesEngine = PolicyEngine<MaintenanceFamily>;
 
 /// Evaluates every loaded matcher against one subject at a time.
-pub struct MaintenanceRulesEvaluator {
-    engine: Engine,
-    rules: Vec<MaintenanceRuleHandle>,
-    limits: RuntimeLimits,
-}
+pub type MaintenanceRulesEvaluator = PolicyEvaluator<MaintenanceFamily>;
 
 impl MaintenanceRulesEvaluator {
     /// Evaluate every loaded matcher against one subject.
@@ -547,119 +438,8 @@ impl MaintenanceRulesEvaluator {
         &mut self,
         input: &MaintenanceInput,
     ) -> Result<MaintenanceEvalResult, RulesError> {
-        let mut result = MaintenanceEvalResult {
-            records: Vec::new(),
-            errors: Vec::new(),
-        };
-
-        if self.rules.is_empty() {
-            return Ok(result);
-        }
-
-        let document = serde_json::to_value(input).map_err(RulesError::Serialization)?;
-        let unobservable = unobservable_facts(&document);
-        let input_value = runtime::bounded_input_value(&document, &self.limits)?;
-        self.engine.set_input(input_value);
-
-        for rule in &self.rules {
-            let held_by = held_reason_codes(&rule.referenced_facts, &unobservable);
-            if !held_by.is_empty() {
-                result.records.push(MaintenanceEvalRecord {
-                    rule_set_id: rule.id.clone(),
-                    rule_set_name: rule.name.clone(),
-                    policy_content_hash: rule.content_hash.clone(),
-                    decision: MaintenanceDecision {
-                        outcome: MaintenanceOutcome::Unknown,
-                        reason_codes: held_by,
-                    },
-                });
-                continue;
-            }
-
-            match self.engine.eval_rule(decision_wrapper_rule_path(&rule.id)) {
-                Ok(value) => match decode_decision(&value) {
-                    Ok(decision) => result.records.push(MaintenanceEvalRecord {
-                        rule_set_id: rule.id.clone(),
-                        rule_set_name: rule.name.clone(),
-                        policy_content_hash: rule.content_hash.clone(),
-                        decision,
-                    }),
-                    Err(message) => {
-                        warn!(
-                            rule_id = rule.id.as_str(),
-                            %message,
-                            "maintenance rule produced a malformed decision"
-                        );
-                        result.errors.push(MaintenanceEvalError {
-                            rule_set_id: rule.id.clone(),
-                            rule_set_name: rule.name.clone(),
-                            message,
-                        });
-                    }
-                },
-                Err(e) => {
-                    warn!(
-                        rule_id = rule.id.as_str(),
-                        error = %e,
-                        "maintenance rule evaluation failed, skipping"
-                    );
-                    result.errors.push(MaintenanceEvalError {
-                        rule_set_id: rule.id.clone(),
-                        rule_set_name: rule.name.clone(),
-                        message: e.to_string(),
-                    });
-                }
-            }
-        }
-
-        Ok(result)
+        self.evaluate_policies(input, &())
     }
-}
-
-// ── Host-derived unknownness ────────────────────────────────────────────────
-
-/// Facts this subject's snapshot could not answer, mapped to the stable code
-/// saying why.
-///
-/// Only `unknown` counts. An `absent` fact is an answer — the source replied
-/// and there is nothing there — so a rule matching on the missing key is
-/// deciding on real evidence and must not be held.
-fn unobservable_facts(document: &serde_json::Value) -> BTreeMap<String, String> {
-    let Some(observations) = document.get("observations").and_then(|obs| obs.as_object()) else {
-        return BTreeMap::new();
-    };
-
-    observations
-        .iter()
-        .filter_map(|(name, envelope)| {
-            if envelope.get("status").and_then(serde_json::Value::as_str) != Some(UNKNOWN_STATUS) {
-                return None;
-            }
-            let reason = envelope
-                .get("reason")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(UNKNOWN_STATUS);
-            Some((name.clone(), reason.to_string()))
-        })
-        .collect()
-}
-
-/// Reason codes explaining why a rule cannot be consulted, deduplicated and in
-/// fact-name order. Empty when every fact the rule reads is observable, which
-/// is the signal to evaluate it normally.
-fn held_reason_codes(
-    referenced_facts: &BTreeSet<String>,
-    unobservable: &BTreeMap<String, String>,
-) -> Vec<String> {
-    let mut codes: Vec<String> = Vec::new();
-    for fact in referenced_facts {
-        if let Some(reason) = unobservable.get(fact)
-            && !codes.iter().any(|existing| existing == reason)
-        {
-            codes.push(reason.clone());
-        }
-    }
-    codes
 }
 
 // ── Output validation ───────────────────────────────────────────────────────
@@ -698,39 +478,6 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
         outcome,
         reason_codes,
     })
-}
-
-fn decode_reasons(value: &Value) -> Result<Vec<String>, String> {
-    let items: Vec<&Value> = if let Ok(array) = value.as_array() {
-        array.iter().collect()
-    } else if let Ok(set) = value.as_set() {
-        set.iter().collect()
-    } else {
-        return Err("'reasons' must be an array or set of strings".to_string());
-    };
-
-    if items.len() > MAX_REASON_CODES {
-        return Err(format!(
-            "'reasons' has {} entries, at most {MAX_REASON_CODES} are allowed",
-            items.len()
-        ));
-    }
-
-    let mut reasons = Vec::with_capacity(items.len());
-    for item in items {
-        let reason = item
-            .as_string()
-            .map_err(|_| "'reasons' must contain only strings".to_string())?;
-        if reason.len() > MAX_REASON_CODE_LEN {
-            return Err(format!(
-                "reason code is {} characters, at most {MAX_REASON_CODE_LEN} are allowed",
-                reason.len()
-            ));
-        }
-        reasons.push(reason.to_string());
-    }
-
-    Ok(reasons)
 }
 
 // ── Synthetic input ─────────────────────────────────────────────────────────
@@ -791,6 +538,14 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             last_watched_at: Observation::known("2024-03-01T00:00:00Z".to_string()),
             watched_by_any_requester: Observation::known(true),
             watched_by_all_requesters: Observation::known(true),
+            keep_claim_active: Observation::known(false),
+            request_lease_state: Observation::known("none".to_string()),
+            // The one deliberately absent fact in the synthetic document: a
+            // title with no live lease has no expiry, and inventing one would
+            // make a dry-run of "the lease lapsed before <date>" pass against a
+            // date no instance ever produced.
+            request_lease_expires_at: Observation::absent(),
+            active_retention_claims: Observation::known(0),
         },
     }
 }
@@ -1210,5 +965,42 @@ mod tests {
         let absent = serde_json::to_value(Observation::<bool>::absent()).expect("serializable");
         assert_eq!(absent["status"], "absent");
         assert!(absent.get("observed_at").is_none());
+    }
+
+    /// The wrapper is what every stored matcher is evaluated through, so its
+    /// text is a contract with the rules already in people's databases. It is
+    /// generated by the shared core now; it must still come out character for
+    /// character as it always did.
+    #[test]
+    fn the_generated_wrapper_is_unchanged_and_projects_the_family_hold_head() {
+        assert_eq!(
+            decision_wrapper_source("rule_1"),
+            "package scryer.maintenance.wrapper.rule_1\n\
+             import rego.v1\n\n\
+             decision := {\n\
+             \t\"matched\": object.get(data.scryer.maintenance.user.rule_1, \"match\", false),\n\
+             \t\"unknown\": object.get(data.scryer.maintenance.user.rule_1, \"unknown\", false),\n\
+             \t\"reasons\": object.get(data.scryer.maintenance.user.rule_1, \"reasons\", []),\n\
+             }\n"
+        );
+        assert_eq!(
+            decision_wrapper_rule_path("rule_1"),
+            "data.scryer.maintenance.wrapper.rule_1.decision"
+        );
+        assert_eq!(user_policy_path("rule_1"), "maintenance/rule_1.rego");
+        assert_eq!(
+            decision_wrapper_policy_path("rule_1"),
+            "internal/rule_1_maintenance_wrapper.rego"
+        );
+
+        // Maintenance says `unknown if`; the request family will say
+        // `manual if`. The head the wrapper reads is exactly what the family
+        // declares, so the two cannot drift apart.
+        let hold = MaintenanceFamily::hold_rule_name().expect("maintenance holds");
+        assert_eq!(hold, "unknown");
+        assert!(
+            decision_wrapper_source("rule_1").contains(&format!("\"{hold}\", false)")),
+            "the wrapper must read the head the family declares"
+        );
     }
 }

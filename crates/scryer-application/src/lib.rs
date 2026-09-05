@@ -63,6 +63,7 @@ mod library_scan_progress;
 mod library_scan_titles;
 #[path = "library/scan/unmatched.rs"]
 mod library_scan_unmatched;
+pub mod lifecycle_claims;
 pub mod location;
 pub mod maintenance_rules;
 mod media;
@@ -80,6 +81,7 @@ mod ports;
 pub use ports::{CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord, TitleOptionsPatch};
 mod quality;
 mod rate_limit_signal;
+pub mod request_rules;
 mod rules;
 mod scheduler;
 mod security;
@@ -350,7 +352,12 @@ pub use media::language::{
     normalize_detected_subtitle_language_code, normalize_detected_subtitle_languages,
     normalize_known_audio_language_code, normalize_metadata_language_code,
 };
+pub use media_requests::snapshot::{
+    MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION, MediaRequestMetadataSnapshot,
+    MediaRequestMetadataSnapshotExt,
+};
 pub use media_requests::{
+    ApproveMediaRequestOutcome, CLAIM_RELEASE_REQUEST_CANCELED, CLAIM_RELEASE_REQUEST_REJECTED,
     ListMediaRequestsInput, SubmitMediaRequestInput, SubmitMediaRequestOutcome,
     UpdateMediaRequestInput,
 };
@@ -364,6 +371,16 @@ pub use plugins::plugins::{
     RulePackTemplate,
 };
 pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind};
+pub use request_rules::{
+    Arbitration, ArbitrationReason, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_NO_RULE_MATCHED,
+    FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER, PREFLIGHT_REQUEST_ID_PREFIX,
+    REQUEST_MAX_LEASE_DAYS, RecordedVote, RequestDecisionReason, RequestDraft, RequestEvaluation,
+    RequestEvaluationPurpose, RequestPreflight, RequestRuleDraft, RequestRuleGates,
+    RequestRuleGatesUpdate, RequestRulePreviewMatcher, RequestRulePreviewRequest,
+    RequestRulePreviewResult, RequestRuleSample, RequestRuleScope, RequestRuleSetDetail,
+    RequestRulesEngineCache, RequestRulesEngineHandle, ScopedError, ScopedVote, arbitrate,
+    validate_lease_days, validate_tag_list,
+};
 pub use security::backup::{AutoBackupRunOutcome, start_background_auto_backup_scheduler};
 pub use security::backup_bundle::{
     BACKUP_TABLE_CATALOG, BLOB_MARKER_BASE64, BLOB_MARKER_TYPE, BackupBundleExportRequest,
@@ -460,16 +477,18 @@ pub use null_repositories::{
     NullExternalImportSetupSecretDraftRepository, NullFileImporter, NullHousekeepingRepository,
     NullImportArtifactRepository, NullImportRepository, NullIndexerSearchLearningRepository,
     NullIndexerStatsTracker, NullJobRunRepository, NullLibraryProbeRepository,
-    NullLibraryRepository, NullLibraryScanUnmatchedItemRepository, NullLocationOperationRepository,
-    NullLogicalBackupExporter, NullMaintenanceEvaluationRepository,
-    NullMaintenanceRuleSetRepository, NullMediaFileRepository, NullMediaRequestRepository,
-    NullMediaServerConnectionRepository, NullNotificationChannelRepository,
-    NullNotificationSubscriptionRepository, NullOAuthRepository, NullPendingReleaseRepository,
-    NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime, NullPluginInstallationRepository,
-    NullPostProcessingScriptRepository, NullProxyConfigRepository, NullRuleSetRepository,
-    NullScopeIndexerCoverageRepository, NullSettingsRepository, NullStagedNzbStore,
-    NullSubtitleDownloadRepository, NullSystemInfoProvider, NullTitleImageProcessor,
-    NullTitleImageRepository, NullUpstreamScheduler, NullWorkflowOperationRepository,
+    NullLibraryRepository, NullLibraryScanUnmatchedItemRepository, NullLifecycleClaimRepository,
+    NullLocationOperationRepository, NullLogicalBackupExporter,
+    NullMaintenanceEvaluationRepository, NullMaintenanceRuleSetRepository, NullMediaFileRepository,
+    NullMediaRequestRepository, NullMediaServerConnectionRepository,
+    NullNotificationChannelRepository, NullNotificationSubscriptionRepository, NullOAuthRepository,
+    NullPendingReleaseRepository, NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime,
+    NullPluginInstallationRepository, NullPostProcessingScriptRepository,
+    NullProxyConfigRepository, NullRequestRuleDecisionRepository, NullRequestRuleSetRepository,
+    NullRuleSetRepository, NullScopeIndexerCoverageRepository, NullSettingsRepository,
+    NullStagedNzbStore, NullSubtitleDownloadRepository, NullSystemInfoProvider,
+    NullTitleImageProcessor, NullTitleImageRepository, NullUpstreamScheduler,
+    NullWorkflowOperationRepository,
 };
 // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
 pub use null_repositories::NullMediaServerPlaybackProbe;
@@ -499,32 +518,33 @@ pub use ports::{
     IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchRunWrite,
     IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser, JobRunRepository,
     LibraryProbeRepository, LibraryRepository, LibraryScanUnmatchedItemRepository,
-    LifecycleActionRunRepository, LocationOperationProgress, LocationOperationRepository,
-    LocationOwnershipClaim, LocationOwnershipOutcome, LogicalBackupExporter,
-    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
-    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
-    MaintenanceRuleSetRepository, MediaAnalyzer, MediaFileHashCandidate, MediaFileRepository,
-    MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
-    MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
-    NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,
-    NotificationAppPayload, NotificationApplicationUpdatePayload, NotificationChannelRepository,
-    NotificationClient, NotificationDownloadPayload, NotificationEpisodePayload,
-    NotificationExternalIdsPayload, NotificationFilePayload, NotificationHealthPayload,
-    NotificationImportPayload, NotificationManualInteractionPayload, NotificationMediaFilePayload,
+    LifecycleActionRunRepository, LifecycleClaimRepository, LocationOperationProgress,
+    LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
+    LogicalBackupExporter, MaintenanceCandidateQuery, MaintenanceCandidateRepository,
+    MaintenanceEvaluationRepository, MaintenanceEvaluationRunRepository,
+    MaintenanceExclusionRepository, MaintenanceRuleSetRepository, MediaAnalyzer,
+    MediaFileHashCandidate, MediaFileRepository, MediaRequestQuery, MediaRequestRepository,
+    MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
+    MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
+    NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
+    NotificationApplicationUpdatePayload, NotificationChannelRepository, NotificationClient,
+    NotificationDownloadPayload, NotificationEpisodePayload, NotificationExternalIdsPayload,
+    NotificationFilePayload, NotificationHealthPayload, NotificationImportPayload,
+    NotificationManualInteractionPayload, NotificationMediaFilePayload,
     NotificationMediaUpdatePayload, NotificationMediaUpdateTypePayload, NotificationPayload,
     NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
     NotificationSubscriptionRepository, NotificationTitlePayload, OAuthRepository,
     PendingReleaseRepository, PlexServerDiscovery, PlexServerUser, PluginDescriptorLoader,
     PluginHttpTrustConfigRuntime, PluginInstallationRepository, PostProcessingScriptRepository,
     ProxyConfigRepository, QualityProfileRepository, ReleaseAttemptRepository,
-    ReusableIndexerSearchCandidate, ReusableIndexerSearchStrategy, RuleSetRepository,
-    RuntimePluginLoad, ScopeCoverageRow, ScopeIndexerCoverageRepository, SeedingProfileRepository,
-    SettingsRepository, ShowRepository, SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore,
-    SubtitleDownloadRepository, SubtitlePluginProvider, SubtitleProviderClient,
-    SubtitleProviderConfigRepository, SystemInfoProvider, TitleImageProcessor,
-    TitleImageRepository, TitleRepository, TotpRepository, UserExternalAccountRepository,
-    UserRepository, VerifiedExternalIdentity, WebauthnRepository, WorkflowOperationInfo,
-    WorkflowOperationRepository,
+    RequestRuleDecisionRepository, RequestRuleSetRepository, ReusableIndexerSearchCandidate,
+    ReusableIndexerSearchStrategy, RuleSetRepository, RuntimePluginLoad, ScopeCoverageRow,
+    ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, ShowRepository,
+    SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
+    SubtitlePluginProvider, SubtitleProviderClient, SubtitleProviderConfigRepository,
+    SystemInfoProvider, TitleImageProcessor, TitleImageRepository, TitleRepository, TotpRepository,
+    UserExternalAccountRepository, UserRepository, VerifiedExternalIdentity, WebauthnRepository,
+    WorkflowOperationInfo, WorkflowOperationRepository,
 };
 pub use ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
@@ -599,14 +619,14 @@ pub use settings::keys::{
     RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY,
     RENAME_MISSING_METADATA_POLICY_SERIES_GLOBAL_KEY, RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
     RENAME_TEMPLATE_KEY, RENAME_TEMPLATE_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_SERIES_GLOBAL_KEY,
-    REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY, SEASON_FOLDER_TEMPLATE_KEY, SERIES_PATH_KEY,
-    SERIES_ROOT_FOLDERS_KEY, SET_PERMISSIONS_LINUX_KEY, SETTINGS_SCOPE_MEDIA,
-    SETTINGS_SCOPE_SYSTEM, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
-    SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
-    SRRDB_FILENAME_RECOVERY_ENABLED_KEY, TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
-    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY, TLS_KEY_PATH_KEY,
-    TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY, USE_SEASON_FOLDERS_KEY,
-    VERIFICATION_DEPTH_KEY,
+    REQUEST_RULE_GATE_EVALUATION_KEY, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
+    SEASON_FOLDER_TEMPLATE_KEY, SERIES_PATH_KEY, SERIES_ROOT_FOLDERS_KEY,
+    SET_PERMISSIONS_LINUX_KEY, SETTINGS_SCOPE_MEDIA, SETTINGS_SCOPE_SYSTEM,
+    SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY, SKIP_LOGIN_FOR_LOCAL_IPS_KEY,
+    SPECIALS_FOLDER_TEMPLATE_KEY, SRRDB_FILENAME_RECOVERY_ENABLED_KEY,
+    TITLE_METADATA_LANGUAGE_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY,
+    TLS_KEY_PATH_KEY, TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY,
+    USE_SEASON_FOLDERS_KEY, VERIFICATION_DEPTH_KEY,
 };
 pub use settings::runtime::is_bootstrap_default_library_root_set;
 pub(crate) use types::JwtClaims;
@@ -619,30 +639,31 @@ pub use types::{
     AddTitleAndQueueDownloadOutcome, AddTitleHydrationState, AddTitleOutcome,
     ApiKeyProvisioningSource, ApiKeyRecord, AuthenticatedTokenClaims, BackupDownloadTicket,
     BackupInfo, BackupStatus, BackupTrigger, CancelLibraryScanResult,
-    CollectionEpisodeProgressSummary, CreateTitleOutcome, CutoffUnmetItem, CutoffUnmetPage,
-    CutoffUnmetQualitySummary, DecisionCodeCount, DiskSpaceInfo, DownloadActivityFilter,
-    DownloadDisplayState, DownloadGrabResult, DownloadHistoryFilter, DownloadHistoryPage,
-    DownloadHistorySort, DownloadHistorySortKey, DownloadImportFilter, DownloadImportPage,
-    DownloadQueueCommandRecord, DownloadQueuePage, DownloadSourceKind, EpisodeMediaAvailability,
-    EpisodeMediaAvailabilityState, EpisodeScopedMediaFile, FixTitleMatchResult, HealthCheckResult,
-    HealthCheckStatus, HousekeepingReport, IgnorePendingImportResult, IndexerQueryStats,
-    JwtAuthConfig, JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass, LoginVerificationChallengeRecord,
-    LoginVerificationMethod, LoginVerificationRequirement, LoginVerificationSatisfied,
-    ManualImportSelection, ManualImportSelectionCandidate, MediaFileAssociations,
-    MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
-    MissingSeriesMovieLinkCandidate, MissingTitleCandidate, OAuthAuthorizationCodeRecord,
-    OAuthAuthorizationSource, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,
-    OAuthRefreshGrantRecord, OAuthRefreshRotation, OAuthRefreshRotationOutcome,
-    OAuthRefreshTokenRecord, PasskeySummary, PendingImportBindingFilePreview,
-    PendingImportBindingPreview, PendingImportConnection, PendingImportCounts, PendingImportItem,
-    PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus, PendingRelease,
-    PendingReleaseObservation, PendingReleaseRole, PendingReleaseStatus, PendingReleaseStatusCount,
-    PendingTitleHydration, PrimaryCollectionSummary, RecycleBinBatchJobAccepted,
-    RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
-    RecycleRestorePreviewItem, RecycledItem, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature, ResolvePendingImportResult,
-    RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
+    CollectionEpisodeProgressSummary, ContentCertification, ContentRating, CreateTitleOutcome,
+    CutoffUnmetItem, CutoffUnmetPage, CutoffUnmetQualitySummary, DecisionCodeCount, DiskSpaceInfo,
+    DownloadActivityFilter, DownloadDisplayState, DownloadGrabResult, DownloadHistoryFilter,
+    DownloadHistoryPage, DownloadHistorySort, DownloadHistorySortKey, DownloadImportFilter,
+    DownloadImportPage, DownloadQueueCommandRecord, DownloadQueuePage, DownloadSourceKind,
+    EpisodeMediaAvailability, EpisodeMediaAvailabilityState, EpisodeScopedMediaFile,
+    FixTitleMatchResult, HealthCheckResult, HealthCheckStatus, HousekeepingReport,
+    IgnorePendingImportResult, IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryRootDraft,
+    LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass,
+    LoginVerificationChallengeRecord, LoginVerificationMethod, LoginVerificationRequirement,
+    LoginVerificationSatisfied, ManualImportSelection, ManualImportSelectionCandidate,
+    MdblistSummary, MediaFileAssociations, MediaRequestCounts, MissingEpisodeCandidate,
+    MissingScopeCandidates, MissingSeriesMovieLinkCandidate, MissingTitleCandidate,
+    OAuthAuthorizationCodeRecord, OAuthAuthorizationSource, OAuthClientRegistrationRecord,
+    OAuthConnectedAppRecord, OAuthRefreshGrantRecord, OAuthRefreshRotation,
+    OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, PasskeySummary,
+    PendingImportBindingFilePreview, PendingImportBindingPreview, PendingImportConnection,
+    PendingImportCounts, PendingImportItem, PendingImportReasonClass, PendingImportSearchAttempt,
+    PendingImportStatus, PendingRelease, PendingReleaseObservation, PendingReleaseRole,
+    PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
+    PrimaryCollectionSummary, RecycleBinBatchJobAccepted, RecycleBinSettings,
+    RecycleRestoreConflictPolicy, RecycleRestorePreview, RecycleRestorePreviewItem, RecycledItem,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord,
+    ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
+    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics, TitleAward,
     TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogFilterCounts,
     TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,

@@ -810,6 +810,31 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "lifecycle_action_runs",
         classification: BackupTableClassification::Export,
     },
+    // Request rules are user intent in exactly the way maintenance rules are,
+    // and their revisions are what a stored decision points at: dropping them
+    // would leave every trace naming a rule revision that no longer exists.
+    BackupTableCatalogEntry {
+        table: "request_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "request_rule_revisions",
+        classification: BackupTableClassification::Export,
+    },
+    // The decision trace is the audit record of why a request resolved the way
+    // it did; it cannot be recomputed, because the metadata it was judged on
+    // has moved on.
+    BackupTableCatalogEntry {
+        table: "request_rule_decisions",
+        classification: BackupTableClassification::Export,
+    },
+    // A lifecycle claim is what holds media against deletion. Losing one on a
+    // restore would silently expose a leased title to the next maintenance
+    // pass, so it is exported like the candidates and action runs above.
+    BackupTableCatalogEntry {
+        table: "lifecycle_claims",
+        classification: BackupTableClassification::Export,
+    },
     // A manual-import selection is deliberate user intent — the files a user
     // picked and the targets they mapped them to — held until the import
     // executes, so it is backed up like every other download/import lifecycle

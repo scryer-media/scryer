@@ -81,6 +81,7 @@ export function canAccessSettingsSection(
     case "delayProfiles":
     case "rules":
     case "maintenanceRules":
+    case "requestRules":
     case "post-processing":
     case "subtitles":
       return canManageCatalogSettings;

@@ -670,8 +670,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // public types 737->738. The two switches themselves are additive fields on
     // the existing general settings payload and update input, so INPUT_OBJECT,
     // ENUM, mutation, and subscription counts are unchanged.
+    // Request rules (spec 0003 section 7) add nine query roots: the three
+    // authoring reads (`requestRuleSets`, `requestRuleSet`,
+    // `requestRuleRevisions`), the instance gate, the two decision reads
+    // (`requestRuleDecision`, `requestRuleDecisions`), the Rules Context
+    // Reference document, the requester pre-flight, and `titleClaims`.
+    // Query 151->160.
     assert_eq!(
-        query_field_count, 151,
+        query_field_count, 160,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -682,8 +688,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Indexer search (spec 0002) adds two mutations on the interactive-search
     // job: issueInteractiveReleaseCandidateToken and queueUnlinkedRelease.
     // 216->218.
+    // Request rules add eleven mutations: six authoring roots (create, matcher
+    // edit, metadata edit, mode, delete, validate), the author-side preview,
+    // the instance gate, and the three administrator claim operations.
+    // 220->231.
     assert_eq!(
-        mutation_field_count, 220,
+        mutation_field_count, 231,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -741,10 +751,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // census. Combined with the location-surface fold above, the totals are
     // public types 720->724, OBJECT 379->380, INPUT_OBJECT 191->193, and
     // ENUM 138->139.
-    assert_eq!(public_types.len(), 738);
-    assert_eq!(kind_count("OBJECT"), 388);
-    assert_eq!(kind_count("INPUT_OBJECT"), 198);
-    assert_eq!(kind_count("ENUM"), 140);
+    // Request rules add fourteen objects (rule set, revision, detail, delete
+    // payload, validation payload, reason, vote, decision, author preview,
+    // requester pre-flight, instance gates, title claim, media-request lease,
+    // and the request's submit-time metadata), eleven inputs (six authoring,
+    // the preview pair, the gate, and the three claim operations), and six
+    // enums (evaluation mode, decision outcome, vote, and the three lifecycle
+    // claim enums): OBJECT 388->402, INPUT_OBJECT 198->209, ENUM 140->146,
+    // public types 738->769. The additive fields on the existing media-request
+    // payload and its three inputs add no type.
+    assert_eq!(public_types.len(), 769);
+    assert_eq!(kind_count("OBJECT"), 402);
+    assert_eq!(kind_count("INPUT_OBJECT"), 209);
+    assert_eq!(kind_count("ENUM"), 146);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));

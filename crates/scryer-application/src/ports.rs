@@ -843,6 +843,25 @@ pub trait TitleRepository: Send + Sync {
     ) -> AppResult<Vec<Title>> {
         self.list(facet, query).await
     }
+    /// How many titles one library holds, for the request-rule
+    /// `library_title_count` fact (spec 0003 §3.2).
+    ///
+    /// Defaulted over `list_for_libraries` rather than left abstract: it is a
+    /// single scalar feeding one advisory fact, every implementation can answer
+    /// it, and a store is free to override it with a `SELECT COUNT(*)`. The
+    /// default reads more rows than it needs; the fact is not on a hot loop —
+    /// one call per request evaluation.
+    async fn count_titles_in_library(&self, library_id: &str) -> AppResult<u64> {
+        let library_id = library_id.trim();
+        if library_id.is_empty() {
+            return Ok(0);
+        }
+        let library_ids = [library_id.to_string()];
+        Ok(self
+            .list_for_libraries(None, &library_ids, None)
+            .await?
+            .len() as u64)
+    }
     async fn list_delete_preview_info(&self) -> AppResult<Vec<TitleDeletePreviewInfo>> {
         Ok(self
             .list_without_external_ids(None, None)
@@ -1718,6 +1737,12 @@ pub struct NewMediaRequest {
     pub requested_monitor_type: Option<String>,
     /// Season/series-movie picks captured for the `advanced` monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Lease the requester asked for, in days; `None` means forever
+    /// (spec 0003 FR-040).
+    pub requested_lease_days: Option<i64>,
+    /// Versioned metadata snapshot captured at submit (spec 0003 FR-030),
+    /// already serialized. `{}` when nothing was captured.
+    pub metadata_snapshot_json: String,
     pub external_ids: Vec<ExternalId>,
     pub created_by_user_id: String,
 }
@@ -1725,11 +1750,25 @@ pub struct NewMediaRequest {
 #[derive(Clone, Debug)]
 pub struct MediaRequestResolution {
     pub status: scryer_domain::MediaRequestStatus,
-    pub resolved_by_user_id: String,
+    /// Who resolved it. `None` when policy did (spec 0003 §4.4): a rule-driven
+    /// denial has no human resolver, and the column is nullable in both
+    /// dialects, so inventing a system user id would be a lie the UI would
+    /// render as a person's decision.
+    pub resolved_by_user_id: Option<String>,
     pub resolved_at: chrono::DateTime<chrono::Utc>,
     pub created_title_id: Option<String>,
     pub approved_quality_profile_id: Option<String>,
     pub approved_quality_profile_name: Option<String>,
+    /// Lease the approver granted, in days; `None` means forever
+    /// (spec 0003 FR-040).
+    pub approved_lease_days: Option<i64>,
+    /// Trace that produced this resolution, when rules decided it
+    /// (spec 0003 FR-016).
+    pub decision_id: Option<String>,
+    /// Rule sets that voted for the outcome.
+    pub decided_by_rule_set_ids: Vec<String>,
+    /// Tags the rules emitted (spec 0003 FR-050).
+    pub policy_tags: Vec<String>,
     pub event: NewDomainEvent,
 }
 
@@ -1790,6 +1829,13 @@ pub trait MediaRequestRepository: Send + Sync {
         resolution: MediaRequestResolution,
     ) -> AppResult<MediaRequestResolutionResult>;
 
+    /// `requested_lease_days` is the lease the requester now wants; `None`
+    /// means forever (spec 0003 FR-040). It is always written, because the edit
+    /// form always carries the current value — there is no "leave it alone".
+    // Eight parameters because the edit form always carries every preference
+    // it can change; bundling them into a struct would hide that "absent"
+    // never means "leave it alone" here.
+    #[allow(clippy::too_many_arguments)]
     async fn update_pending_request_preferences(
         &self,
         request_id: &str,
@@ -1797,6 +1843,7 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
 
@@ -1845,6 +1892,48 @@ pub trait MediaRequestRepository: Send + Sync {
     }
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>>;
+
+    /// How many requests `user_id` submitted, optionally narrowed to one status
+    /// and to requests created at or after `since`.
+    ///
+    /// Counts submissions, not joins: the requester-history facts
+    /// (`pending_request_count`, `approved_last_30d`, …) ask what this person
+    /// asked for, and a user who seconded someone else's request did not.
+    async fn count_for_requester(
+        &self,
+        user_id: &str,
+        status: Option<scryer_domain::MediaRequestStatus>,
+        since: Option<DateTime<Utc>>,
+    ) -> AppResult<u64>;
+
+    /// Every request ever made for this identity, any requester, any status,
+    /// newest first. Feeds `previous_request_count` / `previously_denied` /
+    /// `previously_approved`.
+    async fn history_for_fingerprint(
+        &self,
+        identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>>;
+
+    /// When `user_id` last submitted anything, for `days_since_last_request`.
+    /// `None` when they never have — a real answer, not an unknown.
+    async fn latest_request_at_for_user(&self, user_id: &str) -> AppResult<Option<DateTime<Utc>>>;
+
+    /// Stamp the request-rule verdict onto a request row that is *not* being
+    /// resolved (spec 0003 FR-016).
+    ///
+    /// Submit and edit evaluate every request, including the ones that end up
+    /// waiting for a human — and those rows still have to say which trace judged
+    /// them, so an approver can see the policy verdict beside the request. The
+    /// resolve paths carry the same three fields on
+    /// [`MediaRequestResolution`]; this is the pending case, which has no
+    /// resolution to ride along with.
+    async fn record_decision_on_request(
+        &self,
+        request_id: &str,
+        decision_id: Option<&str>,
+        rule_set_ids: &[String],
+        tags: &[String],
+    ) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -6181,6 +6270,215 @@ impl<T> MaintenanceEvaluationRepository for T where
         + MaintenanceEvaluationRunRepository
         + LifecycleActionRunRepository
 {
+}
+
+/// Persistence for user-authored request rules (spec 0003 section 6).
+///
+/// Mirrors [`MaintenanceRuleSetRepository`] minus arming: a request rule votes
+/// and nothing else, so there is no blast radius for an operator to acknowledge
+/// and no disarm to carry in a write. Rule set and revision are still one unit
+/// of change — a rule set with no revision has no matcher — so
+/// [`Self::create_rule_set`] and [`Self::add_revision`] each write both rows in
+/// a single transaction.
+#[async_trait]
+pub trait RequestRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<scryer_domain::RequestRuleSet>>;
+
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>>;
+
+    /// Insert the rule set and its first revision atomically.
+    async fn create_rule_set(
+        &self,
+        rule_set: &scryer_domain::RequestRuleSet,
+        revision: &scryer_domain::RequestRuleRevision,
+    ) -> AppResult<()>;
+
+    /// Append `revision` and repoint the rule set at it, atomically. Existing
+    /// revisions are never rewritten.
+    async fn add_revision(
+        &self,
+        revision: &scryer_domain::RequestRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn get_revision(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+    ) -> AppResult<Option<scryer_domain::RequestRuleRevision>>;
+
+    /// Newest revision first.
+    async fn list_revisions(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleRevision>>;
+
+    /// Update the fields that carry no evaluation semantics. Never creates a
+    /// revision — the matcher is untouched.
+    async fn update_rule_set_metadata(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        library_ids: &[String],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Move a rule set between evaluation modes. `enabled` is derived by the
+    /// caller from the mode so the two columns can never disagree.
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        id: &str,
+        mode: scryer_domain::RequestRuleEvaluationMode,
+        enabled: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Removes the rule set; the FK cascade takes its revisions with it. The
+    /// decision traces are *not* cascaded: they are the explanation of past
+    /// decisions (spec 0003 FR-016) and outlive the rule that made them.
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
+}
+
+/// Append-only traces of request evaluations (spec 0003 FR-016).
+#[async_trait]
+pub trait RequestRuleDecisionRepository: Send + Sync {
+    async fn record(&self, decision: &scryer_domain::RequestRuleDecisionRecord) -> AppResult<()>;
+
+    async fn latest_for_request(
+        &self,
+        request_id: &str,
+    ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>>;
+
+    /// Newest first, optionally narrowed to one effective outcome.
+    async fn list_recent(
+        &self,
+        limit: usize,
+        outcome: Option<scryer_domain::RequestDecisionOutcome>,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>>;
+
+    /// How many recorded decisions a rule set participated in.
+    ///
+    /// The rule ids live inside `votes_json` rather than in a join table, so
+    /// this is a substring match over that column. It is deliberately loose:
+    /// the number drives an "this rule has decided N requests" affordance in
+    /// the authoring UI, not any safety decision, and a rule id is a generated
+    /// opaque id, so a false positive would need one id to contain another.
+    async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
+}
+
+/// Title leases and keep claims (spec 0003 FR-041…FR-044).
+///
+/// Claims are released, never deleted: every terminal state is history the
+/// operator can still read (constitution C3).
+#[async_trait]
+pub trait LifecycleClaimRepository: Send + Sync {
+    async fn create(&self, claim: &scryer_domain::LifecycleClaim) -> AppResult<()>;
+
+    async fn get(&self, id: &str) -> AppResult<Option<scryer_domain::LifecycleClaim>>;
+
+    /// Every claim on a title, live and terminal, newest first.
+    async fn list_for_title(&self, title_id: &str)
+    -> AppResult<Vec<scryer_domain::LifecycleClaim>>;
+
+    /// Live (dormant or active) claims for each of `title_ids`, keyed by title
+    /// id. Titles with no live claim are absent rather than empty.
+    ///
+    /// Batched on purpose: the maintenance pass asks this for a whole chunk of
+    /// titles at once, and a per-title query would make the pass scale with the
+    /// library.
+    async fn list_live_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::LifecycleClaim>>>;
+
+    /// Live *and* expired retention claims for each of `title_ids`, keyed by
+    /// title id. Titles with no retention history are absent rather than empty.
+    ///
+    /// Separate from [`Self::list_live_for_titles`] because the
+    /// `request_lease_state` fact has to tell "this title's lease lapsed" apart
+    /// from "this title never had one", and only the expired rows carry that
+    /// difference. Released and converted claims are deliberately not returned:
+    /// they were withdrawn rather than spent, so they say nothing about whether
+    /// a lease ran out.
+    ///
+    /// Batched for the same reason its sibling is: the maintenance pass asks it
+    /// once per chunk of titles.
+    async fn list_retention_history_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::LifecycleClaim>>>;
+
+    /// Dormant claims awaiting a first import, oldest first.
+    async fn list_dormant(&self, limit: usize) -> AppResult<Vec<scryer_domain::LifecycleClaim>>;
+
+    /// Start a dormant claim's clock at the title's first import. A no-op on a
+    /// claim that is not dormant, so a replayed import cannot restart a window.
+    ///
+    /// `now` is the write time and `starts_at` is the lease's own beginning:
+    /// the reconcile pass backdates a lease to the import it missed, and
+    /// stamping `updated_at` with that backdated instant would make the row
+    /// look like it was written before it was.
+    async fn activate(
+        &self,
+        id: &str,
+        starts_at: DateTime<Utc>,
+        expires_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Flip every active retention claim whose window has elapsed to expired.
+    /// Returns how many moved.
+    async fn expire_due(&self, now: DateTime<Utc>) -> AppResult<u64>;
+
+    /// Release every live claim produced by one request. Returns how many moved.
+    async fn release_for_producer_ref(
+        &self,
+        producer: scryer_domain::LifecycleClaimProducer,
+        producer_ref: &str,
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64>;
+
+    /// Release one live claim by id — the administrator's explicit withdrawal
+    /// (spec 0003 FR-044). Returns how many moved, so a caller can tell a claim
+    /// that was already terminal from one it just released.
+    async fn release_claim(&self, id: &str, reason: &str, now: DateTime<Utc>) -> AppResult<u64>;
+
+    /// Release every live claim on a title — the title-delete path.
+    async fn release_for_title(
+        &self,
+        title_id: &str,
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64>;
+
+    /// Push an active claim's expiry out. Only touches a live claim: extending
+    /// an expired lease would resurrect a hold the operator already saw lapse.
+    async fn extend(
+        &self,
+        id: &str,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Mark `id` converted and insert `replacement` (a keep) in one transaction,
+    /// so there is no instant in which the title carries neither.
+    async fn convert_to_permanent(
+        &self,
+        id: &str,
+        replacement: &scryer_domain::LifecycleClaim,
+        now: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Live claims produced by requests this user submitted, for the
+    /// `active_lease_count` fact.
+    ///
+    /// Joined through `media_requests.created_by_user_id` on `producer_ref`
+    /// rather than taking a caller-supplied id list: the alternative asks the
+    /// caller to first read every request the user ever made, which is the more
+    /// expensive of the two by exactly that read.
+    async fn count_live_for_user(&self, user_id: &str) -> AppResult<u64>;
 }
 
 #[async_trait]

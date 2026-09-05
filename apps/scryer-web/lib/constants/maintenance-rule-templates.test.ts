@@ -25,7 +25,7 @@ const ACTION_KINDS: MaintenanceActionKind[] = [
 ];
 
 test("the gallery ships every starter template exactly once", () => {
-  assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 10);
+  assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 11);
 
   const ids = MAINTENANCE_RULE_TEMPLATES.map((template) => template.id);
   assert.deepEqual([...new Set(ids)], ids);
@@ -133,6 +133,7 @@ test("every file-deleting template is marked and says so in its copy", () => {
       "requested-media-expiry",
       "departed-requester",
       "watched-by-every-requester",
+      "expired-request-leases",
     ],
   );
 });

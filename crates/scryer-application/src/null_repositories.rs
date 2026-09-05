@@ -3015,6 +3015,7 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _requested_quality_profile_name: String,
         _requested_monitor_type: Option<String>,
         _requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        _requested_lease_days: Option<i64>,
         _updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         Err(AppError::Repository(
@@ -3034,6 +3035,247 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _title_ids: &[String],
     ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
         Ok(std::collections::HashMap::new())
+    }
+
+    async fn count_for_requester(
+        &self,
+        _user_id: &str,
+        _status: Option<scryer_domain::MediaRequestStatus>,
+        _since: Option<DateTime<Utc>>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+
+    async fn history_for_fingerprint(
+        &self,
+        _identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn latest_request_at_for_user(&self, _user_id: &str) -> AppResult<Option<DateTime<Utc>>> {
+        Ok(None)
+    }
+
+    /// A no-op rather than a refusal: the caller has already submitted the
+    /// request and is only stamping provenance onto it, and a null repository
+    /// has no row to stamp. Failing here would turn "no store configured" into
+    /// a warning on every submission.
+    async fn record_decision_on_request(
+        &self,
+        _request_id: &str,
+        _decision_id: Option<&str>,
+        _rule_set_ids: &[String],
+        _tags: &[String],
+    ) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+/// Reads answer empty and writes refuse: an assembly with no request-rule store
+/// has no rules, so the evaluator finds nothing to apply rather than silently
+/// dropping a rule it believed it wrote.
+#[derive(Default)]
+pub struct NullRequestRuleSetRepository;
+
+const REQUEST_RULE_NOT_CONFIGURED: &str = "request rule repository is not configured";
+
+#[async_trait]
+impl crate::ports::RequestRuleSetRepository for NullRequestRuleSetRepository {
+    async fn list_rule_sets(&self) -> AppResult<Vec<scryer_domain::RequestRuleSet>> {
+        Ok(Vec::new())
+    }
+    async fn get_rule_set(&self, _id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>> {
+        Ok(None)
+    }
+    async fn create_rule_set(
+        &self,
+        _rule_set: &scryer_domain::RequestRuleSet,
+        _revision: &scryer_domain::RequestRuleRevision,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn add_revision(
+        &self,
+        _revision: &scryer_domain::RequestRuleRevision,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn get_revision(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+    ) -> AppResult<Option<scryer_domain::RequestRuleRevision>> {
+        Ok(None)
+    }
+    async fn list_revisions(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleRevision>> {
+        Ok(Vec::new())
+    }
+    async fn update_rule_set_metadata(
+        &self,
+        _id: &str,
+        _name: &str,
+        _description: &str,
+        _library_ids: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        _id: &str,
+        _mode: scryer_domain::RequestRuleEvaluationMode,
+        _enabled: bool,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+/// A trace that cannot be written must not be silently discarded: recording is
+/// the one thing FR-016 requires of every evaluation, so the write refuses
+/// rather than pretending.
+#[derive(Default)]
+pub struct NullRequestRuleDecisionRepository;
+
+#[async_trait]
+impl crate::ports::RequestRuleDecisionRepository for NullRequestRuleDecisionRepository {
+    async fn record(&self, _decision: &scryer_domain::RequestRuleDecisionRecord) -> AppResult<()> {
+        Err(AppError::Repository(
+            "request rule decision repository is not configured".to_string(),
+        ))
+    }
+    async fn latest_for_request(
+        &self,
+        _request_id: &str,
+    ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>> {
+        Ok(None)
+    }
+    async fn list_recent(
+        &self,
+        _limit: usize,
+        _outcome: Option<scryer_domain::RequestDecisionOutcome>,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>> {
+        Ok(Vec::new())
+    }
+    async fn count_for_rule_set(&self, _rule_set_id: &str) -> AppResult<u64> {
+        Ok(0)
+    }
+}
+
+/// No claim store means no lease can be created, so writes refuse. Reads answer
+/// empty, which is the honest shape: an instance without the table has no
+/// holds — the executor's own unreadable-store hold covers the case where the
+/// store exists but cannot answer.
+#[derive(Default)]
+pub struct NullLifecycleClaimRepository;
+
+const LIFECYCLE_CLAIM_NOT_CONFIGURED: &str = "lifecycle claim repository is not configured";
+
+#[async_trait]
+impl crate::ports::LifecycleClaimRepository for NullLifecycleClaimRepository {
+    async fn create(&self, _claim: &scryer_domain::LifecycleClaim) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn get(&self, _id: &str) -> AppResult<Option<scryer_domain::LifecycleClaim>> {
+        Ok(None)
+    }
+    async fn list_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Vec<scryer_domain::LifecycleClaim>> {
+        Ok(Vec::new())
+    }
+    async fn list_live_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::LifecycleClaim>>> {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn list_retention_history_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::LifecycleClaim>>> {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn list_dormant(&self, _limit: usize) -> AppResult<Vec<scryer_domain::LifecycleClaim>> {
+        Ok(Vec::new())
+    }
+    async fn activate(
+        &self,
+        _id: &str,
+        _starts_at: DateTime<Utc>,
+        _expires_at: Option<DateTime<Utc>>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn expire_due(&self, _now: DateTime<Utc>) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn release_for_producer_ref(
+        &self,
+        _producer: scryer_domain::LifecycleClaimProducer,
+        _producer_ref: &str,
+        _reason: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn release_claim(&self, _id: &str, _reason: &str, _now: DateTime<Utc>) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn release_for_title(
+        &self,
+        _title_id: &str,
+        _reason: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn extend(
+        &self,
+        _id: &str,
+        _expires_at: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn convert_to_permanent(
+        &self,
+        _id: &str,
+        _replacement: &scryer_domain::LifecycleClaim,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn count_live_for_user(&self, _user_id: &str) -> AppResult<u64> {
+        Ok(0)
     }
 }
 

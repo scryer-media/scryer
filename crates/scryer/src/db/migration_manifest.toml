@@ -1919,3 +1919,54 @@ kind = "sql"
 file = "postgres/migrations/0217_wireguard_proxies.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 218
+description = "request rule sets, revisions, and decision traces"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0218_request_rule_sets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0218_request_rule_sets.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 219
+description = "lifecycle claims for title leases and keeps"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0219_lifecycle_claims.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0219_lifecycle_claims.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 220
+description = "media request policy provenance and lease columns"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0220_media_request_policy.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0220_media_request_policy.sql"
+engine = "postgres"
+scope = "all"

@@ -632,7 +632,14 @@ impl AppUseCase {
         )
         .await?;
         self.delete_title_row(title, actor, options.append_title_deleted_event)
-            .await
+            .await?;
+        // Last, and only once the rows are gone: a lifecycle claim is a hold on
+        // a title, and there is no title left to hold (spec 0003 FR-044).
+        // Releasing first would open a window in which a maintenance action
+        // could act on a title whose claim had already been withdrawn.
+        self.release_lifecycle_claims_for_deleted_title(&title.id)
+            .await;
+        Ok(())
     }
 }
 impl AppUseCase {

@@ -299,6 +299,32 @@ fn optional_ids_to_strings(ids: Option<Vec<ID>>) -> Option<Vec<String>> {
     ids.map(|ids| ids.into_iter().map(String::from).collect())
 }
 
+/// Project a page of media requests together with the policy detail that lives
+/// in other tables — the decision trace and the lifecycle claim holding the
+/// title.
+///
+/// The facts are loaded for the whole page in one call rather than per row, and
+/// a failure to load them degrades to requests without policy detail: a request
+/// list that errors because a trace row could not be read is strictly worse than
+/// one that shows the requests.
+async fn media_requests_with_policy(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    requests: Vec<scryer_domain::MediaRequest>,
+) -> Vec<MediaRequestPayload> {
+    let facts = app
+        .media_request_policy_facts(actor, &requests)
+        .await
+        .unwrap_or_default();
+    requests
+        .into_iter()
+        .map(|request| {
+            let policy = facts.get(&request.id).cloned().unwrap_or_default();
+            from_media_request(app, request, Some(&policy))
+        })
+        .collect()
+}
+
 fn from_download_history_page(
     page: scryer_application::DownloadHistoryPage,
 ) -> DownloadHistoryPagePayload {
@@ -1261,10 +1287,7 @@ impl CatalogQueries {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(requests
-            .into_iter()
-            .map(|request| from_media_request(&app, request))
-            .collect())
+        Ok(media_requests_with_policy(&app, &actor, requests).await)
     }
 
     /// List only the caller's media requests, optionally filtered by facet, libraries, and status.
@@ -1293,10 +1316,7 @@ impl CatalogQueries {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(requests
-            .into_iter()
-            .map(|request| from_media_request(&app, request))
-            .collect())
+        Ok(media_requests_with_policy(&app, &actor, requests).await)
     }
 
     /// Read settings for a library by ID, subject to the caller's library-settings permission.
@@ -3397,6 +3417,202 @@ impl AcquisitionQueries {
         Ok(runs
             .into_iter()
             .filter_map(crate::mappers::from_maintenance_action_run)
+            .collect())
+    }
+
+    // ── Request Rule Sets ────────────────────────────────────────────────
+
+    /// List request rule sets; requires catalog-settings management permission.
+    async fn request_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<RequestRuleSet>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let details = app
+            .list_request_rule_set_details(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        let ids: Vec<String> = details
+            .iter()
+            .map(|detail| detail.rule_set.id.clone())
+            .collect();
+        let counts = app
+            .request_rule_decision_counts(&actor, &ids)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(details
+            .iter()
+            .map(|detail| {
+                crate::mappers::from_request_rule_set(
+                    &detail.rule_set,
+                    counts.get(&detail.rule_set.id).copied().unwrap_or_default(),
+                )
+            })
+            .collect())
+    }
+
+    /// Return one request rule set with the revision currently in force, or null when no such rule set exists.
+    async fn request_rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Request rule-set ID to load.")] id: ID,
+    ) -> GqlResult<Option<RequestRuleSetDetail>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let Some(detail) = app
+            .get_request_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        let counts = app
+            .request_rule_decision_counts(&actor, std::slice::from_ref(&detail.rule_set.id))
+            .await
+            .map_err(to_gql_error)?;
+        let count = counts.get(&detail.rule_set.id).copied().unwrap_or_default();
+        Ok(Some(crate::mappers::from_request_rule_set_detail(
+            detail, count,
+        )))
+    }
+
+    /// List every stored revision of one request rule set, newest first.
+    async fn request_rule_revisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Request rule-set ID whose revisions are returned.")] rule_set_id: ID,
+    ) -> GqlResult<Vec<RequestRuleRevision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let revisions = app
+            .list_request_rule_revisions(&actor, rule_set_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(revisions
+            .into_iter()
+            .map(crate::mappers::from_request_rule_revision)
+            .collect())
+    }
+
+    /// Read the instance-wide request-rule gate; requires system-settings management permission.
+    async fn request_rule_instance_gates(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<RequestRuleInstanceGates> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let gates = app
+            .request_rule_instance_gates(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_request_rule_instance_gates(gates))
+    }
+
+    /// Read the decision recorded for one media request, or null when it was never evaluated.
+    ///
+    /// Two audiences reach this. A manager of the request's library sees the
+    /// whole trace. The **requester** sees the outcome, the fallback reason, the
+    /// reasons, and the tags, with `votes` emptied, which is the same redaction
+    /// the pre-flight enforces by construction.
+    async fn request_rule_decision(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Media request whose decision is returned.")] request_id: ID,
+    ) -> GqlResult<Option<RequestRuleDecision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let view = app
+            .request_rule_decision_for_request(&actor, request_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(view.map(crate::mappers::from_request_rule_decision_view))
+    }
+
+    /// List recorded request decisions, newest first; requires catalog-settings management permission.
+    async fn request_rule_decisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Maximum decisions to return; defaults to 50 and is clamped to 1 through 500."
+        )]
+        limit: Option<i32>,
+        #[graphql(desc = "Return only decisions whose effective outcome was this.")]
+        outcome: Option<RequestDecisionOutcomeValue>,
+    ) -> GqlResult<Vec<RequestRuleDecision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let decisions = app
+            .list_request_rule_decisions(
+                &actor,
+                limit.and_then(|limit| usize::try_from(limit).ok()),
+                outcome.map(crate::mappers::request_decision_outcome_into_application),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(decisions
+            .into_iter()
+            // The catalog administrator who reaches this query is the audience
+            // the vote table exists for.
+            .map(|record| crate::mappers::from_request_rule_decision(record, false))
+            .collect())
+    }
+
+    /// The request family's Rules Context Reference: every fact a request matcher may read.
+    async fn request_rule_input_reference(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<crate::mappers::RequestRuleInputReference> {
+        // The contract is a static document, so no service call enforces the
+        // permission the rest of this surface requires; the gate happens here.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::request_rule_input_reference())
+    }
+
+    /// Evaluate a draft request without submitting it; requires request permission on the target library.
+    ///
+    /// Takes the submit mutation's own input type, deliberately: the pre-flight
+    /// and the submit share one input, one metadata read, and one evaluation
+    /// function, which is what makes "identical drafts yield identical
+    /// decisions" a property of the code rather than a promise.
+    async fn preview_my_request_decision(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The draft request to evaluate, exactly as it would be submitted.")]
+        input: SubmitMediaRequestInput,
+    ) -> GqlResult<RequestPreflightPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let preflight = app
+            .preview_my_request_decision(
+                &actor,
+                crate::mappers::submit_media_request_input_into_application(input),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_request_preflight(preflight))
+    }
+
+    /// List every lifecycle claim on one title, live and historical; requires title management on the title's library.
+    async fn title_claims(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Title whose claims are returned.")] title_id: ID,
+    ) -> GqlResult<Vec<TitleClaim>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let claims = app
+            .list_title_claims(&actor, title_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(claims
+            .into_iter()
+            .map(crate::mappers::from_title_claim)
             .collect())
     }
 

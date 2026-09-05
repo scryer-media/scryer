@@ -28,6 +28,54 @@ pub enum MetadataFieldUpdate<T> {
     Clear,
 }
 
+/// One certification published by a rating board for a country, e.g. `PG-13` from `tmdb`.
+///
+/// Shared by discovery (`DiscoveryContentCertification` is an alias for this type) and by the
+/// request metadata snapshot, so the two can never drift apart.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ContentCertification {
+    pub value: String,
+    pub source: String,
+    pub release_type: Option<i32>,
+}
+
+/// A country's content rating: its certifications plus the minimum age SMG derived from them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ContentRating {
+    pub country: String,
+    pub certifications: Vec<ContentCertification>,
+    pub age_rating: Option<i32>,
+    pub age_rating_source: Option<String>,
+}
+
+/// MDBList's view of a title, as republished by SMG.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MdblistSummary {
+    pub mdblist_id: String,
+    pub trakt_id: Option<i64>,
+    pub score: Option<f64>,
+    pub score_average: Option<f64>,
+    pub age_rating: Option<i32>,
+    pub certification: String,
+    /// Common Sense Media's "recommended" flag; `None` means MDBList has no opinion.
+    pub commonsense: Option<bool>,
+}
+
+/// One award claim (win or nomination) SMG resolved for a title.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TitleAward {
+    pub award_qid: String,
+    pub award_label: String,
+    pub year: Option<i32>,
+    pub recipient_qid: String,
+    pub recipient_label: String,
+    pub claim_side: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleMetadataUpdate {
     pub name: Option<String>,

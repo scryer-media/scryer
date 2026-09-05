@@ -499,6 +499,96 @@ async fn migrations_apply_then_validate_is_idempotent() {
     let _ = std::fs::remove_file(db);
 }
 
+/// 0218-0220 land the request-rules tables and the media-request policy
+/// columns. A fresh database must carry all three, and re-opening it in
+/// validate mode must accept the manifest checksums the build script derived
+/// from the SQL files — an edit to a shipped migration would fail here rather
+/// than in production (constitution C1).
+#[tokio::test]
+async fn migrations_0218_through_0220_apply_then_validate() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_request_rules_migrations_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("migrations should apply");
+    let pool = services.pool().clone();
+
+    for table in [
+        "request_rule_sets",
+        "request_rule_revisions",
+        "request_rule_decisions",
+        "lifecycle_claims",
+    ] {
+        let found: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .expect("read sqlite_master");
+        assert_eq!(found, 1, "{table} should exist after 0218-0219");
+    }
+
+    for index in [
+        "idx_request_rule_revisions_rule_set",
+        "idx_request_rule_decisions_request",
+        "idx_lifecycle_claims_live_producer",
+        "idx_lifecycle_claims_title_state",
+    ] {
+        let found: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?",
+        )
+        .bind(index)
+        .fetch_one(&pool)
+        .await
+        .expect("read sqlite_master");
+        assert_eq!(found, 1, "{index} should exist after 0218-0219");
+    }
+
+    let request_columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('media_requests')")
+            .fetch_all(&pool)
+            .await
+            .expect("read media_requests columns");
+    for column in [
+        "requested_lease_days",
+        "approved_lease_days",
+        "decision_id",
+        "decided_by_rule_set_ids",
+        "policy_tags_json",
+        "metadata_snapshot_json",
+    ] {
+        assert!(
+            request_columns.iter().any(|name| name == column),
+            "media_requests should carry {column} after 0220"
+        );
+    }
+
+    // 0220 deliberately leaves `resolved_by_user_id` alone: it is already
+    // nullable, so a rule-driven denial can record no resolver without
+    // inventing a system user.
+    let resolver_notnull: i64 = sqlx::query_scalar(
+        "SELECT \"notnull\" FROM pragma_table_info('media_requests') WHERE name = 'resolved_by_user_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read resolved_by_user_id nullability");
+    assert_eq!(
+        resolver_notnull, 0,
+        "resolved_by_user_id must stay nullable for policy denials"
+    );
+
+    drop(services);
+
+    let _ = SqliteServices::new_with_mode(db.to_string_lossy(), MigrationMode::ValidateOnly)
+        .await
+        .expect("applied DB should pass validate mode");
+
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn migration_0155_allows_emby_external_accounts_and_preserves_legacy_rows() {
     let pool = SqlitePoolOptions::new()

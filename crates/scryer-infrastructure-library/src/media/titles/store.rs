@@ -312,6 +312,27 @@ impl TitleRepository for TitleStore {
         .await
     }
 
+    /// One scalar, in SQL. The port's default reads every title row in the
+    /// library to count them, which is the wrong shape for a fact resolved on
+    /// the submit path with the requester waiting.
+    async fn count_titles_in_library(&self, library_id: &str) -> AppResult<u64> {
+        let library_id = library_id.trim();
+        if library_id.is_empty() {
+            return Ok(0);
+        }
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(*) AS title_count FROM titles WHERE library_id = {}",
+            &[SqlArg::Text(library_id.to_string())],
+        )
+        .await?;
+        Ok(row
+            .map(|row| row.i64("title_count"))
+            .transpose()?
+            .unwrap_or(0)
+            .max(0) as u64)
+    }
+
     async fn count_by_quality_profile_id(&self, profile_id: &str) -> AppResult<u64> {
         let profile_id = profile_id.trim();
         if profile_id.is_empty() {

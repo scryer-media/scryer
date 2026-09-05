@@ -1846,6 +1846,7 @@ async fn notification_dispatcher_delivers_global_media_request_to_facet_scope() 
         schema_version: 1,
         stream: DomainEventStream::Global,
         payload: DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
+            requested_lease_days: None,
             request_id: "request-1".to_string(),
             library_id: "library-series".to_string(),
             facet: MediaFacet::Series,

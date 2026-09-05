@@ -97,6 +97,16 @@ pub const MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY: &str = "maintenance.gate.reve
 /// Reserved for the executor wave: high risk actions.
 pub const MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY: &str = "maintenance.gate.destructive_effects";
 
+// ── Request rule instance gate (spec 0003 FR-013) ───────────────────────────
+/// Lets request rules be evaluated at all. Off means every request is decided
+/// by the library's Auto-Approve permission exactly as it was before rules
+/// existed. A missing row reads as off, so an instance that has never been
+/// configured evaluates nothing.
+///
+/// One key, not five: a request rule votes and has no effects to arm
+/// separately (see `request_rules::gates`).
+pub const REQUEST_RULE_GATE_EVALUATION_KEY: &str = "request_rules.evaluation_enabled";
+
 pub const RECYCLE_BIN_ENABLED_KEY: &str = "recycle_bin.enabled";
 pub const RECYCLE_BIN_PATH_KEY: &str = "recycle_bin.path";
 pub const RECYCLE_BIN_RETENTION_DAYS_KEY: &str = "recycle_bin.retention_days";

@@ -40,7 +40,9 @@ use scryer_infrastructure_configuration::{
     customization::{
         maintenance_evaluation_store::MaintenanceEvaluationStore,
         maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
-        post_processing_script_store::PostProcessingScriptStore, rule_set_store::RuleSetStore,
+        post_processing_script_store::PostProcessingScriptStore,
+        request_rule_decision_store::RequestRuleDecisionStore,
+        request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,
     },
     settings::{quality_profile_store::QualityProfileStore, settings_store::SettingsStore},
 };
@@ -64,6 +66,8 @@ use scryer_infrastructure_library::media::{
         store::LibraryStore,
         title_merge_store::TitleMergeStore,
     },
+    lifecycle_claims::LifecycleClaimStore,
+    requests::MediaRequestStore,
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,
     shows::store::ShowStore,
@@ -884,6 +888,10 @@ impl TestContext {
         let rule_set_store = RuleSetStore::new(datastore.clone());
         let maintenance_rule_set_store = MaintenanceRuleSetStore::new(datastore.clone());
         let maintenance_evaluation_store = MaintenanceEvaluationStore::new(datastore.clone());
+        let request_rule_set_store = RequestRuleSetStore::new(datastore.clone());
+        let request_rule_decision_store = RequestRuleDecisionStore::new(datastore.clone());
+        let lifecycle_claim_store = LifecycleClaimStore::new(datastore.clone());
+        let media_request_store = MediaRequestStore::new(datastore.clone());
         let media_server_signal_store = MediaServerSignalStore::new(datastore.clone());
         let post_processing_script_store = PostProcessingScriptStore::new(datastore.clone());
         let plugin_store = PluginStore::new(datastore.clone());
@@ -948,6 +956,10 @@ impl TestContext {
         .with_rule_set_store(Arc::new(rule_set_store))
         .with_maintenance_rule_set_store(Arc::new(maintenance_rule_set_store))
         .with_maintenance_evaluation_store(Arc::new(maintenance_evaluation_store))
+        .with_request_rule_set_store(Arc::new(request_rule_set_store))
+        .with_request_rule_decision_store(Arc::new(request_rule_decision_store))
+        .with_lifecycle_claim_store(Arc::new(lifecycle_claim_store))
+        .with_media_requests(Arc::new(media_request_store))
         .with_media_server_signal_store(Arc::new(media_server_signal_store))
         .with_post_processing_script_store(Arc::new(post_processing_script_store))
         .with_plugin_installation_store(Arc::new(plugin_store.clone()))

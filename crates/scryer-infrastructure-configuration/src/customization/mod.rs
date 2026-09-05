@@ -2,4 +2,6 @@ pub mod maintenance_evaluation_store;
 pub mod maintenance_rule_set_store;
 pub mod plugin_store;
 pub mod post_processing_script_store;
+pub mod request_rule_decision_store;
+pub mod request_rule_set_store;
 pub mod rule_set_store;

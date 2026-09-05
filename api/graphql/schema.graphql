@@ -797,6 +797,22 @@ input ApproveMediaRequestInput {
 	omitted the request's stored selection is applied.
 	"""
 	monitorSelection: MonitorSelectionInput
+	"""
+	Approver override for the lease, in days. Omitting both this and
+	`leaseForever` grants exactly what the requester asked for.
+	"""
+	leaseDays: Int
+	"""
+	Set to true to grant the title forever regardless of what was asked.
+	Rejected together with `leaseDays`.
+	"""
+	leaseForever: Boolean
+	"""
+	Approver override for the policy tags stamped on the created title. A
+	supplied list **replaces** the policy's tags outright; omitting it keeps
+	them.
+	"""
+	tags: [String!]
 }
 
 """
@@ -815,6 +831,13 @@ type ApproveMediaRequestPayload {
 	Non-fatal search error when approval succeeded but search could not be queued.
 	"""
 	searchError: String
+	"""
+	Non-fatal claim error when the title was created and the request
+	resolved, but the retention claim could not be written. The approval is
+	deliberately **not** rolled back: the requester has their title, and an
+	operator can re-pin it by hand.
+	"""
+	claimError: String
 }
 
 """
@@ -1783,6 +1806,17 @@ enum ConvergenceStateValue {
 }
 
 """
+Replaces a live claim with a permanent operator keep. The original stays as
+history in the `CONVERTED` state.
+"""
+input ConvertTitleClaimToPermanentInput {
+	"""
+	Claim to convert.
+	"""
+	claimId: ID!
+}
+
+"""
 Password used to encrypt a new backup.
 """
 input CreateBackupInput {
@@ -2298,6 +2332,30 @@ input CreateProxyConfigInput {
 	Whether the proxy is enabled.
 	"""
 	isEnabled: Boolean
+}
+
+"""
+Creates a request rule set together with its first matcher revision. The
+rule set is always created disabled; arming it is a second, deliberate call.
+"""
+input CreateRequestRuleSetInput {
+	"""
+	Rule-set name.
+	"""
+	name: String!
+	"""
+	Optional description.
+	"""
+	description: String
+	"""
+	Matcher source as written in the editor. The package declaration is
+	applied by the server.
+	"""
+	regoSource: String!
+	"""
+	Libraries to confine the rule to. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
 }
 
 """
@@ -3142,6 +3200,16 @@ type DeleteRecycledItemsPayload {
 	Background job accepted for the deletion operation.
 	"""
 	jobRun: JobRunPayload!
+}
+
+"""
+Identifier returned after deleting a request rule set.
+"""
+type DeleteRequestRuleSetPayload {
+	"""
+	Deleted rule-set ID.
+	"""
+	id: ID!
 }
 
 """
@@ -5710,6 +5778,21 @@ enum ExecutionModeValue {
 	Start work and return without waiting for completion.
 	"""
 	FIRE_AND_FORGET
+}
+
+"""
+Pushes a live claim's window out.
+"""
+input ExtendTitleClaimInput {
+	"""
+	Claim to extend.
+	"""
+	claimId: ID!
+	"""
+	New expiry. Refused for a claim that is no longer live: an expired lease
+	is replaced, not extended.
+	"""
+	expiresAt: DateTime!
 }
 
 """
@@ -9019,6 +9102,65 @@ type LibrarySettingsPayload {
 	Library override download-client routing entries; null means inherit.
 	"""
 	downloadClientRoutingOverride: [DownloadClientRoutingEntryPayload!]
+}
+
+"""
+What a lifecycle claim holds.
+"""
+enum LifecycleClaimKindValue {
+	"""
+	Holds until `expiresAt`, whose clock starts at the title's first import.
+	"""
+	RETAIN_UNTIL
+	"""
+	Holds indefinitely.
+	"""
+	KEEP
+}
+
+"""
+What produced a lifecycle claim.
+"""
+enum LifecycleClaimProducerValue {
+	"""
+	A finite lease approved on a media request.
+	"""
+	REQUEST_LEASE
+	"""
+	A request approved as "forever": a permanent keep.
+	"""
+	REQUEST_PERMANENT
+	"""
+	An administrator pinned the title by hand.
+	"""
+	OPERATOR_KEEP
+}
+
+"""
+Lifecycle state of one claim. Claims are released, never deleted, so the
+terminal states are history and only `DORMANT` and `ACTIVE` hold anything.
+"""
+enum LifecycleClaimStateValue {
+	"""
+	Created but not yet started: the title has never imported.
+	"""
+	DORMANT
+	"""
+	Running. A retention claim has an `expiresAt`.
+	"""
+	ACTIVE
+	"""
+	The retention window elapsed.
+	"""
+	EXPIRED
+	"""
+	Withdrawn before it ran out.
+	"""
+	RELEASED
+	"""
+	Superseded by a permanent keep.
+	"""
+	CONVERTED
 }
 
 """
@@ -12525,6 +12667,95 @@ type MediaRequestExternalRatingPayload {
 }
 
 """
+The lease one media request holds, derived from the live claim it produced.
+Null on the request payload until an approval creates that claim.
+"""
+type MediaRequestLease {
+	"""
+	Days the requester asked for; null means forever.
+	"""
+	requestedDays: Int
+	"""
+	Days the approver granted; null means forever.
+	"""
+	approvedDays: Int
+	"""
+	State of the claim holding the title.
+	"""
+	state: LifecycleClaimStateValue!
+	"""
+	When the lease started running, which is the title's first import. Null
+	while the claim is dormant.
+	"""
+	startsAt: DateTime
+	"""
+	When the lease runs out. Null while dormant and for a forever request.
+	"""
+	expiresAt: DateTime
+}
+
+"""
+The metadata a media request was decided against, read back out of the
+snapshot captured when it was submitted.
+
+`partial` is the load-bearing field: it separates "the source says this title
+has no content rating" from "we could not ask the source", and a fact derived
+from a missing group reads as unknown rather than absent.
+"""
+type MediaRequestMetadataPayload {
+	"""
+	True when enrichment did not fully succeed.
+	"""
+	partial: Boolean!
+	"""
+	Groups that could not be established (`content_ratings`, `genres`,
+	`mdblist`, `ratings`, `awards`, or `all`).
+	"""
+	missing: [String!]!
+	"""
+	Genres captured at submit time.
+	"""
+	genres: [String!]!
+	"""
+	Content ratings captured at submit time, one entry per country.
+	"""
+	contentRatings: [DiscoveryContentRatingPayload!]!
+	"""
+	Minimum age the captured ratings imply, or null when none of them said.
+	"""
+	ageRating: Int
+	"""
+	US certification label, or null when the title has no US certification.
+	"""
+	certificationLabel: String
+	"""
+	That label's rank on Scryer's US ladder, or null when the label is not
+	on it. A label off the ladder is an absence of a rank, not an unknown.
+	"""
+	certificationRank: Int
+	"""
+	True when any captured canonical tag is flagged adult.
+	"""
+	isAdult: Boolean!
+	"""
+	TMDB vote average, published for movies only.
+	"""
+	tmdbVoteAverage: Float
+	"""
+	TMDB vote count, published for movies only.
+	"""
+	tmdbVoteCount: Int
+	"""
+	TMDB popularity, published for movies only.
+	"""
+	popularity: Float
+	"""
+	How many awards the snapshot captured.
+	"""
+	awardCount: Int!
+}
+
+"""
 Media request with current status, title identity, and resolution metadata.
 """
 type MediaRequestPayload {
@@ -12656,6 +12887,36 @@ type MediaRequestPayload {
 	UTC time when the request was last changed.
 	"""
 	updatedAt: DateTime!
+	"""
+	Days the requester asked the media to be kept for; null means forever.
+	"""
+	requestedLeaseDays: Int
+	"""
+	Days the approver granted; null means forever, and it stays null until
+	the request is approved.
+	"""
+	approvedLeaseDays: Int
+	"""
+	The lease actually holding the created title, or null until an approval
+	creates the claim.
+	"""
+	lease: MediaRequestLease
+	"""
+	The decision request rules recorded for this request, or null when it
+	was never evaluated. A requester reading their own request gets it with
+	`votes` emptied.
+	"""
+	decision: RequestRuleDecision
+	"""
+	Tags the policy emitted for this request. Stamped on the title only when
+	the request is approved.
+	"""
+	policyTags: [String!]!
+	"""
+	The metadata the request was decided against, as captured at submit
+	time.
+	"""
+	metadata: MediaRequestMetadataPayload!
 }
 
 """
@@ -15182,6 +15443,127 @@ type MutationRoot {
 		ruleSetId: ID
 	): MaintenanceEvaluationTriggerPayload!
 	"""
+	Create a request rule set together with its first matcher revision.
+	
+	The rule is created disabled. Arming it is a second, deliberate call, and
+	the instance gate is a third.
+	"""
+	createRequestRuleSet(
+		"""
+		Rule name, matcher source, and optional description and library scope.
+		"""
+		input: CreateRequestRuleSetInput!
+	): RequestRuleSetDetail!
+	"""
+	Replace a rule set's matcher by appending revision N+1.
+	
+	Revision N is left exactly as written, so a decision recorded against it
+	stays attributable.
+	"""
+	updateRequestRuleMatcher(
+		"""
+		Rule-set identity and the replacement matcher source.
+		"""
+		input: UpdateRequestRuleMatcherInput!
+	): RequestRuleSetDetail!
+	"""
+	Rename and re-scope a rule set without touching its matcher, so no revision is created.
+	"""
+	updateRequestRuleMetadata(
+		"""
+		Rule-set identity, replacement name, and optional description and library scope.
+		"""
+		input: UpdateRequestRuleMetadataInput!
+	): RequestRuleSet!
+	"""
+	Move a request rule set between evaluation modes.
+	"""
+	setRequestRuleMode(
+		"""
+		Rule-set identity and the evaluation mode to store.
+		"""
+		input: SetRequestRuleModeInput!
+	): RequestRuleSetDetail!
+	"""
+	Delete a request rule set and every revision it owns.
+	
+	The decisions it took part in are **kept**: a trace is the explanation of
+	a decision already made, and it outlives the rule that produced it.
+	"""
+	deleteRequestRuleSet(
+		"""
+		Request rule-set identity to delete.
+		"""
+		id: ID!
+	): DeleteRequestRuleSetPayload!
+	"""
+	Compile and check request rule source without saving it.
+	"""
+	validateRequestRule(
+		"""
+		Matcher source to validate.
+		"""
+		input: ValidateRequestRuleInput!
+	): RequestRuleValidationPayload!
+	"""
+	Evaluate one matcher against one hypothetical request without saving anything.
+	
+	This is the author-side preview: it returns the vote, the reasons, the
+	tags, **and** the exact input document the rule saw. The requester-facing
+	equivalent is the `previewMyRequestDecision` query, which returns none of
+	the internals.
+	"""
+	previewRequestRule(
+		"""
+		Either a stored rule set or an unsaved matcher, plus the sample request to evaluate it against.
+		"""
+		input: PreviewRequestRuleInput!
+	): RequestRulePreviewPayload!
+	"""
+	Arm or disarm the instance-wide request-rule gate. Omitted fields keep their stored value.
+	
+	While the gate is off every rule is still evaluated and every decision is
+	still recorded; only the *effect* is suspended, so an operator can read
+	what policy would have done before letting it do it.
+	"""
+	setRequestRuleInstanceGates(
+		"""
+		The gate to change; omit the field to leave it alone.
+		"""
+		input: SetRequestRuleInstanceGatesInput!
+	): RequestRuleInstanceGates!
+	"""
+	Push a live claim's window out. Requires title management on the claim's own library.
+	"""
+	extendTitleClaim(
+		"""
+		Claim identity and its new expiry.
+		"""
+		input: ExtendTitleClaimInput!
+	): TitleClaim!
+	"""
+	Replace a live claim with a permanent operator keep.
+	
+	The replacement is a new claim rather than a mutated one, so the original
+	stays as history and the trail still says a request produced the hold and
+	an administrator chose to make it permanent.
+	"""
+	convertTitleClaimToPermanent(
+		"""
+		Claim identity to convert.
+		"""
+		input: ConvertTitleClaimToPermanentInput!
+	): TitleClaim!
+	"""
+	Withdraw a claim by hand. The reason is required and kept as history.
+	"""
+	releaseTitleClaim(
+		"""
+		Claim identity and why it is being released.
+		"""
+		input: ReleaseTitleClaimInput!
+	): TitleClaim!
+	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
 	refreshPluginCatalog: [RegistryPluginPayload!]!
@@ -17019,6 +17401,28 @@ input PreviewMaintenanceRuleInput {
 }
 
 """
+Runs one matcher against one hypothetical request without saving anything.
+
+Supply either `ruleSetId` to preview a stored rule set or `regoSource` to
+preview an unsaved draft, never both: they answer different questions, and
+accepting both would make it ambiguous which source produced the verdict.
+"""
+input PreviewRequestRuleInput {
+	"""
+	Stored rule set to preview at its current revision.
+	"""
+	ruleSetId: ID
+	"""
+	Unsaved matcher source to preview, as written in the editor.
+	"""
+	regoSource: String
+	"""
+	The request to evaluate the matcher against.
+	"""
+	sample: RequestRuleSampleInput!
+}
+
+"""
 Provider catalog family used when describing configurable providers.
 """
 enum ProviderCatalogFamilyValue {
@@ -18833,6 +19237,86 @@ type QueryRoot {
 		limit: Int
 	): [MaintenanceActionRun!]!
 	"""
+	List request rule sets; requires catalog-settings management permission.
+	"""
+	requestRuleSets: [RequestRuleSet!]!
+	"""
+	Return one request rule set with the revision currently in force, or null when no such rule set exists.
+	"""
+	requestRuleSet(
+		"""
+		Request rule-set ID to load.
+		"""
+		id: ID!
+	): RequestRuleSetDetail
+	"""
+	List every stored revision of one request rule set, newest first.
+	"""
+	requestRuleRevisions(
+		"""
+		Request rule-set ID whose revisions are returned.
+		"""
+		ruleSetId: ID!
+	): [RequestRuleRevision!]!
+	"""
+	Read the instance-wide request-rule gate; requires system-settings management permission.
+	"""
+	requestRuleInstanceGates: RequestRuleInstanceGates!
+	"""
+	Read the decision recorded for one media request, or null when it was never evaluated.
+	
+	Two audiences reach this. A manager of the request's library sees the
+	whole trace. The **requester** sees the outcome, the fallback reason, the
+	reasons, and the tags, with `votes` emptied, which is the same redaction
+	the pre-flight enforces by construction.
+	"""
+	requestRuleDecision(
+		"""
+		Media request whose decision is returned.
+		"""
+		requestId: ID!
+	): RequestRuleDecision
+	"""
+	List recorded request decisions, newest first; requires catalog-settings management permission.
+	"""
+	requestRuleDecisions(
+		"""
+		Maximum decisions to return; defaults to 50 and is clamped to 1 through 500.
+		"""
+		limit: Int,
+		"""
+		Return only decisions whose effective outcome was this.
+		"""
+		outcome: RequestDecisionOutcomeValue
+	): [RequestRuleDecision!]!
+	"""
+	The request family's Rules Context Reference: every fact a request matcher may read.
+	"""
+	requestRuleInputReference: JSON!
+	"""
+	Evaluate a draft request without submitting it; requires request permission on the target library.
+	
+	Takes the submit mutation's own input type, deliberately: the pre-flight
+	and the submit share one input, one metadata read, and one evaluation
+	function, which is what makes "identical drafts yield identical
+	decisions" a property of the code rather than a promise.
+	"""
+	previewMyRequestDecision(
+		"""
+		The draft request to evaluate, exactly as it would be submitted.
+		"""
+		input: SubmitMediaRequestInput!
+	): RequestPreflightPayload!
+	"""
+	List every lifecycle claim on one title, live and historical; requires title management on the title's library.
+	"""
+	titleClaims(
+		"""
+		Title whose claims are returned.
+		"""
+		titleId: ID!
+	): [TitleClaim!]!
+	"""
 	List post-processing scripts visible to the caller.
 	"""
 	postProcessingScripts: [PostProcessingScriptPayload!]!
@@ -19676,6 +20160,21 @@ type ReleaseDecisionsPagePayload {
 }
 
 """
+Withdraws a claim by hand.
+"""
+input ReleaseTitleClaimInput {
+	"""
+	Claim to release.
+	"""
+	claimId: ID!
+	"""
+	Why it is being released. Required by the service: a hold withdrawn
+	without a reason leaves nothing to explain the deletion it permits.
+	"""
+	reason: String
+}
+
+"""
 Action when a rename destination already exists.
 """
 enum RenameCollisionPolicyValue {
@@ -19753,6 +20252,430 @@ type ReorderDownloadClientConfigsPayload {
 	Download-client identities in stored order.
 	"""
 	ids: [ID!]!
+}
+
+"""
+What a request evaluation concluded.
+"""
+enum RequestDecisionOutcomeValue {
+	"""
+	Approve without waiting for a person.
+	"""
+	AUTO_APPROVE
+	"""
+	Leave the request for a human. Every uncertainty lands here: a held
+	rule, a rule that errored, an unobservable fact, or no rule matching at
+	all.
+	"""
+	MANUAL_REVIEW
+	"""
+	Refuse the request.
+	"""
+	DENY
+}
+
+"""
+Requester-side pre-flight: what would happen if this draft were submitted
+now (FR-020).
+
+Deliberately has no vote table and no input document. A requester sees the
+outcome, the reasons behind it, and the tags an approval would stamp.
+"""
+type RequestPreflightPayload {
+	"""
+	What would actually happen if the draft were submitted now.
+	"""
+	outcome: RequestDecisionOutcomeValue!
+	"""
+	Why, in codes with the rule names that produced them.
+	"""
+	reasons: [RequestPreflightReason!]!
+	"""
+	Tags an approval would stamp on the created title.
+	"""
+	tags: [String!]!
+	"""
+	True when the metadata could not be fully established, so the verdict
+	rests on incomplete facts. An unevaluable policy never approves.
+	"""
+	metadataPartial: Boolean!
+	"""
+	Strictest mode among the rules that were consulted.
+	"""
+	evaluationMode: RequestRuleEvaluationModeValue!
+	"""
+	Why the verdict fell back to needing approval, when it did. One of the
+	arbitration vocabulary's codes (`rule_manual`, `held`, `error`,
+	`no_rule_matched`), or null when a rule decided outright. It carries no
+	rule internals: it names the shape of the fallback, never a vote.
+	"""
+	fallbackReason: String
+}
+
+"""
+One reason a decision came out the way it did, in the only form that is safe
+to show a requester: a stable code and the name of the rule that emitted it.
+Rule bodies never reach this surface.
+"""
+type RequestPreflightReason {
+	"""
+	Stable reason code the rule emitted.
+	"""
+	code: String!
+	"""
+	Name of the rule that emitted it.
+	"""
+	ruleName: String!
+}
+
+"""
+The durable trace of one request evaluation (FR-016).
+
+`policyOutcome` is what the rules concluded and `effectiveOutcome` is what
+the instance acted on. They disagree on purpose whenever the instance gate is
+off or every deciding rule is in shadow.
+"""
+type RequestRuleDecision {
+	"""
+	Trace ID, or null for a preview, which persists nothing.
+	"""
+	id: ID
+	"""
+	The media request this decision belongs to, or null for a preview.
+	"""
+	requestId: ID
+	"""
+	UTC time the evaluation ran.
+	"""
+	evaluatedAt: DateTime!
+	"""
+	Strictest mode among the rules that were consulted.
+	"""
+	mode: RequestRuleEvaluationModeValue!
+	"""
+	What actually happened to the request.
+	"""
+	effectiveOutcome: RequestDecisionOutcomeValue!
+	"""
+	What the rules concluded, whether or not they were allowed to act.
+	"""
+	policyOutcome: RequestDecisionOutcomeValue!
+	"""
+	Why the decision fell back rather than following a rule vote
+	(`no_rule_matched`, `held`, `error`, `rule_manual`), or null when a rule
+	decided.
+	"""
+	fallbackReason: String
+	"""
+	Per-rule votes. **Empty for a requester reading their own request's
+	decision**, who sees `reasons` instead.
+	"""
+	votes: [RequestRuleVote!]!
+	"""
+	Reason codes with the rules that emitted them, flattened out of the
+	votes. Safe for every audience, and the only explanation a requester
+	gets.
+	"""
+	reasons: [RequestPreflightReason!]!
+	"""
+	Tags the rules emitted. Recorded on every path; applied to a title only
+	on an approval.
+	"""
+	tags: [String!]!
+	"""
+	Schema version of the input document the rules were evaluated against.
+	"""
+	inputSchemaVersion: Int!
+}
+
+"""
+How a request rule set is evaluated.
+"""
+enum RequestRuleEvaluationModeValue {
+	"""
+	Stored but never evaluated, and the mode every new rule set is created
+	in.
+	"""
+	DISABLED
+	"""
+	Evaluated and recorded; the effective decision stays whatever the
+	library permission would have produced on its own.
+	"""
+	SHADOW
+	"""
+	Evaluated, recorded, and acted on.
+	"""
+	ENFORCE
+}
+
+"""
+The instance-wide request-rule gate. One switch, defaulting off: a request
+rule votes and executes nothing, so there is one blast radius.
+"""
+type RequestRuleInstanceGates {
+	"""
+	Whether stored request rules are allowed to decide anything. While this
+	is off every evaluation still runs and is recorded, but the effective
+	outcome stays whatever the library permission would have produced.
+	"""
+	evaluationEnabled: Boolean!
+}
+
+"""
+Author-side preview of one matcher against one hypothetical request.
+
+Nothing is persisted but the trace the evaluation writes, and the caller
+already holds catalog-settings authority, so this is the one place the whole
+input document is returned.
+"""
+type RequestRulePreviewPayload {
+	"""
+	Stored rule set the preview ran, or the throwaway ID an unsaved draft
+	compiled under.
+	"""
+	ruleSetId: String!
+	"""
+	Hash of the exact source that produced this outcome.
+	"""
+	matcherContentHash: String!
+	"""
+	The single rule's verdict, shaped as a decision so the authoring UI and
+	the decision browser render the same component. `effectiveOutcome`
+	equals `policyOutcome` here because a preview is never subject to the
+	instance gate.
+	"""
+	decision: RequestRuleDecision!
+	"""
+	True when the sample's metadata could not be fully established, so some
+	facts were unknown.
+	"""
+	metadataPartial: Boolean!
+	"""
+	The exact document the rule saw.
+	"""
+	inputDocument: JSON!
+}
+
+"""
+One immutable revision of a request rule set's matcher.
+"""
+type RequestRuleRevision {
+	"""
+	Revision ID.
+	"""
+	id: ID!
+	"""
+	ID of the rule set this revision belongs to.
+	"""
+	ruleSetId: ID!
+	"""
+	Revision number, starting at one and incremented on every matcher edit.
+	"""
+	revisionNumber: Int!
+	"""
+	Rego source as the editor should show it, with the package declaration
+	and the rego.v1 import stripped.
+	"""
+	regoSource: String!
+	"""
+	Hash of the exact stored source, used to attribute a decision to the
+	revision that produced it.
+	"""
+	matcherContentHash: String!
+	"""
+	ID of the user who wrote the revision, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+}
+
+"""
+The hypothetical request an author-side preview is evaluated against.
+
+It names a real user and a real library on purpose: the question a preview
+answers is "what would this rule do to *this person* asking for *this
+title*", and a synthetic requester would exercise none of the permission,
+history, or linked-provider facts that make request rules useful.
+"""
+input RequestRuleSampleInput {
+	"""
+	User to evaluate as.
+	"""
+	userId: ID!
+	"""
+	Library to evaluate against.
+	"""
+	libraryId: ID!
+	"""
+	Provider identifiers of the sample title. An empty list is a legitimate
+	preview of requester facts alone, and leaves every metadata fact
+	unknown.
+	"""
+	externalIds: [ExternalIdInput!]!
+	"""
+	Quality profile the sample requests.
+	"""
+	qualityProfileId: ID
+	"""
+	Monitoring policy the sample requests.
+	"""
+	monitorType: MonitorTypeValue
+	"""
+	Lease the sample requests, in days.
+	"""
+	leaseDays: Int
+	"""
+	Set to true for a sample that asks to keep the title forever. Rejected
+	together with `leaseDays`.
+	"""
+	leaseForever: Boolean
+}
+
+"""
+A request rule set: identity, scope, and evaluation state. The matcher lives
+on the revision, never here.
+"""
+type RequestRuleSet {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Rule-set name.
+	"""
+	name: String!
+	"""
+	Rule-set description; empty when the author supplied none.
+	"""
+	description: String!
+	"""
+	Whether the rule set is enabled. Derived from `evaluationMode` rather
+	than set independently: false for `DISABLED`, true otherwise.
+	"""
+	enabled: Boolean!
+	"""
+	Evaluation mode currently stored for the rule set.
+	"""
+	evaluationMode: RequestRuleEvaluationModeValue!
+	"""
+	Libraries the rule is confined to. Empty means every library.
+	"""
+	libraryIds: [String!]!
+	"""
+	Revision number of the matcher currently in force.
+	"""
+	currentRevisionNumber: Int!
+	"""
+	How many recorded decisions this rule took part in. Traces outlive the
+	rule that produced them, so this can be non-zero for a rule that is now
+	disabled.
+	"""
+	decisionCount: Int!
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+A rule set together with the revision currently in force.
+"""
+type RequestRuleSetDetail {
+	"""
+	The rule set itself.
+	"""
+	ruleSet: RequestRuleSet!
+	"""
+	The revision currently in force.
+	"""
+	revision: RequestRuleRevision!
+}
+
+"""
+Result of validating request rule source without saving it.
+"""
+type RequestRuleValidationPayload {
+	"""
+	Whether the source is valid.
+	"""
+	valid: Boolean!
+	"""
+	Validation errors; empty when valid.
+	"""
+	errors: [String!]!
+}
+
+"""
+One rule's recorded vote inside a decision trace.
+
+`vote` is null exactly when `error` is set: a rule that failed produced no
+vote, and rendering that as an abstain would say the rule looked and had no
+opinion.
+"""
+type RequestRuleVote {
+	"""
+	Rule set that voted.
+	"""
+	ruleSetId: ID!
+	"""
+	That rule set's name as it was when the vote was cast. Recorded on the
+	trace, so it survives the rule being renamed or deleted.
+	"""
+	ruleSetName: String!
+	"""
+	Revision that voted.
+	"""
+	revisionNumber: Int!
+	"""
+	The vote, or null when the rule failed.
+	"""
+	vote: RequestVoteValue
+	"""
+	True when Scryer held the rule because a fact it reads was unobservable,
+	rather than the author writing `manual`. Both arbitrate identically.
+	"""
+	held: Boolean!
+	"""
+	Reason codes the rule emitted.
+	"""
+	reasonCodes: [String!]!
+	"""
+	Tags the rule emitted.
+	"""
+	tags: [String!]!
+	"""
+	Why the rule failed, or null when it did not.
+	"""
+	error: String
+}
+
+"""
+One rule's vote on one request.
+"""
+enum RequestVoteValue {
+	"""
+	The rule would approve.
+	"""
+	APPROVE
+	"""
+	The rule refuses. A deny outranks every other vote.
+	"""
+	DENY
+	"""
+	The rule wants a person to look. Outranks an approve.
+	"""
+	MANUAL
+	"""
+	The rule ran and had no opinion.
+	"""
+	ABSTAIN
 }
 
 """
@@ -20897,6 +21820,31 @@ input SetPrimaryMovieFileInput {
 }
 
 """
+Arms or disarms the instance-wide request-rule gate. An omitted field leaves
+the gate exactly as stored.
+"""
+input SetRequestRuleInstanceGatesInput {
+	"""
+	Whether stored request rules may decide anything.
+	"""
+	evaluationEnabled: Boolean
+}
+
+"""
+Moves a rule set between evaluation modes.
+"""
+input SetRequestRuleModeInput {
+	"""
+	Rule-set ID.
+	"""
+	ruleSetId: ID!
+	"""
+	Mode to store. Anything other than `DISABLED` also enables the rule.
+	"""
+	mode: RequestRuleEvaluationModeValue!
+}
+
+"""
 Monitoring state change for a series-movie link.
 """
 input SetSeriesMovieMonitoredInput {
@@ -21349,6 +22297,11 @@ input SubmitMediaRequestInput {
 	Seasons and series movies to monitor; required with `ADVANCED`.
 	"""
 	requestedMonitorSelection: MonitorSelectionInput
+	"""
+	How long the requester wants the media kept, in days. Omitted means
+	forever, which is what Scryer granted before leases existed.
+	"""
+	requestedLeaseDays: Int
 }
 
 """
@@ -22073,6 +23026,69 @@ enum TitleCatalogSortKeyValue {
 	Sort by MDBList rating.
 	"""
 	RATING_MDBLIST
+}
+
+"""
+One hold on one title.
+"""
+type TitleClaim {
+	"""
+	Claim ID.
+	"""
+	id: ID!
+	"""
+	Title the claim holds.
+	"""
+	titleId: ID!
+	"""
+	Library that title belongs to.
+	"""
+	libraryId: ID!
+	"""
+	What produced the claim.
+	"""
+	producer: LifecycleClaimProducerValue!
+	"""
+	The producing media request's ID, or null for an operator pin.
+	"""
+	producerRef: String
+	"""
+	What the claim holds.
+	"""
+	kind: LifecycleClaimKindValue!
+	"""
+	Current lifecycle state.
+	"""
+	state: LifecycleClaimStateValue!
+	"""
+	Requested window in days for a retention claim; null for a keep.
+	"""
+	durationDays: Int
+	"""
+	When the claim started running, which is the title's first import. Null
+	while dormant.
+	"""
+	startsAt: DateTime
+	"""
+	When the window closes. Null while dormant and for a keep.
+	"""
+	expiresAt: DateTime
+	"""
+	ID of the user the claim is attributed to, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+	"""
+	Why the claim was released or converted; kept as history, never cleared.
+	"""
+	releasedReason: String
 }
 
 """
@@ -23908,6 +24924,11 @@ input UpdateMediaRequestInput {
 	Seasons and series movies to monitor; required with `ADVANCED`.
 	"""
 	requestedMonitorSelection: MonitorSelectionInput
+	"""
+	Replacement lease in days; omitted means forever. Always applied,
+	because the edit form always carries the current value.
+	"""
+	requestedLeaseDays: Int
 }
 
 """
@@ -24356,6 +25377,43 @@ input UpdateRecycleBinSettingsInput {
 }
 
 """
+Replaces the matcher of an existing rule set, appending revision N+1.
+"""
+input UpdateRequestRuleMatcherInput {
+	"""
+	Rule-set ID.
+	"""
+	ruleSetId: ID!
+	"""
+	Replacement matcher source as written in the editor.
+	"""
+	regoSource: String!
+}
+
+"""
+Renames and re-scopes a rule set without touching its matcher, so no
+revision is created.
+"""
+input UpdateRequestRuleMetadataInput {
+	"""
+	Rule-set ID.
+	"""
+	ruleSetId: ID!
+	"""
+	Replacement name.
+	"""
+	name: String!
+	"""
+	Replacement description; omitted clears it.
+	"""
+	description: String
+	"""
+	Replacement library scope. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
+}
+
+"""
 Patches a rule set while preserving omitted values.
 """
 input UpdateRuleSetInput {
@@ -24733,6 +25791,16 @@ input ValidateExternalImportConnectionInput {
 Validates maintenance rule source without saving it.
 """
 input ValidateMaintenanceRuleInput {
+	"""
+	Matcher source to validate, as written in the editor.
+	"""
+	regoSource: String!
+}
+
+"""
+Validates request rule source without saving it.
+"""
+input ValidateRequestRuleInput {
 	"""
 	Matcher source to validate, as written in the editor.
 	"""

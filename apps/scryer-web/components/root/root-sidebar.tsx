@@ -129,7 +129,11 @@ function isSettingsNavEntryActive(
   settingsSection: SettingsSection,
 ): boolean {
   if (entryId === "rules") {
-    return settingsSection === "rules" || settingsSection === "maintenanceRules";
+    return (
+      settingsSection === "rules" ||
+      settingsSection === "maintenanceRules" ||
+      settingsSection === "requestRules"
+    );
   }
   return entryId === settingsSection;
 }
@@ -197,8 +201,8 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "calendar" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
-      // Scoring and maintenance rules share this entry; the Rules page's own
-      // gutter picks the kind, so the sidebar names the subject once.
+      // Scoring, maintenance and request rules share this entry; the Rules
+      // page's own gutter picks the kind, so the sidebar names the subject once.
       { kind: "settings", id: "rules", labelKey: "nav.rules", icon: SlidersHorizontal },
       { kind: "settings", id: "post-processing", icon: FolderCog },
     ],
@@ -391,6 +395,12 @@ const settingsEntries: Array<{
     id: "maintenanceRules",
     label: (t) => t("settings.maintenanceRules"),
     icon: Wrench,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
+    id: "requestRules",
+    label: (t) => t("settings.requestRules"),
+    icon: Inbox,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
@@ -747,10 +757,11 @@ function RootSidebarContent({
     () =>
       settingsEntries.filter(
         (entry) =>
-          // Maintenance rules are still being finished, so the shortcut is
-          // offered only when the instance has opted in. The permission it
-          // already required still applies on top.
-          (entry.id !== "maintenanceRules" || experimentalFeaturesEnabled) &&
+          // Maintenance and request rules are still being finished, so their
+          // shortcuts are offered only when the instance has opted in. The
+          // permission each already required still applies on top.
+          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
+            experimentalFeaturesEnabled) &&
           (!entry.requiredAnyAppPermission ||
             hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
             entry.requiredAnyLibraryPermission?.some((permission) =>

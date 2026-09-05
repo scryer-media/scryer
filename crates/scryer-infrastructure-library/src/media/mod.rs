@@ -1,6 +1,7 @@
 pub mod canonical_tags;
 pub mod images;
 pub mod libraries;
+pub mod lifecycle_claims;
 pub(crate) mod monitor_selections;
 pub mod requests;
 pub mod search;

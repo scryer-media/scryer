@@ -272,6 +272,37 @@ impl AppServicesBuilder {
         self
     }
 
+    /// Not a required service: request rules ship dark behind the experimental
+    /// gate, and an assembly that never configures the store simply has no
+    /// rules to read (spec 0003 FR-013).
+    pub fn with_request_rule_set_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::RequestRuleSetRepository + Send + Sync + 'static,
+    {
+        self.services.customization.request_rule_sets = store;
+        self
+    }
+
+    /// Not required either: without it there is nowhere to record a trace, and
+    /// the gate that would produce one is off anyway.
+    pub fn with_request_rule_decision_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::RequestRuleDecisionRepository + Send + Sync + 'static,
+    {
+        self.services.customization.request_rule_decisions = store;
+        self
+    }
+
+    /// Not required either: no claim store means no lease can be granted, which
+    /// is what an instance without request rules looks like.
+    pub fn with_lifecycle_claim_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::LifecycleClaimRepository + Send + Sync + 'static,
+    {
+        self.services.catalog.lifecycle_claims = store;
+        self
+    }
+
     pub fn with_post_processing_script_store<T>(mut self, store: Arc<T>) -> Self
     where
         T: PostProcessingScriptRepository + Send + Sync + 'static,

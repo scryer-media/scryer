@@ -3602,6 +3602,135 @@ export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetI
   }
 }`;
 
+// ── Request Rules ─────────────────────────────────────────────────────
+//
+// Request rules are saved DISABLED and nothing evaluates until three separate
+// controls agree: the instance gate (system-settings), the rule's own mode
+// (catalog settings), and the requester's library permission.
+
+export const REQUEST_RULE_SET_FIELDS = `
+    id
+    name
+    description
+    enabled
+    evaluationMode
+    libraryIds
+    currentRevisionNumber
+    decisionCount
+    createdAt
+    updatedAt`;
+
+const requestRuleRevisionFieldSelection = `
+    id
+    ruleSetId
+    revisionNumber
+    regoSource
+    matcherContentHash
+    createdBy
+    createdAt`;
+
+/// Detail payload shared by the rule-set query and every mutation that returns
+/// a rule set with its current revision.
+export const REQUEST_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${REQUEST_RULE_SET_FIELDS}
+    }
+    revision {${requestRuleRevisionFieldSelection}
+    }`;
+
+/// The full trace, votes included. Only ever asked for on the surfaces that
+/// carry the authority to see them: the recent-decisions table (catalog
+/// settings), the author preview, and a request read by a manager of its
+/// library. A requester asking the same question receives the same shape with
+/// `votes` empty — there is no flag saying which you got.
+export const REQUEST_RULE_DECISION_FIELDS = `
+    id
+    requestId
+    evaluatedAt
+    mode
+    effectiveOutcome
+    policyOutcome
+    fallbackReason
+    inputSchemaVersion
+    votes {
+      ruleSetId
+      ruleSetName
+      revisionNumber
+      vote
+      held
+      reasonCodes
+      tags
+      error
+    }
+    reasons {
+      code
+      ruleName
+    }
+    tags`;
+
+export const requestRuleSetsQuery = `query RequestRuleSets {
+  requestRuleSets {${REQUEST_RULE_SET_FIELDS}
+  }
+}`;
+
+export const requestRuleSetQuery = `query RequestRuleSet($id: ID!) {
+  requestRuleSet(id: $id) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const requestRuleRevisionsQuery = `query RequestRuleRevisions($ruleSetId: ID!) {
+  requestRuleRevisions(ruleSetId: $ruleSetId) {${requestRuleRevisionFieldSelection}
+  }
+}`;
+
+export const requestRuleInstanceGatesQuery = `query RequestRuleInstanceGates {
+  requestRuleInstanceGates {
+    evaluationEnabled
+  }
+}`;
+
+export const requestRuleDecisionsQuery = `query RequestRuleDecisions($limit: Int, $outcome: RequestDecisionOutcomeValue) {
+  requestRuleDecisions(limit: $limit, outcome: $outcome) {${REQUEST_RULE_DECISION_FIELDS}
+  }
+}`;
+
+/// The requester's own pre-flight. It takes the submit input verbatim, which is
+/// what makes the answer it gives the same one the submit path will reach, and
+/// it carries no field a vote could travel in.
+export const previewMyRequestDecisionQuery = `query PreviewMyRequestDecision($input: SubmitMediaRequestInput!) {
+  previewMyRequestDecision(input: $input) {
+    outcome
+    metadataPartial
+    evaluationMode
+    fallbackReason
+    tags
+    reasons {
+      code
+      ruleName
+    }
+  }
+}`;
+
+export const TITLE_CLAIM_FIELDS = `
+    id
+    titleId
+    libraryId
+    producer
+    producerRef
+    kind
+    state
+    durationDays
+    startsAt
+    expiresAt
+    createdBy
+    createdAt
+    updatedAt
+    releasedReason`;
+
+export const titleClaimsQuery = `query TitleClaims($titleId: ID!) {
+  titleClaims(titleId: $titleId) {${TITLE_CLAIM_FIELDS}
+  }
+}`;
+
 // ── Community Rule Packs ──────────────────────────────────────────────
 
 export const rulePackRegistryQuery = `query RulePackRegistry {
@@ -4074,6 +4203,18 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     createdByUserId
     createdAt
     updatedAt
+    requestedLeaseDays
+    approvedLeaseDays
+    policyTags
+    lease {
+      requestedDays
+      approvedDays
+      state
+      startsAt
+      expiresAt
+    }
+    decision {${REQUEST_RULE_DECISION_FIELDS}
+    }
   }
 }`;
 
@@ -4135,6 +4276,18 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     createdByUserId
     createdAt
     updatedAt
+    requestedLeaseDays
+    approvedLeaseDays
+    policyTags
+    lease {
+      requestedDays
+      approvedDays
+      state
+      startsAt
+      expiresAt
+    }
+    decision {${REQUEST_RULE_DECISION_FIELDS}
+    }
   }
 }`;
 
