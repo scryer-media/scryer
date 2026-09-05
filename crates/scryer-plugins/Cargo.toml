@@ -28,12 +28,12 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", 
 rustls-native-certs = "0.8"
 url = "2"
 uuid = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 tempfile = "3"
 libc = "0.2"
 blake3 = "1"
 # RFC 123 WP1: native wasmtime archive host (crypto ABI + command protocol).
-wasmparser = "0.254"
+wasmparser = "0.258"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 
