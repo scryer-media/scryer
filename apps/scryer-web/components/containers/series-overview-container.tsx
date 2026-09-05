@@ -804,9 +804,18 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const retainedEpisodeIds = episodeIdsForEpisodeRecord(
         retainedEpisodesByCollection,
       );
-      setEpisodesByCollection((current) =>
-        retainEquivalentSnapshot(current, retainedEpisodesByCollection),
-      );
+      // Prune the live state, not the render-phase ref. A snapshot that applies
+      // between an episode-detail response and its commit would otherwise write
+      // the pre-detail copy back over it, silently dropping that episode's
+      // playback links, overview and image until the title is reopened.
+      setEpisodesByCollection((current) => {
+        const retained = Object.fromEntries(
+          Object.entries(current).filter(([collectionId]) =>
+            nextCollectionIds.has(collectionId),
+          ),
+        );
+        return retainEquivalentSnapshot(current, retained);
+      });
       setEpisodeDetailsLoaded((current) => {
         const retained = new Set<string>();
         for (const episodeId of current) {

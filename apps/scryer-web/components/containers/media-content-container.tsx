@@ -46,6 +46,7 @@ import {
   titleCatalogFilterOptionsQuery,
   buildTitlesQuery,
 } from "@/lib/graphql/queries";
+import { mergePreferLoadedImageFields } from "@/lib/utils/catalog-title-merge";
 import { selectedOverviewUsesMovieRecord } from "@/lib/utils/selected-overview-policy";
 import {
   CATEGORY_SCOPE_MAP,
@@ -327,101 +328,6 @@ type ActiveCatalogListFilters = {
   query: string;
   libraryIds: readonly string[];
 };
-
-function mergePreferLoadedImageFields(
-  current: TitleRecord,
-  incoming: TitleRecord,
-): TitleRecord {
-  const incomingHasPoster = Boolean(
-    incoming.posterUrl || incoming.posterSourceUrl,
-  );
-  const incomingHasBackground = Boolean(
-    incoming.backgroundUrl || incoming.backgroundSourceUrl,
-  );
-
-  return {
-    ...incoming,
-    posterUrl: incomingHasPoster
-      ? incoming.posterUrl
-      : (current.posterUrl ?? null),
-    posterSourceUrl: incomingHasPoster
-      ? incoming.posterSourceUrl
-      : (current.posterSourceUrl ?? null),
-    backgroundUrl: incomingHasBackground
-      ? incoming.backgroundUrl
-      : (current.backgroundUrl ?? null),
-    backgroundSourceUrl: incomingHasBackground
-      ? incoming.backgroundSourceUrl
-      : (current.backgroundSourceUrl ?? null),
-    overview:
-      incoming.overview === undefined ? current.overview : incoming.overview,
-    runtimeMinutes:
-      incoming.runtimeMinutes === undefined
-        ? current.runtimeMinutes
-        : incoming.runtimeMinutes,
-    language:
-      incoming.language === undefined ? current.language : incoming.language,
-    firstAired:
-      incoming.firstAired === undefined
-        ? current.firstAired
-        : incoming.firstAired,
-    network:
-      incoming.network === undefined ? current.network : incoming.network,
-    studio: incoming.studio === undefined ? current.studio : incoming.studio,
-    country:
-      incoming.country === undefined ? current.country : incoming.country,
-    metadataLanguage:
-      incoming.metadataLanguage === undefined
-        ? current.metadataLanguage
-        : incoming.metadataLanguage,
-    monitorType:
-      incoming.monitorType === undefined
-        ? current.monitorType
-        : incoming.monitorType,
-    useSeasonFolders:
-      incoming.useSeasonFolders === undefined
-        ? current.useSeasonFolders
-        : incoming.useSeasonFolders,
-    monitorSpecials:
-      incoming.monitorSpecials === undefined
-        ? current.monitorSpecials
-        : incoming.monitorSpecials,
-    interSeasonMovies:
-      incoming.interSeasonMovies === undefined
-        ? current.interSeasonMovies
-        : incoming.interSeasonMovies,
-    fillerPolicy:
-      incoming.fillerPolicy === undefined
-        ? current.fillerPolicy
-        : incoming.fillerPolicy,
-    recapPolicy:
-      incoming.recapPolicy === undefined
-        ? current.recapPolicy
-        : incoming.recapPolicy,
-    collections:
-      incoming.collections === undefined
-        ? current.collections
-        : incoming.collections,
-    mediaFiles:
-      incoming.mediaFiles === undefined
-        ? current.mediaFiles
-        : incoming.mediaFiles,
-    sizeBytes:
-      incoming.sizeBytes === undefined ? current.sizeBytes : incoming.sizeBytes,
-    imdbId: incoming.imdbId === undefined ? current.imdbId : incoming.imdbId,
-    externalIds:
-      incoming.externalIds === undefined ? current.externalIds : incoming.externalIds,
-    canonicalTags:
-      incoming.canonicalTags === undefined
-        ? current.canonicalTags
-        : incoming.canonicalTags,
-    ratings: incoming.ratings === undefined ? current.ratings : incoming.ratings,
-    // Catalog list refreshes omit credits; treating that as "no cast" would
-    // blank the overview rail on every list refresh.
-    credits: incoming.credits === undefined ? current.credits : incoming.credits,
-    metadataFetchedAt: incoming.metadataFetchedAt ?? current.metadataFetchedAt,
-  };
-}
 
 function mergeCatalogTitlesPreservingImages(
   currentTitles: TitleRecord[],
