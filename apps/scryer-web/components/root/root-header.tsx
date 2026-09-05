@@ -4,6 +4,7 @@ import {
   Eraser,
   LogOut,
   Search,
+  ShieldCheck,
   User,
   X,
 } from "lucide-react";
@@ -79,7 +80,9 @@ import { useSearchContext } from "@/lib/context/search-context";
 import { cn } from "@/lib/utils";
 import { buildViewPath } from "@/lib/utils/routing";
 import {
+  APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  hasAnyAppPermission,
   hasAnyLibraryPermission,
 } from "@/lib/utils/permissions";
 import {
@@ -177,6 +180,11 @@ export const RootHeader = React.memo(function RootHeader({
   const canViewCatalog = user
     ? hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.view)
     : false;
+  // Form login off means nobody has to sign in yet. Offer a one-click jump to
+  // Security so the admin who can turn it on does not have to hunt for it.
+  const canEnableFormLogin =
+    effectiveFormLoginEnabled === false &&
+    hasAnyAppPermission(user, [APP_PERMISSIONS.manageUsers]);
   const searchTriggerPlaceholder = canViewCatalog
     ? t("search.globalPlaceholder")
     : t("search.globalPlaceholderNoLibrary");
@@ -548,6 +556,11 @@ export const RootHeader = React.memo(function RootHeader({
   const handleOpenProfile = React.useCallback(() => {
     setAccountMenuOpen(false);
     navigate(buildViewPath("settings", "profile"));
+  }, [navigate]);
+
+  const handleEnableLogin = React.useCallback(() => {
+    setAccountMenuOpen(false);
+    navigate(buildViewPath("settings", "security"));
   }, [navigate]);
 
   const handleLogout = React.useCallback(() => {
@@ -1775,6 +1788,18 @@ export const RootHeader = React.memo(function RootHeader({
                     <User className="mr-2 h-4 w-4 text-[var(--scry-accent-ring)]" />
                     {t("settings.profile")}
                   </Button>
+                  {canEnableFormLogin ? (
+                    <Button
+                      id="account-menu-enable-login"
+                      type="button"
+                      variant="ghost"
+                      className="h-11 w-full justify-start rounded-[9px] px-3 text-sm font-medium text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] focus-visible:ring-primary/25"
+                      onClick={handleEnableLogin}
+                    >
+                      <ShieldCheck className="mr-2 h-4 w-4 text-[var(--scry-accent-ring)]" />
+                      {t("settings.enableFormLogin")}
+                    </Button>
+                  ) : null}
                   {token && effectiveFormLoginEnabled !== false ? (
                     <Button
                       id="account-menu-logout"

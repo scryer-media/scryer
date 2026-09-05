@@ -217,6 +217,7 @@ const en: LocaleDictionary = {
   "settings.general": "General",
   "settings.backups": "Backups",
   "settings.security": "Security",
+  "settings.enableFormLogin": "Enable login",
   "settings.securityEnableFormLogin": "Form login",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
