@@ -188,7 +188,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -268,7 +268,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
           components: clippy
 
       - name: Install sccache
@@ -436,7 +436,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -471,7 +471,7 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends mold nasm
 
-      - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
+      - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: nextest
 
@@ -580,7 +580,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
 
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends musl-tools mold
@@ -803,7 +803,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
 
       - name: Install system dependencies
         shell: bash
@@ -1063,7 +1063,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
           targets: ${{ matrix.target }}
 
       - name: Restore sccache directory
@@ -1818,8 +1818,8 @@ jobs:
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
 
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -2025,8 +2025,8 @@ jobs:
       - name: Prepare build context
         run: sh docker/prepare-build-context.sh artifacts docker-ctx
 
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -2320,7 +2320,7 @@ jobs:
         run: test -s "release-notes/${{ steps.release_meta.outputs.tag_name }}.md"
 
       - name: Publish release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ steps.release_meta.outputs.tag_name }}
           name: ${{ steps.release_meta.outputs.tag_name }}
