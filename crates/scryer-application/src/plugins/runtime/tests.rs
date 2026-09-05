@@ -20,6 +20,7 @@ mod indexer_config_reconciliation_tests {
             host_binding: None,
             options: Vec::new(),
             help_text: None,
+            ..Default::default()
         }
     }
 

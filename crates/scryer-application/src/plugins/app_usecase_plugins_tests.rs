@@ -625,6 +625,7 @@ impl MockPluginProvider {
                 host_binding: None,
                 options: Vec::new(),
                 help_text: None,
+                ..Default::default()
             });
         self
     }
@@ -698,6 +699,7 @@ impl IndexerPluginProvider for MockPluginProvider {
                 host_binding: None,
                 options: Vec::new(),
                 help_text: None,
+                ..Default::default()
             });
         }
 
@@ -991,6 +993,7 @@ fn make_runtime_plugin_load(
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }]
     }
 
@@ -3869,6 +3872,7 @@ fn validate_downloaded_plugin_descriptor_rejects_invalid_allowed_hosts() {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 }],
                 allowed_hosts: vec!["https://example.com".to_string()],
                 rate_limit_seconds: None,

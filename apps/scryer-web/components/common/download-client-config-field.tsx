@@ -4,6 +4,7 @@ import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { InfoHelp } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -104,6 +105,29 @@ export function DownloadClientConfigField({
           </SelectContent>
         </Select>
       </label>
+    );
+  }
+
+  if (field.fieldType === "FILTERED_SELECT" && field.options.length > 0) {
+    return (
+      <div>
+        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+          {field.label}
+          {requiredMarker}
+          {help}
+        </Label>
+        <FilterableSelect
+          id={fieldId}
+          value={value || field.defaultValue || ""}
+          onValueChange={(next) => onChange(field.key, next)}
+          ariaLabel={field.label}
+          optionIdPrefix={optionIdPrefix}
+          options={field.options.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+        />
+      </div>
     );
   }
 

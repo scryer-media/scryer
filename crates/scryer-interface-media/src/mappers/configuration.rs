@@ -786,6 +786,11 @@ pub fn from_provider_type(
                     })
                     .collect(),
                 help_text: f.help_text,
+                visible_when: f.visible_when.map(PluginFieldConditionPayload::from_domain),
+                required_when: f
+                    .required_when
+                    .map(PluginFieldConditionPayload::from_domain),
+                advanced: f.advanced,
             })
             .collect(),
     }
@@ -955,6 +960,7 @@ mod option_tests {
                 ]),
             }],
             help_text: None,
+            ..Default::default()
         };
 
         let options = provider_config_field_payload_options(&field);

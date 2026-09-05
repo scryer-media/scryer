@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router";
 import {
+  ChevronRight,
   Edit,
   Logs,
   Lock,
@@ -12,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { DownloadClientConfigField } from "@/components/common/download-client-config-field";
 import {
   IndexerErrorHistoryModal,
   type IndexerErrorHistoryScope,
@@ -21,8 +23,13 @@ import { ProxyAssignmentSelect } from "@/components/common/proxy-assignment-sele
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
-import { Input, signedIntegerInputProps } from "@/components/ui/input";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -31,7 +38,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import {
   Table,
@@ -54,6 +60,10 @@ import type {
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
 import { selectorId } from "@/lib/utils/dom-ids";
+import {
+  resolveConfigFieldsForValues,
+  splitAdvancedConfigFields,
+} from "@/lib/utils/provider-config-fields";
 import { buildIndexerSettingsPath } from "@/lib/utils/routing";
 import { applyIndexerConfigOption } from "@/lib/utils/indexer-setup";
 import { cn } from "@/lib/utils";
@@ -271,125 +281,72 @@ function IndexerStatusCell({
   );
 }
 
-function DynamicConfigField({
-  field,
-  value,
-  hasStoredSecretValue = false,
-  onChange,
-}: {
+/// The Indexers form renders the same declarations the download-client form
+/// does, so it shares that renderer rather than keeping a second copy that
+/// silently lags behind it — this one had no TAG or PATH branch, and would have
+/// needed a third FILTERED_SELECT branch. Only the id prefix is pinned, because
+/// selectors depend on it.
+function DynamicConfigField(props: {
   field: ConfigFieldDef;
   value: string;
   hasStoredSecretValue?: boolean;
   onChange: (key: string, value: string) => void;
 }) {
-  const t = useTranslate();
-  const fieldId = selectorId("settings-indexer-field", field.key);
-  const requiredMarker = field.required ? (
-    <span aria-hidden="true" className="text-destructive">
-      *
-    </span>
-  ) : null;
-
-  if (field.fieldType === "BOOL") {
-    return (
-      <CheckboxField
-        id={fieldId}
-        checked={value === "true"}
-        onCheckedChange={(checkedValue) =>
-          onChange(field.key, checkedValue === true ? "true" : "false")
-        }
-        label={field.label}
-        labelAccessory={requiredMarker}
-        description={field.helpText}
-        className="items-center"
-        checkboxClassName="mt-0"
-      />
-    );
-  }
-
-  if (field.fieldType === "SELECT" && field.options.length > 0) {
-    return (
-      <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
-          {field.label}
-          {requiredMarker}
-        </Label>
-        <Select
-          value={value || field.defaultValue || ""}
-          onValueChange={(v) => onChange(field.key, v)}
-        >
-          <SelectTrigger id={fieldId} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {field.options.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {field.helpText ? (
-          <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.fieldType === "MULTILINE") {
-    return (
-      <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
-          {field.label}
-          {requiredMarker}
-        </Label>
-        <Textarea
-          id={fieldId}
-          value={value}
-          onChange={(e) => onChange(field.key, e.target.value)}
-          required={field.required && !hasStoredSecretValue}
-          placeholder={field.defaultValue ?? ""}
-          rows={6}
-        />
-        {field.helpText ? (
-          <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
-        ) : null}
-      </label>
-    );
-  }
-
   return (
-    <label>
-      <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
-        {field.label}
-        {requiredMarker}
-      </Label>
-      <Input
-        id={fieldId}
-        value={value}
-        onChange={(e) => onChange(field.key, e.target.value)}
-        {...(field.fieldType === "NUMBER" ? signedIntegerInputProps : {})}
-        type={
-          field.fieldType === "PASSWORD"
-            ? "password"
-            : field.fieldType === "NUMBER"
-              ? "number"
-              : "text"
-        }
-        required={field.required && !hasStoredSecretValue}
-        placeholder={
-          hasStoredSecretValue
-            ? t("form.apiKeyStoredPlaceholder")
-            : field.defaultValue ?? ""
-        }
-      />
-      {field.helpText ? (
-        <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
-      ) : null}
-    </label>
+    <DownloadClientConfigField {...props} idPrefix="settings-indexer-field" />
   );
 }
 
+/// One provider's fields: everything that is not a checkbox in a grid, then the
+/// checkboxes in a row under it. Used once for the standard fields and once
+/// inside the advanced disclosure so the two groups lay out identically.
+function ProviderConfigFieldGroup({
+  fields,
+  draft,
+  onChange,
+}: {
+  fields: ConfigFieldDef[];
+  draft: IndexerDraft;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (fields.length === 0) {
+    return null;
+  }
+  const boolFields = fields.filter((field) => field.fieldType === "BOOL");
+  const valueFor = (field: ConfigFieldDef, fallback: string) =>
+    draft.configValues[field.key] ?? field.defaultValue ?? fallback;
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 md:grid-cols-3">
+        {fields
+          .filter((field) => field.fieldType !== "BOOL")
+          .map((field) => (
+            <DynamicConfigField
+              key={field.key}
+              field={field}
+              value={valueFor(field, "")}
+              hasStoredSecretValue={draft.storedSecretKeys.includes(field.key)}
+              onChange={onChange}
+            />
+          ))}
+      </div>
+      {boolFields.length > 0 ? (
+        <div className="flex items-center gap-6">
+          {boolFields.map((field) => (
+            <DynamicConfigField
+              key={field.key}
+              field={field}
+              value={valueFor(field, "false")}
+              hasStoredSecretValue={draft.storedSecretKeys.includes(field.key)}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 function IndexerDownloadClientSelect({
   model,
   selectId,
@@ -900,14 +857,24 @@ export function SettingsIndexersSection({
 
   const selectedProviderFields = React.useMemo(
     () =>
-      visibleIndexerConfigFields(
-        normalizedProviderType,
-        (selectedProvider?.configFields ?? []).filter(
-          (field) => field.valueSource !== "HOST_BINDING",
-        ),
-      ),
-    [normalizedProviderType, selectedProvider],
+      visibleIndexerConfigFields(selectedProvider?.configFields ?? []),
+    [selectedProvider],
   );
+
+  // Conditions are resolved against the draft, so a field appears or becomes
+  // required the moment the field it depends on changes.
+  const { standard: standardProviderFields, advanced: advancedProviderFields } =
+    React.useMemo(
+      () =>
+        splitAdvancedConfigFields(
+          resolveConfigFieldsForValues(
+            selectedProviderFields,
+            indexerDraft.configValues,
+          ),
+        ),
+      [indexerDraft.configValues, selectedProviderFields],
+    );
+  const [advancedConfigOpen, setAdvancedConfigOpen] = React.useState(false);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
@@ -1431,45 +1398,42 @@ export function SettingsIndexersSection({
                 <Label className="text-sm font-medium">
                   {t("settings.indexerConfig")}
                 </Label>
-                <div className="grid gap-3 md:grid-cols-3">
-                  {selectedProviderFields
-                    .filter((f) => f.fieldType !== "BOOL")
-                    .map((field) => (
-                      <DynamicConfigField
-                        key={field.key}
-                        field={field}
-                        value={
-                          indexerDraft.configValues[field.key] ??
-                          field.defaultValue ??
-                          ""
-                        }
-                        hasStoredSecretValue={indexerDraft.storedSecretKeys.includes(
-                          field.key,
-                        )}
+                <ProviderConfigFieldGroup
+                  fields={standardProviderFields}
+                  draft={indexerDraft}
+                  onChange={handleConfigValueChange}
+                />
+                {advancedProviderFields.length > 0 ? (
+                  <Collapsible
+                    open={advancedConfigOpen}
+                    onOpenChange={setAdvancedConfigOpen}
+                  >
+                    <CollapsibleTrigger asChild>
+                      <button
+                        id="settings-indexer-advanced-toggle"
+                        type="button"
+                        className="flex items-center gap-1.5 rounded-[8px] py-1 text-sm font-medium text-[var(--scry-muted)] transition-colors hover:text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "h-4 w-4 transition-transform",
+                            advancedConfigOpen && "rotate-90",
+                          )}
+                        />
+                        {t("settings.advancedConfig")}
+                        <span className="text-[var(--scry-faint)]">
+                          ({advancedProviderFields.length})
+                        </span>
+                      </button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-3">
+                      <ProviderConfigFieldGroup
+                        fields={advancedProviderFields}
+                        draft={indexerDraft}
                         onChange={handleConfigValueChange}
                       />
-                    ))}
-                </div>
-                {selectedProviderFields.some((f) => f.fieldType === "BOOL") ? (
-                  <div className="flex items-center gap-6">
-                    {selectedProviderFields
-                      .filter((f) => f.fieldType === "BOOL")
-                      .map((field) => (
-                        <DynamicConfigField
-                          key={field.key}
-                          field={field}
-                          value={
-                            indexerDraft.configValues[field.key] ??
-                            field.defaultValue ??
-                            "false"
-                          }
-                          hasStoredSecretValue={indexerDraft.storedSecretKeys.includes(
-                            field.key,
-                          )}
-                          onChange={handleConfigValueChange}
-                        />
-                      ))}
-                  </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 ) : null}
               </div>
             ) : null}
