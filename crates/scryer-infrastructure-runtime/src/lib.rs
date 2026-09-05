@@ -101,7 +101,9 @@ pub(crate) use scryer_infrastructure_acquisition::proxy_config_store::ProxyConfi
 pub(crate) use scryer_infrastructure_configuration::customization::{
     maintenance_evaluation_store::MaintenanceEvaluationStore,
     maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
-    post_processing_script_store::PostProcessingScriptStore, rule_set_store::RuleSetStore,
+    post_processing_script_store::PostProcessingScriptStore,
+    request_rule_decision_store::RequestRuleDecisionStore,
+    request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,
 };
 pub(crate) use scryer_infrastructure_configuration::settings::{
     quality_profile_store::QualityProfileStore, settings_store::SettingsStore,
@@ -130,6 +132,7 @@ pub(crate) use scryer_infrastructure_library::media::{
         store::LibraryStore,
         title_merge_store::TitleMergeStore,
     },
+    lifecycle_claims::LifecycleClaimStore,
     requests::MediaRequestStore,
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,

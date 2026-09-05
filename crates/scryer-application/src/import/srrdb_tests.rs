@@ -10,9 +10,15 @@ const RELEASE_NAME: &str = "Harbor.Pals.S01E02.1080p.WEB.H264-LANTERNS";
 const MEMBER_CRC: &str = "CBF43926";
 const MEMBER_SIZE: u64 = 1_234_567;
 
+/// One registry per test. `RateLimitRegistry::new()` hands back the
+/// process-wide shared registry, so the production lookup's 1 rps lane would
+/// serialize every case here behind one bucket and fail the losers outright
+/// (`NoRetry` does not wait) when the suite runs in parallel; `isolated()` is
+/// a fresh registry that nothing else shares.
 fn lookup_for(server: &MockServer) -> SrrdbHttpFilenameLookup {
-    SrrdbHttpFilenameLookup::new(
+    SrrdbHttpFilenameLookup::with_rate_limits(
         reqwest::Url::parse(&format!("{}/v1", server.uri())).expect("base url"),
+        RateLimitRegistry::isolated(),
     )
 }
 

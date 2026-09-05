@@ -12,6 +12,10 @@ pub struct AppCatalogServices {
     pub(crate) shows: Arc<dyn ShowRepository>,
     pub(crate) libraries: Arc<dyn LibraryRepository>,
     pub(crate) media_requests: Arc<dyn MediaRequestRepository>,
+    /// Title leases and keep claims (spec 0003 FR-041…FR-044). Catalog-side
+    /// because a claim is a hold on a title, not on the request that produced
+    /// it: an operator pin has no request at all.
+    pub(crate) lifecycle_claims: Arc<dyn crate::ports::LifecycleClaimRepository>,
 }
 
 #[derive(Clone)]
@@ -150,6 +154,17 @@ pub struct AppCustomizationServices {
     pub(crate) rule_sets: Arc<dyn RuleSetRepository>,
     pub(crate) maintenance_rule_sets: Arc<dyn MaintenanceRuleSetRepository>,
     pub(crate) maintenance_evaluation: Arc<dyn crate::ports::MaintenanceEvaluationRepository>,
+    /// User-authored request rules (spec 0003). Ships dark behind the same
+    /// experimental gate as maintenance.
+    pub(crate) request_rule_sets: Arc<dyn crate::ports::RequestRuleSetRepository>,
+    /// Append-only traces of every request evaluation (spec 0003 FR-016).
+    pub(crate) request_rule_decisions: Arc<dyn crate::ports::RequestRuleDecisionRepository>,
+    /// The compiled request-rules engine and the per-rule library scope map,
+    /// rebuilt by every mutating authoring call. It lives beside
+    /// [`Self::user_rules`] — the release engine — because both are compiled
+    /// artefacts of stored sources, swapped under a lock rather than rebuilt per
+    /// evaluation.
+    pub(crate) request_rules_engine: crate::request_rules::RequestRulesEngineHandle,
     pub(crate) pp_scripts: Arc<dyn PostProcessingScriptRepository>,
     pub(crate) plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
@@ -291,6 +306,7 @@ impl AppServices {
                 shows,
                 libraries: Arc::new(NullLibraryRepository),
                 media_requests: Arc::new(NullMediaRequestRepository),
+                lifecycle_claims: Arc::new(null_repositories::NullLifecycleClaimRepository),
             },
             identity: AppIdentityServices {
                 users,
@@ -403,6 +419,13 @@ impl AppServices {
                 maintenance_evaluation: Arc::new(
                     null_repositories::NullMaintenanceEvaluationRepository,
                 ),
+                request_rule_sets: Arc::new(null_repositories::NullRequestRuleSetRepository),
+                request_rule_decisions: Arc::new(
+                    null_repositories::NullRequestRuleDecisionRepository,
+                ),
+                request_rules_engine: Arc::new(std::sync::RwLock::new(
+                    crate::request_rules::RequestRulesEngineCache::default(),
+                )),
                 pp_scripts: Arc::new(NullPostProcessingScriptRepository),
                 plugin_installations: Arc::new(NullPluginInstallationRepository),
                 plugin_descriptor_loader: Arc::new(NullPluginDescriptorLoader),

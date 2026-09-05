@@ -151,12 +151,20 @@ pub struct SrrdbHttpFilenameLookup {
 
 impl SrrdbHttpFilenameLookup {
     pub fn new(base_url: reqwest::Url) -> Self {
+        Self::with_rate_limits(base_url, SRRDB_RATE_LIMITS.clone())
+    }
+
+    /// A lookup with its own rate-limit registry.
+    ///
+    /// Production shares one process-wide registry so every caller queues on
+    /// the same 1 rps lane for srrdb.com. Tests hand each mock server an
+    /// isolated registry instead: on the shared one, thirty parallel cases
+    /// contend for a single one-request bucket and, with `NoRetry`, the losers
+    /// fail as outages instead of waiting.
+    pub fn with_rate_limits(base_url: reqwest::Url, rate_limits: RateLimitRegistry) -> Self {
         Self {
             base_url,
-            client: OutboundHttpClient::new(
-                no_redirect_reqwest_client(),
-                SRRDB_RATE_LIMITS.clone(),
-            ),
+            client: OutboundHttpClient::new(no_redirect_reqwest_client(), rate_limits),
         }
     }
 

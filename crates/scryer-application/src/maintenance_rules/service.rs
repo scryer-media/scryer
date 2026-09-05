@@ -28,7 +28,8 @@ use crate::maintenance_rules::action_execution::{
     EXECUTABLE_TITLE_RULE_ACTIONS, title_rule_action_not_executable,
 };
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch, build_title_input,
+    MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
+    build_title_input,
 };
 use crate::maintenance_rules::{
     MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
@@ -520,6 +521,21 @@ impl AppUseCase {
         let signals_by_title = self
             .maintenance_watch_signals_for_titles(&watch_context, &titles)
             .await?;
+        // Claims are read exactly as the pass reads them, including what
+        // happens when the store is down: preview degrades to unknown claim
+        // facts rather than erroring, so an operator previewing a lease rule
+        // during an outage sees the same hold the scheduled pass would produce.
+        let claims_by_title = match self.maintenance_claims_for_titles(&titles).await {
+            Ok(claims) => Some(claims),
+            Err(error) => {
+                tracing::warn!(
+                    rule_set_id = policy.id.as_str(),
+                    error = %error,
+                    "could not read lifecycle claims; preview reports claim facts as unknown"
+                );
+                None
+            }
+        };
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
@@ -549,6 +565,13 @@ impl AppUseCase {
                 context: &watch_context,
                 signals: signals_by_title.get(&title.id).map(Vec::as_slice),
             };
+            let claims = MaintenanceTitleClaims {
+                claims: claims_by_title
+                    .as_ref()
+                    .and_then(|claims| claims.get(&title.id))
+                    .map(Vec::as_slice),
+                store_readable: claims_by_title.is_some(),
+            };
             let input = build_title_input(
                 evaluated_at,
                 &title,
@@ -556,6 +579,7 @@ impl AppUseCase {
                 files,
                 people,
                 watch,
+                claims,
                 series_movies_by_title
                     .get(&title.id)
                     .map(Vec::as_slice)

@@ -12,11 +12,11 @@ use scryer_application::{
 };
 use scryer_domain::{DomainEventActorKind, MediaRequestStatus, User};
 
-fn request_store(services: &SqliteServices) -> crate::MediaRequestStore {
+pub(super) fn request_store(services: &SqliteServices) -> crate::MediaRequestStore {
     crate::MediaRequestStore::new(services.datastore())
 }
 
-async fn seed_user(services: &SqliteServices, id: &str) {
+pub(super) async fn seed_user(services: &SqliteServices, id: &str) {
     UserRepository::create(
         &user_store(services),
         User {
@@ -32,7 +32,7 @@ async fn seed_user(services: &SqliteServices, id: &str) {
     .expect("seed user");
 }
 
-async fn seed_library(services: &SqliteServices, id: &str) {
+pub(super) async fn seed_library(services: &SqliteServices, id: &str) {
     sqlx::query(
         "INSERT INTO libraries
             (id, facet, name, slug, is_default, created_at, updated_at)
@@ -47,13 +47,13 @@ async fn seed_library(services: &SqliteServices, id: &str) {
     .expect("seed library");
 }
 
-async fn seed_title(services: &SqliteServices, id: &str) {
+pub(super) async fn seed_title(services: &SqliteServices, id: &str) {
     TitleRepository::create(&title_store(services), make_test_title(id, None))
         .await
         .expect("seed title");
 }
 
-fn request_event(request_id: &str) -> NewDomainEvent {
+pub(super) fn request_event(request_id: &str) -> NewDomainEvent {
     NewDomainEvent {
         event_id: Id::new().0,
         occurred_at: Utc::now(),
@@ -68,6 +68,7 @@ fn request_event(request_id: &str) -> NewDomainEvent {
         stream: DomainEventStream::Global,
         payload: DomainEventPayload::MediaRequestSubmitted(
             scryer_domain::MediaRequestSubmittedEventData {
+                requested_lease_days: None,
                 request_id: request_id.to_string(),
                 library_id: "library-1".to_string(),
                 facet: MediaFacet::Movie,
@@ -83,7 +84,7 @@ fn request_event(request_id: &str) -> NewDomainEvent {
     }
 }
 
-fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMediaRequest {
+pub(super) fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMediaRequest {
     NewMediaRequest {
         rating_summary: scryer_domain::TitleRatingSummary::default(),
         background_url: None,
@@ -104,12 +105,14 @@ fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMediaRequest {
         requested_quality_profile_id: None,
         requested_quality_profile_name: None,
         requested_monitor_type: None,
+        requested_lease_days: None,
+        metadata_snapshot_json: "{}".to_string(),
         external_ids: Vec::new(),
         created_by_user_id: submitter.to_string(),
     }
 }
 
-fn user(id: &str) -> User {
+pub(super) fn user(id: &str) -> User {
     User {
         id: id.to_string(),
         username: id.to_string(),
@@ -141,11 +144,15 @@ async fn approve_onto_title(services: &SqliteServices, request_id: &str, title_i
             request_id,
             MediaRequestResolution {
                 status: MediaRequestStatus::Approved,
-                resolved_by_user_id: "resolver".to_string(),
+                resolved_by_user_id: Some("resolver".to_string()),
                 resolved_at: Utc::now(),
                 created_title_id: Some(title_id.to_string()),
                 approved_quality_profile_id: None,
                 approved_quality_profile_name: None,
+                approved_lease_days: None,
+                decision_id: None,
+                decided_by_rule_set_ids: Vec::new(),
+                policy_tags: Vec::new(),
                 event: request_event(request_id),
             },
         )

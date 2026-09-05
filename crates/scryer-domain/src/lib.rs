@@ -375,6 +375,24 @@ pub struct MediaRequest {
     pub created_title_id: Option<String>,
     pub approved_quality_profile_id: Option<String>,
     pub approved_quality_profile_name: Option<String>,
+    /// Lease the requester asked for, in days. `None` means forever, which is
+    /// the dialog default (plan 0003 A2).
+    pub requested_lease_days: Option<i64>,
+    /// Lease the approver granted. `None` on a pending request, and on an
+    /// approved one it means the approver granted forever.
+    pub approved_lease_days: Option<i64>,
+    /// The [`RequestRuleDecisionRecord`] that decided this request, when rules
+    /// were evaluated at all.
+    pub decision_id: Option<String>,
+    /// Rule sets that voted for the effective outcome.
+    pub decided_by_rule_set_ids: Vec<String>,
+    /// Tags the rules emitted, merged onto the created title at approval
+    /// (spec 0003 FR-050).
+    pub policy_tags: Vec<String>,
+    /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
+    /// A raw JSON string here: the typed snapshot lives in the application
+    /// layer, so the domain carries the bytes and nothing interprets them.
+    pub metadata_snapshot_json: String,
     pub external_ids: Vec<ExternalId>,
     pub requesters: Vec<MediaRequestRequester>,
     pub created_by_user_id: String,
@@ -3283,6 +3301,10 @@ pub struct MediaRequestSubmittedEventData {
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,
+    /// `None` means forever. Defaulted on read: events written before request
+    /// leases existed carry no lease at all, which is exactly "forever".
+    #[serde(default)]
+    pub requested_lease_days: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3298,6 +3320,16 @@ pub struct MediaRequestResolvedEventData {
     pub requested_monitor_type: Option<String>,
     pub approved_quality_profile_id: Option<String>,
     pub approved_quality_profile_name: Option<String>,
+    /// Policy provenance, all defaulted on read so events written before
+    /// request rules existed decode unchanged (constitution C6).
+    #[serde(default)]
+    pub decided_by_rule_set_ids: Vec<String>,
+    #[serde(default)]
+    pub decision_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub approved_lease_days: Option<i64>,
+    #[serde(default)]
+    pub policy_tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4643,6 +4675,295 @@ pub struct LifecycleActionRun {
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+/// How far a request rule set is allowed to act (spec 0003 FR-013).
+///
+/// The whole enum is pinned here, storage strings included, even though the
+/// persistence wave only ever writes [`Self::Disabled`]: the column ships now
+/// and must not need a migration when the evaluator lands.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestRuleEvaluationMode {
+    #[default]
+    Disabled,
+    /// Evaluate and record the trace; the effective decision stays whatever
+    /// today's permission check would have produced.
+    Shadow,
+    /// Evaluate, record, and act on the decision.
+    Enforce,
+}
+
+impl RequestRuleEvaluationMode {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Shadow => "shadow",
+            Self::Enforce => "enforce",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "shadow" => Some(Self::Shadow),
+            "enforce" => Some(Self::Enforce),
+            _ => None,
+        }
+    }
+}
+
+/// A user-authored request rule set: identity, scope, and evaluation state.
+///
+/// The matcher lives on [`RequestRuleRevision`], never here, so changing what a
+/// rule decides always produces a new revision.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleSet {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub evaluation_mode: RequestRuleEvaluationMode,
+    /// Libraries this rule is confined to. Empty means every library.
+    pub library_ids: Vec<String>,
+    /// Revision number of the matcher currently in force.
+    pub current_revision_number: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One immutable revision of a request rule set's matcher.
+///
+/// Revisions are append-only, exactly as maintenance revisions are: editing the
+/// matcher writes revision N+1 and repoints the rule set, so a decision can
+/// always be attributed to the exact source that produced it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleRevision {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    /// Rego source with the package declaration already rewritten to the
+    /// system-assigned rule ID.
+    pub rego_source: String,
+    pub matcher_content_hash: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What a request evaluation concluded (spec 0003 FR-010, FR-011).
+///
+/// [`Self::ManualReview`] is the default because every failure path — engine
+/// error, timeout, unknown fact, no matching rule — lands there: a decision this
+/// build cannot interpret must never read back as an approval or a denial.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestDecisionOutcome {
+    AutoApprove,
+    #[default]
+    ManualReview,
+    Deny,
+}
+
+impl RequestDecisionOutcome {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::AutoApprove => "auto_approve",
+            Self::ManualReview => "manual_review",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "auto_approve" => Some(Self::AutoApprove),
+            "manual_review" => Some(Self::ManualReview),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+}
+
+/// The durable trace of one request evaluation (spec 0003 FR-016).
+///
+/// Written for every evaluation, shadow and enforce alike, which is why
+/// `policy_outcome` (what the rules said) and `effective_outcome` (what the
+/// instance acted on) are separate columns: in shadow they disagree on purpose.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleDecisionRecord {
+    pub id: String,
+    /// The media request this decision belongs to. Not a foreign key: a
+    /// pre-flight decision is recorded before any request row exists.
+    pub request_id: String,
+    pub evaluated_at: DateTime<Utc>,
+    pub mode: RequestRuleEvaluationMode,
+    pub effective_outcome: RequestDecisionOutcome,
+    pub policy_outcome: RequestDecisionOutcome,
+    /// Why the decision fell back rather than following a rule vote
+    /// (`no_rule_matched`, `held`, `error`, …). `None` when a rule decided.
+    pub fallback_reason: Option<String>,
+    /// Serialized per-rule votes, reasons, and rule ids. JSON because the vote
+    /// shape belongs to the application layer.
+    pub votes_json: String,
+    /// Tags the rules emitted, in the order the arbitration produced them.
+    pub tags: Vec<String>,
+    /// Hash of the bounded input document, so a decision can be compared
+    /// against the data it was made on.
+    pub input_hash: String,
+    pub input_schema_version: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What produced a lifecycle claim (plan 0003 §5).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleClaimProducer {
+    /// A finite lease approved on a media request.
+    #[default]
+    RequestLease,
+    /// A "forever" request: a permanent keep.
+    RequestPermanent,
+    /// An administrator pinned the title by hand.
+    OperatorKeep,
+}
+
+impl LifecycleClaimProducer {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::RequestLease => "request_lease",
+            Self::RequestPermanent => "request_permanent",
+            Self::OperatorKeep => "operator_keep",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "request_lease" => Some(Self::RequestLease),
+            "request_permanent" => Some(Self::RequestPermanent),
+            "operator_keep" => Some(Self::OperatorKeep),
+            _ => None,
+        }
+    }
+}
+
+/// What a lifecycle claim holds (plan 0003 §5).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleClaimKind {
+    /// Holds until `expires_at`, which starts running at first import.
+    #[default]
+    RetainUntil,
+    /// Holds indefinitely.
+    Keep,
+}
+
+impl LifecycleClaimKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::RetainUntil => "retain_until",
+            Self::Keep => "keep",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "retain_until" => Some(Self::RetainUntil),
+            "keep" => Some(Self::Keep),
+            _ => None,
+        }
+    }
+}
+
+/// Lifecycle state of one claim (plan 0003 §5).
+///
+/// Claims are released, never deleted (constitution C3): the terminal states are
+/// history, and only [`Self::Dormant`] and [`Self::Active`] hold anything.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleClaimState {
+    /// Created but not yet started: the title has never imported.
+    #[default]
+    Dormant,
+    /// Running; `expires_at` is set for a retention claim.
+    Active,
+    /// The retention window elapsed.
+    Expired,
+    /// Withdrawn before it ran out (request canceled, title deleted, admin).
+    Released,
+    /// Superseded by a permanent keep.
+    Converted,
+}
+
+impl LifecycleClaimState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Dormant => "dormant",
+            Self::Active => "active",
+            Self::Expired => "expired",
+            Self::Released => "released",
+            Self::Converted => "converted",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "dormant" => Some(Self::Dormant),
+            "active" => Some(Self::Active),
+            "expired" => Some(Self::Expired),
+            "released" => Some(Self::Released),
+            "converted" => Some(Self::Converted),
+            _ => None,
+        }
+    }
+
+    /// A live claim holds every destructive maintenance action on its title
+    /// (spec 0003 FR-042). A dormant claim counts: the title simply has not
+    /// imported yet, and deleting it would destroy the very thing the claim was
+    /// created to protect.
+    pub const fn is_live(self) -> bool {
+        matches!(self, Self::Dormant | Self::Active)
+    }
+}
+
+/// Storage form of the live claim states. Duplicated as a literal list in the
+/// `lifecycle_claims` partial unique index, which is what enforces one live
+/// claim per (producer, producer_ref).
+pub const LIFECYCLE_CLAIM_LIVE_STATES: [&str; 2] = [
+    LifecycleClaimState::Dormant.as_storage_str(),
+    LifecycleClaimState::Active.as_storage_str(),
+];
+
+/// A hold on a title's lifecycle: a request lease, a permanent keep, or an
+/// operator pin (plan 0003 §5, spec 0003 FR-041…FR-044).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleClaim {
+    pub id: String,
+    pub title_id: String,
+    pub library_id: String,
+    pub producer: LifecycleClaimProducer,
+    /// The producing media request's id, for a request-produced claim. `None`
+    /// for an operator pin, which has nothing upstream to release against.
+    pub producer_ref: Option<String>,
+    pub kind: LifecycleClaimKind,
+    pub state: LifecycleClaimState,
+    /// Requested window for a retention claim; `None` for a keep.
+    pub duration_days: Option<i64>,
+    /// When the claim started running — the title's first import.
+    pub starts_at: Option<DateTime<Utc>>,
+    /// `starts_at + duration_days` once activated; `None` while dormant and for
+    /// keeps.
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Why the claim was released or converted. Kept as history, never cleared.
+    pub released_reason: Option<String>,
+}
+
+impl LifecycleClaim {
+    /// See [`LifecycleClaimState::is_live`].
+    pub const fn is_live(&self) -> bool {
+        self.state.is_live()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -36,10 +36,11 @@ use crate::{
     ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
     HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
     IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore, LibraryScanUnmatchedStore,
-    LocationOperationStore, MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore,
-    MediaRequestStore, MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient,
-    MigrationMode, NotificationStore, OAuthStore, PendingReleaseStore, PluginStore,
-    PostProcessingScriptStore, ProxyConfigStore, QualityProfileStore, ReleaseStore, RuleSetStore,
+    LifecycleClaimStore, LocationOperationStore, MaintenanceEvaluationStore,
+    MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore, MediaServerConnectionStore,
+    MediaServerSignalStore, MetadataGatewayClient, MigrationMode, NotificationStore, OAuthStore,
+    PendingReleaseStore, PluginStore, PostProcessingScriptStore, ProxyConfigStore,
+    QualityProfileStore, ReleaseStore, RequestRuleDecisionStore, RequestRuleSetStore, RuleSetStore,
     SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
     SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleMergeStore, TitleStore, TotpStore,
@@ -1040,6 +1041,25 @@ impl DatastoreAssembly {
         Arc::new(MaintenanceEvaluationStore::new(self.datastore()))
     }
 
+    /// Built on demand for the same reason as the maintenance stores: request
+    /// rules ship dark behind the experimental gate, so nothing constructs the
+    /// store eagerly (spec 0003 FR-013).
+    pub fn request_rule_set_store(&self) -> Arc<RequestRuleSetStore> {
+        Arc::new(RequestRuleSetStore::new(self.datastore()))
+    }
+
+    /// Traces are written only when a rule set evaluates, which the gate keeps
+    /// off by default.
+    pub fn request_rule_decision_store(&self) -> Arc<RequestRuleDecisionStore> {
+        Arc::new(RequestRuleDecisionStore::new(self.datastore()))
+    }
+
+    /// Claims are written only by an approval that granted a lease, so the
+    /// store is built on demand rather than per-engine.
+    pub fn lifecycle_claim_store(&self) -> Arc<LifecycleClaimStore> {
+        Arc::new(LifecycleClaimStore::new(self.datastore()))
+    }
+
     /// Media-server watch signals (RFC 137 §7.3, WP-M). Built on demand: the
     /// store is written only by the signal sync job, which does nothing at all
     /// until a media-server connection with verified linked accounts exists.
@@ -1504,6 +1524,9 @@ impl DatastoreAssembly {
                 .with_rule_set_store(rule_set_store.clone())
                 .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
                 .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
+                .with_request_rule_set_store(self.request_rule_set_store())
+                .with_request_rule_decision_store(self.request_rule_decision_store())
+                .with_lifecycle_claim_store(self.lifecycle_claim_store())
                 .with_post_processing_script_store(post_processing_script_store.clone())
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())
@@ -1626,6 +1649,9 @@ impl DatastoreAssembly {
                 .with_rule_set_store(rule_set_store.clone())
                 .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
                 .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
+                .with_request_rule_set_store(self.request_rule_set_store())
+                .with_request_rule_decision_store(self.request_rule_decision_store())
+                .with_lifecycle_claim_store(self.lifecycle_claim_store())
                 .with_post_processing_script_store(post_processing_script_store.clone())
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())

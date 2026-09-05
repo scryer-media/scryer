@@ -65,6 +65,31 @@ impl RuntimeLimits {
             max_input_bytes: 4 * 1024 * 1024,
         }
     }
+
+    /// Limits for request-rule engines.
+    ///
+    /// The tightest evaluation budget of the three, because this family alone
+    /// runs *synchronously on the submit path*: a requester is waiting on the
+    /// answer, and the pre-flight banner re-evaluates as they type. 100 ms is
+    /// far more than a well-written rule needs and still short enough that a
+    /// runaway one cannot make submitting a request feel broken — and a rule
+    /// that does exceed it becomes a per-rule error, which arbitrates to manual
+    /// review rather than to an approval or a denial.
+    ///
+    /// The policy bounds match maintenance (256 KiB, 5 000 lines): these are
+    /// hand-authored matchers of the same shape. The input bound is a quarter of
+    /// maintenance's, because a request document describes one draft request and
+    /// one title's metadata rather than a whole library subject's file list.
+    pub fn request_defaults() -> Self {
+        Self {
+            max_execution_time: Duration::from_millis(100),
+            timer_check_interval: NonZeroU32::new(4096).expect("non-zero"),
+            max_policy_bytes: NonZeroUsize::new(256 * 1024).expect("non-zero"),
+            max_policy_lines: NonZeroUsize::new(5_000).expect("non-zero"),
+            max_policy_col: NonZeroU32::new(1024).expect("non-zero"),
+            max_input_bytes: 1024 * 1024,
+        }
+    }
 }
 
 /// Build an engine with Scryer builtins registered and the given limits
@@ -87,10 +112,14 @@ pub(crate) fn configured_engine(limits: &RuntimeLimits) -> Engine {
 
 /// Serialize an input document, enforcing the host-side size bound before it
 /// reaches the engine.
-pub(crate) fn bounded_input_value<T: Serialize>(
+///
+/// The document is returned as `serde_json::Value` rather than a Regorus value
+/// because the policy core inspects it — observation envelopes are read off the
+/// serialized form, not the typed one — before handing it to the engine.
+pub(crate) fn bounded_input_document<T: Serialize + ?Sized>(
     input: &T,
     limits: &RuntimeLimits,
-) -> Result<regorus::Value, RulesError> {
+) -> Result<serde_json::Value, RulesError> {
     let bytes = serde_json::to_vec(input)?;
     if bytes.len() > limits.max_input_bytes {
         return Err(RulesError::InputTooLarge {
@@ -98,8 +127,17 @@ pub(crate) fn bounded_input_value<T: Serialize>(
             limit: limits.max_input_bytes,
         });
     }
-    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-    Ok(value.into())
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// Serialize an input document straight into the engine's value type, enforcing
+/// the same host-side size bound.
+#[cfg(test)]
+pub(crate) fn bounded_input_value<T: Serialize>(
+    input: &T,
+    limits: &RuntimeLimits,
+) -> Result<regorus::Value, RulesError> {
+    Ok(bounded_input_document(input, limits)?.into())
 }
 
 /// Stable content hash of a policy source. Used to attribute evaluation

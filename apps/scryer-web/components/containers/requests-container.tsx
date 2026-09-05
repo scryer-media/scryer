@@ -5,7 +5,10 @@ import { RequestsView } from "@/components/views/requests-view";
 import {
   approveMediaRequestMutation,
   cancelMyMediaRequestMutation,
+  convertTitleClaimToPermanentMutation,
   dismissMediaRequestMutation,
+  extendTitleClaimMutation,
+  releaseTitleClaimMutation,
   updateMyMediaRequestMutation,
 } from "@/lib/graphql/mutations";
 import {
@@ -14,8 +17,10 @@ import {
   mediaRequestsQuery,
   myMediaRequestsQuery,
   qualityProfileOptionsQuery,
+  titleClaimsQuery,
 } from "@/lib/graphql/queries";
 import type { Facet, LibraryRecord, MediaRequestRecord } from "@/lib/types";
+import type { TitleClaimRecord } from "@/lib/types/request-rule-sets";
 import type { MonitorSelectionDraft } from "@/lib/types/titles";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -54,6 +59,9 @@ type ApproveRequestValues = {
   qualityProfileId: string;
   monitorType?: string;
   monitorSelection?: MonitorSelectionDraft;
+  leaseDays?: number;
+  leaseForever?: boolean;
+  tags?: string[];
 };
 
 function sameStringArray(left: string[], right: string[]): boolean {
@@ -165,6 +173,16 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
   >([]);
   const [loading, setLoading] = React.useState(false);
   const [actionRequestId, setActionRequestId] = React.useState<string | null>(null);
+  const [claimsByRequestId, setClaimsByRequestId] = React.useState<
+    Record<string, TitleClaimRecord[]>
+  >({});
+  const [claimsLoadingRequestId, setClaimsLoadingRequestId] = React.useState<
+    string | null
+  >(null);
+  const [claimActionId, setClaimActionId] = React.useState<string | null>(null);
+  /// Which request each loaded claim list belongs to, so a claim mutation can
+  /// reload exactly the panel the operator is looking at.
+  const claimRequestIdByClaimIdRef = React.useRef(new Map<string, string>());
   const refreshSeqRef = React.useRef(0);
   const librariesRef = React.useRef<LibraryRecord[]>([]);
   const adminLibrariesRef = React.useRef<LibraryRecord[]>([]);
@@ -412,18 +430,34 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
               qualityProfileId: values.qualityProfileId,
               monitorType: values.monitorType ?? null,
               monitorSelection: values.monitorSelection ?? null,
+              /// Exactly one of the two, or neither: the API refuses a day
+              /// count and a forever flag together, because an approver who
+              /// sent both has not said what they want. Neither means "keep
+              /// what the requester asked for".
+              leaseDays: values.leaseDays ?? null,
+              leaseForever: values.leaseForever ?? null,
+              tags: values.tags ?? null,
             },
           })
           .toPromise();
         if (error) throw error;
         const searchError = data?.approveMediaRequest?.searchError;
+        /// The approval is deliberately not rolled back when the retention
+        /// claim could not be written, so the failure is reported rather than
+        /// swallowed: the title exists, and nothing is holding it.
+        const claimError = data?.approveMediaRequest?.claimError;
         setGlobalStatus(
-          searchError
-            ? t("status.requestApprovedSearchFailed", {
+          claimError
+            ? t("status.requestApprovedClaimFailed", {
                 name: request.title,
-                error: searchError,
+                error: claimError,
               })
-            : t("status.requestApproved", { name: request.title }),
+            : searchError
+              ? t("status.requestApprovedSearchFailed", {
+                  name: request.title,
+                  error: searchError,
+                })
+              : t("status.requestApproved", { name: request.title }),
         );
         dispatchNavigationBadgesRefresh();
         await refresh();
@@ -518,6 +552,121 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
     [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
   );
 
+  /// Read the holds on the title one request created. Only ever called when an
+  /// operator opens a row's claims panel: a page of approved requests would
+  /// otherwise be one query per row for a panel nobody looked at.
+  const loadClaims = React.useCallback(
+    async (request: MediaRequestRecord) => {
+      const titleId = request.createdTitleId?.trim();
+      if (!titleId) {
+        setClaimsByRequestId((prev) => ({ ...prev, [request.id]: [] }));
+        return;
+      }
+      setClaimsLoadingRequestId(request.id);
+      try {
+        const { data, error } = await client
+          .query(titleClaimsQuery, { titleId }, { requestPolicy: "network-only" })
+          .toPromise();
+        if (error) throw error;
+        const claims = (data?.titleClaims ?? []) as TitleClaimRecord[];
+        for (const claim of claims) {
+          claimRequestIdByClaimIdRef.current.set(claim.id, request.id);
+        }
+        setClaimsByRequestId((prev) => ({ ...prev, [request.id]: claims }));
+      } catch (error) {
+        setClaimsByRequestId((prev) => ({ ...prev, [request.id]: [] }));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+        );
+      } finally {
+        setClaimsLoadingRequestId(null);
+      }
+    },
+    [client, setGlobalStatus, t],
+  );
+
+  /// One shape for the three claim operations. Each reloads the panel it acted
+  /// on rather than patching the row: converting a lease writes a *second*
+  /// claim and leaves the first as history, so what the panel should now show
+  /// is not derivable from the single claim the mutation returned.
+  const runClaimAction = React.useCallback(
+    async (
+      claim: TitleClaimRecord,
+      run: () => Promise<{ error?: unknown }>,
+      successKey: string,
+    ) => {
+      if (claimActionId) {
+        return;
+      }
+      setClaimActionId(claim.id);
+      try {
+        const { error } = await run();
+        if (error) throw error;
+        setGlobalStatus(t(successKey));
+        const requestId = claimRequestIdByClaimIdRef.current.get(claim.id);
+        const request = requestId
+          ? requests.find((candidate) => candidate.id === requestId)
+          : undefined;
+        if (request) {
+          await loadClaims(request);
+        }
+        await refresh();
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+        );
+      } finally {
+        setClaimActionId(null);
+      }
+    },
+    [claimActionId, loadClaims, refresh, requests, setGlobalStatus, t],
+  );
+
+  const extendClaim = React.useCallback(
+    (claim: TitleClaimRecord, expiresAt: string) =>
+      runClaimAction(
+        claim,
+        () =>
+          client
+            .mutation(extendTitleClaimMutation, {
+              input: { claimId: claim.id, expiresAt },
+            })
+            .toPromise(),
+        "status.claimExtended",
+      ),
+    [client, runClaimAction],
+  );
+
+  const convertClaim = React.useCallback(
+    (claim: TitleClaimRecord) =>
+      runClaimAction(
+        claim,
+        () =>
+          client
+            .mutation(convertTitleClaimToPermanentMutation, {
+              input: { claimId: claim.id },
+            })
+            .toPromise(),
+        "status.claimMadePermanent",
+      ),
+    [client, runClaimAction],
+  );
+
+  const releaseClaim = React.useCallback(
+    (claim: TitleClaimRecord, reason: string) =>
+      runClaimAction(
+        claim,
+        () =>
+          client
+            .mutation(releaseTitleClaimMutation, {
+              input: { claimId: claim.id, reason },
+            })
+            .toPromise(),
+        "status.claimReleased",
+      ),
+    [client, runClaimAction],
+  );
+
   return (
     <RequestsView
       mode={mode}
@@ -541,6 +690,13 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       onDismiss={(request) => void dismissRequest(request)}
       onUpdateRequest={(request, values) => void updateRequest(request, values)}
       onCancelRequest={(request) => void cancelRequest(request)}
+      claimsByRequestId={claimsByRequestId}
+      claimsLoadingRequestId={claimsLoadingRequestId}
+      onLoadClaims={(request) => void loadClaims(request)}
+      onExtendClaim={(claim, expiresAt) => void extendClaim(claim, expiresAt)}
+      onConvertClaim={(claim) => void convertClaim(claim)}
+      onReleaseClaim={(claim, reason) => void releaseClaim(claim, reason)}
+      claimActionId={claimActionId}
     />
   );
 }

@@ -40,8 +40,8 @@ use crate::maintenance_rules::action_catalog::{
 };
 use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    QUALITY_PROFILE_TAG_PREFIX, build_title_input,
+    MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
+    QUALITY_PROFILE_TAG_PREFIX, build_title_input, claim_is_live_at,
 };
 use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
@@ -156,6 +156,11 @@ pub mod execution_reason {
     /// A location operation owns the title (FR-084); the action retries once
     /// the operation releases it.
     pub const LOCATION_OPERATION_HOLD: &str = "location_operation_hold";
+    /// A lifecycle claim still holds the title (spec 0003 FR-042): a request
+    /// lease that is running or has not started yet, or a keep claim. The
+    /// action retries once every claim has lapsed or been released — which is
+    /// why this is a hold and not a cancel.
+    pub const RETENTION_CLAIM_HOLD: &str = "retention_claim_hold";
     /// The action completed.
     pub const ACTION_SUCCEEDED: &str = "action_succeeded";
     /// The postcondition already held; nothing was mutated.
@@ -1143,6 +1148,43 @@ impl AppUseCase {
                 Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
             }
         }
+        // (3c) A lifecycle claim on the title (spec 0003 FR-042). Read here
+        // rather than left to the matcher, because this hold does not depend on
+        // the rule mentioning leases: a request the instance approved is a
+        // promise about *this title*, and every high-risk action waits for it
+        // the way it waits for a location operation. Dormant counts — a lease
+        // whose title has not been imported yet is the one case where deleting
+        // would destroy something nobody ever got.
+        //
+        // The same read answers the fact builder below, so preview, the
+        // scheduled pass, and this recheck all decide on one claim snapshot.
+        let recheck_time = Utc::now();
+        let claims_by_title = match self
+            .maintenance_claims_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(claims) => Some(claims),
+            // A claim store Scryer cannot read is a hold for a high-risk
+            // action, and unknown claim facts for everything else.
+            Err(_) if high_risk => {
+                return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            }
+            Err(_) => None,
+        };
+        if high_risk
+            && let Some(claims) = claims_by_title.as_ref()
+            && claims.get(&title.id).is_some_and(|claims| {
+                claims
+                    .iter()
+                    // Derived against this recheck's own clock, exactly as the
+                    // facts are: a lease whose window elapsed since the last
+                    // sweep is spent, and holding on it would make the executor
+                    // disagree with the rule that selected the candidate.
+                    .any(|claim| claim_is_live_at(claim, recheck_time))
+            })
+        {
+            return SafetyDecision::Hold(execution_reason::RETENTION_CLAIM_HOLD);
+        }
         let files_by_title = match self
             .maintenance_files_for_titles(std::slice::from_ref(&title))
             .await
@@ -1206,13 +1248,21 @@ impl AppUseCase {
             context: &watch_context,
             signals: signals_by_title.get(&title.id).map(Vec::as_slice),
         };
+        let claims = MaintenanceTitleClaims {
+            claims: claims_by_title
+                .as_ref()
+                .and_then(|claims| claims.get(&title.id))
+                .map(Vec::as_slice),
+            store_readable: claims_by_title.is_some(),
+        };
         let input = build_title_input(
-            Utc::now(),
+            recheck_time,
             &title,
             &library,
             files,
             people,
             watch,
+            claims,
             series_movies_by_title
                 .get(&title.id)
                 .map(Vec::as_slice)

@@ -193,6 +193,26 @@
           "descKey": "settings.refMaintFactsWatchedByAllRequesters"
         },
         {
+          "field": "keep_claim_active",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsKeepClaimActive"
+        },
+        {
+          "field": "request_lease_state",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseState"
+        },
+        {
+          "field": "request_lease_expires_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseExpiresAt"
+        },
+        {
+          "field": "active_retention_claims",
+          "type": "number",
+          "descKey": "settings.refMaintFactsActiveRetentionClaims"
+        },
+        {
           "field": "series_movies",
           "type": "object[]",
           "descKey": "settings.refMaintFactsSeriesMovies"
@@ -399,6 +419,26 @@
           "field": "watched_by_all_requesters",
           "type": "object",
           "descKey": "settings.refMaintFactsWatchedByAllRequesters"
+        },
+        {
+          "field": "keep_claim_active",
+          "type": "object",
+          "descKey": "settings.refMaintFactsKeepClaimActive"
+        },
+        {
+          "field": "request_lease_state",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestLeaseState"
+        },
+        {
+          "field": "request_lease_expires_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestLeaseExpiresAt"
+        },
+        {
+          "field": "active_retention_claims",
+          "type": "object",
+          "descKey": "settings.refMaintFactsActiveRetentionClaims"
         },
         {
           "field": "series_movies",
@@ -992,6 +1032,110 @@
           "field": "value",
           "type": "bool",
           "descKey": "settings.refMaintFactsWatchedByAllRequestersValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsKeepClaimActive",
+      "path": "input.observations.keep_claim_active",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsKeepClaimActiveValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestLeaseState",
+      "path": "input.observations.request_lease_state",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseStateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestLeaseExpiresAt",
+      "path": "input.observations.request_lease_expires_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseExpiresAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsActiveRetentionClaims",
+      "path": "input.observations.active_retention_claims",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsActiveRetentionClaimsValue"
         },
         {
           "field": "observed_at",

@@ -7073,6 +7073,7 @@ async fn resolve_pending_import_creates_unmonitored_movie_title_and_keeps_item_b
                     tmdb_release_date: Some("2020-01-01".into()),
                     ratings: Default::default(),
                     credits: Vec::new(),
+                    ..Default::default()
                 },
             )]),
         }),
@@ -7176,6 +7177,7 @@ async fn resolve_ignored_pending_import_creates_unmonitored_movie_title_and_clea
                     tmdb_release_date: Some("2020-01-01".into()),
                     ratings: Default::default(),
                     credits: Vec::new(),
+                    ..Default::default()
                 },
             )]),
         }),
@@ -7317,6 +7319,7 @@ async fn hydrate_titles_bulk_updates_title_name_for_selected_metadata_language()
                     tmdb_release_date: Some("2021-10-22".into()),
                     ratings: Default::default(),
                     credits: Vec::new(),
+                    ..Default::default()
                 },
             )]),
         }),

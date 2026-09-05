@@ -390,6 +390,12 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             requested_quality_profile_name: request.requested_quality_profile_name,
             requested_monitor_type: request.requested_monitor_type,
             requested_monitor_selection: request.requested_monitor_selection,
+            requested_lease_days: request.requested_lease_days,
+            approved_lease_days: None,
+            decision_id: None,
+            decided_by_rule_set_ids: Vec::new(),
+            policy_tags: Vec::new(),
+            metadata_snapshot_json: request.metadata_snapshot_json,
             external_ids: request.external_ids,
             requesters: vec![MediaRequestRequester {
                 user_id: requester.id.clone(),
@@ -443,12 +449,16 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 })
         }) {
             candidate.status = resolution.status;
-            candidate.resolved_by_user_id = Some(resolution.resolved_by_user_id.clone());
+            candidate.resolved_by_user_id = resolution.resolved_by_user_id.clone();
             candidate.resolved_at = Some(resolution.resolved_at);
             candidate.created_title_id = resolution.created_title_id.clone();
             candidate.approved_quality_profile_id = resolution.approved_quality_profile_id.clone();
             candidate.approved_quality_profile_name =
                 resolution.approved_quality_profile_name.clone();
+            candidate.approved_lease_days = resolution.approved_lease_days;
+            candidate.decision_id = resolution.decision_id.clone();
+            candidate.decided_by_rule_set_ids = resolution.decided_by_rule_set_ids.clone();
+            candidate.policy_tags = resolution.policy_tags.clone();
             candidate.updated_at = resolution.resolved_at;
             updated += 1;
         }
@@ -477,12 +487,16 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             candidate.id == request_id && candidate.status == MediaRequestStatus::Pending
         }) {
             candidate.status = resolution.status;
-            candidate.resolved_by_user_id = Some(resolution.resolved_by_user_id.clone());
+            candidate.resolved_by_user_id = resolution.resolved_by_user_id.clone();
             candidate.resolved_at = Some(resolution.resolved_at);
             candidate.created_title_id = resolution.created_title_id.clone();
             candidate.approved_quality_profile_id = resolution.approved_quality_profile_id.clone();
             candidate.approved_quality_profile_name =
                 resolution.approved_quality_profile_name.clone();
+            candidate.approved_lease_days = resolution.approved_lease_days;
+            candidate.decision_id = resolution.decision_id.clone();
+            candidate.decided_by_rule_set_ids = resolution.decided_by_rule_set_ids.clone();
+            candidate.policy_tags = resolution.policy_tags.clone();
             candidate.updated_at = resolution.resolved_at;
             updated += 1;
         }
@@ -507,6 +521,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         let mut requests = self.requests.lock().await;
@@ -522,6 +537,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         request.requested_quality_profile_name = Some(requested_quality_profile_name);
         request.requested_monitor_type = requested_monitor_type;
         request.requested_monitor_selection = requested_monitor_selection;
+        request.requested_lease_days = requested_lease_days;
         request.updated_at = now;
         let updated = request.clone();
         drop(requests);
@@ -635,5 +651,73 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             })
             .cloned()
             .collect())
+    }
+
+    /// Mirrors the SQL store: submissions only, so a user who seconded someone
+    /// else's request is not counted as having asked for it.
+    async fn count_for_requester(
+        &self,
+        user_id: &str,
+        status: Option<MediaRequestStatus>,
+        since: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<u64> {
+        let requests = self.requests.lock().await;
+        Ok(requests
+            .iter()
+            .filter(|request| {
+                request.created_by_user_id == user_id
+                    && status.is_none_or(|status| request.status == status)
+                    && since.is_none_or(|since| request.created_at >= since)
+            })
+            .count() as u64)
+    }
+
+    async fn history_for_fingerprint(
+        &self,
+        identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>> {
+        let requests = self.requests.lock().await;
+        let mut history: Vec<MediaRequest> = requests
+            .iter()
+            .filter(|request| request.identity_fingerprint == identity_fingerprint)
+            .cloned()
+            .collect();
+        history.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(history)
+    }
+
+    async fn latest_request_at_for_user(
+        &self,
+        user_id: &str,
+    ) -> AppResult<Option<chrono::DateTime<Utc>>> {
+        let requests = self.requests.lock().await;
+        Ok(requests
+            .iter()
+            .filter(|request| request.created_by_user_id == user_id)
+            .map(|request| request.created_at)
+            .max())
+    }
+
+    async fn record_decision_on_request(
+        &self,
+        request_id: &str,
+        decision_id: Option<&str>,
+        rule_set_ids: &[String],
+        tags: &[String],
+    ) -> AppResult<()> {
+        let mut requests = self.requests.lock().await;
+        let Some(request) = requests.iter_mut().find(|request| request.id == request_id) else {
+            return Ok(());
+        };
+        request.decision_id = decision_id.map(str::to_string);
+        request.decided_by_rule_set_ids = rule_set_ids.to_vec();
+        request.policy_tags = tags.to_vec();
+        request.updated_at = Utc::now();
+        Ok(())
     }
 }

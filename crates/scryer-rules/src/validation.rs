@@ -1,4 +1,7 @@
 use crate::maintenance::{self, USER_PACKAGE_PREFIX as MAINTENANCE_USER_PACKAGE_PREFIX};
+use crate::request::{
+    self, PERSON_TARGETED_REQUEST_ROOT, USER_PACKAGE_PREFIX as REQUEST_USER_PACKAGE_PREFIX,
+};
 use crate::runtime::{self, RuntimeLimits};
 use crate::{
     AudioStreamDoc, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError,
@@ -38,24 +41,80 @@ struct RuleInputCatalog {
     array_container_paths: HashSet<String>,
 }
 
+/// One policy family's input contract, and the catalog lazily derived from it.
+///
+/// Adding a family is adding one `static` here: the contract JSON is the only
+/// family-specific thing the path walker needs, and the mirrored copy under
+/// `apps/scryer-web/lib/contracts/` is what the Rules Context Reference renders
+/// from.
+struct FamilyContract {
+    json: &'static str,
+    name: &'static str,
+    catalog: OnceLock<RuleInputCatalog>,
+}
+
+impl FamilyContract {
+    const fn new(json: &'static str, name: &'static str) -> Self {
+        Self {
+            json,
+            name,
+            catalog: OnceLock::new(),
+        }
+    }
+
+    fn catalog(&'static self) -> &'static RuleInputCatalog {
+        self.catalog
+            .get_or_init(|| build_input_catalog(self.json, self.name))
+    }
+}
+
+static RELEASE_CONTRACT: FamilyContract = FamilyContract::new(
+    include_str!("../rule-input-contract.json"),
+    "rule-input-contract.json",
+);
+
+static MAINTENANCE_CONTRACT: FamilyContract = FamilyContract::new(
+    include_str!("../maintenance-input-contract.json"),
+    "maintenance-input-contract.json",
+);
+
+static REQUEST_CONTRACT: FamilyContract = FamilyContract::new(
+    include_str!("../request-input-contract.json"),
+    "request-input-contract.json",
+);
+
+/// The request family's input contract exactly as shipped.
+///
+/// The Rules Context Reference renders this document. The web app has a
+/// byte-identical mirror under `apps/scryer-web/lib/contracts/`, but the API
+/// serves the crate's copy so a client that fetched the reference and a server
+/// that validated a matcher against it can never be reading different versions
+/// of the same contract.
+pub fn request_input_contract_json() -> &'static str {
+    REQUEST_CONTRACT.json
+}
+
 /// Everything the input-path walker needs to judge one policy family's paths.
 ///
 /// The release family alone allows `input.release.extra.<key>`, whose keys come
 /// from indexer-supplied attributes and so cannot be catalogued.
 #[derive(Debug, Clone, Copy)]
 struct InputPathContext {
+    /// Family label used in the diagnostics that name the family.
+    family: &'static str,
     catalog: &'static RuleInputCatalog,
     allow_release_extra: bool,
-    /// Maintenance only: every `input.facts.<name>` must name its fact with a
-    /// literal, because the engine reads that set to decide whether the subject
-    /// is even knowable enough to consult the rule.
+    /// Families with observation envelopes only: every `input.facts.<name>`
+    /// must name its fact with a literal, because the engine reads that set to
+    /// decide whether the subject is even knowable enough to consult the rule.
     static_facts_only: bool,
 }
 
 impl InputPathContext {
     fn release() -> Self {
         Self {
-            catalog: release_input_catalog(),
+            family: "release",
+            catalog: RELEASE_CONTRACT.catalog(),
             allow_release_extra: true,
             static_facts_only: false,
         }
@@ -63,7 +122,17 @@ impl InputPathContext {
 
     fn maintenance() -> Self {
         Self {
-            catalog: maintenance_input_catalog(),
+            family: "maintenance",
+            catalog: MAINTENANCE_CONTRACT.catalog(),
+            allow_release_extra: false,
+            static_facts_only: true,
+        }
+    }
+
+    fn request() -> Self {
+        Self {
+            family: "request",
+            catalog: REQUEST_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
         }
@@ -146,7 +215,7 @@ impl InputReferencePath {
     ///
     /// `input.facts.tags[0]` and `input.facts.files[_].quality` both name
     /// `tags` / `files`; `input.facts` on its own names nothing.
-    fn maintenance_fact_name(&self) -> Option<&str> {
+    fn fact_name(&self) -> Option<&str> {
         match self.components.as_slice() {
             [
                 InputPathComponent::Field(input),
@@ -154,6 +223,36 @@ impl InputReferencePath {
                 InputPathComponent::Field(name),
                 ..,
             ] if input == "input" && facts == "facts" => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The person-targeted path this reference reads, when it reads one.
+    ///
+    /// For the request family every field of `input.requester` is about one
+    /// named person, so the unit is the subtree rather than a list of facts:
+    /// `input.requester.username` reports itself, `input.requester.app_permissions[0]`
+    /// reports `input.requester.app_permissions`, and a bare `input.requester`
+    /// reports the root — reading the whole document is at least as targeted as
+    /// reading one field of it.
+    fn person_targeted_path(&self) -> Option<String> {
+        // The two segments of `PERSON_TARGETED_REQUEST_ROOT`, which the test
+        // below pins so this match and that constant cannot drift.
+        match self.components.as_slice() {
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(requester),
+            ] if input == "input" && requester == "requester" => {
+                Some(PERSON_TARGETED_REQUEST_ROOT.to_string())
+            }
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(requester),
+                InputPathComponent::Field(field),
+                ..,
+            ] if input == "input" && requester == "requester" => {
+                Some(format!("{PERSON_TARGETED_REQUEST_ROOT}.{field}"))
+            }
             _ => None,
         }
     }
@@ -230,26 +329,6 @@ fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCat
         known_paths,
         array_container_paths,
     }
-}
-
-fn release_input_catalog() -> &'static RuleInputCatalog {
-    static CATALOG: OnceLock<RuleInputCatalog> = OnceLock::new();
-    CATALOG.get_or_init(|| {
-        build_input_catalog(
-            include_str!("../rule-input-contract.json"),
-            "rule-input-contract.json",
-        )
-    })
-}
-
-fn maintenance_input_catalog() -> &'static RuleInputCatalog {
-    static CATALOG: OnceLock<RuleInputCatalog> = OnceLock::new();
-    CATALOG.get_or_init(|| {
-        build_input_catalog(
-            include_str!("../maintenance-input-contract.json"),
-            "maintenance-input-contract.json",
-        )
-    })
 }
 
 fn unknown_rule_input_path_message(path: &str) -> String {
@@ -334,8 +413,10 @@ fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<Strin
 /// References under `input.observations.*` are not collected: that namespace is
 /// the opted-out surface where the author takes responsibility for the
 /// three-valued envelope themselves.
-fn module_referenced_facts(module: &Module) -> Result<BTreeSet<String>, String> {
-    let ctx = InputPathContext::maintenance();
+fn module_referenced_facts(
+    module: &Module,
+    ctx: InputPathContext,
+) -> Result<BTreeSet<String>, String> {
     let mut facts = BTreeSet::new();
     let mut error: Option<String> = None;
     walk_module_input_paths(module, ctx, |path| {
@@ -351,7 +432,7 @@ fn module_referenced_facts(module: &Module) -> Result<BTreeSet<String>, String> 
             error = Some(whole_facts_object_message(&path.display));
         } else if path.references_input_wholesale() {
             error = Some(whole_input_document_message(&path.display));
-        } else if let Some(name) = path.maintenance_fact_name() {
+        } else if let Some(name) = path.fact_name() {
             facts.insert(name.to_string());
         }
     });
@@ -380,11 +461,20 @@ pub(crate) fn maintenance_fact_references(
     rego_source: &str,
     policy_path: &str,
 ) -> Result<BTreeSet<String>, String> {
+    fact_references(rego_source, policy_path, InputPathContext::maintenance())
+}
+
+/// The same work for any family whose facts arrive in observation envelopes.
+fn fact_references(
+    rego_source: &str,
+    policy_path: &str,
+    ctx: InputPathContext,
+) -> Result<BTreeSet<String>, String> {
     let module = parse_module(rego_source, policy_path)?;
-    if let Some(error) = input_import_error(&module) {
+    if let Some(error) = input_import_error(&module, ctx.family) {
         return Err(error);
     }
-    module_referenced_facts(&module)
+    module_referenced_facts(&module, ctx)
 }
 
 /// The `input.facts.<name>` facts a maintenance matcher reads, for callers
@@ -403,6 +493,80 @@ pub fn maintenance_referenced_facts(
         .map_err(RulesError::Compilation)
 }
 
+/// Facts a request rule reads, plus the parse work needed to find them.
+///
+/// The request family holds a rule on unobservable facts exactly as maintenance
+/// does, so it needs the same statically resolvable set and fails for the same
+/// sources: one that will not parse, imports part of `input`, hands the document
+/// around whole, or selects a fact by a computed name.
+pub(crate) fn request_fact_references(
+    rego_source: &str,
+    policy_path: &str,
+) -> Result<BTreeSet<String>, String> {
+    fact_references(rego_source, policy_path, InputPathContext::request())
+}
+
+/// The `input.facts.<name>` facts a request rule reads, for callers outside this
+/// crate that must decide something about a rule *before* it runs.
+///
+/// The same static set the engine holds rules on, exposed once so an
+/// authorization check and the evaluator can never disagree about what a rule
+/// reads. A caller that cannot get an answer here must reject the rule rather
+/// than assume it reads nothing.
+pub fn request_referenced_facts(
+    rego_source: &str,
+    rule_set_id: &str,
+) -> Result<BTreeSet<String>, String> {
+    request_fact_references(rego_source, &request::user_policy_path(rule_set_id))
+}
+
+/// Every `input.requester.*` path a request rule reads, deduplicated, in the
+/// order the source reads them.
+///
+/// Authoring or previewing a rule that reads any of these is a way of asking the
+/// instance about one named person, so the application gates it on
+/// permission-management authority — the request-family counterpart of
+/// [`crate::maintenance::PERSON_TARGETED_MAINTENANCE_FACTS`]. An empty result
+/// means the rule decides on content and the draft alone.
+///
+/// Fails for the same sources the engine would refuse to load: a rule whose
+/// input references cannot be read off its source has no resolvable list here
+/// either, and a caller must reject it rather than treat it as person-free.
+pub fn request_person_targeted_paths(
+    rego_source: &str,
+    rule_set_id: &str,
+) -> Result<Vec<String>, String> {
+    let policy_path = request::user_policy_path(rule_set_id);
+    let module = parse_module(rego_source, &policy_path)?;
+    let ctx = InputPathContext::request();
+    if let Some(error) = input_import_error(&module, ctx.family) {
+        return Err(error);
+    }
+
+    // Same refusals as the fact set: a rule that reaches the requester document
+    // through a bare `input` would read person data without ever writing a
+    // person path.
+    let mut paths: Vec<String> = Vec::new();
+    let mut error: Option<String> = None;
+    walk_module_input_paths(&module, ctx, |path| {
+        if error.is_some() {
+            return;
+        }
+        if path.references_input_wholesale() {
+            error = Some(whole_input_document_message(&path.display));
+        } else if let Some(person_path) = path.person_targeted_path()
+            && !paths.contains(&person_path)
+        {
+            paths.push(person_path);
+        }
+    });
+
+    match error {
+        Some(error) => Err(error),
+        None => Ok(paths),
+    }
+}
+
 /// Reject any import that pulls `input` (or part of it) into scope.
 ///
 /// `import input.facts` would let a rule write `facts.monitored`, which the
@@ -412,11 +576,11 @@ pub fn maintenance_referenced_facts(
 /// tractable, but it means teaching the walker scoping rules (aliases, local
 /// bindings that shadow the import) to buy an abbreviation worth one word. The
 /// import is refused instead, and the author writes the path out.
-fn input_import_error(module: &Module) -> Option<String> {
+fn input_import_error(module: &Module, family: &str) -> Option<String> {
     module.imports.iter().find_map(|import| {
         (rule_head_name(&import.refr) == Some("input")).then(|| {
             format!(
-                "Unsupported import '{}' in a maintenance rule. Reference facts by their full path \
+                "Unsupported import '{}' in a {family} rule. Reference facts by their full path \
                  (for example input.facts.monitored) so Scryer can tell which facts the rule \
                  depends on.",
                 import.refr.span().text().trim()
@@ -901,7 +1065,7 @@ pub fn validate_maintenance_rule(
 
     let module = parse_module(rego_source, &policy_path).map_err(RulesError::Compilation)?;
 
-    if let Some(error) = input_import_error(&module) {
+    if let Some(error) = input_import_error(&module, "maintenance") {
         return Ok(ValidationResult::invalid(error));
     }
 
@@ -925,6 +1089,90 @@ pub fn validate_maintenance_rule(
 
     match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match maintenance::decode_decision(&value) {
+            Ok(_) => Ok(ValidationResult::valid()),
+            Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
+        },
+        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+    }
+}
+
+/// The heads a request rule may write. At least one of the first four has to be
+/// defined or the rule can never contribute anything to a decision.
+const REQUEST_VOTE_HEADS: [&str; 4] = ["approve", "deny", "manual", "tags"];
+
+/// Validate a user-authored request rule without persisting it.
+///
+/// The caller is expected to have already called
+/// [`crate::request::rewrite_package_declaration`] on the source.
+///
+/// Checks:
+/// 1. Package declaration matches `scryer.request.user.<rule_set_id>`.
+/// 2. Source and the generated decision wrapper both compile.
+/// 3. No import pulls part of `input` into scope, `input` is never referenced as
+///    a whole value, and every fact is selected by a literal name. All three keep
+///    the referenced-fact set statically resolvable, which is what lets the
+///    engine hold a rule whose facts it cannot observe.
+/// 4. Every `input.*` reference resolves in the request catalog.
+/// 5. The source defines at least one of `approve`, `deny`, `manual`, or `tags`.
+///    The wrapper defaults every head, so a rule defining none of them — one
+///    that only writes `reasons`, say — would compile, load, and abstain
+///    forever; this is the only place that catches it.
+/// 6. A dry run against synthetic input yields a well-formed decision, which is
+///    also what proves the rule's `reasons` and `tags` are inside their bounds.
+pub fn validate_request_rule(
+    rego_source: &str,
+    rule_set_id: &str,
+) -> Result<ValidationResult, RulesError> {
+    let expected_pkg = format!("package {REQUEST_USER_PACKAGE_PREFIX}.{rule_set_id}");
+    if !rego_source.lines().any(|line| line.trim() == expected_pkg) {
+        return Ok(ValidationResult::invalid(format!(
+            "package declaration must be: {expected_pkg}"
+        )));
+    }
+
+    let mut engine = runtime::configured_engine(&RuntimeLimits::request_defaults());
+
+    let policy_path = request::user_policy_path(rule_set_id);
+    if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+    if let Err(e) = engine.add_policy(
+        request::decision_wrapper_policy_path(rule_set_id),
+        request::decision_wrapper_source(rule_set_id),
+    ) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+
+    let module = parse_module(rego_source, &policy_path).map_err(RulesError::Compilation)?;
+
+    if let Some(error) = input_import_error(&module, "request") {
+        return Ok(ValidationResult::invalid(error));
+    }
+
+    let input_path_errors = module_input_path_errors(&module, InputPathContext::request());
+    if !input_path_errors.is_empty() {
+        return Ok(ValidationResult {
+            valid: false,
+            errors: input_path_errors,
+        });
+    }
+
+    if !REQUEST_VOTE_HEADS
+        .iter()
+        .any(|head| module_defines_rule(&module, head))
+    {
+        return Ok(ValidationResult::invalid(
+            "request rule can never vote: define at least one of 'approve', 'deny', 'manual', \
+             or 'tags', for example: approve if { ... }",
+        ));
+    }
+
+    let input_value = serde_json::to_value(request::synthetic_request_input())
+        .map_err(RulesError::Serialization)?;
+    engine.set_input(input_value.into());
+
+    match engine.eval_rule(request::decision_wrapper_rule_path(rule_set_id)) {
+        Ok(value) => match request::decode_decision(&value) {
             Ok(_) => Ok(ValidationResult::valid()),
             Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
         },
@@ -1239,6 +1487,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_input_contract_copies_are_byte_identical() {
+        assert_eq!(
+            include_str!("../request-input-contract.json"),
+            include_str!("../../../apps/scryer-web/lib/contracts/request-input-contract.json"),
+            "crates/scryer-rules/request-input-contract.json and \
+             apps/scryer-web/lib/contracts/request-input-contract.json must stay byte-identical"
+        );
+    }
+
     fn validate_maintenance_body(id: &str, body: &str) -> ValidationResult {
         let source = maintenance::rewrite_package_declaration(body, id);
         validate_maintenance_rule(&source, id).expect("validation should not fail outright")
@@ -1511,7 +1769,7 @@ mod tests {
     /// have to be changed together deliberately.
     #[test]
     fn every_pinned_maintenance_template_validates() {
-        let templates: [(&str, &str); 12] = [
+        let templates: [(&str, &str); 13] = [
             (
                 "dead-wanted",
                 "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
@@ -1551,6 +1809,10 @@ mod tests {
             (
                 "no-profile",
                 "package rules\nimport rego.v1\n\nmatch if not input.facts.quality_profile_id\n",
+            ),
+            (
+                "expired-request-leases",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n",
             ),
             (
                 "tagged-for-removal",
@@ -1871,6 +2133,453 @@ mod tests {
                 .iter()
                 .any(|entry| entry.code == "password_protected"),
             "password-protected template should block when the signal is injected"
+        );
+    }
+
+    // ── request family ───────────────────────────────────────────────────────
+
+    fn validate_request_body(id: &str, body: &str) -> ValidationResult {
+        let source = request::rewrite_package_declaration(body, id);
+        validate_request_rule(&source, id).expect("validation should not fail outright")
+    }
+
+    fn request_policy(id: &str, body: &str) -> request::RequestPolicy {
+        request::RequestPolicy {
+            id: id.to_string(),
+            name: format!("rule {id}"),
+            rego_source: request::rewrite_package_declaration(body, id),
+        }
+    }
+
+    /// The engine is the second gate, exactly as it is for maintenance: a stored
+    /// revision that somehow bypassed validation must still be refused at load,
+    /// so the fact set the engine holds a rule on is never an underestimate.
+    fn request_build_error(id: &str, body: &str) -> String {
+        request::RequestRulesEngine::build(&[request_policy(id, body)])
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| panic!("engine build should have refused {id}"))
+    }
+
+    fn assert_request_rejected_everywhere(id: &str, body: &str, expected: &str) {
+        let result = validate_request_body(id, body);
+        assert!(!result.valid, "{id} should not validate");
+        assert!(
+            result.errors.iter().any(|error| error.contains(expected)),
+            "{id} validation errors: {:?}",
+            result.errors
+        );
+
+        let build_error = request_build_error(id, body);
+        assert!(
+            build_error.contains(expected),
+            "{id} build error: {build_error}"
+        );
+    }
+
+    #[test]
+    fn valid_request_rule_passes_validation() {
+        let result = validate_request_body(
+            "family_rated",
+            "approve if {\n  \
+               input.facts.certification_rank <= 2\n  \
+               input.request.lease_days <= 30\n\
+             }\n\n\
+             tags contains \"family\"\n\n\
+             reasons contains \"family_rated\"\n",
+        );
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    /// Every example the web offers as a starting point must validate exactly as
+    /// written; a template that needs editing before it saves is not a template.
+    #[test]
+    fn every_pinned_request_example_validates() {
+        for (index, (template_id, rego_source)) in
+            request::REQUEST_RULE_EXAMPLES.into_iter().enumerate()
+        {
+            let rule_id = format!("request_template_{index}");
+            let rewritten = request::rewrite_package_declaration(rego_source, &rule_id);
+            let result = validate_request_rule(&rewritten, &rule_id).expect("validates");
+            assert!(result.valid, "{template_id}: {:?}", result.errors);
+        }
+    }
+
+    /// The wrapper defaults every head, so a rule that defines none of the four
+    /// would compile, load, and abstain forever. Validation is the only place
+    /// that can tell the author their rule can never say anything.
+    #[test]
+    fn request_rule_that_can_never_vote_is_rejected() {
+        let result = validate_request_body(
+            "reasons_only",
+            "reasons contains \"adult_content\" if {\n  input.facts.is_adult\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("can never vote")
+                && result.errors[0].contains("'approve'")
+                && result.errors[0].contains("'tags'"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// A rule that only tags is a real rule: it contributes no vote but does
+    /// change the title, so it must not be caught by the check above.
+    #[test]
+    fn request_rule_that_only_tags_is_accepted() {
+        let result = validate_request_body(
+            "tags_only",
+            "tags contains \"family\" if {\n  input.facts.certification_rank <= 1\n}\n",
+        );
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn request_rule_with_unknown_input_path_is_rejected() {
+        let result = validate_request_body(
+            "unknown_fact",
+            "approve if {\n  input.facts.parental_score == 0\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("Unknown rule input path 'input.facts.parental_score'")
+                && result.errors[0].contains("Rules Context Reference"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// The referenced-fact set is what makes an unobservable fact hold a rule,
+    /// so a fact name the host cannot read off the source is refused outright.
+    #[test]
+    fn request_rule_with_dynamic_fact_access_is_rejected() {
+        assert_request_rejected_everywhere(
+            "dynamic_fact",
+            "approve if {\n  some fact\n  input.facts[fact]\n}\n",
+            "Unsupported dynamic fact access",
+        );
+    }
+
+    #[test]
+    fn request_rule_reading_the_whole_fact_object_is_rejected() {
+        assert_request_rejected_everywhere(
+            "whole_object",
+            "deny if {\n  object.get(input.facts, \"is_adult\", false)\n}\n",
+            "Unsupported reference to the whole fact object",
+        );
+    }
+
+    /// Handing the whole document around would let a rule reach both the facts
+    /// and the *requester* without ever writing either path — which defeats the
+    /// auto-hold and the person-targeting gate at the same time.
+    #[test]
+    fn request_rule_referencing_the_whole_input_document_is_rejected() {
+        const EXPECTED: &str = "Unsupported reference to the whole input document";
+
+        assert_request_rejected_everywhere(
+            "input_alias",
+            "approve if {\n  \
+               doc := input\n  \
+               doc.requester.username == \"alice\"\n\
+             }\n",
+            EXPECTED,
+        );
+
+        assert_request_rejected_everywhere(
+            "input_object_get",
+            "approve if {\n  object.get(input, [\"facts\", \"is_adult\"], false)\n}\n",
+            EXPECTED,
+        );
+    }
+
+    #[test]
+    fn request_rule_importing_part_of_input_is_rejected() {
+        let source = request::rewrite_package_declaration(
+            "import input.facts\n\napprove if {\n  not facts.is_adult\n}\n",
+            "imported_facts",
+        );
+        let result = validate_request_rule(&source, "imported_facts").expect("validates");
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("Unsupported import 'input.facts'")
+                && result.errors[0].contains("in a request rule"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn request_rule_with_non_boolean_head_is_rejected() {
+        for (id, body, expected) in [
+            (
+                "numeric_approve",
+                "approve := 42\n",
+                "'approve' must be a boolean",
+            ),
+            (
+                "string_deny",
+                "deny := \"yes\"\n",
+                "'deny' must be a boolean",
+            ),
+            (
+                "numeric_manual",
+                "manual := 1\n",
+                "'manual' must be a boolean",
+            ),
+        ] {
+            let result = validate_request_body(id, body);
+            assert!(!result.valid, "{id}");
+            assert!(
+                result.errors[0].contains(expected),
+                "{id}: {:?}",
+                result.errors
+            );
+        }
+    }
+
+    /// The bounded decoders run in the dry-run too, so an author learns their
+    /// tag is unusable at save time rather than at submit time.
+    #[test]
+    fn request_rule_emitting_a_malformed_tag_is_rejected() {
+        let result = validate_request_body(
+            "bad_tag",
+            "approve := true\n\ntags contains \"scryer:managed\"\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("output error") && result.errors[0].contains("reserved"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn request_rule_with_wrong_package_is_rejected() {
+        let source = request::rewrite_package_declaration("approve := true\n", "actual_id");
+        let result = validate_request_rule(&source, "expected_id").unwrap();
+        assert!(!result.valid);
+        assert!(result.errors[0].contains("package declaration"));
+    }
+
+    /// The advanced surface stays documented and reachable, including the nested
+    /// certification list under `value[]`.
+    #[test]
+    fn a_request_rule_may_read_the_observation_envelope_directly() {
+        let result = validate_request_body(
+            "envelope_reader",
+            "manual if {\n  \
+               input.observations.certification_rank.status == \"unknown\"\n\
+             }\n\n\
+             deny if {\n  \
+               input.observations.certifications.value[0].country == \"US\"\n  \
+               input.observations.certifications.value[0].value == \"NC-17\"\n\
+             }\n\n\
+             reasons contains input.observations.certification_rank.reason\n",
+        );
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    /// Named array and object access on the always-known sections works, and the
+    /// open-keyed maps (`ratings_by_source`, `external_ids`) are reachable
+    /// through `object.get` on the named fact — which still names the fact, so
+    /// the auto-hold keeps counting it.
+    #[test]
+    fn a_request_rule_may_read_open_keyed_maps_through_the_named_fact() {
+        let result = validate_request_body(
+            "open_maps",
+            "approve if {\n  \
+               object.get(input.facts.ratings_by_source, \"imdb\", 0) >= 7\n  \
+               input.request.external_ids.tmdb != \"\"\n  \
+               input.facts.certifications[0].value == \"PG-13\"\n  \
+               \"request\" in input.requester.library_permissions\n\
+             }\n",
+        );
+        assert!(result.valid, "errors: {:?}", result.errors);
+
+        let referenced = request_referenced_facts(
+            &request::rewrite_package_declaration(
+                "approve if {\n  object.get(input.facts.ratings_by_source, \"imdb\", 0) >= 7\n}\n",
+                "open_maps",
+            ),
+            "open_maps",
+        )
+        .expect("fact set resolves");
+        assert!(
+            referenced.contains("ratings_by_source"),
+            "reading the map through object.get still names the fact: {referenced:?}"
+        );
+    }
+
+    #[test]
+    fn request_referenced_facts_lists_every_named_fact() {
+        let facts = request_referenced_facts(
+            &request::rewrite_package_declaration(
+                "approve if {\n  \
+                   input.facts.certification_rank <= 2\n  \
+                   not input.facts.is_adult\n  \
+                   input.facts.genres[0] == \"Comedy\"\n\
+                 }\n",
+                "fact_reader",
+            ),
+            "fact_reader",
+        )
+        .expect("fact set resolves");
+
+        assert_eq!(
+            facts,
+            BTreeSet::from([
+                "certification_rank".to_string(),
+                "genres".to_string(),
+                "is_adult".to_string(),
+            ])
+        );
+    }
+
+    /// The gate the application authors on: which named people the rule asks
+    /// about, in the order it asks.
+    #[test]
+    fn request_person_targeted_paths_lists_what_the_rule_reads() {
+        assert_eq!(
+            request_person_targeted_paths(
+                &request::rewrite_package_declaration(
+                    request::EXAMPLE_NAMED_REQUESTERS_FAMILY_RATED,
+                    "example_1"
+                ),
+                "example_1"
+            )
+            .expect("resolves"),
+            vec!["input.requester.username".to_string()]
+        );
+
+        assert_eq!(
+            request_person_targeted_paths(
+                &request::rewrite_package_declaration(
+                    request::EXAMPLE_DENY_ADULT_CONTENT,
+                    "example_4"
+                ),
+                "example_4"
+            )
+            .expect("resolves"),
+            Vec::<String>::new(),
+            "a content-only rule asks about nobody"
+        );
+
+        assert_eq!(
+            request_person_targeted_paths(
+                &request::rewrite_package_declaration(
+                    "approve if {\n  \
+                       input.requester.username == \"alice\"\n  \
+                       \"manage_users\" in input.requester.app_permissions\n  \
+                       input.requester.username != \"\"\n  \
+                       input.requester.linked_providers[0] == \"plex\"\n\
+                     }\n",
+                    "many_paths"
+                ),
+                "many_paths"
+            )
+            .expect("resolves"),
+            vec![
+                "input.requester.username".to_string(),
+                "input.requester.app_permissions".to_string(),
+                "input.requester.linked_providers".to_string(),
+            ],
+            "deduplicated, in the order the source reads them"
+        );
+    }
+
+    /// Reading the requester document whole is at least as person-targeted as
+    /// reading one field of it.
+    #[test]
+    fn request_person_targeted_paths_counts_the_whole_requester_document() {
+        assert_eq!(
+            request_person_targeted_paths(
+                &request::rewrite_package_declaration(
+                    "approve if {\n  count(input.requester) > 0\n}\n",
+                    "whole_requester"
+                ),
+                "whole_requester"
+            )
+            .expect("resolves"),
+            vec![request::PERSON_TARGETED_REQUEST_ROOT.to_string()]
+        );
+    }
+
+    /// A source whose references cannot be resolved has no person list either,
+    /// so the caller has to reject it rather than read an empty answer as
+    /// "asks about nobody".
+    #[test]
+    fn request_person_targeted_paths_refuses_an_unresolvable_source() {
+        let bare_input = request_person_targeted_paths(
+            &request::rewrite_package_declaration(
+                "approve if {\n  doc := input\n  doc.requester.username == \"alice\"\n}\n",
+                "bare_input",
+            ),
+            "bare_input",
+        )
+        .expect_err("a bare input document hides the requester read");
+        assert!(
+            bare_input.contains("Unsupported reference to the whole input document"),
+            "{bare_input}"
+        );
+
+        let imported = request_person_targeted_paths(
+            &request::rewrite_package_declaration(
+                "import input.requester\n\napprove if {\n  requester.username == \"alice\"\n}\n",
+                "imported",
+            ),
+            "imported",
+        )
+        .expect_err("an import hides the requester read");
+        assert!(imported.contains("Unsupported import"), "{imported}");
+    }
+
+    #[test]
+    fn the_person_targeted_root_is_the_requester_document() {
+        assert_eq!(request::PERSON_TARGETED_REQUEST_ROOT, "input.requester");
+    }
+
+    /// The `input.release.extra.<key>` escape hatch is release-only.
+    #[test]
+    fn request_rule_cannot_use_release_extra_paths() {
+        let result = validate_request_body(
+            "extra_path",
+            "approve if {\n  input.release.extra.anything == \"x\"\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("Unknown rule input path 'input.release.extra.anything'"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// Each family judges paths against its own catalog: a maintenance fact is
+    /// not a request fact, and neither is a request fact a maintenance one.
+    #[test]
+    fn the_three_family_catalogs_do_not_leak_into_each_other() {
+        let request_reading_a_maintenance_fact = validate_request_body(
+            "maintenance_fact",
+            "approve if {\n  input.facts.monitored\n}\n",
+        );
+        assert!(!request_reading_a_maintenance_fact.valid);
+        assert!(
+            request_reading_a_maintenance_fact.errors[0]
+                .contains("Unknown rule input path 'input.facts.monitored'"),
+            "{:?}",
+            request_reading_a_maintenance_fact.errors
+        );
+
+        let maintenance_reading_a_request_fact = validate_maintenance_body(
+            "request_fact",
+            "match if {\n  input.facts.certification_rank <= 2\n}\n",
+        );
+        assert!(!maintenance_reading_a_request_fact.valid);
+        assert!(
+            maintenance_reading_a_request_fact.errors[0]
+                .contains("Unknown rule input path 'input.facts.certification_rank'"),
+            "{:?}",
+            maintenance_reading_a_request_fact.errors
         );
     }
 }

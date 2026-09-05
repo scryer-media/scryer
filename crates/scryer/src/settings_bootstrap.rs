@@ -23,9 +23,10 @@ use scryer_application::{
     RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY, RENAME_MISSING_METADATA_POLICY_KEY,
     RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
     RENAME_TEMPLATE_KEY, RENAME_TEMPLATE_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_SERIES_GLOBAL_KEY,
-    REQUEST_QUALITY_PROFILE_IDS_KEY, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
-    SEASON_FOLDER_TEMPLATE_KEY, SERIES_ROOT_FOLDERS_KEY, SET_PERMISSIONS_LINUX_KEY,
-    SETUP_COMPLETE_KEY, SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
+    REQUEST_QUALITY_PROFILE_IDS_KEY, REQUEST_RULE_GATE_EVALUATION_KEY,
+    REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY, SEASON_FOLDER_TEMPLATE_KEY,
+    SERIES_ROOT_FOLDERS_KEY, SET_PERMISSIONS_LINUX_KEY, SETUP_COMPLETE_KEY,
+    SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
     TITLE_METADATA_LANGUAGE_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
     TLS_CERT_PATH_KEY as TLS_CERT_KEY, TLS_KEY_PATH_KEY as TLS_KEY_KEY,
     TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY, USE_SEASON_FOLDERS_KEY,
@@ -1219,6 +1220,18 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        // The single request-rule gate (spec 0003 FR-013). One switch where
+        // maintenance has five: a request rule votes and executes nothing, so
+        // there is one blast radius. It ships disarmed for the same reason the
+        // maintenance gates do.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: REQUEST_RULE_GATE_EVALUATION_KEY,
             data_type: "boolean",
             default_value_json: "false",
             is_sensitive: false,

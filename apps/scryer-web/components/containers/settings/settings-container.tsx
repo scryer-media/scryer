@@ -11,6 +11,7 @@ import {
   Download,
   FolderCog,
   History,
+  Inbox,
   ListChecks,
   Puzzle,
   Rss,
@@ -114,6 +115,9 @@ const SettingsRulesContainer = lazy(async () => ({
 }));
 const SettingsMaintenanceRulesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-maintenance-rules-container")).SettingsMaintenanceRulesContainer,
+}));
+const SettingsRequestRulesContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-request-rules-container")).SettingsRequestRulesContainer,
 }));
 const SettingsPluginsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-plugins-container")).SettingsPluginsContainer,
@@ -239,6 +243,7 @@ const RULES_SECTION_ITEMS: Record<
 > = {
   scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
   maintenance: { labelKey: "settings.maintenanceRules", icon: Wrench },
+  request: { labelKey: "settings.requestRules", icon: Inbox },
 };
 
 const MAINTENANCE_RULES_SECTIONS: {
@@ -401,7 +406,10 @@ export const SettingsContainer = memo(function SettingsContainer({
   const rulesSections = rulesSectionsFor(experimentalFeaturesEnabled);
   const maintenanceRulesHidden =
     settingsSection === "maintenanceRules" && !experimentalFeaturesEnabled;
-  const effectiveRulesSection = maintenanceRulesHidden ? "scoring" : rulesSection;
+  const requestRulesHidden =
+    settingsSection === "requestRules" && !experimentalFeaturesEnabled;
+  const effectiveRulesSection =
+    maintenanceRulesHidden || requestRulesHidden ? "scoring" : rulesSection;
   // Indexer search is on the same footing: with the switch off the Indexers
   // page keeps its list and seeding profiles, and a held search link lands on
   // the list.
@@ -590,6 +598,10 @@ export const SettingsContainer = memo(function SettingsContainer({
                         ? maintenanceRulesHidden
                           ? t("settings.rulesScoring")
                           : t("settings.maintenanceRules")
+                      : settingsSection === "requestRules"
+                        ? requestRulesHidden
+                          ? t("settings.rulesScoring")
+                          : t("settings.requestRules")
                       : settingsSection === "plugins"
                         ? t("settings.plugins")
                         : settingsSection === "notifications"
@@ -648,7 +660,9 @@ export const SettingsContainer = memo(function SettingsContainer({
   );
   // Both kinds of rule are panes of one page, so both carry its gutter.
   const isRulesSection =
-    settingsSection === "rules" || settingsSection === "maintenanceRules";
+    settingsSection === "rules" ||
+    settingsSection === "maintenanceRules" ||
+    settingsSection === "requestRules";
   const usesAutomationHeader =
     isRulesSection ||
     settingsSection === "subtitles" ||
@@ -668,6 +682,8 @@ export const SettingsContainer = memo(function SettingsContainer({
         return SlidersHorizontal;
       case "maintenanceRules":
         return maintenanceRulesHidden ? SlidersHorizontal : Wrench;
+      case "requestRules":
+        return requestRulesHidden ? SlidersHorizontal : Inbox;
       case "post-processing":
         return FolderCog;
       case "subtitles":
@@ -816,6 +832,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                   : "max-w-[1280px]"
               : settingsSection === "rules" ||
                   settingsSection === "maintenanceRules" ||
+                  settingsSection === "requestRules" ||
                   settingsSection === "post-processing"
                 ? "max-w-none"
                 : settingsSection === "users"
@@ -973,6 +990,12 @@ export const SettingsContainer = memo(function SettingsContainer({
               <SettingsRulesContainer />
             ) : (
               <SettingsMaintenanceRulesContainer section={maintenanceRulesSection} />
+            )
+          ) : settingsSection === "requestRules" ? (
+            requestRulesHidden ? (
+              <SettingsRulesContainer />
+            ) : (
+              <SettingsRequestRulesContainer />
             )
           ) : settingsSection === "plugins" ? (
             <SettingsPluginsContainer />

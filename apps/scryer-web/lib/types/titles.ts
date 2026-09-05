@@ -1,6 +1,10 @@
 import type { CanonicalMediaTag } from "./canonical-tags";
 import type { DownloadClientRoutingEntry } from "./download-clients";
 import type { CatalogDiscoveryItem } from "./discovery";
+import type {
+  MediaRequestLeaseRecord,
+  RequestRuleDecisionRecord,
+} from "./request-rule-sets";
 import type { ImportMode } from "./settings";
 
 export type { CanonicalMediaTag };
@@ -314,6 +318,22 @@ export type MediaRequestRecord = {
   createdByUserId: string;
   createdAt: string;
   updatedAt: string;
+  /// How long the requester asked the media to be kept, in days. Null means
+  /// forever: there is no separate flag on the requester side.
+  requestedLeaseDays?: number | null;
+  /// What the approver granted. Null means forever, and it stays null until the
+  /// request is approved.
+  approvedLeaseDays?: number | null;
+  /// The claim actually holding the created title. Null until an approval
+  /// creates one, and `DORMANT` with no window until the title first imports.
+  lease?: MediaRequestLeaseRecord | null;
+  /// What request rules decided. A requester reading their own request gets
+  /// this with `votes` emptied; there is no flag saying which you got, so
+  /// render `reasons` unless you know the reader manages the library.
+  decision?: RequestRuleDecisionRecord | null;
+  /// Tags the policy emitted. Stamped on the title only when the request is
+  /// approved, so on a pending row these are what *would* be applied.
+  policyTags?: string[];
 };
 
 export type LibrarySettingsRecord = {

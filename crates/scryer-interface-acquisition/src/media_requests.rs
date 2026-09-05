@@ -1,13 +1,37 @@
 use async_graphql::{Context, ID, Object, Result as GqlResult};
-use scryer_domain::{ExternalId, TitleExternalRating, TitleRatingSummary};
 
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, to_gql_error};
-use scryer_interface_media::mappers::{from_media_request, monitor_selection_from_input};
+use scryer_interface_media::mappers::{
+    from_media_request, monitor_selection_from_input, submit_media_request_input_into_application,
+};
 use scryer_interface_media::types::{
     ApproveMediaRequestInput, ApproveMediaRequestPayload, MediaRequestActionPayload,
     MediaRequestPayload, SubmitMediaRequestInput, SubmitMediaRequestPayload,
     UpdateMediaRequestInput,
 };
+
+/// Resolve an approver's lease override into the application layer's
+/// `Option<Option<i64>>`.
+///
+/// The double option is the honest shape and GraphQL has no way to spell it, so
+/// two fields carry it: `None` means "grant what the requester asked for",
+/// `Some(None)` is an explicit forever, and `Some(Some(n))` is a finite
+/// override. Supplying both at once is refused rather than resolved by
+/// precedence — an approver who typed a number *and* ticked forever has not
+/// said what they want.
+fn lease_override(
+    lease_days: Option<i32>,
+    lease_forever: Option<bool>,
+) -> GqlResult<Option<Option<i64>>> {
+    match (lease_days, lease_forever.unwrap_or(false)) {
+        (Some(_), true) => Err(to_gql_error(scryer_application::AppError::Validation(
+            "approve accepts either 'leaseDays' or 'leaseForever', not both".to_string(),
+        ))),
+        (Some(days), false) => Ok(Some(Some(i64::from(days)))),
+        (None, true) => Ok(Some(None)),
+        (None, false) => Ok(None),
+    }
+}
 
 #[derive(Default)]
 pub struct MediaRequestMutations;
@@ -28,52 +52,9 @@ impl MediaRequestMutations {
         let outcome = app
             .submit_media_request(
                 &actor,
-                scryer_application::SubmitMediaRequestInput {
-                    library_id: String::from(input.library_id),
-                    facet: input.facet.into_domain(),
-                    title: input.title,
-                    sort_title: input.sort_title,
-                    slug: input.slug,
-                    year: input.year,
-                    overview: input.overview,
-                    runtime_minutes: input.runtime_minutes,
-                    language: input.language,
-                    content_status: input.content_status,
-                    rating_summary: TitleRatingSummary {
-                        rating: input.rating,
-                        rating_sources: input.rating_sources.unwrap_or_default(),
-                        external_ratings: input
-                            .external_ratings
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|rating| TitleExternalRating {
-                                source: rating.source,
-                                value: rating.value,
-                                score: rating.score,
-                                normalized: rating.normalized,
-                                votes: rating.votes,
-                                url: rating.url,
-                            })
-                            .collect(),
-                    },
-                    requested_quality_profile_id: input
-                        .requested_quality_profile_id
-                        .map(String::from),
-                    requested_monitor_type: input
-                        .requested_monitor_type
-                        .map(|value| value.as_tag_value().to_string()),
-                    requested_monitor_selection: input
-                        .requested_monitor_selection
-                        .map(monitor_selection_from_input),
-                    external_ids: input
-                        .external_ids
-                        .into_iter()
-                        .map(|external_id| ExternalId {
-                            source: external_id.source,
-                            value: external_id.value,
-                        })
-                        .collect(),
-                },
+                // The same conversion the pre-flight query uses, so a draft
+                // previewed and a draft submitted are literally the same value.
+                submit_media_request_input_into_application(input),
             )
             .await
             .map_err(to_gql_error)?;
@@ -102,6 +83,8 @@ impl MediaRequestMutations {
                     .monitor_type
                     .map(|value| value.as_tag_value().to_string()),
                 input.monitor_selection.map(monitor_selection_from_input),
+                lease_override(input.lease_days, input.lease_forever)?,
+                input.tags,
             )
             .await
             .map_err(to_gql_error)?;
@@ -112,6 +95,7 @@ impl MediaRequestMutations {
                 .wanted_search
                 .map(super::wanted::wanted_search_payload),
             search_error: outcome.search_error,
+            claim_error: outcome.claim_error,
         })
     }
 
@@ -156,12 +140,21 @@ impl MediaRequestMutations {
                     requested_monitor_selection: input
                         .requested_monitor_selection
                         .map(monitor_selection_from_input),
+                    requested_lease_days: input.requested_lease_days.map(i64::from),
                 },
             )
             .await
             .map_err(to_gql_error)?;
 
-        Ok(from_media_request(&app, request))
+        // One request, so the batched policy read is a batch of one; the edit
+        // re-evaluates the request, and returning it without the fresh verdict
+        // would show the requester the decision they had before they edited.
+        let policy = app
+            .media_request_policy_facts(&actor, std::slice::from_ref(&request))
+            .await
+            .unwrap_or_default();
+        let facts = policy.get(&request.id).cloned().unwrap_or_default();
+        Ok(from_media_request(&app, request, Some(&facts)))
     }
 
     /// Cancel the caller's request without deleting an already-created title.

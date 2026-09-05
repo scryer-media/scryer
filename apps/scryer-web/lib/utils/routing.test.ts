@@ -59,6 +59,7 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/rules/maintenance/candidates",
     "/automation/rules/maintenance/history",
     "/automation/rules/maintenance/gates",
+    "/automation/rules/request",
     "/automation/subtitles",
     "/automation/post-processing",
     "/integrations/indexers",
@@ -126,6 +127,8 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/settings/rules", "/automation/rules/scoring"],
     ["/settings/maintenance-rules", "/automation/rules/maintenance"],
     ["/settings/maintenanceRules", "/automation/rules/maintenance"],
+    ["/settings/request-rules", "/automation/rules/request"],
+    ["/settings/requestRules", "/automation/rules/request"],
     // Rules names the page, not a pane, so it lands on the first one.
     ["/automation/rules", "/automation/rules/scoring"],
     ["/automation/rules/scoring-rules", "/automation/rules/scoring"],
@@ -134,6 +137,7 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/automation/maintenanceRules", "/automation/rules/maintenance"],
     ["/automation/rules/maintenance-rules", "/automation/rules/maintenance"],
     ["/automation/rules/maintenance/rules", "/automation/rules/maintenance"],
+    ["/automation/rules/request-rules", "/automation/rules/request"],
     // Exclusions moved in with the gates.
     ["/automation/rules/maintenance/exclusions", "/automation/rules/maintenance/gates"],
     ["/automation/rules/maintenance/runs", "/automation/rules/maintenance/history"],
@@ -278,8 +282,12 @@ test("indexer pane paths round-trip through the tab helpers", () => {
   );
 });
 
-test("the rules page carries both kinds of rule as panes", () => {
+test("the rules page carries all three kinds of rule as panes", () => {
   assert.equal(canonical("/automation/rules/scoring").settingsSection, "rules");
+  assert.equal(
+    canonical("/automation/rules/request").settingsSection,
+    "requestRules",
+  );
   for (const path of [
     "/automation/rules/maintenance",
     "/automation/rules/maintenance/candidates",
@@ -296,8 +304,12 @@ test("the rules page carries both kinds of rule as panes", () => {
   assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/nope"), {
     kind: "not-found",
   });
-  // Scoring has no second level of panes, and maintenance stops at one.
+  // Scoring and request rules have no second level of panes, and maintenance
+  // stops at one.
   assert.deepEqual(resolveAppRoute("/automation/rules/scoring/candidates"), {
+    kind: "not-found",
+  });
+  assert.deepEqual(resolveAppRoute("/automation/rules/request/decisions"), {
     kind: "not-found",
   });
   assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/gates/extra"), {
@@ -306,7 +318,7 @@ test("the rules page carries both kinds of rule as panes", () => {
 });
 
 test("rules pane paths round-trip through the section helpers", () => {
-  for (const section of ["scoring", "maintenance"] as const) {
+  for (const section of ["scoring", "maintenance", "request"] as const) {
     assert.equal(rulesSectionFromPath(buildRulesPath(section)), section, section);
   }
   for (const section of ["rules", "candidates", "history", "gates"] as const) {
@@ -339,8 +351,8 @@ test("indexerSettingsTabsFor drops search until experimental features are on", (
   assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
 });
 
-test("rulesSectionsFor drops maintenance until experimental features are on", () => {
-  assert.deepEqual(rulesSectionsFor(true), ["scoring", "maintenance"]);
+test("rulesSectionsFor drops maintenance and request rules until experimental features are on", () => {
+  assert.deepEqual(rulesSectionsFor(true), ["scoring", "maintenance", "request"]);
   // One entry left means there is no kind to switch between, which is how the
   // Rules page decides to drop its kind rail.
   assert.deepEqual(rulesSectionsFor(false), ["scoring"]);
@@ -349,4 +361,5 @@ test("rulesSectionsFor drops maintenance until experimental features are on", ()
     assert.ok(rulesSectionsFor(enabled).includes("scoring"));
   }
   assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
+  assert.equal(buildRulesPath("request"), "/automation/rules/request");
 });

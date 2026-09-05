@@ -9,6 +9,7 @@ use crate::{
 
 /// Result of hydrating a title's metadata from a metadata gateway.
 /// Movies return empty seasons/episodes. Series include full season/episode data.
+#[derive(Default)]
 pub struct HydrationResult {
     pub metadata_update: TitleMetadataUpdate,
     pub seasons: Vec<SeasonMetadata>,
@@ -17,6 +18,14 @@ pub struct HydrationResult {
     pub anime_movies: Vec<AnimeMovie>,
     pub movie_metadata: std::collections::HashMap<i64, MovieMetadata>,
     pub more_like_this: Vec<DiscoveryTitle>,
+    /// The series-level facts [`TitleMetadataUpdate`] does not carry (genres, content ratings,
+    /// MDBList, awards), kept so a caller that needs them — the media-request metadata snapshot —
+    /// does not have to call the gateway a second time.
+    ///
+    /// The season/episode/anime vectors on this copy are intentionally left empty: they are
+    /// already on the `HydrationResult` itself, and duplicating a long-running show's episode
+    /// list on every hydration would double a library scan's peak allocation for one caller.
+    pub raw_series: Option<SeriesMetadata>,
 }
 
 pub(crate) fn external_ids_from_hydration_metadata(
@@ -191,6 +200,7 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         anime_movies: vec![],
         movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
+        raw_series: None,
     }
 }
 
@@ -219,6 +229,32 @@ pub(crate) async fn hydrate_referenced_movie_metadata(
 /// Build a [`HydrationResult`] from an already-fetched [`SeriesMetadata`].
 pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> HydrationResult {
     let extra_external_ids = primary_anime_mapping_extra_external_ids(&series.anime_mappings);
+    // Carry the series-level facts `TitleMetadataUpdate` has no home for. Only the cheap fields
+    // are copied; see `HydrationResult::raw_series`.
+    let raw_series = SeriesMetadata {
+        target_key: series.target_key.clone(),
+        tvdb_id: series.tvdb_id,
+        name: series.name.clone(),
+        sort_name: series.sort_name.clone(),
+        slug: series.slug.clone(),
+        year: series.year,
+        content_status: series.content_status.clone(),
+        first_aired: series.first_aired.clone(),
+        overview: series.overview.clone(),
+        network: series.network.clone(),
+        runtime_minutes: series.runtime_minutes,
+        poster_url: series.poster_url.clone(),
+        background_url: series.background_url.clone(),
+        original_language: series.original_language.clone(),
+        country: series.country.clone(),
+        canonical_tags: series.canonical_tags.clone(),
+        ratings: series.ratings.clone(),
+        genres: series.genres.clone(),
+        content_ratings: series.content_ratings.clone(),
+        mdblist: series.mdblist.clone(),
+        awards: series.awards.clone(),
+        ..Default::default()
+    };
     let update = TitleMetadataUpdate {
         name: non_empty(series.name),
         year: series.year.filter(|&y| y > 0),
@@ -257,6 +293,7 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         anime_movies: series.anime_movies,
         movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
+        raw_series: Some(raw_series),
     }
 }
 
@@ -355,6 +392,7 @@ mod tests {
             anime_movies: vec![],
             ratings: Default::default(),
             credits: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -503,6 +541,7 @@ mod tests {
             tmdb_release_date: None,
             ratings: Default::default(),
             credits,
+            ..Default::default()
         }
     }
 

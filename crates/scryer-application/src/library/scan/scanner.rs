@@ -391,21 +391,11 @@ pub struct DiscoveryExternalId {
     pub key: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct DiscoveryContentCertification {
-    pub value: String,
-    pub source: String,
-    pub release_type: Option<i32>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct DiscoveryContentRating {
-    pub country: String,
-    #[serde(default)]
-    pub certifications: Vec<DiscoveryContentCertification>,
-    pub age_rating: Option<i32>,
-    pub age_rating_source: Option<String>,
-}
+/// Discovery's content-rating shape is the same one the catalog and the request metadata
+/// snapshot carry, so both names resolve to one definition in [`crate::types`] rather than to
+/// two structs that have to be kept in step by hand.
+pub type DiscoveryContentCertification = crate::types::ContentCertification;
+pub type DiscoveryContentRating = crate::types::ContentRating;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DiscoveryTitle {
@@ -531,7 +521,7 @@ impl DiscoveryRatingProvenance {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MovieMetadata {
     pub target_key: Option<String>,
     pub smg_id: Option<i64>,
@@ -557,6 +547,12 @@ pub struct MovieMetadata {
     pub tmdb_release_date: Option<String>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
+    pub genres: Vec<String>,
+    pub content_ratings: Vec<crate::types::ContentRating>,
+    pub mdblist: Option<crate::types::MdblistSummary>,
+    pub awards: Vec<crate::types::TitleAward>,
+    pub tmdb_vote_average: Option<f64>,
+    pub tmdb_vote_count: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -579,7 +575,7 @@ pub struct MovieTitleBulkResult {
     pub missing_ref_indexes: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SeriesMetadata {
     pub target_key: Option<String>,
     pub tvdb_id: i64,
@@ -605,6 +601,10 @@ pub struct SeriesMetadata {
     pub anime_movies: Vec<AnimeMovie>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
+    pub genres: Vec<String>,
+    pub content_ratings: Vec<crate::types::ContentRating>,
+    pub mdblist: Option<crate::types::MdblistSummary>,
+    pub awards: Vec<crate::types::TitleAward>,
 }
 
 #[derive(Debug, Clone)]

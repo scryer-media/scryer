@@ -1110,6 +1110,7 @@ mod tests {
         let title = title_snapshot(MediaFacet::Series);
         vec![
             DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
+                requested_lease_days: None,
                 request_id: "req-1".to_string(),
                 library_id: "lib-1".to_string(),
                 facet: MediaFacet::Series,
@@ -1122,6 +1123,7 @@ mod tests {
                 requested_monitor_type: None,
             }),
             DomainEventPayload::MediaRequestUpdated(MediaRequestSubmittedEventData {
+                requested_lease_days: None,
                 request_id: "req-1".to_string(),
                 library_id: "lib-1".to_string(),
                 facet: MediaFacet::Series,
@@ -1384,6 +1386,10 @@ mod tests {
 
     fn media_request_resolved() -> MediaRequestResolvedEventData {
         MediaRequestResolvedEventData {
+            decided_by_rule_set_ids: Vec::new(),
+            decision_reason_codes: Vec::new(),
+            approved_lease_days: None,
+            policy_tags: Vec::new(),
             request_id: "req-1".to_string(),
             library_id: "lib-1".to_string(),
             facet: MediaFacet::Series,

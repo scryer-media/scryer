@@ -152,6 +152,18 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
       "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
   },
   {
+    id: "expired-request-leases",
+    name: "expired_request_leases",
+    titleKey: "settings.maintenanceTemplateExpiredLeasesTitle",
+    descriptionKey: "settings.maintenanceTemplateExpiredLeasesDescription",
+    actionKind: "DELETE_TITLE_AND_FILES",
+    graceDays: 7,
+    subjectFacets: ["movie", "show"],
+    destructive: true,
+    regoSource:
+      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n",
+  },
+  {
     id: "tagged-for-removal",
     name: "tagged_for_removal",
     titleKey: "settings.maintenanceTemplateTaggedForRemovalTitle",

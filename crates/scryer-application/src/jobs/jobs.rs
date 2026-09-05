@@ -1632,17 +1632,23 @@ impl AppUseCase {
             JobKey::MaintenanceRuleEvaluation => {
                 let report = self.run_maintenance_rule_evaluation_job().await?;
                 let summary_json = serde_json::to_string(&report).ok();
+                // Lease bookkeeping runs whether or not the gate is open, so it
+                // is reported on both paths: an operator reading "nothing was
+                // evaluated" still needs to see that leases moved.
+                let lease_text = format!(
+                    "{} request lease(s) expired, {} started",
+                    report.leases_expired, report.leases_activated
+                );
                 if !report.gate_enabled {
                     return Ok(JobExecutionOutcome::new(
-                        Some(
-                            "Maintenance evaluation is disabled by the instance gate; nothing was evaluated"
-                                .to_string(),
-                        ),
+                        Some(format!(
+                            "Maintenance evaluation is disabled by the instance gate; nothing was evaluated ({lease_text})"
+                        )),
                         summary_json,
                     ));
                 }
                 let summary_text = format!(
-                    "Evaluated {} rule(s) over {} title(s): {} candidate(s) opened, {} canceled, {} superseded, {} held",
+                    "Evaluated {} rule(s) over {} title(s): {} candidate(s) opened, {} canceled, {} superseded, {} held; {lease_text}",
                     report.rules_evaluated,
                     report.titles_evaluated,
                     report.candidates_created,

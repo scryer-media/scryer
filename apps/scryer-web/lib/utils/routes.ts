@@ -82,6 +82,7 @@ export function canAccessSettingsSection(
     case "titleTags":
     case "rules":
     case "maintenanceRules":
+    case "requestRules":
     case "post-processing":
     case "subtitles":
       return canManageCatalogSettings;

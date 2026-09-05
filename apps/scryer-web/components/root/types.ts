@@ -31,16 +31,18 @@ export type SettingsSection =
   | "acquisition"
   | "rules"
   | "maintenanceRules"
+  | "requestRules"
   | "plugins"
   | "notifications"
   | "post-processing"
   | "subtitles";
 
-/// Panes of the Rules page. Scoring and maintenance rules are two kinds of the
-/// same subject, so they share one nav entry and one gutter rather than sitting
-/// beside each other in the sidebar. Each pane keeps its own `SettingsSection`
-/// underneath, so permissions and the settings shell are untouched.
-export type RulesSection = "scoring" | "maintenance";
+/// Panes of the Rules page. Scoring, maintenance and request rules are three
+/// kinds of the same subject, so they share one nav entry and one gutter rather
+/// than sitting beside each other in the sidebar. Each pane keeps its own
+/// `SettingsSection` underneath, so permissions and the settings shell are
+/// untouched.
+export type RulesSection = "scoring" | "maintenance" | "request";
 
 /// Panes of the Maintenance Rules page, reached through a second gutter. The
 /// rule list is the default, so `/automation/rules/maintenance` still means

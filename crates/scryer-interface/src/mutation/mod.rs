@@ -7,6 +7,7 @@ mod location;
 mod maintenance_rules;
 mod notifications;
 mod recycle_bin;
+mod request_rules;
 mod rules;
 mod subtitle;
 mod titles;
@@ -38,6 +39,7 @@ pub struct MutationRoot(
     WantedMutations,
     rules::RulesMutations,
     maintenance_rules::MaintenanceRuleMutations,
+    request_rules::RequestRuleMutations,
     PluginMutations,
     notifications::NotificationMutations,
     BackupMutations,

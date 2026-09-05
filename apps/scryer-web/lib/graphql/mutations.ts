@@ -8,9 +8,13 @@ import {
   MEDIA_SERVER_CONNECTION_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
+  REQUEST_RULE_DECISION_FIELDS,
+  REQUEST_RULE_SET_DETAIL_FIELDS,
+  REQUEST_RULE_SET_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
   SUBTITLE_SETTINGS_FIELDS,
+  TITLE_CLAIM_FIELDS,
   TITLE_MUTATION_RESULT_FIELDS,
   TITLE_TAG_DEFINITION_FIELDS,
 } from "./queries.ts";
@@ -633,6 +637,7 @@ export const approveMediaRequestMutation = `mutation ApproveMediaRequest($input:
       skippedInProgressCount
     }
     searchError
+    claimError
   }
 }`;
 
@@ -2404,6 +2409,86 @@ export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceAc
   runMaintenanceActionHandlerNow {
     started
     message
+  }
+}`;
+
+// ── Request Rules ─────────────────────────────────────────────────────
+//
+// A rule is created DISABLED; `setRequestRuleMode` arms it, and the instance
+// gate is a third switch under a different permission entirely.
+
+export const createRequestRuleSetMutation = `mutation CreateRequestRuleSet($input: CreateRequestRuleSetInput!) {
+  createRequestRuleSet(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateRequestRuleMatcherMutation = `mutation UpdateRequestRuleMatcher($input: UpdateRequestRuleMatcherInput!) {
+  updateRequestRuleMatcher(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateRequestRuleMetadataMutation = `mutation UpdateRequestRuleMetadata($input: UpdateRequestRuleMetadataInput!) {
+  updateRequestRuleMetadata(input: $input) {${REQUEST_RULE_SET_FIELDS}
+  }
+}`;
+
+export const setRequestRuleModeMutation = `mutation SetRequestRuleMode($input: SetRequestRuleModeInput!) {
+  setRequestRuleMode(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const deleteRequestRuleSetMutation = `mutation DeleteRequestRuleSet($id: ID!) {
+  deleteRequestRuleSet(id: $id) {
+    id
+  }
+}`;
+
+export const validateRequestRuleMutation = `mutation ValidateRequestRule($input: ValidateRequestRuleInput!) {
+  validateRequestRule(input: $input) {
+    valid
+    errors
+  }
+}`;
+
+/// The author's preview. Unlike the requester's pre-flight it returns the input
+/// document the matcher actually saw, which is the "why did this not match"
+/// affordance, and a synthesised single-rule decision whose vote is the rule's
+/// own — `revisionNumber` on it is 0 and must not be rendered as a revision.
+export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: PreviewRequestRuleInput!) {
+  previewRequestRule(input: $input) {
+    ruleSetId
+    matcherContentHash
+    metadataPartial
+    inputDocument
+    decision {${REQUEST_RULE_DECISION_FIELDS}
+    }
+  }
+}`;
+
+export const setRequestRuleInstanceGatesMutation = `mutation SetRequestRuleInstanceGates($input: SetRequestRuleInstanceGatesInput!) {
+  setRequestRuleInstanceGates(input: $input) {
+    evaluationEnabled
+  }
+}`;
+
+// ── Title retention claims ────────────────────────────────────────────
+//
+// Converting a lease to a permanent hold leaves the original CONVERTED as
+// history and writes a fresh OPERATOR_KEEP beside it, so the three mutations
+// each return the claim the operator should now be looking at.
+
+export const extendTitleClaimMutation = `mutation ExtendTitleClaim($input: ExtendTitleClaimInput!) {
+  extendTitleClaim(input: $input) {${TITLE_CLAIM_FIELDS}
+  }
+}`;
+
+export const convertTitleClaimToPermanentMutation = `mutation ConvertTitleClaimToPermanent($input: ConvertTitleClaimToPermanentInput!) {
+  convertTitleClaimToPermanent(input: $input) {${TITLE_CLAIM_FIELDS}
+  }
+}`;
+
+export const releaseTitleClaimMutation = `mutation ReleaseTitleClaim($input: ReleaseTitleClaimInput!) {
+  releaseTitleClaim(input: $input) {${TITLE_CLAIM_FIELDS}
   }
 }`;
 

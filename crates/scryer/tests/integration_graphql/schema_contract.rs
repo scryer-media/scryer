@@ -673,8 +673,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Admin-defined title tags add the `titleTagDefinitions` registry read,
     // which any authenticated caller may make because the tag picker and the
     // catalog filter both need the vocabulary: query 151->152.
+    // Request rules (spec 0003 section 7) add nine query roots: the three
+    // authoring reads (`requestRuleSets`, `requestRuleSet`,
+    // `requestRuleRevisions`), the instance gate, the two decision reads
+    // (`requestRuleDecision`, `requestRuleDecisions`), the Rules Context
+    // Reference document, the requester pre-flight, and `titleClaims`.
+    // Query 151->160.
     assert_eq!(
-        query_field_count, 152,
+        query_field_count, 161,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -692,8 +698,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // setSeriesMovieMonitored: a series movie is a link row rather than a
     // title, so its tag patch takes link ids and cannot ride updateTitleTags.
     // 224->225.
+    // Request rules add eleven mutations: six authoring roots (create, matcher
+    // edit, metadata edit, mode, delete, validate), the author-side preview,
+    // the instance gate, and the three administrator claim operations.
+    // 220->231.
     assert_eq!(
-        mutation_field_count, 225,
+        mutation_field_count, 236,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -765,10 +775,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // rewrite counts, `requiresTags` on the action descriptor - and the two new
     // action kinds are values inside the existing MaintenanceActionKind enum,
     // so OBJECT and ENUM are unchanged.
-    assert_eq!(public_types.len(), 746);
-    assert_eq!(kind_count("OBJECT"), 392);
-    assert_eq!(kind_count("INPUT_OBJECT"), 202);
-    assert_eq!(kind_count("ENUM"), 140);
+    // Request rules add fourteen objects (rule set, revision, detail, delete
+    // payload, validation payload, reason, vote, decision, author preview,
+    // requester pre-flight, instance gates, title claim, media-request lease,
+    // and the request's submit-time metadata), eleven inputs (six authoring,
+    // the preview pair, the gate, and the three claim operations), and six
+    // enums (evaluation mode, decision outcome, vote, and the three lifecycle
+    // claim enums): OBJECT 388->402, INPUT_OBJECT 198->209, ENUM 140->146,
+    // public types 738->769. The additive fields on the existing media-request
+    // payload and its three inputs add no type.
+    assert_eq!(public_types.len(), 777);
+    assert_eq!(kind_count("OBJECT"), 406);
+    assert_eq!(kind_count("INPUT_OBJECT"), 213);
+    assert_eq!(kind_count("ENUM"), 146);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));

@@ -31,6 +31,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   acquisition: "acquisition",
   rules: "rules",
   maintenanceRules: "maintenance-rules",
+  requestRules: "request-rules",
   plugins: "plugins",
   notifications: "notifications",
   "post-processing": "post-processing",
@@ -43,12 +44,13 @@ const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>>
   "post-processing": "post-processing",
 };
 
-/// Panes of the Rules page. Both scoring and maintenance rules hang off
+/// Panes of the Rules page. Scoring, maintenance and request rules all hang off
 /// `/automation/rules`, so the sidebar carries one entry and the page's own
 /// gutter picks the kind.
 export const RULES_SECTION_PATH: Record<RulesSection, string> = {
   scoring: "scoring",
   maintenance: "maintenance",
+  request: "request",
 };
 
 const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
@@ -57,6 +59,9 @@ const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
   maintenance: "maintenance",
   "maintenance-rules": "maintenance",
   maintenancerules: "maintenance",
+  request: "request",
+  "request-rules": "request",
+  requestrules: "request",
 };
 
 /// Panes of the Maintenance Rules page. The rule list is the default and has no
@@ -82,22 +87,26 @@ const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<string, MaintenanceRulesSecti
 
 /// Which kinds of rule the Rules page offers on this instance.
 ///
-/// Maintenance rules are still being finished, so they are a pane only when the
-/// instance has opted into experimental features. Scoring is always present, so
-/// a single-entry result also tells the page there is no kind to switch between
-/// and the rail can be dropped.
+/// Maintenance and request rules are still being finished, so they are panes
+/// only when the instance has opted into experimental features. Scoring is
+/// always present, so a single-entry result also tells the page there is no
+/// kind to switch between and the rail can be dropped.
 export function rulesSectionsFor(experimentalFeaturesEnabled: boolean): RulesSection[] {
-  return experimentalFeaturesEnabled ? ["scoring", "maintenance"] : ["scoring"];
+  return experimentalFeaturesEnabled
+    ? ["scoring", "maintenance", "request"]
+    : ["scoring"];
 }
 
-/// The `rules` settings section is the Scoring pane and `maintenanceRules` is
-/// the Maintenance pane. Which `SettingsSection` a pane maps to still decides
-/// its permissions, so the two stay distinct underneath one nav entry.
+/// The `rules` settings section is the Scoring pane, `maintenanceRules` the
+/// Maintenance pane and `requestRules` the Request pane. Which `SettingsSection`
+/// a pane maps to still decides its permissions, so the three stay distinct
+/// underneath one nav entry.
 export const RULES_SECTION_BY_SETTINGS_SECTION: Partial<
   Record<SettingsSection, RulesSection>
 > = {
   rules: "scoring",
   maintenanceRules: "maintenance",
+  requestRules: "request",
 };
 
 /// Path of one Rules pane. Maintenance carries its own pane as a fourth
@@ -388,6 +397,11 @@ const MOVED_SETTINGS_RULES_BY_SEGMENT: Record<string, RulesSection> = {
   rules: "scoring",
   "maintenance-rules": "maintenance",
   maintenancerules: "maintenance",
+  // Request rules never had a settings section of their own, but the section
+  // path exists for the settings shell, so the spelling it implies resolves
+  // rather than 404ing.
+  "request-rules": "request",
+  requestrules: "request",
 };
 const INTEGRATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   indexers: "indexers",
@@ -494,11 +508,18 @@ function resolveRulesRoute(
     return { kind: "not-found" };
   }
 
-  if (rulesSection === "scoring") {
+  // Scoring and request rules are one page each: neither carries a second level
+  // of panes, so a fourth segment names nothing.
+  if (rulesSection === "scoring" || rulesSection === "request") {
     if (rawSegments.length !== 3) {
       return { kind: "not-found" };
     }
-    return canonicalOrRedirect(currentPath, settingsRoute("rules"), search, hash);
+    return canonicalOrRedirect(
+      currentPath,
+      settingsRoute(rulesSection === "scoring" ? "rules" : "requestRules"),
+      search,
+      hash,
+    );
   }
 
   if (rawSegments.length > 4) {

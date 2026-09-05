@@ -6,6 +6,16 @@ struct MediaRequestMetadataGateway {
     movies: HashMap<i64, MovieMetadata>,
     series: HashMap<i64, SeriesMetadata>,
     fail_detail: bool,
+    /// Counts every read that would have crossed the wire to SMG, so the enrichment cache can be
+    /// shown to collapse a preview and a submit into one call (FR-021).
+    detail_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl MediaRequestMetadataGateway {
+    fn record_detail_call(&self) {
+        self.detail_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
@@ -48,6 +58,7 @@ impl MetadataGateway for MediaRequestMetadataGateway {
     }
 
     async fn get_movie(&self, tvdb_id: i64, _language: &str) -> AppResult<MovieMetadata> {
+        self.record_detail_call();
         if self.fail_detail {
             return Err(AppError::Repository("movie metadata unavailable".into()));
         }
@@ -58,6 +69,7 @@ impl MetadataGateway for MediaRequestMetadataGateway {
     }
 
     async fn get_series(&self, tvdb_id: i64, _language: &str) -> AppResult<SeriesMetadata> {
+        self.record_detail_call();
         if self.fail_detail {
             return Err(AppError::Repository("series metadata unavailable".into()));
         }
@@ -99,6 +111,7 @@ impl MetadataGateway for MediaRequestMetadataGateway {
         refs: &[MovieTitleRef],
         _language: &str,
     ) -> AppResult<MovieTitleBulkResult> {
+        self.record_detail_call();
         if self.fail_detail {
             return Err(AppError::Repository("movie metadata unavailable".into()));
         }
@@ -171,6 +184,7 @@ fn make_series_metadata(tvdb_id: i64, name: &str) -> SeriesMetadata {
         anime_movies: Vec::new(),
         ratings: Default::default(),
         credits: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -1324,6 +1338,7 @@ async fn requester_can_update_pending_request_preferences() {
                 requested_quality_profile_id: "1080p".to_string(),
                 requested_monitor_type: Some("allEpisodes".to_string()),
                 requested_monitor_selection: None,
+                requested_lease_days: None,
             },
         )
         .await
@@ -1407,6 +1422,7 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
                 requested_quality_profile_id: "1080p".to_string(),
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
+                requested_lease_days: None,
             },
         )
         .await
@@ -1447,7 +1463,15 @@ async fn approve_media_request_creates_title_and_resolves_overlapping_pending_re
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request_id, "1080p", None, None)
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("approval should create the title");
 
@@ -1522,7 +1546,15 @@ async fn approve_media_request_accepts_legacy_case_profile_id_and_persists_canon
     let request_id = harness.media_requests.requests.lock().await[0].id.clone();
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request_id, "wizard-series", None, None)
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "wizard-series",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("approval should resolve profile ids case-insensitively");
 
@@ -1561,7 +1593,15 @@ async fn approve_series_media_request_applies_requested_monitor_type() {
 
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request.id, "1080p", None, None)
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("approval should create the series title");
 
@@ -1601,6 +1641,8 @@ async fn approve_series_media_request_can_override_requested_monitor_type() {
             &request.id,
             "1080p",
             Some("none".to_string()),
+            None,
+            None,
             None,
         )
         .await
@@ -1884,7 +1926,15 @@ async fn approve_advanced_series_request_applies_the_selection_to_the_created_ti
 
     let outcome = harness
         .app
-        .approve_media_request(&harness.manager, &request_id, "1080p", None, None)
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("approval should create the title");
 
@@ -1940,6 +1990,8 @@ async fn approve_advanced_series_request_honours_an_approver_selection_override(
                 seasons: vec![0, 3],
                 series_movies: vec![],
             }),
+            None,
+            None,
         )
         .await
         .expect("approval should create the title");
@@ -1954,4 +2006,360 @@ async fn approve_advanced_series_request_honours_an_approver_selection_override(
         .expect("approver override should be stored");
     assert_eq!(selection.seasons, vec![0, 3]);
     assert!(selection.series_movies.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Metadata snapshot (FR-030) and the shared enrichment cache (FR-021)
+// ---------------------------------------------------------------------------
+
+fn snapshot_content_ratings() -> Vec<crate::ContentRating> {
+    vec![crate::ContentRating {
+        country: "usa".to_string(),
+        certifications: vec![crate::ContentCertification {
+            value: "PG-13".to_string(),
+            source: "tmdb".to_string(),
+            release_type: Some(3),
+        }],
+        age_rating: Some(13),
+        age_rating_source: Some("tmdb".to_string()),
+    }]
+}
+
+fn snapshot_mdblist() -> crate::MdblistSummary {
+    crate::MdblistSummary {
+        mdblist_id: "mdb-fixture".to_string(),
+        trakt_id: Some(4242),
+        score: Some(70.0),
+        score_average: Some(68.5),
+        age_rating: Some(13),
+        certification: "PG-13".to_string(),
+        commonsense: Some(false),
+    }
+}
+
+fn snapshot_award() -> crate::TitleAward {
+    crate::TitleAward {
+        award_qid: "Q100".to_string(),
+        award_label: "Fixture Prize".to_string(),
+        year: Some(2026),
+        recipient_qid: "Q200".to_string(),
+        recipient_label: "Fixture Subject".to_string(),
+        claim_side: "nominee".to_string(),
+    }
+}
+
+fn adult_canonical_tag() -> scryer_domain::CanonicalMediaTag {
+    scryer_domain::CanonicalMediaTag {
+        key: "canonical:genre:fixture".to_string(),
+        category: "genre".to_string(),
+        name: "Fixture".to_string(),
+        confidence: Some(0.9),
+        sources: vec!["fixture".to_string()],
+        source_tag_keys: vec![],
+        is_adult: true,
+        is_spoiler: false,
+    }
+}
+
+fn widen_movie_for_snapshot(movie: &mut MovieMetadata) {
+    movie.genres = vec!["Drama".to_string(), "Thriller".to_string()];
+    movie.content_ratings = snapshot_content_ratings();
+    movie.mdblist = Some(snapshot_mdblist());
+    movie.awards = vec![snapshot_award()];
+    movie.tmdb_vote_average = Some(7.25);
+    movie.tmdb_vote_count = Some(4321);
+    movie.popularity = Some(19.5);
+    movie.canonical_tags = vec![adult_canonical_tag()];
+}
+
+fn widen_series_for_snapshot(series: &mut SeriesMetadata) {
+    series.genres = vec!["Drama".to_string()];
+    series.content_ratings = snapshot_content_ratings();
+    series.mdblist = Some(snapshot_mdblist());
+    series.awards = vec![snapshot_award()];
+    series.canonical_tags = vec![adult_canonical_tag()];
+}
+
+#[test]
+fn media_request_snapshot_round_trips_a_movie() {
+    let mut movie = make_movie_metadata(92_001, "Snapshot Movie");
+    widen_movie_for_snapshot(&mut movie);
+    let captured_at = chrono::Utc::now();
+
+    let snapshot = crate::MediaRequestMetadataSnapshot::from_movie(&movie, captured_at);
+
+    assert_eq!(
+        snapshot.schema_version,
+        crate::MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION
+    );
+    assert!(!snapshot.partial);
+    assert!(snapshot.missing.is_empty());
+    assert_eq!(snapshot.source.as_deref(), Some("smg_movie"));
+    assert_eq!(
+        snapshot.genres,
+        vec!["Drama".to_string(), "Thriller".to_string()]
+    );
+    assert_eq!(snapshot.content_ratings, snapshot_content_ratings());
+    assert_eq!(snapshot.mdblist, Some(snapshot_mdblist()));
+    assert_eq!(snapshot.awards, vec![snapshot_award()]);
+    assert_eq!(snapshot.tmdb_vote_average, Some(7.25));
+    assert_eq!(snapshot.tmdb_vote_count, Some(4321));
+    assert_eq!(snapshot.popularity, Some(19.5));
+    assert_eq!(snapshot.runtime_minutes, Some(100));
+    assert_eq!(snapshot.studio.as_deref(), Some("Test Studio"));
+    assert_eq!(snapshot.release_date.as_deref(), Some("2026-01-01"));
+    assert!(snapshot.first_aired.is_none(), "movies have no first_aired");
+    assert!(
+        snapshot.is_adult,
+        "an adult canonical tag makes the title adult"
+    );
+
+    let reparsed = crate::MediaRequestMetadataSnapshot::parse(&snapshot.to_json());
+    assert_eq!(reparsed, snapshot);
+}
+
+#[test]
+fn media_request_snapshot_round_trips_a_series() {
+    let mut series = make_series_metadata(92_002, "Snapshot Series");
+    widen_series_for_snapshot(&mut series);
+    let captured_at = chrono::Utc::now();
+
+    let snapshot = crate::MediaRequestMetadataSnapshot::from_series(&series, captured_at);
+
+    assert!(!snapshot.partial);
+    assert_eq!(snapshot.source.as_deref(), Some("smg_series"));
+    assert_eq!(snapshot.first_aired.as_deref(), Some("2026-01-01"));
+    assert_eq!(snapshot.network.as_deref(), Some("Test Network"));
+    assert_eq!(snapshot.country.as_deref(), Some("JP"));
+    assert!(
+        snapshot.release_date.is_none(),
+        "series have no release_date"
+    );
+    assert!(
+        snapshot.tmdb_vote_average.is_none() && snapshot.tmdb_vote_count.is_none(),
+        "SMG publishes TMDB vote aggregates on movies only"
+    );
+    assert_eq!(snapshot.content_ratings, snapshot_content_ratings());
+
+    let reparsed = crate::MediaRequestMetadataSnapshot::parse(&snapshot.to_json());
+    assert_eq!(reparsed, snapshot);
+}
+
+#[test]
+fn media_request_snapshot_parse_never_reads_absence_as_an_answer() {
+    for stored in ["", "   ", "{}", "not json at all", "[1,2,3]"] {
+        let snapshot = crate::MediaRequestMetadataSnapshot::parse(stored);
+        assert!(
+            snapshot.partial,
+            "`{stored}` must read back as partial, not as a title with no facts"
+        );
+        assert_eq!(snapshot.missing, vec!["all".to_string()]);
+        assert!(snapshot.is_missing("content_ratings"));
+        assert_eq!(
+            snapshot.schema_version,
+            crate::MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION
+        );
+    }
+
+    let unavailable = crate::MediaRequestMetadataSnapshot::unavailable("enrichment_failed");
+    assert!(unavailable.partial);
+    assert_eq!(unavailable.missing, vec!["all".to_string()]);
+    assert_eq!(unavailable.source.as_deref(), Some("enrichment_failed"));
+    assert_eq!(
+        crate::MediaRequestMetadataSnapshot::parse(&unavailable.to_json()),
+        unavailable
+    );
+}
+
+#[test]
+fn media_request_snapshot_tolerates_a_document_missing_newer_fields() {
+    let stored = r#"{"schema_version":1,"genres":["Drama"],"partial":false}"#;
+
+    let snapshot = crate::MediaRequestMetadataSnapshot::parse(stored);
+
+    assert!(!snapshot.partial);
+    assert_eq!(snapshot.genres, vec!["Drama".to_string()]);
+    assert!(snapshot.content_ratings.is_empty());
+    assert!(snapshot.mdblist.is_none());
+}
+
+#[tokio::test]
+async fn submit_media_request_persists_a_full_movie_metadata_snapshot() {
+    let harness = bootstrap_media_request_app();
+    let tvdb_id = 92_010;
+    let mut movie = make_movie_metadata(tvdb_id, "Snapshot Movie");
+    widen_movie_for_snapshot(&mut movie);
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            movies: HashMap::from([(tvdb_id, movie)]),
+            ..Default::default()
+        }))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, tvdb_id);
+    input.external_ids = vec![external_id("TVDB", tvdb_id)];
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("request submission should succeed");
+
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(!snapshot.partial, "a successful enrichment is not partial");
+    assert!(snapshot.missing.is_empty());
+    assert_eq!(
+        snapshot.source.as_deref(),
+        Some("smg_titles"),
+        "the bulk title read is the source that actually answered"
+    );
+    assert_eq!(snapshot.content_ratings, snapshot_content_ratings());
+    assert_eq!(
+        snapshot.genres,
+        vec!["Drama".to_string(), "Thriller".to_string()]
+    );
+    assert_eq!(snapshot.mdblist, Some(snapshot_mdblist()));
+    assert_eq!(snapshot.awards, vec![snapshot_award()]);
+    assert_eq!(snapshot.tmdb_vote_count, Some(4321));
+    assert!(snapshot.is_adult);
+    assert!(snapshot.captured_at.is_some());
+}
+
+#[tokio::test]
+async fn submit_media_request_persists_series_facts_without_a_second_gateway_read() {
+    let harness = bootstrap_media_request_app();
+    let tvdb_id = 92_020;
+    let mut series = make_series_metadata(tvdb_id, "Snapshot Series");
+    widen_series_for_snapshot(&mut series);
+    let detail_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            series: HashMap::from([(tvdb_id, series)]),
+            detail_calls: detail_calls.clone(),
+            ..Default::default()
+        }))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id, tvdb_id);
+    input.facet = MediaFacet::Series;
+    input.external_ids = vec![external_id("tvdb", tvdb_id)];
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("series request submission should succeed");
+
+    assert_eq!(
+        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the series snapshot rides on the hydration read, it does not add one"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(!snapshot.partial);
+    assert_eq!(snapshot.source.as_deref(), Some("smg_series"));
+    assert_eq!(snapshot.content_ratings, snapshot_content_ratings());
+    assert_eq!(snapshot.network.as_deref(), Some("Test Network"));
+    assert_eq!(snapshot.awards, vec![snapshot_award()]);
+}
+
+#[tokio::test]
+async fn submit_media_request_records_a_partial_snapshot_when_enrichment_fails() {
+    let harness = bootstrap_media_request_app();
+    let tvdb_id = 92_030;
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            movies: HashMap::from([(tvdb_id, make_movie_metadata(tvdb_id, "Unreachable"))]),
+            fail_detail: true,
+            ..Default::default()
+        }))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, tvdb_id);
+    input.external_ids = vec![external_id("TVDB", tvdb_id)];
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("a metadata outage must never fail a submission");
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1, "the request still exists");
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert!(snapshot.partial);
+    assert_eq!(snapshot.missing, vec!["all".to_string()]);
+    assert_eq!(snapshot.source.as_deref(), Some("enrichment_failed"));
+    assert!(
+        snapshot.content_ratings.is_empty() && snapshot.genres.is_empty(),
+        "an unreachable gateway yields no facts, and says so"
+    );
+}
+
+#[tokio::test]
+async fn a_preview_and_the_submit_that_follows_it_read_smg_once() {
+    let harness = bootstrap_media_request_app();
+    let tvdb_id = 92_040;
+    let mut movie = make_movie_metadata(tvdb_id, "Cached Movie");
+    widen_movie_for_snapshot(&mut movie);
+    let detail_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            movies: HashMap::from([(tvdb_id, movie)]),
+            detail_calls: detail_calls.clone(),
+            ..Default::default()
+        }))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, tvdb_id);
+    input.external_ids = vec![external_id("TVDB", tvdb_id)];
+    let normalized = normalize_media_request_external_ids(input.external_ids.clone())
+        .expect("request external ids should normalize");
+
+    // Two pre-flight evaluations, as the request dialog would issue while the requester edits.
+    let first = app
+        .enrich_request_draft(&MediaFacet::Movie, normalized.clone())
+        .await;
+    let second = app
+        .enrich_request_draft(&MediaFacet::Movie, normalized)
+        .await;
+    assert_eq!(
+        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the second pre-flight is served from the enrichment cache"
+    );
+    assert_eq!(first.snapshot, second.snapshot);
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("request submission should succeed");
+
+    assert_eq!(
+        detail_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the submit reuses the enrichment the preview already paid for (FR-021)"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    let snapshot = crate::MediaRequestMetadataSnapshotExt::metadata_snapshot(&requests[0]);
+    assert_eq!(
+        snapshot, first.snapshot,
+        "what the requester was shown is what the request was stored with"
+    );
+}
+
+#[test]
+fn enrichment_cache_key_ignores_external_id_order_and_case() {
+    let a = crate::media_requests::media_request_enrichment_cache_key(
+        &MediaFacet::Movie,
+        &[external_id("TVDB", 42), external_id("imdb", "tt0000042")],
+    );
+    let b = crate::media_requests::media_request_enrichment_cache_key(
+        &MediaFacet::Movie,
+        &[external_id("imdb", "tt0000042"), external_id("tvdb", 42)],
+    );
+    assert_eq!(a, b);
+    assert_ne!(
+        a,
+        crate::media_requests::media_request_enrichment_cache_key(
+            &MediaFacet::Series,
+            &[external_id("tvdb", 42), external_id("imdb", "tt0000042")],
+        ),
+        "the same identifiers under a different facet are a different subject"
+    );
 }

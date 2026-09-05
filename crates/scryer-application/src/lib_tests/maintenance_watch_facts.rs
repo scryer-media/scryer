@@ -219,6 +219,12 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
     MediaRequest {
         background_url: None,
         requested_monitor_selection: None,
+        requested_lease_days: None,
+        approved_lease_days: None,
+        decision_id: None,
+        decided_by_rule_set_ids: Vec::new(),
+        policy_tags: Vec::new(),
+        metadata_snapshot_json: "{}".to_string(),
         rating_summary: scryer_domain::TitleRatingSummary::default(),
         id: Id::new().0,
         library_id: "library-1".to_string(),

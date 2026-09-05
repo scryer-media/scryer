@@ -16,7 +16,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use scryer_domain::{MediaFacet, Title, UserMediaSignal};
+use scryer_domain::{
+    LifecycleClaim, LifecycleClaimKind, LifecycleClaimState, MediaFacet, Title, UserMediaSignal,
+};
 use scryer_rules::maintenance::{
     MAINTENANCE_INPUT_SCHEMA_VERSION, MaintenanceFactsDoc, MaintenanceFileDoc, MaintenanceInput,
     MaintenanceLibraryDoc, MaintenanceSeriesMovieDoc, MaintenanceSubjectDoc,
@@ -105,6 +107,36 @@ pub mod unknown_reason {
     /// it", and the difference is what a "delete what nobody watched" rule
     /// deletes on.
     pub const NO_LINKED_PARTICIPANTS: &str = "no_linked_participants";
+
+    /// The lifecycle-claim store could not be read for this pass, so nothing is
+    /// known about the title's leases or keep claims. Every claim fact is
+    /// unknown together, for the whole chunk, exactly like the watch gate: a
+    /// rule that deletes on "the lease expired" must be held rather than told
+    /// there is no lease.
+    pub const CLAIM_STORE_UNREADABLE: &str = "claim_store_unreadable";
+
+    /// The claim store answered and no live lease holds the title, so there is
+    /// no expiry to report. An *absence* reason: `not
+    /// input.facts.request_lease_expires_at` is a decisive "nothing is holding
+    /// this", which is why it is not unknown.
+    pub const NO_LIVE_LEASE: &str = "no_live_lease";
+}
+
+/// The four values `request_lease_state` can take. Part of the authoring
+/// contract: a matcher compares against exactly these strings.
+pub mod request_lease_state {
+    /// No retention claim has ever been written for the title (or every one of
+    /// them was released or converted, which withdraws it rather than spends
+    /// it).
+    pub const NONE: &str = "none";
+    /// A lease exists but its clock has not started: the title has not been
+    /// imported yet. Dormant is *live* — deleting a title whose lease has not
+    /// even arrived is the worst of the failure modes here.
+    pub const DORMANT: &str = "dormant";
+    /// A lease is running.
+    pub const ACTIVE: &str = "active";
+    /// Every retention claim on the title has run out.
+    pub const EXPIRED: &str = "expired";
 }
 
 /// How recently every enabled signal-sync connection must have swept cleanly
@@ -198,11 +230,53 @@ pub struct MaintenanceTitlePeople<'a> {
     pub usernames: &'a HashMap<String, String>,
 }
 
+/// The lifecycle claims on one title, resolved by the caller in batch.
+///
+/// `claims` is the union of the title's live claims (every kind) and its
+/// expired retention claims: the lease facts have to tell "this lease ran out"
+/// apart from "this title never had one", and only the expired rows carry that
+/// difference. Released and converted claims are not in it — they were
+/// withdrawn rather than spent.
+///
+/// `store_readable` is the gate, and it is run-scoped for the same reason the
+/// watch gate is: a claim store that could not be read makes every claim fact
+/// unknown rather than empty, and two subjects in one chunk must not disagree
+/// about whether Scryer can see claims at all.
+#[derive(Clone, Copy, Debug)]
+pub struct MaintenanceTitleClaims<'a> {
+    /// This title's claims. `None` with a readable store is a confirmed "no
+    /// claims", not a gap.
+    pub claims: Option<&'a [LifecycleClaim]>,
+    pub store_readable: bool,
+}
+
+impl Default for MaintenanceTitleClaims<'_> {
+    /// An unconfigured context reports the most conservative answer there is:
+    /// a caller that forgot to resolve claims must not get "no claims".
+    fn default() -> Self {
+        Self {
+            claims: None,
+            store_readable: false,
+        }
+    }
+}
+
+impl MaintenanceTitleClaims<'_> {
+    /// The claims context for a readable store that holds nothing for this
+    /// title.
+    pub fn none() -> Self {
+        Self {
+            claims: None,
+            store_readable: true,
+        }
+    }
+}
+
 /// Build the title-scoped input document for one title.
 ///
 /// `files` must be this title's files only; callers batch-load for the whole
 /// selection and group by `title_id` rather than querying per title. The same
-/// holds for [`MaintenanceTitlePeople`].
+/// holds for [`MaintenanceTitlePeople`] and [`MaintenanceTitleClaims`].
 pub fn build_title_input(
     evaluation_time: DateTime<Utc>,
     title: &Title,
@@ -210,6 +284,7 @@ pub fn build_title_input(
     files: &[TitleMediaFile],
     people: MaintenanceTitlePeople<'_>,
     watch: MaintenanceTitleWatch<'_>,
+    claims: MaintenanceTitleClaims<'_>,
     series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceInput {
     MaintenanceInput {
@@ -228,15 +303,25 @@ pub fn build_title_input(
             id: library.id.clone(),
             name: library.name.clone(),
         },
-        facts: build_facts(title, files, people, watch, series_movies),
+        facts: build_facts(
+            evaluation_time,
+            title,
+            files,
+            people,
+            watch,
+            claims,
+            series_movies,
+        ),
     }
 }
 
 fn build_facts(
+    evaluation_time: DateTime<Utc>,
     title: &Title,
     files: &[TitleMediaFile],
     people: MaintenanceTitlePeople<'_>,
     watch: MaintenanceTitleWatch<'_>,
+    claims: MaintenanceTitleClaims<'_>,
     series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceFactsDoc {
     let file_docs: Vec<MaintenanceFileDoc> = files.iter().map(file_doc).collect();
@@ -246,6 +331,7 @@ fn build_facts(
     let (requested, requested_by_user_ids, requested_by_usernames) =
         requested_observations(people.requester_user_ids, people.usernames);
     let watched = watch_observations(&title.facet, people.requester_user_ids, watch);
+    let claim_facts = claim_observations(evaluation_time, claims);
 
     MaintenanceFactsDoc {
         monitored: Observation::known(title.monitored),
@@ -275,7 +361,112 @@ fn build_facts(
         last_watched_at: watched.last_watched_at,
         watched_by_any_requester: watched.watched_by_any_requester,
         watched_by_all_requesters: watched.watched_by_all_requesters,
+        keep_claim_active: claim_facts.keep_claim_active,
+        request_lease_state: claim_facts.request_lease_state,
+        request_lease_expires_at: claim_facts.request_lease_expires_at,
+        active_retention_claims: claim_facts.active_retention_claims,
         series_movies: series_movies_observation(&title.facet, series_movies),
+    }
+}
+
+/// The four lifecycle-claim facts for one subject.
+struct ClaimObservations {
+    keep_claim_active: Observation<bool>,
+    request_lease_state: Observation<String>,
+    request_lease_expires_at: Observation<String>,
+    active_retention_claims: Observation<i64>,
+}
+
+impl ClaimObservations {
+    /// Every claim fact unknown for one reason. Used when the store could not
+    /// be read at all: reporting "no claims" there is how a rule deletes a
+    /// title a lease was holding.
+    fn all_unknown(reason: &'static str) -> Self {
+        Self {
+            keep_claim_active: Observation::unknown(reason),
+            request_lease_state: Observation::unknown(reason),
+            request_lease_expires_at: Observation::unknown(reason),
+            active_retention_claims: Observation::unknown(reason),
+        }
+    }
+}
+
+/// Whether a claim is still holding the title at `evaluation_time`.
+///
+/// Expiry is derived here as well as swept by the scheduled pass, and that is
+/// deliberate: the sweep runs every eight hours, so between two sweeps an
+/// `active` row can already be past its window. Reading the row's state alone
+/// would make the facts and the executor's own hold disagree with the clock —
+/// and with each other — for up to a whole cycle.
+pub(crate) fn claim_is_live_at(claim: &LifecycleClaim, evaluation_time: DateTime<Utc>) -> bool {
+    match claim.state {
+        LifecycleClaimState::Dormant => true,
+        LifecycleClaimState::Active => claim
+            .expires_at
+            .is_none_or(|expires_at| expires_at > evaluation_time),
+        LifecycleClaimState::Expired
+        | LifecycleClaimState::Released
+        | LifecycleClaimState::Converted => false,
+    }
+}
+
+/// The lease and keep facts (spec 0003 FR-043).
+///
+/// `active` beats `dormant` when a title carries both: a running lease is the
+/// stronger statement, and the aggregate exists so a rule can ask "is anything
+/// still holding this", not "how many ways".
+fn claim_observations(
+    evaluation_time: DateTime<Utc>,
+    claims: MaintenanceTitleClaims<'_>,
+) -> ClaimObservations {
+    if !claims.store_readable {
+        return ClaimObservations::all_unknown(unknown_reason::CLAIM_STORE_UNREADABLE);
+    }
+
+    let claims = claims.claims.unwrap_or_default();
+    let keep_claim_active = claims.iter().any(|claim| {
+        claim.kind == LifecycleClaimKind::Keep && claim_is_live_at(claim, evaluation_time)
+    });
+
+    let retention: Vec<&LifecycleClaim> = claims
+        .iter()
+        .filter(|claim| claim.kind == LifecycleClaimKind::RetainUntil)
+        .collect();
+    let live_retention: Vec<&&LifecycleClaim> = retention
+        .iter()
+        .filter(|claim| claim_is_live_at(claim, evaluation_time))
+        .collect();
+
+    let state = if live_retention
+        .iter()
+        .any(|claim| claim.state == LifecycleClaimState::Active)
+    {
+        request_lease_state::ACTIVE
+    } else if !live_retention.is_empty() {
+        // Everything live that is not active is dormant, by construction.
+        request_lease_state::DORMANT
+    } else if retention.is_empty() {
+        request_lease_state::NONE
+    } else {
+        // Retention claims exist, none of them still holds: released and
+        // converted rows never reach this builder, so what is left ran out.
+        request_lease_state::EXPIRED
+    };
+
+    let expires_at = live_retention
+        .iter()
+        .filter_map(|claim| claim.expires_at)
+        .max()
+        .map_or_else(
+            || Observation::absent_because(unknown_reason::NO_LIVE_LEASE),
+            |latest| Observation::known(latest.to_rfc3339()),
+        );
+
+    ClaimObservations {
+        keep_claim_active: Observation::known(keep_claim_active),
+        request_lease_state: Observation::known(state.to_string()),
+        request_lease_expires_at: expires_at,
+        active_retention_claims: Observation::known(live_retention.len() as i64),
     }
 }
 
@@ -558,14 +749,24 @@ fn first_imported_observation(files: &[TitleMediaFile]) -> Observation<String> {
         return Observation::absent();
     }
 
+    first_imported_instant(files).map_or_else(
+        || Observation::unknown(unknown_reason::FILE_TIMESTAMPS_UNAVAILABLE),
+        |earliest| Observation::known(earliest.to_rfc3339()),
+    )
+}
+
+/// The instant behind `first_imported_at`, for callers that need the timestamp
+/// rather than the observation — the dormant-claim sweep starts a lease's clock
+/// at exactly this moment.
+///
+/// Shared with [`first_imported_observation`] on purpose: a lease backdated to
+/// one definition of "first import" while a rule reads another is a lease that
+/// expires on a day nobody can explain.
+pub(crate) fn first_imported_instant(files: &[TitleMediaFile]) -> Option<DateTime<Utc>> {
     files
         .iter()
         .filter_map(|file| parse_timestamp(&file.created_at))
         .min()
-        .map_or_else(
-            || Observation::unknown(unknown_reason::FILE_TIMESTAMPS_UNAVAILABLE),
-            |earliest| Observation::known(earliest.to_rfc3339()),
-        )
 }
 
 /// Absent for movies — a movie has no episodes, and that is a fact, not a gap.
@@ -703,6 +904,38 @@ mod tests {
                 usernames,
             },
             MaintenanceTitleWatch { context, signals },
+            MaintenanceTitleClaims::none(),
+            &[],
+        );
+        serde_json::to_value(input).expect("input serializes")
+    }
+
+    /// The serialized document with the claim context spelled out, for the
+    /// lease facts.
+    fn claim_document(
+        evaluation_time: DateTime<Utc>,
+        title: &Title,
+        claims: &[LifecycleClaim],
+        store_readable: bool,
+    ) -> serde_json::Value {
+        let usernames = HashMap::new();
+        let input = build_title_input(
+            evaluation_time,
+            title,
+            &library(),
+            &[],
+            MaintenanceTitlePeople {
+                requester_user_ids: None,
+                usernames: &usernames,
+            },
+            MaintenanceTitleWatch {
+                context: &MaintenanceWatchContext::default(),
+                signals: None,
+            },
+            MaintenanceTitleClaims {
+                claims: (!claims.is_empty()).then_some(claims),
+                store_readable,
+            },
             &[],
         );
         serde_json::to_value(input).expect("input serializes")
@@ -1153,6 +1386,237 @@ mod tests {
         assert_eq!(doc["facts"]["watched_by_any_requester"], false);
         assert_eq!(doc["facts"]["watched_by_all_requesters"], false);
     }
+
+    // ── Lifecycle claims (spec 0003 FR-043) ─────────────────────────────────
+
+    fn claim(
+        id: &str,
+        kind: LifecycleClaimKind,
+        state: LifecycleClaimState,
+        expires_at: Option<&str>,
+    ) -> LifecycleClaim {
+        LifecycleClaim {
+            id: id.to_string(),
+            title_id: "title-1".to_string(),
+            library_id: "library-1".to_string(),
+            producer: match kind {
+                LifecycleClaimKind::Keep => scryer_domain::LifecycleClaimProducer::RequestPermanent,
+                LifecycleClaimKind::RetainUntil => {
+                    scryer_domain::LifecycleClaimProducer::RequestLease
+                }
+            },
+            producer_ref: Some(format!("request-{id}")),
+            kind,
+            state,
+            duration_days: Some(30),
+            starts_at: None,
+            expires_at: expires_at.map(instant),
+            created_by: None,
+            created_at: instant("2024-01-01T00:00:00Z"),
+            updated_at: instant("2024-01-01T00:00:00Z"),
+            released_reason: None,
+        }
+    }
+
+    fn instant(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("fixture timestamp parses")
+            .with_timezone(&Utc)
+    }
+
+    const CLAIM_FACTS: [&str; 4] = [
+        "keep_claim_active",
+        "request_lease_state",
+        "request_lease_expires_at",
+        "active_retention_claims",
+    ];
+
+    #[test]
+    fn a_title_with_no_claims_reports_no_lease_and_no_keep() {
+        let doc = claim_document(instant("2024-06-01T00:00:00Z"), &title(None), &[], true);
+
+        assert_eq!(doc["facts"]["keep_claim_active"], false);
+        assert_eq!(doc["facts"]["request_lease_state"], "none");
+        assert_eq!(doc["facts"]["active_retention_claims"], 0);
+        // Absent, not unknown: the store answered, and the answer is that
+        // nothing is holding this title, which a rule may act on with `not`.
+        assert!(doc["facts"].get("request_lease_expires_at").is_none());
+        assert_eq!(
+            doc["observations"]["request_lease_expires_at"]["status"],
+            "absent"
+        );
+        assert_eq!(
+            doc["observations"]["request_lease_expires_at"]["reason"],
+            unknown_reason::NO_LIVE_LEASE
+        );
+    }
+
+    #[test]
+    fn a_dormant_lease_reports_dormant_and_counts_as_live() {
+        let doc = claim_document(
+            instant("2024-06-01T00:00:00Z"),
+            &title(None),
+            &[claim(
+                "claim-1",
+                LifecycleClaimKind::RetainUntil,
+                LifecycleClaimState::Dormant,
+                None,
+            )],
+            true,
+        );
+
+        assert_eq!(doc["facts"]["request_lease_state"], "dormant");
+        assert_eq!(doc["facts"]["active_retention_claims"], 1);
+        assert!(doc["facts"].get("request_lease_expires_at").is_none());
+    }
+
+    #[test]
+    fn an_active_lease_reports_active_and_its_expiry() {
+        let doc = claim_document(
+            instant("2024-06-01T00:00:00Z"),
+            &title(None),
+            &[claim(
+                "claim-1",
+                LifecycleClaimKind::RetainUntil,
+                LifecycleClaimState::Active,
+                Some("2024-07-01T00:00:00Z"),
+            )],
+            true,
+        );
+
+        assert_eq!(doc["facts"]["request_lease_state"], "active");
+        assert_eq!(doc["facts"]["active_retention_claims"], 1);
+        assert_eq!(
+            doc["facts"]["request_lease_expires_at"],
+            instant("2024-07-01T00:00:00Z").to_rfc3339()
+        );
+    }
+
+    /// The sweep runs every eight hours; the clock does not wait for it.
+    #[test]
+    fn an_active_lease_past_its_window_reads_expired_before_the_sweep() {
+        let doc = claim_document(
+            instant("2024-08-01T00:00:00Z"),
+            &title(None),
+            &[claim(
+                "claim-1",
+                LifecycleClaimKind::RetainUntil,
+                LifecycleClaimState::Active,
+                Some("2024-07-01T00:00:00Z"),
+            )],
+            true,
+        );
+
+        assert_eq!(doc["facts"]["request_lease_state"], "expired");
+        assert_eq!(doc["facts"]["active_retention_claims"], 0);
+        assert!(doc["facts"].get("request_lease_expires_at").is_none());
+    }
+
+    #[test]
+    fn two_live_leases_report_the_latest_expiry_and_both_counts() {
+        let doc = claim_document(
+            instant("2024-06-01T00:00:00Z"),
+            &title(None),
+            &[
+                claim(
+                    "claim-1",
+                    LifecycleClaimKind::RetainUntil,
+                    LifecycleClaimState::Active,
+                    Some("2024-07-01T00:00:00Z"),
+                ),
+                claim(
+                    "claim-2",
+                    LifecycleClaimKind::RetainUntil,
+                    LifecycleClaimState::Active,
+                    Some("2024-09-01T00:00:00Z"),
+                ),
+            ],
+            true,
+        );
+
+        assert_eq!(doc["facts"]["request_lease_state"], "active");
+        assert_eq!(doc["facts"]["active_retention_claims"], 2);
+        assert_eq!(
+            doc["facts"]["request_lease_expires_at"],
+            instant("2024-09-01T00:00:00Z").to_rfc3339(),
+            "the title is held until the last lease on it lapses"
+        );
+    }
+
+    /// `active` is the stronger statement, so it wins the aggregate.
+    #[test]
+    fn an_active_lease_beats_a_dormant_one() {
+        let doc = claim_document(
+            instant("2024-06-01T00:00:00Z"),
+            &title(None),
+            &[
+                claim(
+                    "claim-1",
+                    LifecycleClaimKind::RetainUntil,
+                    LifecycleClaimState::Dormant,
+                    None,
+                ),
+                claim(
+                    "claim-2",
+                    LifecycleClaimKind::RetainUntil,
+                    LifecycleClaimState::Active,
+                    Some("2024-07-01T00:00:00Z"),
+                ),
+            ],
+            true,
+        );
+
+        assert_eq!(doc["facts"]["request_lease_state"], "active");
+        assert_eq!(doc["facts"]["active_retention_claims"], 2);
+    }
+
+    #[test]
+    fn a_keep_claim_is_reported_beside_an_expired_lease() {
+        let doc = claim_document(
+            instant("2024-08-01T00:00:00Z"),
+            &title(None),
+            &[
+                claim(
+                    "claim-1",
+                    LifecycleClaimKind::RetainUntil,
+                    LifecycleClaimState::Expired,
+                    Some("2024-07-01T00:00:00Z"),
+                ),
+                claim(
+                    "claim-2",
+                    LifecycleClaimKind::Keep,
+                    LifecycleClaimState::Active,
+                    None,
+                ),
+            ],
+            true,
+        );
+
+        assert_eq!(doc["facts"]["keep_claim_active"], true);
+        assert_eq!(
+            doc["facts"]["request_lease_state"], "expired",
+            "a keep is not a lease: it does not make the lease state active"
+        );
+        assert_eq!(doc["facts"]["active_retention_claims"], 0);
+    }
+
+    /// The whole point of the gate: "Scryer cannot see claims" must never read
+    /// as "there are no claims".
+    #[test]
+    fn an_unreadable_claim_store_makes_every_claim_fact_unknown() {
+        let doc = claim_document(instant("2024-06-01T00:00:00Z"), &title(None), &[], false);
+
+        for fact in CLAIM_FACTS {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"],
+                unknown_reason::CLAIM_STORE_UNREADABLE,
+                "{fact}"
+            );
+        }
+    }
+
     /// `input.facts.tags` is the rule author's tag vocabulary, and reserved
     /// `scryer:` entries are settings that happen to share the storage. A rule
     /// must never be able to read a quality profile or a monitor type through a
