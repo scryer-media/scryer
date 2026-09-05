@@ -2176,6 +2176,11 @@ async fn notification_dispatcher_prefers_local_catalog_metadata_over_snapshot() 
     let provider = Arc::new(FakeNotificationProvider::jellyfin());
     let app = app_with_notification_provider(&ctx, provider.clone());
     let user = default_user(&app).await;
+    // Creation is registry-gated now, so the label this fixture asserts on has
+    // to exist before a title can be born carrying it.
+    app.create_title_tag_definition(&user, "local-tag", None)
+        .await
+        .expect("tag should be defined");
 
     let title = app
         .add_title(

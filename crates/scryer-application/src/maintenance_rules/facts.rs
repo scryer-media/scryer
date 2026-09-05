@@ -246,7 +246,7 @@ fn build_facts(
 
     MaintenanceFactsDoc {
         monitored: Observation::known(title.monitored),
-        tags: Observation::known(title.tags.clone()),
+        tags: Observation::known(user_title_tags(&title.tags)),
         quality_profile_id: quality_profile_observation(&title.tags),
         added_at: Observation::known(title.created_at.to_rfc3339()),
         added_by_user_id,
@@ -273,6 +273,20 @@ fn build_facts(
         watched_by_any_requester: watched.watched_by_any_requester,
         watched_by_all_requesters: watched.watched_by_all_requesters,
     }
+}
+
+/// The user-defined half of a title's tag bag.
+///
+/// `input.facts.tags` is the rule author's tag vocabulary, and that vocabulary
+/// is the admin registry. Reserved `scryer:` entries are per-title *settings*
+/// stored in the same bag; surfacing them here would let a rule read a quality
+/// profile or a monitor type through a fact named "tags", and every one of
+/// those settings already has its own fact or none at all on purpose.
+fn user_title_tags(tags: &[String]) -> Vec<String> {
+    tags.iter()
+        .filter(|tag| !crate::is_reserved_title_tag(tag))
+        .cloned()
+        .collect()
 }
 
 /// Known when the structured tag is present and non-empty; absent when the
@@ -1116,5 +1130,42 @@ mod tests {
 
         assert_eq!(doc["facts"]["watched_by_any_requester"], false);
         assert_eq!(doc["facts"]["watched_by_all_requesters"], false);
+    }
+    /// `input.facts.tags` is the rule author's tag vocabulary, and reserved
+    /// `scryer:` entries are settings that happen to share the storage. A rule
+    /// must never be able to read a quality profile or a monitor type through a
+    /// fact named "tags", and the structured entries must not push the user's
+    /// own labels around either.
+    #[test]
+    fn structured_settings_entries_never_appear_in_the_tags_fact() {
+        let mut subject = title(Some("user-1"));
+        subject.tags = vec![
+            "scryer:quality-profile:profile-one".to_string(),
+            "keep".to_string(),
+            "scryer:monitor-type:all".to_string(),
+            "needs review".to_string(),
+        ];
+
+        let doc = document(&subject, None, &usernames(&[]));
+
+        assert_eq!(
+            doc["facts"]["tags"],
+            serde_json::json!(["keep", "needs review"])
+        );
+        // The settings themselves are still readable through the fact that
+        // exists for them, so nothing is lost by filtering the bag.
+        assert_eq!(doc["facts"]["quality_profile_id"], "profile-one");
+    }
+
+    /// A title carrying settings and no user labels reports an empty list, not
+    /// a hold: "this title has no tags" is a confirmed answer.
+    #[test]
+    fn a_title_with_only_structured_entries_reports_an_empty_tags_fact() {
+        let mut subject = title(Some("user-1"));
+        subject.tags = vec!["scryer:monitor-specials:false".to_string()];
+
+        let doc = document(&subject, None, &usernames(&[]));
+
+        assert_eq!(doc["facts"]["tags"], serde_json::json!([]));
     }
 }

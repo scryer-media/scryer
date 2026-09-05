@@ -202,6 +202,13 @@ async fn creating_a_title_still_assigns_the_requested_root_directly() {
 #[tokio::test]
 async fn update_title_metadata_changes_name_and_tags() {
     let (app, user) = bootstrap();
+    // Both doors into the bag — creation and the whole-bag write — are
+    // registry-gated, so the vocabulary has to exist before either can use it.
+    for label in ["scifi", "action", "drama"] {
+        app.create_title_tag_definition(&user, label, None)
+            .await
+            .expect("tag should be defined");
+    }
     let created = app
         .add_title(
             &user,
@@ -218,14 +225,6 @@ async fn update_title_metadata_changes_name_and_tags() {
         )
         .await
         .expect("create title");
-
-    // The whole-bag write is registry-gated now, so the vocabulary has to exist
-    // before a title can be given it.
-    for label in ["action", "drama"] {
-        app.create_title_tag_definition(&user, label, None)
-            .await
-            .expect("tag should be defined");
-    }
 
     let updated = app
         .update_title_metadata(
@@ -1431,6 +1430,71 @@ async fn stored_title_tags(app: &AppUseCase, title_id: &str) -> Vec<String> {
         .tags
 }
 
+/// Creation is the third door into the bag. A title that could be *born*
+/// carrying an undefined label would leave membership the registry never
+/// authorized, exactly what the update gate exists to prevent.
+#[tokio::test]
+async fn creating_a_title_refuses_a_label_the_registry_does_not_define() {
+    let (app, user) = bootstrap();
+
+    let error = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Born Untagged".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec!["not defined".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("an unregistered label must be refused at creation");
+    assert!(
+        error.to_string().contains("not defined"),
+        "the refusal must name the label: {error}"
+    );
+
+    // Reserved structured entries are how the add flow stores per-title
+    // options, so they pass the gate untouched.
+    let with_options = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Born With Options".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec!["scryer:monitor-type:all".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a reserved entry is not a user tag and is not gated");
+    assert_eq!(
+        with_options.tags,
+        vec!["scryer:monitor-type:all".to_string()]
+    );
+
+    // The same creation succeeds once an administrator defines the tag.
+    app.create_title_tag_definition(&user, "not defined", None)
+        .await
+        .expect("tag should be defined");
+    let created = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Born Tagged".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec!["Not Defined".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a defined label is accepted at creation");
+    assert_eq!(created.tags, vec!["not defined".to_string()]);
+}
+
 #[tokio::test]
 async fn the_raw_tag_write_refuses_a_label_the_registry_does_not_define() {
     let (app, user) = bootstrap();
@@ -1685,6 +1749,7 @@ async fn renaming_a_tag_rewrites_titles_and_delay_profiles() {
     // label; the counts exist so the UI can warn that Rego is never rewritten.
     assert_eq!(renamed.counts.maintenance_rule_sets, 0);
     assert_eq!(renamed.counts.release_rule_sets, 0);
+    assert_eq!(renamed.counts.managed_tag_filters, 0);
 
     assert_eq!(
         stored_title_tags(&app, &first.id).await,
@@ -1708,6 +1773,159 @@ async fn renaming_a_tag_rewrites_titles_and_delay_profiles() {
     assert_eq!(registry.len(), 1);
     assert_eq!(registry[0].definition.label, "archive");
     assert_eq!(registry[0].title_count, 2);
+}
+
+/// A read-only rule-set repository over a fixed list. The rename warning only
+/// ever lists rule sets, so nothing else has to work.
+struct FixedRuleSetRepo(Vec<scryer_domain::RuleSet>);
+
+#[async_trait]
+impl crate::ports::RuleSetRepository for FixedRuleSetRepo {
+    async fn list_rule_sets(&self) -> AppResult<Vec<scryer_domain::RuleSet>> {
+        Ok(self.0.clone())
+    }
+    async fn list_enabled_rule_sets(&self) -> AppResult<Vec<scryer_domain::RuleSet>> {
+        Ok(self.0.iter().filter(|rule| rule.enabled).cloned().collect())
+    }
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<scryer_domain::RuleSet>> {
+        Ok(self.0.iter().find(|rule| rule.id == id).cloned())
+    }
+    async fn create_rule_set(&self, _rule_set: &scryer_domain::RuleSet) -> AppResult<()> {
+        Ok(())
+    }
+    async fn update_rule_set(&self, _rule_set: &scryer_domain::RuleSet) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn record_rule_set_history(
+        &self,
+        _rule_set_id: &str,
+        _action: &str,
+        _rego_source: Option<&str>,
+        _actor_id: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn get_rule_set_by_managed_key(
+        &self,
+        key: &str,
+    ) -> AppResult<Option<scryer_domain::RuleSet>> {
+        Ok(self
+            .0
+            .iter()
+            .find(|rule| rule.managed_key.as_deref() == Some(key))
+            .cloned())
+    }
+    async fn delete_rule_set_by_managed_key(&self, _key: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_rule_sets_by_managed_key_prefix(
+        &self,
+        prefix: &str,
+    ) -> AppResult<Vec<scryer_domain::RuleSet>> {
+        Ok(self
+            .0
+            .iter()
+            .filter(|rule| {
+                rule.managed_key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with(prefix))
+            })
+            .cloned()
+            .collect())
+    }
+}
+
+fn fixture_rule_set(id: &str, rego_source: &str) -> scryer_domain::RuleSet {
+    let now = Utc::now();
+    scryer_domain::RuleSet {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: String::new(),
+        rego_source: rego_source.to_string(),
+        enabled: true,
+        priority: 0,
+        applied_facets: Vec::new(),
+        created_at: now,
+        updated_at: now,
+        is_managed: false,
+        managed_key: None,
+        managed_tag_filter: None,
+    }
+}
+
+/// A rename cannot rewrite a rule, so it has to say where the operator must go
+/// and look. Rego sources and managed tag filters are two different places, and
+/// one managed pack can be counted in both.
+#[tokio::test]
+async fn renaming_a_tag_counts_rego_references_and_managed_tag_filters_apart() {
+    let (app, user) = bootstrap();
+    let authored = fixture_rule_set(
+        "ruleauthored",
+        "package scryer.rules.ruleauthored\n\nblock { \"keep\" in input.context.tags }\n",
+    );
+    // A managed pack narrows itself by tag list, not by source text, so it is
+    // counted for a reason the substring scan would never see. This one names
+    // the label both ways, which is exactly the case the split counts exist for.
+    let managed = scryer_domain::RuleSet {
+        id: "rulemanaged".to_string(),
+        is_managed: true,
+        managed_key: Some("locale-pack-one".to_string()),
+        managed_tag_filter: Some(vec!["keep".to_string()]),
+        ..fixture_rule_set(
+            "rulemanaged",
+            "package scryer.rules.rulemanaged\n\nblock { \"keep\" in input.context.tags }\n",
+        )
+    };
+    let filter_only = scryer_domain::RuleSet {
+        id: "rulefilteronly".to_string(),
+        is_managed: true,
+        managed_key: Some("locale-pack-two".to_string()),
+        managed_tag_filter: Some(vec!["keep".to_string()]),
+        ..fixture_rule_set("rulefilteronly", "package scryer.rules.rulefilteronly\n")
+    };
+    let app = app.with_test_overrides(|services| {
+        services.with_rule_sets(Arc::new(FixedRuleSetRepo(vec![
+            authored,
+            managed,
+            filter_only,
+        ])))
+    });
+
+    let definition = app
+        .create_title_tag_definition(&user, "keep", None)
+        .await
+        .expect("tag should be defined");
+    let renamed = app
+        .update_title_tag_definition(&user, &definition.id, Some("archive".to_string()), None)
+        .await
+        .expect("rename should apply");
+    assert_eq!(renamed.definition.label, "archive");
+    assert_eq!(renamed.counts.release_rule_sets, 2);
+    assert_eq!(renamed.counts.managed_tag_filters, 2);
+    assert_eq!(renamed.counts.maintenance_rule_sets, 0);
+
+    // The label is only reported, never rewritten: every rule still names it.
+    let stored = app
+        .list_rule_sets(&user)
+        .await
+        .expect("rule sets should load");
+    assert_eq!(
+        stored
+            .iter()
+            .filter(|rule_set| rule_set.rego_source.contains("keep"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        stored
+            .iter()
+            .filter(|rule_set| rule_set.managed_tag_filter == Some(vec!["keep".to_string()]))
+            .count(),
+        2
+    );
 }
 
 #[tokio::test]

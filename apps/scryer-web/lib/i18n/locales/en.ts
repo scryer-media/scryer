@@ -1945,7 +1945,8 @@ const en: LocaleDictionary = {
     "Normalized original title country, when metadata provides one",
   "settings.refCtxInferredOriginalAudioLanguage":
     "Normalized original audio language inferred for unlabeled releases",
-  "settings.refCtxTags": "User-defined tags on the title",
+  "settings.refCtxTags":
+    "User-defined tags on the title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refCtxHasExisting":
     "True when a file already exists for this title",
   "settings.refCtxExistingScore":
@@ -3807,7 +3808,8 @@ const en: LocaleDictionary = {
   "settings.refMaintLibraryName": "Display name of that library",
   "settings.refMaintSectionFacts": "— The fact snapshot; each fact is a plain value, and the key is missing when the fact is absent or could not be observed",
   "settings.refMaintFactsMonitored": "Whether the subject is monitored",
-  "settings.refMaintFactsTags": "Tags applied to the subject",
+  "settings.refMaintFactsTags":
+    "User-defined tags on the subject, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
   "settings.refMaintFactsQualityProfileId": "Quality profile the subject is assigned to",
   "settings.refMaintFactsAddedAt": "When the subject was added to the library",
   "settings.refMaintFactsAddedByUserId": "Which user added the subject; absent when a scan or discovery created it",
@@ -3835,7 +3837,8 @@ const en: LocaleDictionary = {
   "settings.refMaintObsObservedAt": "When the value was observed, if the source recorded a time",
   "settings.refMaintObsReason": "Stable machine code explaining why the fact is unknown, or why an absent fact has no value",
   "settings.refMaintFactsMonitoredValue": "True when the subject is monitored",
-  "settings.refMaintFactsTagsValue": "Tag names applied to the subject",
+  "settings.refMaintFactsTagsValue":
+    "Lowercase user-defined tag names from the admin tag registry; never reserved scryer: settings entries",
   "settings.refMaintFactsQualityProfileIdValue": "Identifier of the assigned quality profile",
   "settings.refMaintFactsAddedAtValue": "RFC3339 timestamp the subject was added",
   "settings.refMaintFactsAddedByUserIdValue": "Identifier of the user who added the subject; the reason is title_added_by_system when nobody did",

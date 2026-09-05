@@ -2221,7 +2221,7 @@ const ru: LocaleDictionary = {
         "Нормализованный язык оригинальной звуковой дорожки, определённый для релизов без явной маркировки",
 
     "settings.refCtxTags":
-        "Пользовательские теги, назначенные материалу",
+        "Пользовательские теги материала в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
 
     "settings.refCtxHasExisting":
         "Истинно, если для этого материала уже существует файл",
@@ -5114,7 +5114,8 @@ const ru: LocaleDictionary = {
     "settings.refMaintLibraryName": "Отображаемое имя этой библиотеки",
     "settings.refMaintSectionFacts": "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
     "settings.refMaintFactsMonitored": "Отслеживается ли субъект",
-    "settings.refMaintFactsTags": "Теги, назначенные субъекту",
+    "settings.refMaintFactsTags":
+        "Пользовательские теги субъекта в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
     "settings.refMaintFactsQualityProfileId": "Профиль качества, назначенный субъекту",
     "settings.refMaintFactsAddedAt": "Когда субъект был добавлен в библиотеку",
     "settings.refMaintFactsAddedByUserId": "Какой пользователь добавил субъект; отсутствует, если его создало сканирование или обнаружение",
@@ -5142,7 +5143,8 @@ const ru: LocaleDictionary = {
     "settings.refMaintObsObservedAt": "Когда значение было получено, если источник записал время",
     "settings.refMaintObsReason": "Устойчивый машинный код, объясняющий, почему факт неизвестен или почему у отсутствующего факта нет значения",
     "settings.refMaintFactsMonitoredValue": "True, когда субъект отслеживается",
-    "settings.refMaintFactsTagsValue": "Имена тегов, назначенных субъекту",
+    "settings.refMaintFactsTagsValue":
+        "Имена пользовательских тегов в нижнем регистре из реестра тегов администратора; никогда не служебные записи с префиксом scryer:",
     "settings.refMaintFactsQualityProfileIdValue": "Идентификатор назначенного профиля качества",
     "settings.refMaintFactsAddedAtValue": "Метка времени RFC3339 добавления субъекта",
     "settings.refMaintFactsAddedByUserIdValue": "Идентификатор пользователя, добавившего субъект; причина title_added_by_system, если этого не сделал никто",

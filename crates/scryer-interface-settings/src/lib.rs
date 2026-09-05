@@ -601,6 +601,45 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
     }
 }
 
+/// Counts cross a `u64` application boundary and a signed GraphQL one. Nothing
+/// here can plausibly exceed `i32::MAX`, and saturating beats wrapping a title
+/// count into a negative number on the one pathological catalog that could.
+fn title_tag_count(value: u64) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+pub(crate) fn from_title_tag_definition(
+    definition: scryer_domain::TitleTagDefinition,
+    title_count: u64,
+) -> TitleTagDefinitionPayload {
+    TitleTagDefinitionPayload {
+        id: definition.id.into(),
+        label: definition.label,
+        description: definition.description,
+        title_count: title_tag_count(title_count),
+        created_at: definition.created_at,
+        updated_at: definition.updated_at,
+    }
+}
+
+pub(crate) fn from_title_tag_summary(
+    summary: scryer_application::TitleTagDefinitionSummary,
+) -> TitleTagDefinitionPayload {
+    from_title_tag_definition(summary.definition, summary.title_count)
+}
+
+pub(crate) fn from_title_tag_rewrite_counts(
+    counts: scryer_application::TitleTagRewriteCounts,
+) -> TitleTagRewriteCountsPayload {
+    TitleTagRewriteCountsPayload {
+        titles: title_tag_count(counts.titles),
+        delay_profiles: title_tag_count(counts.delay_profiles),
+        maintenance_rule_sets: title_tag_count(counts.maintenance_rule_sets),
+        release_rule_sets: title_tag_count(counts.release_rule_sets),
+        managed_tag_filters: title_tag_count(counts.managed_tag_filters),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[Object]
 impl SettingsQueries {
@@ -927,6 +966,28 @@ impl SettingsQueries {
         let actor = actor_from_ctx(ctx)?;
         let profiles = app.get_delay_profiles(&actor).await.map_err(to_gql_error)?;
         Ok(profiles.into_iter().map(from_delay_profile).collect())
+    }
+
+    /// Lists every administrator-defined title tag with the number of titles carrying it.
+    ///
+    /// Readable by any authenticated caller: the tag picker and the catalog
+    /// filter both need the vocabulary, and the vocabulary says nothing about
+    /// any particular title.
+    async fn title_tag_definitions(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<TitleTagDefinitionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.title_tag_definitions(&actor)
+            .await
+            .map(|definitions| {
+                definitions
+                    .into_iter()
+                    .map(from_title_tag_summary)
+                    .collect()
+            })
+            .map_err(to_gql_error)
     }
 
     /// Returns media settings for the requested content scope.

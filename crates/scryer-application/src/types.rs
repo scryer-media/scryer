@@ -878,16 +878,24 @@ pub struct TitleTagDefinitionSummary {
 
 /// What a rename or delete actually rewrote.
 ///
-/// `titles` and `delay_profiles` are rewrites the operation performed.
-/// `maintenance_rule_sets` and `release_rule_sets` are references it found and
-/// deliberately did *not* rewrite: Rego revisions are immutable, so a rule that
+/// `titles` and `delay_profiles` are rewrites the operation performed. The last
+/// three are references it found and deliberately did *not* rewrite: Rego
+/// revisions are immutable and managed tag filters are SMG-owned, so a rule that
 /// named the old label stops matching rather than silently changing meaning.
+///
+/// The three reference counts are kept apart rather than summed so the warning
+/// can name what the operator has to go and look at: a maintenance rule, a
+/// release rule, or a managed pack's tag filter are three different places.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TitleTagRewriteCounts {
     pub titles: u64,
     pub delay_profiles: u64,
     pub maintenance_rule_sets: u64,
     pub release_rule_sets: u64,
+    /// Release rule sets whose managed `tag_filter` list carries the label.
+    /// A managed pack can appear here and in `release_rule_sets` at once; the
+    /// two answer different questions.
+    pub managed_tag_filters: u64,
 }
 
 /// Outcome of a registry rename/describe: the row as it now stands, and what

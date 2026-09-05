@@ -430,6 +430,18 @@ impl TransferFixture {
         library_id: &str,
         root_id: &str,
     ) -> Title {
+        // Creation is registry-gated, so whatever user labels a case asks for
+        // have to be defined before the title can be born carrying them.
+        // Reserved `scryer:` entries are settings and are not gated.
+        for tag in &tags {
+            if crate::is_reserved_title_tag(tag) {
+                continue;
+            }
+            let _ = self
+                .app
+                .create_title_tag_definition(&self.user, tag, None)
+                .await;
+        }
         // The facet follows the library the title is created in: the catalog
         // refuses a title whose facet does not match its library's.
         let facet = if library_id == self.destination_library_id {

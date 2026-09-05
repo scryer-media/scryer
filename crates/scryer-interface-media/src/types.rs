@@ -18,7 +18,7 @@ pub struct TitlePayload {
     pub facet: MediaFacetValue,
     /// Whether acquisition and monitoring are enabled for the title.
     pub monitored: bool,
-    /// Source tag values associated with the title.
+    /// User-defined tags plus reserved `scryer:` settings entries.
     pub tags: Vec<String>,
     /// External catalog identifiers attached to the title.
     pub external_ids: Vec<ExternalIdPayload>,
@@ -231,6 +231,8 @@ pub struct TitleCatalogFilterInput {
     pub genre_tag_keys: Option<Vec<String>>,
     /// Restrict results to titles having one of these canonical theme tag keys; null leaves all themes included.
     pub theme_tag_keys: Option<Vec<String>>,
+    /// Restrict results to titles carrying at least one of these user-defined tag labels; null or empty leaves all titles included. Labels are normalized the way the tag registry stores them, and reserved `scryer:` entries are rejected.
+    pub tags: Option<Vec<String>>,
     /// Inclusive lower bound for release year; null imposes no lower bound.
     pub minimum_year: Option<i32>,
     /// Inclusive upper bound for release year; null imposes no upper bound.

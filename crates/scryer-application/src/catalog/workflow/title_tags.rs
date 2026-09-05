@@ -90,11 +90,11 @@ impl AppUseCase {
 
         // The rule-set scan runs before the write so the warning describes the
         // label the operator is renaming away from, not what is left afterwards.
-        let (maintenance_rule_sets, release_rule_sets) = if renamed {
+        let (maintenance_rule_sets, release_rule_sets, managed_tag_filters) = if renamed {
             self.count_rule_sets_referencing_title_tag(&previous_label)
                 .await?
         } else {
-            (0, 0)
+            (0, 0, 0)
         };
 
         let (definition, titles) = self
@@ -132,6 +132,7 @@ impl AppUseCase {
                 delay_profiles,
                 maintenance_rule_sets,
                 release_rule_sets,
+                managed_tag_filters,
             },
         })
     }
@@ -156,7 +157,7 @@ impl AppUseCase {
             .get_title_tag_definition(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
-        let (maintenance_rule_sets, release_rule_sets) = self
+        let (maintenance_rule_sets, release_rule_sets, managed_tag_filters) = self
             .count_rule_sets_referencing_title_tag(&existing.label)
             .await?;
 
@@ -183,6 +184,7 @@ impl AppUseCase {
             delay_profiles,
             maintenance_rule_sets,
             release_rule_sets,
+            managed_tag_filters,
         })
     }
 
@@ -324,14 +326,27 @@ impl AppUseCase {
         Ok(changed)
     }
 
-    /// `(maintenance rule sets, release rule sets)` whose stored Rego mentions
-    /// `label` anywhere.
+    /// `(maintenance rule sets, release rule sets, managed tag filters)` that
+    /// name `label`.
     ///
-    /// A plain substring search on purpose: this is a warning, not a rewrite.
-    /// Rego revisions are immutable, so nothing here can be corrected
-    /// automatically, and an over-broad match costs the operator one extra look
-    /// at a rule while a missed match costs a rule that silently stops firing.
-    async fn count_rule_sets_referencing_title_tag(&self, label: &str) -> AppResult<(u64, u64)> {
+    /// The first two are a plain substring search over stored Rego, on purpose:
+    /// this is a warning, not a rewrite. Rego revisions are immutable, so
+    /// nothing here can be corrected automatically, and an over-broad match
+    /// costs the operator one extra look at a rule while a missed match costs a
+    /// rule that silently stops firing.
+    ///
+    /// The third is exact: a managed pack's `tag_filter` is a list of labels,
+    /// not free text, and it is SMG-owned, so it is neither rewritten nor
+    /// folded into the Rego count — the operator has to fix it somewhere else.
+    /// One managed pack can therefore be counted twice, once per reason.
+    ///
+    /// Only each rule set's *current* revision is scanned. Older revisions are
+    /// immutable history and cannot fire, so naming them would send the
+    /// operator after rules that are already inert.
+    async fn count_rule_sets_referencing_title_tag(
+        &self,
+        label: &str,
+    ) -> AppResult<(u64, u64, u64)> {
         let mut maintenance = 0_u64;
         for rule_set in self
             .services
@@ -352,17 +367,28 @@ impl AppUseCase {
             }
         }
 
-        let release = self
+        let mut release = 0_u64;
+        let mut managed_tag_filters = 0_u64;
+        for rule_set in self
             .services
             .customization
             .rule_sets
             .list_rule_sets()
             .await?
-            .into_iter()
-            .filter(|rule_set| rule_set.rego_source.contains(label))
-            .count() as u64;
+        {
+            if rule_set.rego_source.contains(label) {
+                release += 1;
+            }
+            if rule_set
+                .managed_tag_filter
+                .as_ref()
+                .is_some_and(|tags| tags.iter().any(|tag| tag == label))
+            {
+                managed_tag_filters += 1;
+            }
+        }
 
-        Ok((maintenance, release))
+        Ok((maintenance, release, managed_tag_filters))
     }
 }
 
