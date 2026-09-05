@@ -560,3 +560,30 @@ async fn a_single_file_under_a_usable_release_name_is_never_looked_up() {
     );
     assert!(member.exists(), "no file on disk is ever renamed");
 }
+
+#[tokio::test]
+async fn a_usable_release_name_that_matches_no_title_is_never_looked_up() {
+    // An adopted download whose NZB name is a perfectly good release name for
+    // a title Scryer does not have. The recovered scene name would carry the
+    // same title, so the download stays unmatched without any hashing or any
+    // third-party request.
+    let root = tempfile::tempdir().expect("completed dir");
+    let release = "Quiet.Marsh.S01E02.1080p.WEB.H264-LANTERNS";
+    let dir = root.path().join(release);
+    std::fs::create_dir(&dir).expect("create release folder");
+    let member = write_member(&dir, OBFUSCATED_MEMBERS[0], true);
+    let lookup = Arc::new(FakeSrrdbLookup::recovering(&[(
+        member_crc(&member).as_str(),
+        "Harbor.Pals.S01E02.1080p.WEB.H264-LANTERNS.mkv",
+    )]));
+
+    let result =
+        run_recovery_import_named(&dir, Some(release), "sabnzbd", true, lookup.clone(), None).await;
+
+    assert_eq!(
+        lookup.call_count().await,
+        0,
+        "a usable release name is never second-guessed through srrdb: {result:?}"
+    );
+    assert_eq!(result.decision, ImportDecision::Unmatched, "{result:?}");
+}
