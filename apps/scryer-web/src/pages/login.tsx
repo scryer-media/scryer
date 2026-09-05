@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
+import { useTheme } from "next-themes";
 import { Fingerprint, KeyRound, Loader2 } from "lucide-react";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { useAuth, type AuthUser } from "@/lib/hooks/use-auth";
@@ -37,6 +38,7 @@ import {
 } from "@/lib/utils/passkeys";
 import { authenticateWithPlexPin } from "@/lib/utils/plex-oauth";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { cn } from "@/lib/utils";
 
 type LoginMethod = "password" | "jellyfin" | "emby" | null;
 
@@ -147,6 +149,46 @@ const AUTH_SECONDARY_BUTTON_CLASS =
   "flex h-10 w-full items-center justify-center gap-2 rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-4 text-sm font-semibold text-[var(--scry-ink2)] shadow-none transition-colors hover:bg-[var(--scry-hover)] disabled:opacity-50";
 const AUTH_ERROR_CLASS =
   "rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm leading-6 text-[var(--scry-danger-text)]";
+
+/// Brand mark stacked over the wordmark at the top of the sign-in card.
+///
+/// The mark is the 512px icon rather than `scryer-logo.svg`: the SVG carries an
+/// embedded raster and weighs 2.6MB, which is a lot to spend on the one page
+/// every unauthenticated visitor loads. At 256 CSS px the 512px source is still
+/// pixel-doubled on retina.
+///
+/// Only one wordmark asset exists and its letterforms are light ink for a dark
+/// background, so on the light theme it is darkened to stay legible. The theme
+/// is read after mount for the same reason the sidebar does it: `resolvedTheme`
+/// is undefined on the first pass and the mark would otherwise flip after paint.
+function AuthBrand() {
+  const { resolvedTheme } = useTheme();
+  const [themeMounted, setThemeMounted] = useState(false);
+  useEffect(() => setThemeMounted(true), []);
+  const lightTheme = themeMounted && resolvedTheme === "light";
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <img
+        id="login-brand-logo"
+        src={`${import.meta.env.BASE_URL}scryer-icon-512.png`}
+        alt=""
+        width={256}
+        height={256}
+        className="h-auto w-64 max-w-full"
+      />
+      <img
+        id="login-brand-wordmark"
+        src={`${import.meta.env.BASE_URL}scryer-wordmark.svg`}
+        alt="Scryer"
+        className={cn(
+          "h-auto w-56 max-w-full",
+          lightTheme && "[filter:brightness(0.2)_saturate(1.15)]",
+        )}
+      />
+    </div>
+  );
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -1167,6 +1209,7 @@ export default function LoginPage() {
   return (
     <div className={AUTH_PAGE_CLASS}>
       <div className={AUTH_PANEL_CLASS}>
+        <AuthBrand />
         <h1 className={AUTH_HEADING_CLASS}>{t("auth.signIn")}</h1>
 
         {error && (
