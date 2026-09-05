@@ -575,11 +575,23 @@ async fn resolve_completed_import_target(
         }
     }
 
-    if title.is_none() {
-        // Last resort before giving up: the download's own video files carry no
-        // title signal, so ask srrdb for their original names and try the
-        // ordinary release-candidate match again with those. The results are
-        // memoized and reused by the file list built further down.
+    // Whether the release name Scryer already holds for this download parses
+    // to a usable title. srrdb only ever helps a download whose own name says
+    // nothing: a usable name that matched no library title is an adopted
+    // download for something Scryer does not have, and the recovered scene
+    // name would carry the same title, so hashing it would buy nothing.
+    let release_evidence_title_unusable = release_evidence
+        .release_title(None)
+        .as_deref()
+        .and_then(parse_usable_release_title)
+        .is_none();
+
+    if title.is_none() && release_evidence_title_unusable {
+        // Last resort before giving up: neither the release name nor the
+        // download's own video files carry a title signal, so ask srrdb for
+        // their original names and try the ordinary release-candidate match
+        // again with those. The results are memoized and reused by the file
+        // list built further down.
         let probe_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
         let probe_files = find_video_files(probe_dir, true)
             .ok()
@@ -751,11 +763,6 @@ async fn resolve_completed_import_target(
     // already carries the episode or the year and the quality, planning
     // proceeds on it today, and hashing plus a third-party request would buy
     // nothing.
-    let release_evidence_title_unusable = release_evidence
-        .release_title(None)
-        .as_deref()
-        .and_then(parse_usable_release_title)
-        .is_none();
     let needs_own_name = (is_series && video_files.len() > 1) || release_evidence_title_unusable;
     let video_files = srrdb
         .enrich(app, completed, video_files, needs_own_name)
