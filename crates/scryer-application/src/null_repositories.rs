@@ -3070,6 +3070,14 @@ impl MediaRequestRepository for NullMediaRequestRepository {
     ) -> AppResult<()> {
         Ok(())
     }
+
+    async fn rewrite_pending_policy_tag(
+        &self,
+        _label: &str,
+        _replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
 }
 
 /// Reads answer empty and writes refuse: an assembly with no request-rule store

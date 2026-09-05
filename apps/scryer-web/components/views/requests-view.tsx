@@ -8,7 +8,6 @@ import {
   Inbox,
   Loader2,
   Pencil,
-  Plus,
   RefreshCw,
   ScrollText,
   ShieldX,
@@ -31,6 +30,7 @@ import {
 import { TitleRatingsDisplay } from "@/components/common/title-ratings-display";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { MonitorSelectionPicker } from "@/components/common/monitor-selection-picker";
+import { TitleTagsPicker } from "@/components/common/title-tags-picker";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { TitlePoster } from "@/components/title-poster";
 import { Badge } from "@/components/ui/badge";
@@ -85,17 +85,16 @@ import {
   monitorSelectionInput,
   monitorSelectionSummaryParts,
 } from "@/lib/utils/monitor-selection";
+import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID,
   APPROVE_MEDIA_REQUEST_LEASE_ID,
-  APPROVE_MEDIA_REQUEST_TAG_ADD_ID,
-  APPROVE_MEDIA_REQUEST_TAG_INPUT_ID,
+  APPROVE_MEDIA_REQUEST_TAGS_PREFIX,
   TITLE_CLAIM_EXTEND_DATE_ID,
   TITLE_CLAIM_RELEASE_REASON_ID,
   approveMediaRequestLeaseOptionId,
-  approveMediaRequestTagRemoveId,
   mediaRequestApproveId,
   mediaRequestCancelId,
   mediaRequestClaimsPanelId,
@@ -769,7 +768,6 @@ export function RequestsView({
   const [approvalCustomLeaseDays, setApprovalCustomLeaseDays] =
     React.useState(30);
   const [approvalTags, setApprovalTags] = React.useState<string[]>([]);
-  const [approvalTagDraft, setApprovalTagDraft] = React.useState("");
   const [openClaimsRequestId, setOpenClaimsRequestId] = React.useState<
     string | null
   >(null);
@@ -837,7 +835,6 @@ export function RequestsView({
     /// Prefilled from what the policy emitted, and editable: the approver is
     /// the one who decides what the created title actually carries.
     setApprovalTags([...(approvalRequest.policyTags ?? [])]);
-    setApprovalTagDraft("");
   }, [approvalRequest, libraries, qualityProfileOptions]);
 
   React.useEffect(() => {
@@ -871,6 +868,12 @@ export function RequestsView({
   const approvalTvdbId = approvalRequest
     ? requestExternalIdValue(approvalRequest, "tvdb")?.trim() ?? ""
     : "";
+  // The tag vocabulary is only needed while the approve dialog is open, and
+  // this view is mounted for every visit to the requests page.
+  const {
+    definitions: titleTagDefinitions,
+    loading: titleTagDefinitionsLoading,
+  } = useTitleTagDefinitions({ enabled: approvalRequest !== null });
   const approvalBlocksConfirm =
     approvalAdvancedSelected &&
     (!approvalTvdbId ||
@@ -902,7 +905,6 @@ export function RequestsView({
     setApprovalSelectionLoading(false);
     setApprovalLeaseChoice("requested");
     setApprovalTags([]);
-    setApprovalTagDraft("");
   };
 
   const confirmApproval = () => {
@@ -927,13 +929,6 @@ export function RequestsView({
       tags: approvalTags,
     });
     closeApprovalDialog();
-  };
-
-  const addApprovalTag = () => {
-    const tag = approvalTagDraft.trim();
-    if (!tag) return;
-    setApprovalTags((prev) => (prev.includes(tag) ? prev : [...prev, tag]));
-    setApprovalTagDraft("");
   };
 
   const toggleClaimsPanel = (request: MediaRequestRecord) => {
@@ -1617,53 +1612,18 @@ export function RequestsView({
               <p className="text-xs text-muted-foreground">
                 {t("requests.approvedTagsHelp")}
               </p>
-              {approvalTags.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {approvalTags.map((tag) => (
-                    <Badge key={tag} tone="info" className="gap-1">
-                      {tag}
-                      <button
-                        id={approveMediaRequestTagRemoveId(tag)}
-                        type="button"
-                        aria-label={t("label.delete")}
-                        onClick={() =>
-                          setApprovalTags((prev) =>
-                            prev.filter((value) => value !== tag),
-                          )
-                        }
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-              <div className="flex gap-2">
-                <Input
-                  id={APPROVE_MEDIA_REQUEST_TAG_INPUT_ID}
-                  value={approvalTagDraft}
-                  placeholder={t("requests.approvedTagsPlaceholder")}
-                  disabled={actionRequestId !== null}
-                  onChange={(event) => setApprovalTagDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addApprovalTag();
-                    }
-                  }}
-                />
-                <Button
-                  id={APPROVE_MEDIA_REQUEST_TAG_ADD_ID}
-                  type="button"
-                  variant="secondary"
-                  disabled={
-                    actionRequestId !== null || !approvalTagDraft.trim()
-                  }
-                  onClick={addApprovalTag}
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
+              {/* The registry is the vocabulary: an approver picks from the
+                  same list the title editor offers rather than typing a label
+                  the server would then refuse after they pressed approve. */}
+              <TitleTagsPicker
+                value={approvalTags}
+                onChange={setApprovalTags}
+                definitions={titleTagDefinitions}
+                loading={titleTagDefinitionsLoading}
+                disabled={actionRequestId !== null}
+                idPrefix={APPROVE_MEDIA_REQUEST_TAGS_PREFIX}
+                emptyValueText={t("requests.approvedTagsNone")}
+              />
             </div>
           ) : null}
           <DialogFooter>

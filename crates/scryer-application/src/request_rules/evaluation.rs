@@ -80,9 +80,18 @@ pub struct RequestEvaluation {
     pub effective_outcome: RequestDecisionOutcome,
     pub fallback_reason: Option<String>,
     pub deciding_rule_set_ids: Vec<String>,
-    /// Tags the rules emitted. Recorded always; applied only when the effective
-    /// outcome is an approval (FR-050).
+    /// Tags that can actually land: the subset of [`Self::emitted_tags`] the
+    /// title tag registry defines. Filtering happens once, here, so the pending
+    /// row, the pre-flight banner, the resolution event and the approval all
+    /// read the same list and none of them can promise a label that will be
+    /// dropped later (FR-050).
     pub tags: Vec<String>,
+    /// Every tag the rules emitted, defined or not.
+    ///
+    /// The decision trace keeps this list rather than [`Self::tags`] so an
+    /// operator reading the trace can see the label they have not defined yet;
+    /// that is the only way to find out why a rule's tag never appeared.
+    pub emitted_tags: Vec<String>,
     pub reasons: Vec<RequestDecisionReason>,
     /// Strictest mode among the rules consulted, or `Disabled` when none were.
     pub evaluation_mode: RequestRuleEvaluationMode,
@@ -109,6 +118,7 @@ impl RequestEvaluation {
             fallback_reason: fallback_reason.map(str::to_string),
             deciding_rule_set_ids: Vec::new(),
             tags: Vec::new(),
+            emitted_tags: Vec::new(),
             reasons: Vec::new(),
             evaluation_mode: RequestRuleEvaluationMode::Disabled,
             metadata_partial,
@@ -235,6 +245,7 @@ impl AppUseCase {
                 fallback_reason: arbitration.fallback_reason.map(str::to_string),
                 deciding_rule_set_ids: arbitration.deciding_rule_set_ids.clone(),
                 tags: Vec::new(),
+                emitted_tags: Vec::new(),
                 reasons: Vec::new(),
                 evaluation_mode: RequestRuleEvaluationMode::Disabled,
                 metadata_partial,
@@ -346,13 +357,17 @@ impl AppUseCase {
         let effective_outcome =
             arbitration.effective_outcome(gate_enabled, enforceable, permission);
 
+        let emitted_tags = arbitration.tags.clone();
+        let applicable_tags = self.applicable_policy_tags(&purpose, &emitted_tags).await?;
+
         let mut evaluation = RequestEvaluation {
             decision_id: None,
             policy_outcome: arbitration.policy_outcome,
             effective_outcome,
             fallback_reason: arbitration.fallback_reason.map(str::to_string),
             deciding_rule_set_ids: arbitration.deciding_rule_set_ids.clone(),
-            tags: arbitration.tags.clone(),
+            tags: applicable_tags,
+            emitted_tags,
             reasons: reason_views(&arbitration),
             evaluation_mode: cache.strictest_mode(&library.id),
             metadata_partial,
@@ -362,6 +377,55 @@ impl AppUseCase {
             .record_request_decision(&purpose, &evaluation, &votes, &errors, &input_hash)
             .await;
         Ok(evaluation)
+    }
+
+    /// The subset of `emitted` the title tag registry defines.
+    ///
+    /// Rules may name any label within the family's bounds, but a title only
+    /// ever carries labels an administrator defined (the same gate
+    /// `updateTitleTags` enforces). Dropping the rest here — once, at the
+    /// source — is what keeps the pending row's "would be tagged" chip, the
+    /// pre-flight banner, the resolution event and the approve dialog's prefill
+    /// from promising a label that the approval would silently discard.
+    ///
+    /// The full list survives in the decision trace, which is where an operator
+    /// goes to find out that the label needs defining.
+    async fn applicable_policy_tags(
+        &self,
+        purpose: &RequestEvaluationPurpose,
+        emitted: &[String],
+    ) -> AppResult<Vec<String>> {
+        if emitted.is_empty() {
+            return Ok(Vec::new());
+        }
+        let undefined = self.undefined_title_tag_labels(emitted).await?;
+        if undefined.is_empty() {
+            return Ok(emitted.to_vec());
+        }
+        // Pre-flight runs on every debounced change in the request dialog, so
+        // its copy of the same news is a debug line; a submit or an edit
+        // happens once and deserves the operator's attention. Pre-flight has no
+        // request id, and its trace id is minted later at the write, so its line
+        // carries no id rather than one nothing can be joined on.
+        match purpose {
+            RequestEvaluationPurpose::Preflight => tracing::debug!(
+                dropped = ?undefined,
+                "request rule tags are not defined in the tag registry; the preview shows the rest"
+            ),
+            RequestEvaluationPurpose::Submit { request_id }
+            | RequestEvaluationPurpose::Resubmit { request_id } => {
+                tracing::warn!(
+                    request_id = request_id.as_str(),
+                    dropped = ?undefined,
+                    "request rule tags are not defined in the tag registry; applying the rest"
+                )
+            }
+        }
+        Ok(emitted
+            .iter()
+            .filter(|tag| !undefined.contains(tag))
+            .cloned()
+            .collect())
     }
 
     /// The trace write, best effort.
@@ -388,7 +452,11 @@ impl AppUseCase {
             fallback_reason: evaluation.fallback_reason.clone(),
             votes_json: serde_json::to_string(&recorded_votes(votes, errors))
                 .unwrap_or_else(|_| "[]".to_string()),
-            tags: evaluation.tags.clone(),
+            // The trace keeps everything the rules asked for, including labels
+            // the registry does not define: it is the audit record, and an
+            // operator hunting a tag that never appeared has nowhere else to
+            // look. What actually lands is `evaluation.tags`.
+            tags: evaluation.emitted_tags.clone(),
             input_hash: input_hash.to_string(),
             input_schema_version: i64::from(REQUEST_INPUT_SCHEMA_VERSION),
             created_at: now,

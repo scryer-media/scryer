@@ -119,6 +119,11 @@ export type RequestRulePreviewResult = {
   matcherContentHash: string;
   decision: RequestRuleDecisionRecord;
   metadataPartial: boolean;
+  /// Of the tags the rule emitted, the ones the tag registry does not define.
+  /// They are dropped when a request is decided, so the author has to define
+  /// them in Settings before the rule can apply them. `decision.tags` still
+  /// lists everything the rule emitted.
+  undefinedTags: string[];
   /// The document the matcher actually saw, or null when it could not be
   /// re-parsed. The "why did this not match" affordance.
   inputDocument: unknown;

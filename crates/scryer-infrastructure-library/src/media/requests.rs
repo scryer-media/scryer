@@ -449,6 +449,57 @@ impl MediaRequestRepository for MediaRequestStore {
         .await?;
         Ok(())
     }
+
+    async fn rewrite_pending_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        // The rewrite happens in Rust rather than in SQL: `policy_tags_json` is
+        // a JSON array whose element functions differ between SQLite and
+        // Postgres, and the pending set is small by construction — it is the
+        // approver's queue.
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, policy_tags_json
+               FROM media_requests
+              WHERE status = 'pending'",
+            &[],
+        )
+        .await?;
+
+        let mut changed = 0_u64;
+        for row in rows {
+            let id = row.text("id")?;
+            let tags = parse_json_array(&row, "policy_tags_json")?;
+            if !tags.iter().any(|tag| tag == label) {
+                continue;
+            }
+            let mut next: Vec<String> = tags.into_iter().filter(|tag| tag != label).collect();
+            if let Some(replacement) = replacement
+                && !next.iter().any(|tag| tag == replacement)
+            {
+                next.push(replacement.to_string());
+            }
+            SqlRuntime::execute_write(
+                &self.datastore,
+                "rewrite_media_request_policy_tag",
+                "UPDATE media_requests
+                    SET policy_tags_json = {},
+                        updated_at = {}
+                  WHERE id = {}
+                    AND status = 'pending'",
+                vec![
+                    SqlArg::Text(json_array_text(&next)?),
+                    SqlArg::Timestamp(Utc::now()),
+                    SqlArg::Text(id),
+                ],
+            )
+            .await?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
 }
 
 /// Every read of `media_requests` selects the same column list, so the policy
@@ -957,4 +1008,176 @@ fn json_array_text(values: &[String]) -> AppResult<String> {
 fn parse_json_array(row: &SqlRow, column: &str) -> AppResult<Vec<String>> {
     let raw = json_text_or(row, column, "[]")?;
     Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_store() -> MediaRequestStore {
+        scryer_infrastructure_datastore::register_spellfix_auto_extension()
+            .expect("spellfix extension should register before migrations");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        MediaRequestStore::new(StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    /// The library and user rows the request's foreign keys point at.
+    ///
+    /// Requests are seeded directly rather than submitted — `submit` would drag
+    /// a domain event and an external-id table into a test whose whole subject
+    /// is one JSON column — but the schema still enforces its foreign keys, so
+    /// the two parents have to exist.
+    async fn seed_owners(store: &MediaRequestStore) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_library_for_tag_rewrite",
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text("library-under-test".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("Under test".to_string()),
+                SqlArg::Text("under-test".to_string()),
+                SqlArg::Bool(false),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .expect("seed the library row");
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_user_for_tag_rewrite",
+            "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status)
+             VALUES ({}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::OptText(None),
+                SqlArg::Bool(false),
+                SqlArg::Text("local".to_string()),
+                SqlArg::Text("active".to_string()),
+            ],
+        )
+        .await
+        .expect("seed the user row");
+    }
+
+    /// Insert a request row directly.
+    async fn seed_request(store: &MediaRequestStore, id: &str, status: &str, policy_tags: &[&str]) {
+        let tags = policy_tags
+            .iter()
+            .map(|tag| (*tag).to_string())
+            .collect::<Vec<_>>();
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_media_request_for_tag_rewrite",
+            "INSERT INTO media_requests (
+                id, library_id, facet, status, identity_fingerprint, title,
+                policy_tags_json, created_by_user_id, created_at, updated_at
+            ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text("library-under-test".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text(status.to_string()),
+                SqlArg::Text(format!("fingerprint-{id}")),
+                SqlArg::Text(format!("Request {id}")),
+                SqlArg::Text(json_array_text(&tags).expect("serialize policy tags")),
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .expect("seed the request row");
+    }
+
+    async fn policy_tags_of(store: &MediaRequestStore, id: &str) -> Vec<String> {
+        store
+            .get(id)
+            .await
+            .expect("read the request back")
+            .expect("the request exists")
+            .policy_tags
+    }
+
+    #[tokio::test]
+    async fn renaming_a_policy_tag_touches_pending_rows_and_leaves_history_alone() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_request(&store, "pending-carrier", "pending", &["family", "keep"]).await;
+        seed_request(&store, "pending-bystander", "pending", &["keep"]).await;
+        // A resolved request records what was decided at the time; rewriting it
+        // would falsify the history its decision trace explains.
+        seed_request(&store, "approved-carrier", "approved", &["family"]).await;
+
+        let changed = store
+            .rewrite_pending_policy_tag("family", Some("family friendly"))
+            .await
+            .expect("the rewrite should succeed");
+        assert_eq!(changed, 1, "only the pending row carrying the label moved");
+
+        assert_eq!(
+            policy_tags_of(&store, "pending-carrier").await,
+            vec!["keep".to_string(), "family friendly".to_string()]
+        );
+        assert_eq!(
+            policy_tags_of(&store, "pending-bystander").await,
+            vec!["keep".to_string()]
+        );
+        assert_eq!(
+            policy_tags_of(&store, "approved-carrier").await,
+            vec!["family".to_string()],
+            "a resolved request keeps the label it was decided with"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_policy_tag_strips_it_without_disturbing_the_others() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_request(&store, "pending-carrier", "pending", &["family", "keep"]).await;
+
+        let changed = store
+            .rewrite_pending_policy_tag("family", None)
+            .await
+            .expect("the rewrite should succeed");
+        assert_eq!(changed, 1);
+        assert_eq!(
+            policy_tags_of(&store, "pending-carrier").await,
+            vec!["keep".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rename_onto_a_label_the_row_already_carries_does_not_duplicate_it() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_request(&store, "pending-both", "pending", &["family", "keep"]).await;
+
+        let changed = store
+            .rewrite_pending_policy_tag("family", Some("keep"))
+            .await
+            .expect("the rewrite should succeed");
+        assert_eq!(changed, 1);
+        assert_eq!(
+            policy_tags_of(&store, "pending-both").await,
+            vec!["keep".to_string()]
+        );
+    }
 }

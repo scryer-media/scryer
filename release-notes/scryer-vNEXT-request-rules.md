@@ -57,6 +57,24 @@ records. Rules about content only need catalog-settings management. The rule
 editor ships five starter templates and a reference for every fact a rule can
 read.
 
+**Tags a rule emits have to exist first.** A title only ever carries labels an
+administrator defined in Settings → Tags, and a request rule is held to the same
+bar: a label that is not in the registry is dropped when the request is decided,
+so it never reaches the title, the pending request's tag chip, or the approve
+dialog. The decision trace still lists it, which is where to look when a tag you
+expected did not appear, and the rule preview names the undefined labels while
+you are still writing the rule. This matters for the shipped
+`named-requesters-family-rated` template, which emits `family`: define that tag
+before arming the rule. Renaming a tag follows pending requests but never
+rewrites a rule's source, so the rule keeps emitting the old label until you
+edit it; the rename dialog counts how many request rules that affects.
+
+Tags also compose with maintenance rules, on purpose. A request rule that emits
+`remove` plus the shipped `tagged-for-removal` maintenance template means the
+titles that rule approves are deleted once the template's grace period elapses.
+That is a supported arrangement rather than an accident, but it is a destructive
+one: pick the label deliberately, and check what else already carries it.
+
 ## Upgrade notes
 - This release adds database migrations for request rule sets and revisions,
   decision traces, and lifecycle retention claims, plus additive columns on

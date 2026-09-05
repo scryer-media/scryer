@@ -104,13 +104,14 @@ export function emptyBulkTitleTagsDraft(): BulkTitleTagsDraft {
   return { add: [], remove: [] };
 }
 
-/// The three places a rename cannot reach. Rego revisions are immutable and a
-/// managed pack's tag filter belongs to the pack, so a rename leaves all three
+/// The four places a rename cannot reach. Rego revisions are immutable and a
+/// managed pack's tag filter belongs to the pack, so a rename leaves all four
 /// naming the old label.
 export const TITLE_TAG_REFERENCE_KINDS = [
   "maintenanceRuleSets",
   "releaseRuleSets",
   "managedTagFilters",
+  "requestRuleSets",
 ] as const;
 
 export type TitleTagReferenceKind = (typeof TITLE_TAG_REFERENCE_KINDS)[number];
@@ -132,6 +133,7 @@ export const EMPTY_TITLE_TAG_REWRITE_COUNTS: TitleTagRewriteCounts = {
   maintenanceRuleSets: 0,
   releaseRuleSets: 0,
   managedTagFilters: 0,
+  requestRuleSets: 0,
 };
 
 /// Non-zero reference counts in a fixed order, or null when a rename left
@@ -157,6 +159,7 @@ const TITLE_TAG_REFERENCE_LABEL_KEYS: Record<TitleTagReferenceKind, string> = {
   maintenanceRuleSets: "settings.titleTagReferenceMaintenanceRuleSets",
   releaseRuleSets: "settings.titleTagReferenceReleaseRuleSets",
   managedTagFilters: "settings.titleTagReferenceManagedTagFilters",
+  requestRuleSets: "settings.titleTagReferenceRequestRuleSets",
 };
 
 export type TitleTagTranslate = (

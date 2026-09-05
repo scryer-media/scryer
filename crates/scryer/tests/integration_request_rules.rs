@@ -121,6 +121,17 @@ const UNKNOWN_FACT: &str = "approve if {\n\
      \tinput.facts.not_a_fact\n\
      }\n";
 
+/// Sends every manually submitted request to a human, asking for a tag on the
+/// way. The request stays pending, so its policy tags are still live state a
+/// registry rename has to follow.
+const MANUAL_WITH_TAG: &str = "manual if {\n\
+     \tinput.request.origin == \"manual\"\n\
+     }\n\
+     \n\
+     tags contains \"family\" if {\n\
+     \tinput.request.origin == \"manual\"\n\
+     }\n";
+
 const RULE_SET_FIELDS: &str = r#"
     id
     name
@@ -465,16 +476,20 @@ async fn seed_request_rule_gate_definition(ctx: &TestContext) {
 
 /// Register `label` in the administrator tag registry, which is the only
 /// vocabulary a title may carry.
-async fn define_title_tag(ctx: &TestContext, label: &str) {
+async fn define_title_tag(ctx: &TestContext, label: &str) -> String {
     let response = gql(
         ctx,
         "mutation($input: CreateTitleTagDefinitionInput!) {
-            createTitleTagDefinition(input: $input) { definition { label } }
+            createTitleTagDefinition(input: $input) { definition { id label } }
         }",
         json!({ "input": { "label": label } }),
     )
     .await;
     assert_no_errors(&response);
+    response["data"]["createTitleTagDefinition"]["definition"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the definition should carry an id: {response}"))
+        .to_string()
 }
 
 async fn arm_gate(ctx: &TestContext, enabled: bool) {
@@ -1364,5 +1379,111 @@ async fn recent_decisions_filter_by_outcome_and_need_catalog_authority() {
     assert!(
         reference["data"]["requestRuleInputReference"]["sections"].is_array(),
         "the contract should expose its sections: {reference}"
+    );
+}
+
+// ===========================================================================
+// 8. The tag registry and the request side
+// ===========================================================================
+
+/// Renaming a tag is a data migration across every place a label is held, and a
+/// pending request holds the list an approver is about to apply. The rule that
+/// emits the label cannot be rewritten — Rego revisions are immutable — so the
+/// rename reports it instead.
+#[tokio::test]
+async fn renaming_a_title_tag_follows_pending_requests_and_names_the_request_rule() {
+    let ctx = TestContext::new().await;
+    let requester = requester(&ctx, "renamed-tag-requester").await;
+    let definition_id = define_title_tag(&ctx, "family").await;
+
+    let request = submit_under(&ctx, &requester, MANUAL_WITH_TAG, "ENFORCE", None).await;
+    assert_eq!(request["status"], "PENDING");
+    assert_eq!(request["policyTags"], json!(["family"]));
+
+    let renamed = gql(
+        &ctx,
+        "mutation($input: UpdateTitleTagDefinitionInput!) {
+            updateTitleTagDefinition(input: $input) {
+                definition { label }
+                counts { titles delayProfiles maintenanceRuleSets requestRuleSets }
+            }
+        }",
+        json!({ "input": { "id": definition_id, "label": "family friendly" } }),
+    )
+    .await;
+    assert_no_errors(&renamed);
+    let payload = &renamed["data"]["updateTitleTagDefinition"];
+    assert_eq!(payload["definition"]["label"], "family friendly");
+    assert_eq!(
+        payload["counts"]["requestRuleSets"], 1,
+        "the rule that emits the old label is reported, not rewritten: {payload}"
+    );
+
+    let mine = gql_as(&ctx, &my_requests_query(), json!({}), &requester).await;
+    assert_no_errors(&mine);
+    let updated = &mine["data"]["myMediaRequests"][0];
+    assert_eq!(updated["status"], "PENDING");
+    assert_eq!(
+        updated["policyTags"],
+        json!(["family friendly"]),
+        "the pending row followed the rename: {updated}"
+    );
+
+    // The trace is an audit record of what the rules asked for at the time, so
+    // it keeps the label the rename moved away from.
+    let trace = gql(
+        &ctx,
+        &format!(
+            "query($requestId: ID!) {{ requestRuleDecision(requestId: $requestId) {{{DECISION_FIELDS}}} }}"
+        ),
+        json!({ "requestId": request["id"] }),
+    )
+    .await;
+    assert_no_errors(&trace);
+    assert_eq!(
+        trace["data"]["requestRuleDecision"]["tags"],
+        json!(["family"]),
+        "the decision trace is immutable history: {trace}"
+    );
+}
+
+/// Deleting the label takes it off the pending row too: leaving it there would
+/// offer an approver a tag the approval would then drop in silence.
+#[tokio::test]
+async fn deleting_a_title_tag_strips_it_from_pending_requests() {
+    let ctx = TestContext::new().await;
+    let requester = requester(&ctx, "deleted-tag-requester").await;
+    let definition_id = define_title_tag(&ctx, "family").await;
+
+    let request = submit_under(&ctx, &requester, MANUAL_WITH_TAG, "ENFORCE", None).await;
+    assert_eq!(request["policyTags"], json!(["family"]));
+
+    let deleted = gql(
+        &ctx,
+        "mutation($id: ID!) {
+            deleteTitleTagDefinition(id: $id) {
+                label
+                counts { titles requestRuleSets }
+            }
+        }",
+        json!({ "id": definition_id }),
+    )
+    .await;
+    assert_no_errors(&deleted);
+    assert_eq!(
+        deleted["data"]["deleteTitleTagDefinition"]["label"],
+        "family"
+    );
+    assert_eq!(
+        deleted["data"]["deleteTitleTagDefinition"]["counts"]["requestRuleSets"],
+        1
+    );
+
+    let mine = gql_as(&ctx, &my_requests_query(), json!({}), &requester).await;
+    assert_no_errors(&mine);
+    assert_eq!(
+        mine["data"]["myMediaRequests"][0]["policyTags"],
+        json!([]),
+        "the pending row no longer offers a label nothing defines: {mine}"
     );
 }

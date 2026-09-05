@@ -941,14 +941,18 @@ pub struct TitleTagMembershipCounts {
 
 /// What a rename or delete actually rewrote.
 ///
-/// `titles` and `delay_profiles` are rewrites the operation performed. The last
-/// three are references it found and deliberately did *not* rewrite: Rego
-/// revisions are immutable and managed tag filters are SMG-owned, so a rule that
-/// named the old label stops matching rather than silently changing meaning.
+/// `titles` and `delay_profiles` are rewrites the operation performed — as is
+/// the rewrite of pending requests' policy tags, which is not counted here
+/// because an approver's queue is not a place the operator has to go and fix
+/// anything. The last four are references it found and deliberately did *not*
+/// rewrite: Rego revisions are immutable and managed tag filters are SMG-owned,
+/// so a rule that named the old label stops matching rather than silently
+/// changing meaning.
 ///
-/// The three reference counts are kept apart rather than summed so the warning
+/// The four reference counts are kept apart rather than summed so the warning
 /// can name what the operator has to go and look at: a maintenance rule, a
-/// release rule, or a managed pack's tag filter are three different places.
+/// release rule, a request rule, or a managed pack's tag filter are four
+/// different places.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TitleTagRewriteCounts {
     pub titles: u64,
@@ -962,6 +966,10 @@ pub struct TitleTagRewriteCounts {
     /// A managed pack can appear here and in `release_rule_sets` at once; the
     /// two answer different questions.
     pub managed_tag_filters: u64,
+    /// Request rule sets whose current revision emits the label. Their tags
+    /// land on the title an approval creates, so a rename leaves the rule
+    /// emitting a label nothing defines and the tag simply stops appearing.
+    pub request_rule_sets: u64,
 }
 
 /// Outcome of a registry rename/describe: the row as it now stands, and what

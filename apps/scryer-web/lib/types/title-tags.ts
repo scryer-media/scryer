@@ -14,7 +14,7 @@ export type TitleTagDefinition = {
 };
 
 /// What a rename or a delete rewrote, and what it could not rewrite. Rule
-/// sources are immutable revisions, so the last three counts are warnings
+/// sources are immutable revisions, so the last four counts are warnings
 /// rather than results.
 export type TitleTagRewriteCounts = {
   titles: number;
@@ -23,6 +23,7 @@ export type TitleTagRewriteCounts = {
   maintenanceRuleSets: number;
   releaseRuleSets: number;
   managedTagFilters: number;
+  requestRuleSets: number;
 };
 
 export type TitleTagDefinitionMutationResult = {

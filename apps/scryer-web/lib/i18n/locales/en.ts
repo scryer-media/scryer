@@ -4043,6 +4043,8 @@ const en: LocaleDictionary = {
   "settings.requestPreviewShowInput": "Show the input the matcher saw",
   "settings.requestPreviewHideInput": "Hide the input",
   "settings.requestPreviewInputUnavailable": "The input document could not be read back.",
+  "settings.requestPreviewUndefinedTags":
+    "Define these in Settings › Tags before they can be applied.",
 
   "settings.requestDecisionsTitle": "Recent decisions",
   "settings.requestDecisionsSubtitle":
@@ -4062,6 +4064,8 @@ const en: LocaleDictionary = {
   "settings.requestTemplateGallery": "Starter rules",
   "settings.requestTemplateGalleryDescription":
     "Worked examples you can load into the editor. Applying one fills the form in; you still read it, name it, scope it and save it.",
+  "settings.requestTemplateGalleryTagNote":
+    "A template that emits a tag needs that tag defined in Settings › Tags; undefined ones are dropped when a request is decided.",
   "settings.requestTemplateApply": "Load into the editor",
   "settings.requestTemplatePersonTargetedBadge": "Names people",
   "settings.requestTemplateNamedRequestersTitle": "Named requesters, family-rated media",
@@ -4147,8 +4151,8 @@ const en: LocaleDictionary = {
   "requests.approvedLeaseKeepRequested": "{{count}} days, as asked",
   "requests.approvedTags": "Tags",
   "requests.approvedTagsHelp":
-    "Applied to the title when you approve. Prefilled with what the rules emitted; add or remove as you like.",
-  "requests.approvedTagsPlaceholder": "Add a tag",
+    "Applied to the title when you approve. Prefilled with what the rules emitted; add or remove any tag an administrator has defined in Settings > Tags.",
+  "requests.approvedTagsNone": "No tags will be applied.",
 
   "requests.claimsShow": "Retention",
   "requests.claimsHide": "Hide retention",
@@ -4749,6 +4753,7 @@ const en: LocaleDictionary = {
   "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} maintenance rule sets",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} release rule sets",
   "settings.titleTagReferenceManagedTagFilters": "{{count}} managed tag filters",
+  "settings.titleTagReferenceRequestRuleSets": "{{count}} request rule sets",
   "title.tagsLabel": "Tags",
   "title.tagsNone": "No tags",
   "title.tagsAdd": "Add a tag…",

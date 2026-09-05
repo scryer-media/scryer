@@ -644,6 +644,7 @@ pub(crate) fn from_title_tag_rewrite_counts(
         maintenance_rule_sets: title_tag_count(counts.maintenance_rule_sets),
         release_rule_sets: title_tag_count(counts.release_rule_sets),
         managed_tag_filters: title_tag_count(counts.managed_tag_filters),
+        request_rule_sets: title_tag_count(counts.request_rule_sets),
     }
 }
 

@@ -133,23 +133,15 @@ impl AppUseCase {
             )
             .await?;
 
-        // Only registry-defined labels ever reach a title (the approval path
-        // drops the rest), so the banner shows what an approval would actually
-        // stamp rather than everything the rules asked for.
-        let undefined = self.undefined_title_tag_labels(&evaluation.tags).await?;
-        let tags = evaluation
-            .tags
-            .into_iter()
-            .filter(|tag| !undefined.contains(tag))
-            .collect();
-
         Ok(RequestPreflight {
             outcome: evaluation.effective_outcome,
             reasons: evaluation.reasons,
             // Tags are shown whatever the outcome — a requester should see what
             // an approval would stamp — but they are only ever *applied* by the
-            // approval path.
-            tags,
+            // approval path. `evaluation.tags` is already narrowed to labels the
+            // tag registry defines, so the banner cannot promise one that the
+            // approval would drop.
+            tags: evaluation.tags,
             metadata_partial: evaluation.metadata_partial,
             evaluation_mode: evaluation.evaluation_mode,
             policy_outcome: evaluation.policy_outcome,

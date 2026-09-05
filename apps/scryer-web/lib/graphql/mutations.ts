@@ -1136,7 +1136,8 @@ const TITLE_TAG_REWRITE_COUNT_FIELDS = `
       delayProfiles
       maintenanceRuleSets
       releaseRuleSets
-      managedTagFilters`;
+      managedTagFilters
+      requestRuleSets`;
 
 export const createTitleTagDefinitionMutation = `mutation CreateTitleTagDefinition($input: CreateTitleTagDefinitionInput!) {
   createTitleTagDefinition(input: $input) {
@@ -2459,6 +2460,7 @@ export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: P
     ruleSetId
     matcherContentHash
     metadataPartial
+    undefinedTags
     inputDocument
     decision {${REQUEST_RULE_DECISION_FIELDS}
     }
