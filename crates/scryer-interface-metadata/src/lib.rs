@@ -54,6 +54,7 @@ fn from_metadata_search_item(
         language: item.language,
         runtime_minutes: item.runtime_minutes,
         sort_title: item.sort_title,
+        existing_title_id: None,
     }
 }
 
