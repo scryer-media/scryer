@@ -10264,6 +10264,12 @@ type MetadataSearchItemPayload {
 	Normalized sort title, or null when unavailable.
 	"""
 	sortTitle: String
+	"""
+	Id of the title that already carries this identity in the pending
+	import's library and facet, or null. Only the pending-import title
+	search populates it; every other metadata-search surface returns null.
+	"""
+	existingTitleId: ID
 }
 
 """
@@ -16100,6 +16106,12 @@ input ResolvePendingImportInput {
 	Title metadata to associate with the item.
 	"""
 	title: AddTitleInput!
+	"""
+	Attach the item to a title that already carries this identity in the
+	same library and facet instead of rejecting the request. Defaults to
+	false, which keeps the "title already exists in this library" error.
+	"""
+	attachToExistingTitle: Boolean! = false
 }
 
 """

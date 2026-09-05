@@ -261,6 +261,7 @@ impl LibraryMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let pending_import_id = input.pending_import_id.to_string();
+        let attach_to_existing_title = input.attach_to_existing_title;
         let mut title_input = input.title;
         title_input.library_id = None;
         title_input.monitored = false;
@@ -272,7 +273,12 @@ impl LibraryMutations {
         title_input.min_availability = None;
         let request = map_add_input(title_input, None)?;
         let result = app
-            .resolve_pending_import(&actor, &pending_import_id, request)
+            .resolve_pending_import(
+                &actor,
+                &pending_import_id,
+                request,
+                attach_to_existing_title,
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(from_resolve_pending_import_result(&app, result))
