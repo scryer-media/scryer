@@ -1484,7 +1484,50 @@ async fn import_single_episode_file(
         // fallback; it never overwrites contradictory file evidence.
         let season = ep_meta.season.unwrap_or(1);
         let season_str = season.to_string();
-        let resolved_episodes = resolve_target_episodes(app, title, ep_meta, &season_str).await;
+        let (resolved_episodes, numbering) = resolve_target_episodes_with_numbering(
+            app,
+            title,
+            ep_meta,
+            &season_str,
+            &parsed.normalized_title_variants,
+            file_reference_date(source_video),
+        )
+        .await;
+        // Several readings of an anime release resolve equally well: picking
+        // one would file the episode under a numbering the user never asked
+        // for, so the file is held for a human instead.
+        if let Some(summary) = numbering.ambiguity_summary() {
+            let message = format!(
+                "release numbering has several equally-good readings for this anime: {summary}"
+            );
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "rejected",
+                Some(ANIME_NUMBERING_AMBIGUOUS_REASON),
+                None,
+                &resolved_episodes,
+            )
+            .await?;
+            return Ok(EpisodeImportOutcome::Rejected {
+                rejection: crate::post_download_gate::ImportedFileRejection {
+                    message,
+                    recycle_reason: ANIME_NUMBERING_AMBIGUOUS_REASON,
+                    skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                    blocking_rule_codes: vec![ANIME_NUMBERING_AMBIGUOUS_REASON.to_string()],
+                },
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: Some(ANIME_NUMBERING_AMBIGUOUS_REASON.to_string()),
+                episode_ids: resolved_episodes
+                    .iter()
+                    .map(|episode| episode.id.clone())
+                    .collect(),
+            });
+        }
         if resolved_episodes.is_empty()
             && let Some(episode) = reconcile_unresolved_scene_episode_from_scoped_release(
                 app,
@@ -2135,6 +2178,105 @@ pub(crate) fn build_rename_tokens(
     tokens.insert("ext".to_string(), ext.to_string());
     tokens
 }
+/// Resolve a parsed episode block against the catalog, translating community
+/// (per-cour) anime numbering into the catalog's own numbering first.
+///
+/// The translation is inert for a non-anime title and for an anime title with
+/// no stored numbering bridge, so every other import keeps today's behaviour.
+/// The returned resolution is `Ambiguous` when the release name has several
+/// equally-good readings; the caller holds the file rather than picking one.
+pub(crate) async fn resolve_target_episodes_with_numbering(
+    app: &AppUseCase,
+    title: &scryer_domain::Title,
+    ep_meta: &crate::ParsedEpisodeMetadata,
+    season_str: &str,
+    parsed_title_variants: &[String],
+    reference_date: Option<chrono::NaiveDate>,
+) -> (
+    Vec<scryer_domain::Episode>,
+    crate::anime_numbering::NumberingResolution,
+) {
+    use crate::anime_numbering::NumberingResolution;
+
+    let literal = || resolve_target_episodes(app, title, ep_meta, season_str);
+
+    if title.facet != scryer_domain::MediaFacet::Anime {
+        return (literal().await, NumberingResolution::Unchanged);
+    }
+    let bridge = match app
+        .services
+        .catalog
+        .shows
+        .get_anime_numbering_bridge(&title.id)
+        .await
+    {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                title_id = %title.id,
+                "import: anime numbering bridge lookup failed; using literal numbering"
+            );
+            None
+        }
+    };
+    let Some(bridge) = bridge else {
+        return (literal().await, NumberingResolution::Unchanged);
+    };
+    let catalog_episodes = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .unwrap_or_default();
+
+    let mut translated = ep_meta.clone();
+    if translated.season.is_none() {
+        translated.season = season_str.trim().parse::<u32>().ok();
+    }
+    let resolution = crate::anime_numbering::translate_parsed_episode_numbering(
+        &bridge,
+        title,
+        &catalog_episodes,
+        &mut translated,
+        parsed_title_variants,
+        reference_date,
+    );
+
+    match &resolution {
+        NumberingResolution::Resolved(candidate) => {
+            // The winning candidate was validated against these very episodes,
+            // so its ids need no second lookup.
+            let episodes: Vec<_> = candidate
+                .episode_ids
+                .iter()
+                .filter_map(|episode_id| {
+                    catalog_episodes
+                        .iter()
+                        .find(|episode| &episode.id == episode_id)
+                        .cloned()
+                })
+                .collect();
+            if episodes.is_empty() {
+                return (literal().await, NumberingResolution::Unchanged);
+            }
+            tracing::debug!(
+                title_id = %title.id,
+                season = candidate.season,
+                kind = candidate.kind.as_str(),
+                "import: translated community anime numbering"
+            );
+            (episodes, resolution)
+        }
+        // An ambiguous release still reports what the literal reading found so
+        // the hold message can name it; the caller never imports it.
+        NumberingResolution::Ambiguous(_) | NumberingResolution::Unchanged => {
+            (literal().await, resolution)
+        }
+    }
+}
+
 pub(crate) async fn resolve_target_episodes(
     app: &AppUseCase,
     title: &scryer_domain::Title,
@@ -2644,6 +2786,19 @@ fn scene_titled_file_episode(source_video: &Path) -> Option<crate::ParsedEpisode
         return None;
     }
     parsed.episode
+}
+
+/// Reason code for a file whose anime numbering has more than one equally-good
+/// reading. It is a hold, never a discard: the file is fine, only Scryer's
+/// reading of its numbering is undecided.
+pub(crate) const ANIME_NUMBERING_AMBIGUOUS_REASON: &str = "anime_numbering_ambiguous";
+
+/// The file's own modified date, used only to break an otherwise dead-even tie
+/// between two anime numbering readings. Absent when the file system has no
+/// usable timestamp, in which case the tie simply stands.
+fn file_reference_date(source_video: &Path) -> Option<chrono::NaiveDate> {
+    let modified = std::fs::metadata(source_video).and_then(|meta| meta.modified()).ok()?;
+    Some(chrono::DateTime::<chrono::Utc>::from(modified).date_naive())
 }
 
 /// The episode a video file names on its own: its stem parsed with the

@@ -899,10 +899,42 @@ impl AppUseCase {
             &catalog_episodes,
             Some(title.facet.as_str()),
         );
-        let pending_parsed = crate::release_parser::parse_release_metadata_for_target(
+        let mut pending_parsed = crate::release_parser::parse_release_metadata_for_target(
             &pr.release_title,
             &pending_parse_context,
         );
+        // A parked anime release is very often the reason it was parked: it was
+        // numbered per cour, matched nothing, and sat here. Translate it into
+        // the catalog's numbering before coverage and the numbering veto read
+        // it, exactly as the search and RSS lanes do. Inert for every title
+        // without a stored bridge.
+        let pending_numbering_bridge = if title.facet == MediaFacet::Anime {
+            self.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .unwrap_or_default()
+        } else {
+            None
+        };
+        let pending_numbering = crate::anime_numbering::translate_release_numbering(
+            pending_numbering_bridge.as_ref(),
+            &title,
+            &catalog_episodes,
+            &mut pending_parsed,
+            None,
+        );
+        if pending_numbering.is_ambiguous() {
+            info!(
+                release = pr.release_title.as_str(),
+                readings = pending_numbering.ambiguity_summary().unwrap_or_default(),
+                reason = crate::acquisition_release_search::ReleaseAutoDecisionCode::AnimeNumberingAmbiguous
+                    .as_str(),
+                "pending release: rejecting, anime numbering has several equally-good readings"
+            );
+            return Ok(PendingGrabOutcome::Rejected);
+        }
         let pending_coverage = crate::acquisition_coverage::resolve_release_coverage(
             &pending_parsed,
             &catalog_episodes,

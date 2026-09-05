@@ -2033,6 +2033,27 @@ pub trait ShowRepository: Send + Sync {
         Ok(episodes)
     }
     async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>>;
+    /// The community season layout stored for an anime title, or `None` when
+    /// SMG has never sent one.
+    ///
+    /// Defaulted rather than required: the bridge is a cache of an upstream
+    /// dataset, and a store that does not keep it simply reports none, which
+    /// leaves every lane on plain TVDB numbering.
+    async fn get_anime_numbering_bridge(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<scryer_domain::AnimeNumberingBridge>> {
+        Ok(None)
+    }
+    /// Replace a title's stored bridge. `None` clears it, which is what a
+    /// hydration that no longer reports one means.
+    async fn replace_anime_numbering_bridge(
+        &self,
+        _title_id: &str,
+        _bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn list_episode_external_ids(&self, episode_id: &str)
     -> AppResult<Vec<ScopedExternalId>>;
     async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>>;

@@ -151,6 +151,15 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
     pub(crate) absolute_episode: Option<u32>,
+    /// The wanted item lives in season 0 (specials/OVAs).
+    ///
+    /// Carried separately from `season` because the search parameters
+    /// deliberately leave season 0 out — a `season=0` query means "any season"
+    /// to most indexers. Without this, a specials-scoped search cannot tell a
+    /// season-0 episode from a subject with no season at all, and an `S01E02`
+    /// release whose episode number happens to match sails through the
+    /// numbering veto.
+    pub(crate) specials_scope: bool,
     pub(crate) subject_kind: ReleaseSearchSubjectKind,
     pub(crate) last_search_at: Option<String>,
     pub(crate) submission_scope: SubmissionScope,
@@ -183,6 +192,10 @@ pub(crate) enum ReleaseAutoDecisionCode {
     MinimumSeeders,
     PackBelowMissingThreshold,
     SubtitlesOnly,
+    /// The release's numbering has more than one equally-good reading under the
+    /// title's anime numbering bridge. A release nobody can place must not be
+    /// grabbed on a coin toss.
+    AnimeNumberingAmbiguous,
 }
 
 impl ReleaseAutoDecisionCode {
@@ -215,6 +228,7 @@ impl ReleaseAutoDecisionCode {
             "minimum_seeders" => Some(Self::MinimumSeeders),
             "pack_below_missing_threshold" => Some(Self::PackBelowMissingThreshold),
             "subtitles_only" => Some(Self::SubtitlesOnly),
+            "anime_numbering_ambiguous" => Some(Self::AnimeNumberingAmbiguous),
             _ => None,
         }
     }
@@ -246,6 +260,7 @@ impl ReleaseAutoDecisionCode {
             Self::MinimumSeeders => "minimum_seeders",
             Self::PackBelowMissingThreshold => "pack_below_missing_threshold",
             Self::SubtitlesOnly => "subtitles_only",
+            Self::AnimeNumberingAmbiguous => "anime_numbering_ambiguous",
         }
     }
 
@@ -292,6 +307,9 @@ impl ReleaseAutoDecisionCode {
                 "series pack does not meet the missing-episode threshold"
             }
             Self::SubtitlesOnly => "release carries subtitles only and no video",
+            Self::AnimeNumberingAmbiguous => {
+                "release numbering has several equally-good readings for this anime"
+            }
         }
     }
 
@@ -1251,7 +1269,11 @@ fn candidate_numbering_contradicts_subject(
     candidate: &IndexerSearchResult,
     subject: &ResolvedReleaseSearchSubject,
 ) -> bool {
-    if subject.season.is_none() && subject.episode.is_none() && subject.absolute_episode.is_none() {
+    if subject.season.is_none()
+        && subject.episode.is_none()
+        && subject.absolute_episode.is_none()
+        && !subject.specials_scope
+    {
         return false;
     }
     let Some(parsed) = candidate.parsed_release_metadata.as_ref() else {
@@ -1260,8 +1282,14 @@ fn candidate_numbering_contradicts_subject(
     let Some(episode) = parsed.episode.as_ref() else {
         return true;
     };
+    // A specials-scoped subject is season 0, whatever the search parameters
+    // left out. A release that names any other season is a different episode
+    // that happens to share a number.
+    if subject.specials_scope && episode.season.is_some_and(|season| season != 0) {
+        return true;
+    }
     crate::acquisition_coverage::parsed_numbering_contradicts_episode(
-        subject.season,
+        subject.season.or(subject.specials_scope.then_some(0)),
         subject.episode,
         subject.absolute_episode,
         episode,
@@ -2124,9 +2152,10 @@ impl AppUseCase {
         };
 
         for candidate in &mut results {
-            if candidate.auto_decision_code.as_deref()
-                == Some(ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str())
-            {
+            if candidate.auto_decision_code.as_deref().is_some_and(|code| {
+                code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
+                    || code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
+            }) {
                 continue;
             }
             let code = active_pending_release_delay_code(
@@ -2201,6 +2230,7 @@ impl AppUseCase {
             season: None,
             episode: None,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
             submission_scope: SubmissionScope::Title,
@@ -2336,6 +2366,7 @@ impl AppUseCase {
             season: Some(season_num),
             episode: Some(episode_num),
             absolute_episode,
+            specials_scope: season_num == 0,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
             submission_scope: episode_record
@@ -2403,6 +2434,7 @@ impl AppUseCase {
             season: Some(season_num),
             episode: None,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Season,
             last_search_at: item.last_search_at.clone(),
             submission_scope: collection_download_submission_scope_for_wanted_item(item, episode),
@@ -2478,6 +2510,7 @@ impl AppUseCase {
                 season: None,
                 episode: None,
                 absolute_episode: None,
+                specials_scope: false,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
                 submission_scope: SubmissionScope::SeriesMovie {
@@ -2494,7 +2527,26 @@ impl AppUseCase {
         item: &AcquisitionScopeState,
         episode: Option<&Episode>,
     ) -> ResolvedReleaseSearchSubject {
-        let query_result = build_search_queries(search_title, item, episode, &self.facet_registry);
+        // Anime whose community numbering differs from TVDB's needs the extra
+        // community-numbered query forms; every other title reads `None` here
+        // and searches exactly as before.
+        let anime_numbering_bridge = if search_title.facet == MediaFacet::Anime {
+            self.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&search_title.id)
+                .await
+                .unwrap_or_default()
+        } else {
+            None
+        };
+        let query_result = build_search_queries(
+            search_title,
+            item,
+            episode,
+            &self.facet_registry,
+            anime_numbering_bridge.as_ref(),
+        );
         let owner_facet = if item.media_type == "series_movie" {
             owner_title.facet.clone()
         } else {
@@ -2531,6 +2583,16 @@ impl AppUseCase {
             season: query_result.season,
             episode: query_result.episode,
             absolute_episode,
+            // `build_search_queries` suppresses season 0 as a search parameter
+            // on purpose; the veto still has to know the wanted episode is a
+            // special, or a same-numbered season-1 release passes for it.
+            specials_scope: episode.is_some_and(|episode| {
+                episode
+                    .season_number
+                    .as_deref()
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                    == Some(0)
+            }),
             subject_kind: match item.media_type.as_str() {
                 "episode" => ReleaseSearchSubjectKind::Episode,
                 _ => ReleaseSearchSubjectKind::Title,
@@ -2774,6 +2836,7 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::EpisodeSet {
@@ -2855,6 +2918,37 @@ mod tests {
         ));
     }
 
+    /// A season-0 wanted item must not accept a season-1 release that happens
+    /// to carry the same episode number. The search parameters deliberately
+    /// omit season 0, so the subject's `season` is `None` and the numbering
+    /// veto used to see nothing to contradict — which is how an `S01E02`
+    /// release was grabbed for a specials-scoped item.
+    #[test]
+    fn a_specials_scoped_subject_rejects_a_season_one_release_with_the_same_number() {
+        let title = make_title();
+        let mut subject = episode_set_subject(&title, &["ep-s0e2"]);
+        subject.episode = Some(2);
+        subject.specials_scope = true;
+
+        let season_one = make_candidate("Nightfall.S01E02.1080p.WEB-DL-FIXTUREGRP", None);
+        assert!(candidate_numbering_contradicts_subject(
+            &season_one,
+            &subject
+        ));
+
+        let special = make_candidate("Nightfall.S00E02.1080p.WEB-DL-FIXTUREGRP", None);
+        assert!(!candidate_numbering_contradicts_subject(&special, &subject));
+
+        // Without the specials marker the subject is season-agnostic and the
+        // season-1 release is still accepted, exactly as before.
+        let mut season_agnostic = episode_set_subject(&title, &["ep-2"]);
+        season_agnostic.episode = Some(2);
+        assert!(!candidate_numbering_contradicts_subject(
+            &season_one,
+            &season_agnostic
+        ));
+    }
+
     #[test]
     fn text_title_matching_rejects_only_mismatched_parsed_years() {
         let mut title = make_title();
@@ -2908,6 +3002,7 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -2986,6 +3081,7 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -3082,6 +3178,7 @@ mod tests {
             season,
             episode,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -4130,6 +4227,7 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
+            specials_scope: false,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
             submission_scope: SubmissionScope::Title,
@@ -4222,6 +4320,7 @@ mod tests {
                 season: None,
                 episode: None,
                 absolute_episode: None,
+                specials_scope: false,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: None,
                 submission_scope: SubmissionScope::Title,

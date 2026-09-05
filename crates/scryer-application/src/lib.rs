@@ -87,6 +87,7 @@ pub mod upstream_scheduler;
 
 pub(crate) use acquisition::acquisition as acquisition_workflow;
 pub(crate) use acquisition::admission;
+pub(crate) use acquisition::anime_numbering;
 pub(crate) use acquisition::coverage as acquisition_coverage;
 pub(crate) use acquisition::decision_helpers as acquisition_decision_helpers;
 pub(crate) use acquisition::delay_profile;
