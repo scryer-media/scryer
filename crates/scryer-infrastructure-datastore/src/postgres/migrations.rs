@@ -527,6 +527,10 @@ async fn run_postgres_rust_hook(
         "compact_event_storage" => {
             crate::migrations::event_storage::compact_event_storage_postgres(tx).await
         }
+        "compress_post_processing_output" => {
+            crate::migrations::post_processing_output::compress_post_processing_output_postgres(tx)
+                .await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

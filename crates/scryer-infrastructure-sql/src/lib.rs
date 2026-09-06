@@ -4,5 +4,6 @@ pub mod json;
 pub mod migration;
 pub mod runtime;
 pub mod sanitized_corpus;
+pub mod script_output;
 pub mod timestamp;
 pub mod types;
