@@ -1240,7 +1240,13 @@ fn should_run_fallback_tier(
 }
 
 fn rate_limit_signal_from_error(error: &AppError) -> Option<RateLimitSignal> {
-    RateLimitSignal::from_error(error)
+    RateLimitSignal::from_error(error).or_else(|| {
+        // An indexer that publishes no apiCurrent/apiMax announces an exhausted
+        // account only as a newznab error document, on HTTP 200, with no
+        // Retry-After. Without this the wall is invisible and the indexer keeps
+        // being asked for the rest of the day.
+        RateLimitSignal::from_newznab_quota_message(&error.to_string())
+    })
 }
 
 fn indexer_rss_feedback_summary(

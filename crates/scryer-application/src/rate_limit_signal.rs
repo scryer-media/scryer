@@ -23,6 +23,10 @@ pub enum RateLimitSignalSource {
     TooManyRequestsPhrase,
     Http429Phrase,
     Status429Phrase,
+    /// A newznab `<error code="500">` / `<error code="501">` document. These
+    /// arrive on HTTP 200 with no `Retry-After` and no 429 anywhere, so the
+    /// wall is invisible to every other source here.
+    NewznabQuotaExhausted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +58,34 @@ impl RateLimitSignal {
             } => None,
             _ => Self::from_text(&error.to_string()),
         }
+    }
+
+    /// A newznab request/download limit reported as an error document.
+    ///
+    /// Indexers that publish no `apiCurrent`/`apiMax` announce the wall only
+    /// this way, and they do it on HTTP 200, so nothing in [`Self::from_text`]
+    /// can see it. Treating it as a rate-limit signal is what makes the
+    /// indexer back off the way a 429 already does instead of spending the
+    /// rest of the day re-asking a spent account.
+    ///
+    /// Newznab 910 ("API disabled") is deliberately not included: providers
+    /// reuse that slot for their own gate messages, so it stays a hard error.
+    pub fn from_newznab_quota_message(message: &str) -> Option<Self> {
+        let classified = crate::indexer_errors::classify_newznab_error_message(message)?;
+        if !matches!(
+            classified.classification,
+            crate::types::IndexerErrorClassification::NewznabRequestLimitReached
+                | crate::types::IndexerErrorClassification::NewznabDownloadLimitReached
+        ) {
+            return None;
+        }
+        Some(Self {
+            retry_after: None,
+            source: RateLimitSignalSource::NewznabQuotaExhausted,
+            cooldown_action: RateLimitCooldownAction::RecordFallback,
+            status_code: None,
+            message: Some(message.to_string()),
+        })
     }
 
     pub fn from_outbound_http_error(error: &OutboundHttpError) -> Option<Self> {
@@ -249,5 +281,42 @@ mod tests {
             signal.source,
             RateLimitSignalSource::OutboundHttpRateLimited
         );
+    }
+    #[test]
+    fn a_newznab_request_limit_is_a_rate_limit_signal() {
+        let signal =
+            RateLimitSignal::from_newznab_quota_message("Newznab error 500: Request limit reached")
+                .expect("a spent request quota must back the indexer off");
+        assert_eq!(signal.source, RateLimitSignalSource::NewznabQuotaExhausted);
+        assert_eq!(
+            signal.cooldown_action,
+            RateLimitCooldownAction::RecordFallback
+        );
+    }
+
+    #[test]
+    fn a_newznab_download_limit_is_a_rate_limit_signal() {
+        assert_eq!(
+            RateLimitSignal::from_newznab_quota_message(
+                "Newznab error 501: Download limit reached",
+            )
+            .map(|signal| signal.source),
+            Some(RateLimitSignalSource::NewznabQuotaExhausted)
+        );
+    }
+
+    #[test]
+    fn other_newznab_errors_are_not_quota_walls() {
+        // 910 is reused by providers for their own gate messages, so it stays a
+        // hard error rather than something the indexer waits out.
+        assert!(
+            RateLimitSignal::from_newznab_quota_message("Newznab error 910: newznab not enabled")
+                .is_none()
+        );
+        assert!(
+            RateLimitSignal::from_newznab_quota_message("Newznab error 100: Invalid API Key")
+                .is_none()
+        );
+        assert!(RateLimitSignal::from_newznab_quota_message("connection refused").is_none());
     }
 }

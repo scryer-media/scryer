@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use scryer_application::{
-    CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, challenge_solver as solver,
+    CALL_SOLVER, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerRequestResult,
+    IndexerRequestTally, challenge_solver as solver,
 };
 use tokio::sync::mpsc;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
@@ -427,12 +428,40 @@ impl ComponentHost {
         if !request.body.is_empty() {
             builder = builder.body(request.body.clone());
         }
+        // Every component-plugin request reaches the network here — the direct
+        // send, the cached-session validation and the post-solve replay all
+        // call this function — so this one count is the whole count. There is
+        // no cooldown gate ahead of the send, so nothing is counted undispatched.
+        let tally = self.request_tally();
+        if let Some(tally) = tally.as_ref() {
+            tally.note_sent(&request.url);
+        }
         let cancellation = self.cancellation();
         let response = tokio::select! {
-            _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
-            result = builder.send() => result.map_err(component_transport_error)?,
+            _ = cancellation.cancelled() => {
+                if let Some(tally) = tally.as_ref() {
+                    tally.note_result(IndexerRequestResult::Cancelled);
+                }
+                return Err(TransportError::Cancelled);
+            }
+            result = builder.send() => match result {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(tally) = tally.as_ref() {
+                        tally.note_result(IndexerRequestResult::NoResponse);
+                    }
+                    return Err(component_transport_error(error));
+                }
+            },
         };
-        self.read_response(response).await
+        let result = self.read_response(response).await;
+        if let Some(tally) = tally.as_ref() {
+            match &result {
+                Ok(result) => tally.note_response(&result.captured_response),
+                Err(_) => tally.note_result(IndexerRequestResult::NoResponse),
+            }
+        }
+        result
     }
 
     async fn solve_proxy_request(
@@ -461,9 +490,22 @@ impl ComponentHost {
                 TransportError::Transport
             })?;
         let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
+        // The solve payload is `request.get` against `request.url`, so the
+        // solver fetches the indexer with the user's API key in the query
+        // string. That is a request billed to the account, so it is counted
+        // here alongside the replay this solve makes possible.
+        let solve_tally = self.request_tally();
+        if let Some(tally) = solve_tally.as_ref() {
+            tally.note_sent_call(CALL_SOLVER);
+        }
         let cancellation = self.cancellation();
         let response = tokio::select! {
-            _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
+            _ = cancellation.cancelled() => {
+                if let Some(tally) = solve_tally.as_ref() {
+                    tally.note_result(IndexerRequestResult::Cancelled);
+                }
+                return Err(TransportError::Cancelled);
+            }
             result = proxy_client
                 .post(&endpoint)
                 .timeout(solver_timeout)
@@ -475,6 +517,9 @@ impl ComponentHost {
                 .send() => match result {
                     Ok(response) => response,
                     Err(error) => {
+                        if let Some(tally) = solve_tally.as_ref() {
+                            tally.note_result(IndexerRequestResult::NoResponse);
+                        }
                         let kind = if error.is_timeout() {
                             solver::SolverErrorKind::Timeout
                         } else {
@@ -491,6 +536,9 @@ impl ComponentHost {
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
             || response.status().is_server_error()
         {
+            if let Some(tally) = solve_tally.as_ref() {
+                tally.note_result(IndexerRequestResult::HttpStatus(response.status().as_u16()));
+            }
             solver::SolverHealthLedger::shared().record_failure(
                 &policy.config.id,
                 solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable),
@@ -511,6 +559,15 @@ impl ComponentHost {
         solver::SolverHealthLedger::shared().record_success(&policy.config.id);
 
         let status = solution.status.unwrap_or(200);
+        // The solver reports the indexer's own status, which is a truer
+        // `result` than the status of the solve call that carried it.
+        if let Some(tally) = solve_tally.as_ref() {
+            tally.note_result(if (200..300).contains(&status) {
+                IndexerRequestResult::Success
+            } else {
+                IndexerRequestResult::HttpStatus(status)
+            });
+        }
         let headers = solver::safe_solution_response_headers(solution.headers.as_ref());
         let body = solution.response.clone().unwrap_or_default().into_bytes();
         if body.len() > self.inner.max_response_bytes {
@@ -641,6 +698,17 @@ impl ComponentHost {
         if operation_failed && (200..300).contains(&response.status) {
             PluginHttpHost::record_captured_response(&capture.context, response);
         }
+    }
+
+    /// A tally for the operation currently being captured, or `None` when this
+    /// request belongs to no indexer operation and so is nobody's API hit.
+    fn request_tally(&self) -> Option<IndexerRequestTally> {
+        self.inner
+            .indexer_error_capture
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|capture| capture.context.tally())
     }
 
     fn capture_indexer_response(&self, response: CapturedIndexerHttpResponse) {

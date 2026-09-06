@@ -47,6 +47,8 @@ type IndexerQueryStats = {
   successfulLast24H: number;
   failedLast24H: number;
   lastQueryAt: string | null;
+  apiRequestsToday: number;
+  apiRequestsWindowStartedAt: string | null;
   apiCurrent: number | null;
   apiMax: number | null;
   grabCurrent: number | null;
@@ -923,7 +925,22 @@ export function SystemView({
                   </div>
                   <div className="mt-3 space-y-2 text-xs">
                     <p>
-                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Queries:</span>{" "}
+                      <span className={SYSTEM_MUTED_TEXT_CLASS}>API hits today:</span>{" "}
+                      {stat.apiRequestsToday}
+                      {stat.apiRequestsWindowStartedAt ? (
+                        <span className={SYSTEM_MUTED_TEXT_CLASS}>
+                          {" "}
+                          (since{" "}
+                          {formatUiDateTime(
+                            stat.apiRequestsWindowStartedAt,
+                            dateTimeFormat,
+                          )}
+                          )
+                        </span>
+                      ) : null}
+                    </p>
+                    <p>
+                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Search runs:</span>{" "}
                       {stat.queriesLast24H}
                       {stat.failedLast24H > 0 && (
                         <span className="text-[var(--scry-danger-text-soft)]">

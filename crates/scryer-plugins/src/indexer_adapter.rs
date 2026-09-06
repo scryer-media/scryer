@@ -6,8 +6,8 @@ use scryer_application::{
     IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
     IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, SearchMode, is_valid_magnet_uri,
-    normalize_release_password,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerStatsTracker,
+    NullIndexerStatsTracker, SearchMode, is_valid_magnet_uri, normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, IndexerProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
@@ -58,6 +58,9 @@ pub struct WasmIndexerClient {
     indexer_id: String,
     indexer_name: String,
     indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+    /// Counts outbound indexer requests. Defaults to the null tracker so the
+    /// three constructors and every existing call site keep their signatures.
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
     worker: Option<IndexerPluginWorker>,
     command: Option<Arc<CommandIndexer>>,
     component: Option<Arc<ComponentIndexer>>,
@@ -272,6 +275,7 @@ impl WasmIndexerClient {
             indexer_id: config.id,
             indexer_name,
             indexer_error_recorder,
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
             worker: Some(worker),
             command: None,
             component: None,
@@ -337,6 +341,7 @@ impl WasmIndexerClient {
             indexer_id: config.id,
             indexer_name,
             indexer_error_recorder,
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
             worker: None,
             command: Some(Arc::new(CommandIndexer {
                 wasm: Arc::new(wasm_bytes),
@@ -416,6 +421,7 @@ impl WasmIndexerClient {
             indexer_id: config.id,
             indexer_name,
             indexer_error_recorder,
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
             worker: None,
             command: None,
             component: Some(Arc::new(ComponentIndexer {
@@ -436,6 +442,12 @@ impl WasmIndexerClient {
         })
     }
 
+    /// Attach the tracker that counts outbound indexer API requests.
+    pub fn with_indexer_stats_tracker(mut self, stats: Arc<dyn IndexerStatsTracker>) -> Self {
+        self.indexer_stats = stats;
+        self
+    }
+
     fn indexer_error_capture(
         &self,
         operation: IndexerErrorOperation,
@@ -445,6 +457,7 @@ impl WasmIndexerClient {
             indexer_name: self.indexer_name.clone(),
             operation,
             recorder: Arc::clone(&self.indexer_error_recorder),
+            stats: Arc::clone(&self.indexer_stats),
         }
     }
 
