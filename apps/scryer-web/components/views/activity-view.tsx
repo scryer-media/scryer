@@ -74,6 +74,18 @@ import {
   type TranslateFn,
 } from "@/lib/utils/activity-utils";
 
+/**
+ * Seeding rows are already imported, so only a handful stay on screen; the rest
+ * sit behind a disclosure row.
+ */
+const VISIBLE_SEEDING_ROW_LIMIT = 5;
+
+/**
+ * How many consecutive pages may be fetched to fill a queue list that folded
+ * its seeding rows away before the view stops asking for more.
+ */
+const MAX_QUEUE_AUTO_FILL_PAGES = 10;
+
 type ActivityViewState = {
   queueItems: DownloadQueueItem[];
   activeImportStreams: ActiveImportStream[];
@@ -353,6 +365,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const resultsScrollRef = useRef<HTMLDivElement>(null);
   const [queueScrollMargin, setQueueScrollMargin] = useState(0);
   const [activeImportsExpanded, setActiveImportsExpanded] = useState(false);
+  const [seedingExpanded, setSeedingExpanded] = useState(false);
   const scrollHeightClass = isMobile ? "max-h-[70vh]" : "max-h-[1700px]";
 
   const setRowBusy = useCallback((rowId: string, busy: boolean) => {
@@ -624,9 +637,39 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const activeImportDisclosureLabel = activeImportsExpanded
     ? "Show fewer import activities"
     : `Click to see ${hiddenActiveImportCount} more import activities`;
+  // Seeding rows are finished work that keeps sitting in the queue, so they are
+  // lifted out of the virtualised list and disclosed as their own capped group
+  // the same way active imports are.
+  const seedingQueueItems = useMemo(
+    () =>
+      activeTab === "activity"
+        ? sortedQueueItems.filter((item) => item.displayState === "IMPORTED_SEEDING")
+        : [],
+    [activeTab, sortedQueueItems],
+  );
+  const virtualQueueItems = useMemo(
+    () =>
+      activeTab === "activity" && seedingQueueItems.length > 0
+        ? sortedQueueItems.filter((item) => item.displayState !== "IMPORTED_SEEDING")
+        : sortedQueueItems,
+    [activeTab, seedingQueueItems.length, sortedQueueItems],
+  );
+  const hiddenSeedingCount = Math.max(0, seedingQueueItems.length - VISIBLE_SEEDING_ROW_LIMIT);
+  const visibleSeedingQueueItems = seedingExpanded
+    ? seedingQueueItems
+    : seedingQueueItems.slice(0, VISIBLE_SEEDING_ROW_LIMIT);
+  const seedingDisclosureLabel = seedingExpanded
+    ? "Show fewer seeding activities"
+    : `Click to see ${hiddenSeedingCount} more seeding activities`;
   const activeImportLayoutKey = `${visibleActiveImportStreams
     .map((stream) => stream.id)
-    .join("|")}:${hiddenActiveImportCount}:${activeImportsExpanded}`;
+    .join("|")}:${hiddenActiveImportCount}:${activeImportsExpanded}:${visibleSeedingQueueItems
+    .map((item) => {
+      // Expanding a seeding row grows the prefix, so the key has to move with it.
+      const key = downloadQueueItemIdentityKey(item);
+      return expandedItemIds[key] ? `${key}:open` : key;
+    })
+    .join("|")}:${hiddenSeedingCount}:${seedingExpanded}`;
   useLayoutEffect(() => {
     if (activeTab !== "activity" || isMobile) {
       setQueueScrollMargin(0);
@@ -659,10 +702,10 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   }, [activeImportLayoutKey, activeTab, isMobile, queueLoading]);
 
   const queueVirtualizer = useVirtualizer({
-    count: activeTab === "activity" ? sortedQueueItems.length : 0,
+    count: activeTab === "activity" ? virtualQueueItems.length : 0,
     getScrollElement: () => resultsScrollRef.current,
     getItemKey: (index) =>
-      downloadQueueItemIdentityKey(sortedQueueItems[index] ?? queueItems[index]),
+      downloadQueueItemIdentityKey(virtualQueueItems[index] ?? queueItems[index]),
     estimateSize: () => (isMobile ? 180 : 64),
     measureElement: (element) => {
       const baseHeight = element.getBoundingClientRect().height;
@@ -687,9 +730,9 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const renderedQueueItems =
     activeTab === "activity"
       ? virtualRows
-          .map((virtualRow) => sortedQueueItems[virtualRow.index])
+          .map((virtualRow) => virtualQueueItems[virtualRow.index])
           .filter((item): item is DownloadQueueItem => Boolean(item))
-      : sortedQueueItems;
+      : virtualQueueItems;
   const virtualPaddingTop = Math.max(
     0,
     (virtualRows[0]?.start ?? queueScrollMargin) - queueScrollMargin,
@@ -701,6 +744,47 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
           (virtualRows[virtualRows.length - 1].end - queueScrollMargin),
       )
     : 0;
+
+  // The queue arrives sorted by progress, so a queue with a lot of seeding
+  // entries can fill whole server pages with rows that are folded away here.
+  // Without this the list never overflows, the scroll handler never fires, and
+  // the downloads sitting on later pages stay unreachable. Give up once a run
+  // of pages has added nothing visible so a wholly seeding queue cannot walk
+  // itself to the end.
+  const autoFillAttemptsRef = useRef(0);
+  const autoFilledRowCountRef = useRef(0);
+  useEffect(() => {
+    if (activeTab !== "activity") {
+      autoFillAttemptsRef.current = 0;
+      autoFilledRowCountRef.current = 0;
+      return;
+    }
+    if (virtualQueueItems.length > autoFilledRowCountRef.current) {
+      autoFillAttemptsRef.current = 0;
+    }
+    autoFilledRowCountRef.current = virtualQueueItems.length;
+    if (
+      queueLoading ||
+      queueLoadingMore ||
+      !visibleHasMore ||
+      autoFillAttemptsRef.current >= MAX_QUEUE_AUTO_FILL_PAGES
+    ) {
+      return;
+    }
+    const scrollElement = resultsScrollRef.current;
+    if (!scrollElement || scrollElement.scrollHeight > scrollElement.clientHeight + 160) {
+      return;
+    }
+    autoFillAttemptsRef.current += 1;
+    void requestMoreItems();
+  }, [
+    activeTab,
+    queueLoading,
+    queueLoadingMore,
+    requestMoreItems,
+    virtualQueueItems.length,
+    visibleHasMore,
+  ]);
 
   const visibleImportItems = useMemo(
     () => (activeTab === "import" ? sortedQueueItems : []),
@@ -992,7 +1076,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const renderVirtualMobileQueueCards = () => (
     <div style={{ height: queueVirtualizer.getTotalSize(), position: "relative" }}>
       {virtualRows.map((virtualRow) => {
-        const queueItem = sortedQueueItems[virtualRow.index];
+        const queueItem = virtualQueueItems[virtualRow.index];
         if (!queueItem) {
           return null;
         }
@@ -1151,6 +1235,35 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                 aria-hidden="true"
               />
               {activeImportDisclosureLabel}
+            </button>
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  );
+  const renderSeedingRows = () => (
+    <>
+      {visibleSeedingQueueItems.map((queueItem) => {
+        const rowProps = buildQueueRowProps(queueItem);
+        return <QueueTableRow key={rowProps.rowId} {...rowProps} isVirtualPrefix />;
+      })}
+      {hiddenSeedingCount > 0 ? (
+        <TableRow data-activity-virtual-prefix>
+          <TableCell colSpan={6} className="p-0">
+            <button
+              type="button"
+              aria-expanded={seedingExpanded}
+              className="flex w-full items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-[var(--scry-rowHover)] hover:text-foreground"
+              onClick={() => setSeedingExpanded((expanded) => !expanded)}
+            >
+              <ChevronRight
+                className={cn(
+                  "h-3.5 w-3.5 transition-transform",
+                  seedingExpanded && "rotate-90",
+                )}
+                aria-hidden="true"
+              />
+              {seedingDisclosureLabel}
             </button>
           </TableCell>
         </TableRow>
@@ -1399,6 +1512,33 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
               ) : null}
             </div>
           ) : null}
+          {isMobile && activeTab === "activity" && seedingQueueItems.length > 0 ? (
+            <div className="space-y-3">
+              {visibleSeedingQueueItems.map((queueItem) => {
+                const rowProps = buildQueueRowProps(queueItem);
+                return <QueueRowItem key={rowProps.rowId} {...rowProps} />;
+              })}
+              {hiddenSeedingCount > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 text-xs text-muted-foreground"
+                  aria-expanded={seedingExpanded}
+                  onClick={() => setSeedingExpanded((expanded) => !expanded)}
+                >
+                  <ChevronRight
+                    className={cn(
+                      "h-3.5 w-3.5 transition-transform",
+                      seedingExpanded && "rotate-90",
+                    )}
+                    aria-hidden="true"
+                  />
+                  {seedingDisclosureLabel}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           {isMobile ? (
             sortedQueueItems.length === 0 && !queueLoading ? (
               activeTab === "activity" && activeImportStreams.length > 0 ? null : (
@@ -1512,6 +1652,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                   ) : (
                     <>
                       {activeTab === "activity" ? renderActiveImportRows() : null}
+                      {activeTab === "activity" ? renderSeedingRows() : null}
                       {activeTab === "activity" && virtualPaddingTop > 0 ? (
                         <TableRow aria-hidden="true">
                           <TableCell colSpan={6} style={{ height: virtualPaddingTop, padding: 0 }} />
