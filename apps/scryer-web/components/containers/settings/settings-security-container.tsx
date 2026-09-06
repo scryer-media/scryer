@@ -282,11 +282,16 @@ export function SettingsSecurityContainer() {
 
   // The header's "Enable login" entry lands here with a navigation-state
   // intent so the user sees the same dialog they would get from the button.
+  // The ref only guards re-renders between consuming the intent and the
+  // replace-navigation that clears it; once the state is clear it re-arms,
+  // so a second header click while already on Security opens the dialog
+  // again instead of being swallowed.
   React.useEffect(() => {
-    if (loading || enableIntentConsumedRef.current) {
+    if (!readEnableFormLoginIntent(location.state)) {
+      enableIntentConsumedRef.current = false;
       return;
     }
-    if (!readEnableFormLoginIntent(location.state)) {
+    if (loading || enableIntentConsumedRef.current) {
       return;
     }
     enableIntentConsumedRef.current = true;
