@@ -430,6 +430,69 @@ fn structured_dispatch_query_dedupe_does_not_run_for_plain_title_searches() {
     assert_eq!(deduped, queries);
 }
 
+/// A season/episode token that names something other than what the dispatch
+/// carries is a second, different ask — not a duplicate. This is how an anime
+/// numbered per cour is searched for alongside its official numbering: the
+/// wanted episode is official S01E53, and the same episode is community
+/// S04E17.
+#[test]
+fn structured_dispatch_queries_keep_a_contradicting_season_episode_token() {
+    let queries = vec![
+        "Synthetic Atlas 053".to_string(),
+        "Synthetic Atlas S01E53".to_string(),
+        "Synthetic Atlas S01".to_string(),
+        "Synthetic Atlas".to_string(),
+        "Synthetic Atlas S04E17".to_string(),
+    ];
+
+    let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), Some(53));
+
+    // The forms that merely restate season=1&ep=53 still collapse.
+    assert_eq!(
+        deduped,
+        vec![
+            "Synthetic Atlas 053".to_string(),
+            "Synthetic Atlas S04E17".to_string(),
+        ]
+    );
+}
+
+/// The same holds for the text-safe path, which keeps one query per shape:
+/// two `SxxEyy` forms asking for different episodes are both kept.
+#[test]
+fn text_safe_dispatch_queries_keep_a_contradicting_season_episode_token() {
+    let queries = vec![
+        "Synthetic Atlas S01E53".to_string(),
+        "Synthetic Atlas S04E17".to_string(),
+    ];
+
+    let deduped =
+        dedupe_text_safe_structured_dispatch_queries(queries.clone(), Some(1), Some(53), None);
+
+    assert_eq!(deduped, queries);
+}
+
+/// A bare `Sxx` that names a different season is kept for the same reason,
+/// while the one matching the dispatch still collapses.
+#[test]
+fn structured_dispatch_queries_keep_a_contradicting_season_token() {
+    let queries = vec![
+        "Synthetic Atlas".to_string(),
+        "Synthetic Atlas S01".to_string(),
+        "Synthetic Atlas S04".to_string(),
+    ];
+
+    let deduped = dedupe_structured_dispatch_queries(queries, Some(1), Some(53), None);
+
+    assert_eq!(
+        deduped,
+        vec![
+            "Synthetic Atlas".to_string(),
+            "Synthetic Atlas S04".to_string(),
+        ]
+    );
+}
+
 #[test]
 fn structured_dispatch_queries_keep_legitimate_numbered_titles_when_absolute_episode_differs() {
     let queries = vec![
