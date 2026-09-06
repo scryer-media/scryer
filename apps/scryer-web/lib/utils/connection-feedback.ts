@@ -1,4 +1,4 @@
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 
 type SetGlobalStatus = (status: string) => void;
 
