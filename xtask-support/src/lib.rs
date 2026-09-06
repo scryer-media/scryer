@@ -47,6 +47,17 @@ impl TaskContext {
         }
     }
 
+    /// Builds a context rooted at an arbitrary directory without probing for `rtk`.
+    ///
+    /// Used by tests that exercise repo-relative path handling inside a temporary
+    /// directory instead of the real checkout.
+    pub fn with_repo_root(repo_root: PathBuf) -> Self {
+        Self {
+            repo_root,
+            rtk_available: false,
+        }
+    }
+
     pub fn path(&self, relative: &str) -> PathBuf {
         self.repo_root.join(relative)
     }
