@@ -38,8 +38,20 @@ export type IndexerRecord = {
   lastErrorAt: string | null;
   lastQueryAt: string | null;
   config: ProviderConfigValue[];
+  /**
+   * Categories from the indexer's most recent caps snapshot, sorted by code.
+   * Empty until the first successful caps refresh.
+   */
+  capsCategories: IndexerCapsCategory[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type IndexerCapsCategory = {
+  /** Category id exactly as the indexer expects it in the `cat` parameter. */
+  code: string;
+  /** Human-readable name from the caps document, or null when it has none. */
+  label: string | null;
 };
 
 export type IndexerProxyRecord = {

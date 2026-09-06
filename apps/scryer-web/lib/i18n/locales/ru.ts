@@ -773,6 +773,7 @@ const ru: LocaleDictionary = {
     "settings.indexerRoutingCustomCategories": "Свои коды",
     "settings.indexerRoutingCustomCategoryPlaceholder": "Числовой id из caps индексатора",
     "settings.indexerRoutingCustomCategoryAdd": "Добавить",
+    "settings.indexerRoutingIndexerCategories": "Также на этом индексаторе",
     "settings.indexerCategorySeries": "Сериалы",
     "settings.indexerCategoryMovies": "Фильмы",
     "settings.indexerCategoryOther": "Прочее",

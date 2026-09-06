@@ -6,6 +6,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { resolveFloatingPanelPlacement } from "@/lib/floating-panel";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { overlayCapsCategories } from "@/lib/utils/indexer-caps-categories";
+import type { IndexerCapsCategory } from "@/lib/types/indexers";
 import { ChevronDown } from "lucide-react";
 
 export type ViewCategoryId = "MOVIE" | "SERIES" | "ANIME";
@@ -165,13 +167,19 @@ function knownCategoryCodesForScope(scope: ViewCategoryId): Set<string> {
 }
 
 /**
- * Codes the routing entry carries that the standard newznab tree does not
- * list: an indexer's own categories (a "Movies-DE" subcat, a custom id above
- * 100000) that only exist in that indexer's caps document.
+ * Codes the routing entry carries that neither the standard newznab tree nor
+ * the indexer's caps document lists for this scope: ids typed by hand, or
+ * stale ones the indexer no longer advertises.
  */
-export function customCategoryCodes(scope: ViewCategoryId, values: string[]): string[] {
+export function customCategoryCodes(
+  scope: ViewCategoryId,
+  values: string[],
+  offeredCodes: ReadonlySet<string> = new Set(),
+): string[] {
   const known = knownCategoryCodesForScope(scope);
-  return normalizeCategoryCodes(values).filter((code) => !known.has(code));
+  return normalizeCategoryCodes(values).filter(
+    (code) => !known.has(code) && !offeredCodes.has(code),
+  );
 }
 
 /**
@@ -192,6 +200,8 @@ type IndexerCategoryPickerProps = {
   value: string[];
   scope: ViewCategoryId;
   disabled: boolean;
+  /** Categories the indexer advertises in its caps document, if known. */
+  capsCategories?: readonly IndexerCapsCategory[];
   triggerId?: string;
   panelId?: string;
   categoryIdPrefix?: string;
@@ -213,10 +223,13 @@ function isSameRect(previous: DOMRect | null, next: DOMRect): boolean {
   );
 }
 
+const NO_CAPS_CATEGORIES: readonly IndexerCapsCategory[] = [];
+
 export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
   value,
   scope,
   disabled,
+  capsCategories = NO_CAPS_CATEGORIES,
   triggerId,
   panelId,
   categoryIdPrefix,
@@ -324,10 +337,18 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
     });
   };
 
+  const capsOverlay = React.useMemo(
+    () => overlayCapsCategories(scope, capsCategories, knownCategoryCodesForScope(scope)),
+    [scope, capsCategories],
+  );
+  const capsOfferedCodes = React.useMemo(
+    () => new Set(capsOverlay.extraCategories.map((category) => category.code)),
+    [capsOverlay],
+  );
   const [customCodeDraft, setCustomCodeDraft] = React.useState("");
   const customCodes = React.useMemo(
-    () => customCategoryCodes(scope, draftCategories),
-    [scope, draftCategories],
+    () => customCategoryCodes(scope, draftCategories, capsOfferedCodes),
+    [scope, draftCategories, capsOfferedCodes],
   );
   const parsedCustomCode = parseCustomCategoryCode(customCodeDraft);
   const canAddCustomCode =
@@ -395,6 +416,11 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
                           disabled={disabled}
                         />
                         {t(category.labelKey)}
+                        {capsOverlay.labelsByCode.has(category.code) ? (
+                          <span className="truncate normal-case text-xs text-muted-foreground">
+                            {capsOverlay.labelsByCode.get(category.code)}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="text-xs font-[var(--font-code)] text-muted-foreground">{category.code}</span>
                     </label>
@@ -403,6 +429,37 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
               </div>
             );
           })}
+          {capsOverlay.extraCategories.length > 0 ? (
+            <div className="mt-2 border-t border-border pt-2">
+              <div className="mb-1 px-2 text-sm text-foreground">
+                {t("settings.indexerRoutingIndexerCategories")}
+              </div>
+              <div className="space-y-1 pl-3">
+                {capsOverlay.extraCategories.map((category) => (
+                  <label
+                    key={category.code}
+                    className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent/60"
+                  >
+                    <span className="flex min-w-0 items-center gap-2 text-foreground">
+                      <Checkbox
+                        id={
+                          categoryIdPrefix
+                            ? selectorId(categoryIdPrefix, category.code)
+                            : undefined
+                        }
+                        checked={selectedSet.has(category.code)}
+                        onCheckedChange={() => toggleCategory(category.code)}
+                        aria-label={`${t("indexerCategory.labelCategory")}: ${category.label ?? category.code} ${category.code}`}
+                        disabled={disabled}
+                      />
+                      <span className="truncate">{category.label ?? category.code}</span>
+                    </span>
+                    <span className="text-xs font-[var(--font-code)] text-muted-foreground">{category.code}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="mt-2 border-t border-border pt-2">
             <div className="mb-1 px-2 text-sm text-foreground">
               {t("settings.indexerRoutingCustomCategories")}

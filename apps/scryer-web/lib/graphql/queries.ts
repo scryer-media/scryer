@@ -2120,6 +2120,10 @@ export const indexersQuery = `query Indexers($providerType: String) {
     lastQueryAt
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
+    capsCategories {
+      code
+      label
+    }
     createdAt
     updatedAt
   }
@@ -2321,6 +2325,10 @@ const indexerFieldSelection = `
     lastErrorAt
     lastQueryAt
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
+    }
+    capsCategories {
+      code
+      label
     }
     createdAt
     updatedAt`;

@@ -475,6 +475,7 @@ const zh_CN: LocaleDictionary = {
   "settings.indexerRoutingCustomCategories": "自定义代码",
   "settings.indexerRoutingCustomCategoryPlaceholder": "索引器 caps 中的数字 ID",
   "settings.indexerRoutingCustomCategoryAdd": "添加",
+  "settings.indexerRoutingIndexerCategories": "此索引器还提供",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "电影",
   "settings.indexerCategoryOther": "其他",

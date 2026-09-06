@@ -485,6 +485,7 @@ const ko: LocaleDictionary = {
   "settings.indexerRoutingCustomCategories": "사용자 지정 코드",
   "settings.indexerRoutingCustomCategoryPlaceholder": "인덱서 caps의 숫자 ID",
   "settings.indexerRoutingCustomCategoryAdd": "추가",
+  "settings.indexerRoutingIndexerCategories": "이 인덱서에도 있음",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "영화",
   "settings.indexerCategoryOther": "기타",

@@ -500,6 +500,7 @@ const pt_BR: LocaleDictionary = {
   "settings.indexerRoutingCustomCategories": "Códigos personalizados",
   "settings.indexerRoutingCustomCategoryPlaceholder": "ID numérico das caps do indexador",
   "settings.indexerRoutingCustomCategoryAdd": "Adicionar",
+  "settings.indexerRoutingIndexerCategories": "Também neste indexador",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Filmes",
   "settings.indexerCategoryOther": "Outros",

@@ -21,7 +21,10 @@ use scryer_application::{
 use scryer_domain::{
     ConfigFieldDef, ConfigFieldRole, ConfigFieldType, ConfigFieldValueSource,
     IndexerCapsSearchNode as DomainCapsSearchNode, IndexerCapsSnapshot as DomainCapsSnapshot,
-    IndexerConfig, TaggedAlias, indexer_rate_limit_domain_key,
+    IndexerCategoryDescriptor as DomainCategoryDescriptor,
+    IndexerCategoryModel as DomainCategoryModel,
+    IndexerCategoryValueKind as DomainCategoryValueKind, IndexerConfig, TaggedAlias,
+    indexer_rate_limit_domain_key,
 };
 use scryer_outbound_http::{
     DestinationKey, OutboundHttpClient, OutboundHttpError, RateLimitRegistry, RequestPolicy,
@@ -1276,7 +1279,8 @@ fn build_managed_child_plan(
         "api_path": "/api",
         "imdb_id_format": "canonical",
     });
-    let caps_snapshot_json = serialize_caps_snapshot(caps_snapshot.as_ref());
+    let caps_snapshot_json =
+        serialize_caps_snapshot(caps_snapshot.as_ref(), &indexer.capabilities.categories);
     let managed_metadata_json = serde_json::to_string(&ManagedChildMetadata {
         indexer_id: indexer.id,
         protocol: indexer.protocol.clone(),
@@ -1575,7 +1579,14 @@ fn parse_caps_node(
     })
 }
 
-fn serialize_caps_snapshot(snapshot: Option<&ProwlarrCapsSnapshot>) -> Option<String> {
+/// Serialize the child's caps snapshot. Prowlarr reports the indexer's
+/// category tree on the indexer resource rather than in the caps document, so
+/// it is folded in here; the routing picker reads it back through the stored
+/// snapshot to offer indexer-specific categories such as a "Movies-DE" subcat.
+fn serialize_caps_snapshot(
+    snapshot: Option<&ProwlarrCapsSnapshot>,
+    categories: &[ProwlarrCategory],
+) -> Option<String> {
     let snapshot = snapshot?;
     serde_json::to_string(&DomainCapsSnapshot {
         server_title: snapshot.server_title.clone(),
@@ -1587,9 +1598,48 @@ fn serialize_caps_snapshot(snapshot: Option<&ProwlarrCapsSnapshot>) -> Option<St
         music_search: caps_node_to_domain(&snapshot.music_search),
         audio_search: caps_node_to_domain(&snapshot.audio_search),
         book_search: caps_node_to_domain(&snapshot.book_search),
-        categories: Default::default(),
+        categories: caps_categories_to_domain(categories),
     })
     .ok()
+}
+
+fn caps_categories_to_domain(categories: &[ProwlarrCategory]) -> DomainCategoryModel {
+    let mut flattened = std::collections::BTreeMap::<i64, DomainCategoryDescriptor>::new();
+    for category in categories {
+        flatten_caps_category(category, &mut flattened);
+    }
+    if flattened.is_empty() {
+        return DomainCategoryModel::default();
+    }
+    DomainCategoryModel {
+        value_kinds: vec![DomainCategoryValueKind::Numeric],
+        separate_anime_categories: false,
+        provider_category_metadata: true,
+        categories: flattened.into_values().collect(),
+    }
+}
+
+fn flatten_caps_category(
+    category: &ProwlarrCategory,
+    flattened: &mut std::collections::BTreeMap<i64, DomainCategoryDescriptor>,
+) {
+    let label = Some(category.name.trim().to_string()).filter(|name| !name.is_empty());
+    flattened
+        .entry(category.id)
+        .and_modify(|existing| {
+            if existing.label.is_none() && label.is_some() {
+                existing.label = label.clone();
+            }
+        })
+        .or_insert_with(|| DomainCategoryDescriptor {
+            value: category.id.to_string(),
+            label,
+            value_kind: DomainCategoryValueKind::Numeric,
+            facets: Vec::new(),
+        });
+    for sub_category in &category.sub_categories {
+        flatten_caps_category(sub_category, flattened);
+    }
 }
 
 fn caps_node_to_domain(node: &ProwlarrCapsSearchNode) -> Option<DomainCapsSearchNode> {
@@ -2183,7 +2233,11 @@ mod tests {
                 categories: vec![ProwlarrCategory {
                     id: 2000,
                     name: "Movies".to_string(),
-                    sub_categories: vec![],
+                    sub_categories: vec![ProwlarrCategory {
+                        id: 100020,
+                        name: "Movies-DE".to_string(),
+                        sub_categories: vec![],
+                    }],
                 }],
             },
             priority: 25,
@@ -2216,13 +2270,26 @@ mod tests {
         assert!(child.enable_auto_search);
         assert_eq!(child.routing_scopes.len(), 1);
         assert_eq!(child.routing_scopes[0].scope_id, "movie");
-        assert_eq!(child.routing_scopes[0].categories, vec!["2000"]);
+        assert_eq!(child.routing_scopes[0].categories, vec!["100020", "2000"]);
         assert_eq!(metadata.indexer_id, 7);
         assert_eq!(metadata.app_profile_id, 12);
         assert_eq!(metadata.download_client_id, 3);
         assert!(metadata.enable_rss);
         assert!(!metadata.enable_automatic_search);
         assert_eq!(metadata.caps_snapshot, Some(caps_snapshot));
+
+        let stored_snapshot: DomainCapsSnapshot =
+            serde_json::from_str(child.caps_snapshot_json.as_deref().unwrap()).unwrap();
+        assert_eq!(stored_snapshot.server_title.as_deref(), Some("Prowlarr"));
+        assert_eq!(
+            stored_snapshot
+                .categories
+                .categories
+                .iter()
+                .map(|category| (category.value.as_str(), category.label.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("2000", Some("Movies")), ("100020", Some("Movies-DE"))]
+        );
     }
 
     #[test]
