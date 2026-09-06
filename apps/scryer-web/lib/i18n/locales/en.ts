@@ -61,6 +61,9 @@ const en: LocaleDictionary = {
   "label.testConnection": "Test Connection",
   "external.openOn": "Open on {{site}}",
   "label.unknown": "Unknown",
+  "label.multiEpisodePack": "Multi-episode pack",
+  "label.multiEpisodePackHint":
+    "This release covers more than the episode you searched for.",
   "label.unchanged": "Unchanged",
   "label.deleting": "Deleting…",
   "label.default": "default",
