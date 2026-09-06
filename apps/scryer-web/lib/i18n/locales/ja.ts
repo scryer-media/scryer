@@ -494,6 +494,7 @@ const ja: LocaleDictionary = {
   "settings.indexerRoutingCustomCategories": "カスタムコード",
   "settings.indexerRoutingCustomCategoryPlaceholder": "インデクサーの caps にある数値 ID",
   "settings.indexerRoutingCustomCategoryAdd": "追加",
+  "settings.indexerRoutingIndexerCategories": "このインデクサーにもあり",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "映画",
   "settings.indexerCategoryOther": "その他",

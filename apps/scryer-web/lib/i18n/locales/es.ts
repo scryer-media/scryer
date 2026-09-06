@@ -503,6 +503,7 @@ const es: LocaleDictionary = {
   "settings.indexerRoutingCustomCategories": "Códigos personalizados",
   "settings.indexerRoutingCustomCategoryPlaceholder": "ID numérico de las caps del indexador",
   "settings.indexerRoutingCustomCategoryAdd": "Añadir",
+  "settings.indexerRoutingIndexerCategories": "También en este indexador",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Películas",
   "settings.indexerCategoryOther": "Otros",

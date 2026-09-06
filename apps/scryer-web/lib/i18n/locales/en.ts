@@ -823,6 +823,7 @@ const en: LocaleDictionary = {
   "settings.indexerRoutingCustomCategories": "Custom codes",
   "settings.indexerRoutingCustomCategoryPlaceholder": "Numeric id from the indexer caps",
   "settings.indexerRoutingCustomCategoryAdd": "Add",
+  "settings.indexerRoutingIndexerCategories": "Also on this indexer",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Movies",
   "settings.indexerCategoryOther": "Other",
