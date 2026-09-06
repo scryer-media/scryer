@@ -225,7 +225,7 @@ fn community_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandidate> {
             .collect();
     }
 
-    absolute_start_candidates(input, NumberingCandidateKind::Community)
+    absolute_start_candidates(input)
 }
 
 /// An absolute-only release on a catalog with no absolute numbers of its own:
@@ -236,10 +236,7 @@ fn community_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandidate> {
 /// normally agree — `absolute_start` plus an offset is the same TVDB episode
 /// whichever season you count from — and collapse into one answer; where they
 /// genuinely disagree the caller sees the disagreement.
-fn absolute_start_candidates(
-    input: &NumberingInput<'_>,
-    kind: NumberingCandidateKind,
-) -> Vec<NumberingCandidate> {
+fn absolute_start_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandidate> {
     if !input.parsed.episode_numbers.is_empty() || catalog_has_absolute_numbers(input.episodes) {
         return Vec::new();
     }
@@ -270,7 +267,7 @@ fn absolute_start_candidates(
                 input,
                 community_season,
                 &community_numbers,
-                kind,
+                NumberingCandidateKind::Community,
                 &format!(
                     "community season {} by absolute start {absolute_start}",
                     community_season.index
@@ -284,6 +281,11 @@ fn title_anchored_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandida
     let Some(community_season) = anchored_community_season(input) else {
         return Vec::new();
     };
+    let reason = format!(
+        "release names community season {} (\"{}\")",
+        community_season.index,
+        community_season.titles.first().map_or("", String::as_str)
+    );
 
     if !input.parsed.episode_numbers.is_empty() {
         return map_community_episodes(
@@ -291,45 +293,81 @@ fn title_anchored_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandida
             community_season,
             &input.parsed.episode_numbers,
             NumberingCandidateKind::TitleAnchored,
-            &format!(
-                "release names community season {} (\"{}\")",
-                community_season.index,
-                community_season.titles.first().map_or("", String::as_str)
-            ),
+            &reason,
         )
         .into_iter()
         .collect();
     }
 
-    absolute_start_candidates(input, NumberingCandidateKind::TitleAnchored)
+    // A bare number behind a cour's own name counts within that cour. Groups
+    // that title their releases per cour number them per cour too, so reading
+    // the number as a series-wide absolute would place it by the one piece of
+    // evidence the release did not give. Out-of-range numbers map to nothing
+    // and fall through to the absolute reading, which is the right answer for
+    // a group that names the cour but numbers absolutely.
+    map_community_episodes(
+        input,
+        community_season,
+        &parsed_absolute_numbers(input.parsed),
+        NumberingCandidateKind::TitleAnchored,
+        &reason,
+    )
+    .into_iter()
+    .collect()
 }
 
-/// The single community season whose own title the release names, when the
-/// release does *not* equally name the series itself.
+/// The single community season whose own title the release names, when that
+/// name says more than the series' own does.
 ///
-/// Both halves matter. A release titled with the plain series name carries no
-/// season evidence, and a name that matches two community seasons pins nothing.
+/// The parser projects every release onto the title it matched, so the first
+/// variant is always the series' canonical name. Those variants are skipped
+/// rather than treated as a veto: vetoing on them would disqualify every
+/// release the parser ever produces, which left this whole rule unreachable.
+///
+/// Aliases are *not* a veto either. A metadata provider's alias list for a
+/// long-running anime is the union of every cour's names, so a cour's own
+/// title is normally a series alias too — reading that as "this is just the
+/// series" would discard exactly the evidence worth having.
+///
+/// What is left is guarded twice: a name shared by two community seasons pins
+/// nothing, and a cour that answers to the series' own canonical name pins
+/// nothing either. That second guard is the one that matters in practice —
+/// the first cour of a series is usually catalogued under the bare franchise
+/// name, so without it any release naming the franchise would anchor there.
 fn anchored_community_season<'a>(input: &NumberingInput<'a>) -> Option<&'a AnimeCommunitySeason> {
     let parsed_titles = normalized_parsed_titles(input.parsed_title_variants);
     if parsed_titles.is_empty() {
         return None;
     }
-
-    let series_titles = normalized_series_titles(input.title);
-    if parsed_titles
+    let canonical = crate::app_usecase_rss::normalize_for_matching(&input.title.name);
+    let distinguishing = parsed_titles
         .iter()
-        .any(|parsed| series_titles.iter().any(|series| series == parsed))
-    {
+        .filter(|parsed| **parsed != canonical)
+        .collect::<Vec<_>>();
+    if distinguishing.is_empty() {
         return None;
     }
 
     let mut matched: Option<&AnimeCommunitySeason> = None;
     for season in &input.bridge.seasons {
-        let hit = season.titles.iter().any(|season_title| {
-            let normalized = crate::app_usecase_rss::normalize_for_matching(season_title);
-            !normalized.is_empty() && parsed_titles.iter().any(|parsed| parsed == &normalized)
-        });
-        if !hit {
+        let season_titles = season
+            .titles
+            .iter()
+            .map(|season_title| crate::app_usecase_rss::normalize_for_matching(season_title))
+            .filter(|season_title| !season_title.is_empty())
+            .collect::<Vec<_>>();
+        // A cour catalogued under the series' own name is the franchise, not a
+        // season within it.
+        if season_titles
+            .iter()
+            .any(|season_title| *season_title == canonical)
+        {
+            continue;
+        }
+        if !season_titles
+            .iter()
+            .any(|season_title| distinguishing.iter().any(|parsed| *parsed == season_title))
+        {
             continue;
         }
         if matched.is_some() {
@@ -568,20 +606,6 @@ fn normalized_parsed_titles(variants: &[String]) -> Vec<String> {
     let mut titles = Vec::new();
     for variant in variants {
         let normalized = crate::app_usecase_rss::normalize_for_matching(variant);
-        if !normalized.is_empty() && !titles.contains(&normalized) {
-            titles.push(normalized);
-        }
-    }
-    titles
-}
-
-fn normalized_series_titles(title: &Title) -> Vec<String> {
-    let mut titles = Vec::new();
-    for name in std::iter::once(title.name.as_str())
-        .chain(title.aliases.iter().map(String::as_str))
-        .chain(title.tagged_aliases.iter().map(|alias| alias.name.as_str()))
-    {
-        let normalized = crate::app_usecase_rss::normalize_for_matching(name);
         if !normalized.is_empty() && !titles.contains(&normalized) {
             titles.push(normalized);
         }

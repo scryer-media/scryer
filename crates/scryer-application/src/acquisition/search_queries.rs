@@ -115,7 +115,7 @@ pub(crate) fn build_search_queries(
                 // groups actually name it.
                 queries.extend(community_numbering_queries(
                     title,
-                    episode,
+                    Some(episode),
                     season_num as i32,
                     episode_num as i32,
                     anime_numbering_bridge,
@@ -165,9 +165,13 @@ pub(crate) fn build_search_queries(
 /// Returns nothing for a non-anime title, a title with no bridge, and an
 /// episode no community season covers. Season-level and pack queries are out
 /// of scope: the bridge speaks about episodes.
-fn community_numbering_queries(
+///
+/// `episode` is optional because the interactive lane searches from the season
+/// and episode numbers a user typed and may have no catalog row to read an
+/// absolute number from; the bridge's own `absolute_start` covers that case.
+pub(crate) fn community_numbering_queries(
     title: &Title,
-    episode: &Episode,
+    episode: Option<&Episode>,
     season_num: i32,
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
@@ -213,8 +217,7 @@ fn community_numbering_queries(
     // The absolute number the catalog carries, or the one the bridge's season
     // start implies when the catalog has none.
     if let Some(absolute) = episode
-        .absolute_number
-        .as_deref()
+        .and_then(|episode| episode.absolute_number.as_deref())
         .and_then(|value| value.trim().parse::<i32>().ok())
         .filter(|&value| value > 0)
         .or_else(|| {
@@ -499,6 +502,24 @@ mod tests {
             .position(|query| query == "Lantern Verge S04E20")
             .expect("community query");
         assert!(official < community);
+    }
+
+    /// The interactive lane searches from the season and episode a user typed
+    /// and may hold no catalog row, so the community forms have to come out of
+    /// the bridge alone. The absolute number falls back to the cour's own
+    /// `absolute_start`, which is what the catalog row would have said.
+    #[test]
+    fn community_queries_are_built_without_a_catalog_episode() {
+        let queries = community_numbering_queries(&anime_title(), None, 1, 56, Some(&bridge()));
+
+        assert_eq!(
+            queries,
+            vec![
+                "Lantern Verge S04E20".to_string(),
+                "Lantern Verge: Final Chorus - 20".to_string(),
+                "Lantern Verge - 56".to_string(),
+            ]
+        );
     }
 
     #[test]
