@@ -5409,6 +5409,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           catalogDiscoveryGroups: activeCatalogDiscoveryGroups,
           canViewCatalog,
           canManageTitle,
+          canManageTitlesInLibrary,
           canRequestMedia,
           canManageCatalogDiscovery,
           canRequestCatalogDiscovery,
