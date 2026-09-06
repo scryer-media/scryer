@@ -454,7 +454,14 @@ impl SystemInfoProvider for SettingsStore {
     }
 }
 
-fn settings_with_defaults_sql(has_scope_id: bool, postgres_timestamps: bool) -> String {
+/// Builds the definitions-with-values projection for one scope. With
+/// `single_key` the statement is narrowed to one `key_name` and drops the
+/// ordering so a point read never materialises the whole scope.
+fn settings_with_defaults_sql(
+    has_scope_id: bool,
+    postgres_timestamps: bool,
+    single_key: bool,
+) -> String {
     let created_at = if postgres_timestamps {
         "sv.created_at::TEXT"
     } else {
@@ -471,6 +478,12 @@ fn settings_with_defaults_sql(has_scope_id: bool, postgres_timestamps: bool) -> 
     } else {
         "AND sv.scope = {}
          AND sv.scope_id IS NULL"
+    };
+    let tail = if single_key {
+        "AND d.key_name = {}
+         LIMIT 1"
+    } else {
+        "ORDER BY d.category, d.key_name"
     };
 
     format!(
@@ -496,7 +509,7 @@ fn settings_with_defaults_sql(has_scope_id: bool, postgres_timestamps: bool) -> 
           AND sv.scope = d.scope
           {scope_join}
          WHERE d.scope = {{}}
-         ORDER BY d.category, d.key_name"
+         {tail}"
     )
 }
 
@@ -556,7 +569,7 @@ async fn list_settings_with_defaults_exec(
         .as_ref()
         .is_some_and(|value| !value.trim().is_empty());
     let postgres_timestamps = exec_is_postgres(&exec);
-    let sql = settings_with_defaults_sql(has_scope_id, postgres_timestamps);
+    let sql = settings_with_defaults_sql(has_scope_id, postgres_timestamps, false);
     let normalized_scope_id = normalize_scope_id(scope_id);
 
     let args = if let Some(scope_id) = normalized_scope_id {
@@ -593,12 +606,22 @@ async fn get_setting_with_defaults_exec(
         ));
     }
 
-    Ok(
-        list_settings_with_defaults_exec(exec, &scope, scope_id, encryption_key)
-            .await?
-            .into_iter()
-            .find(|row| row.key_name == key_name),
-    )
+    let has_scope_id = scope_id
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let postgres_timestamps = exec_is_postgres(&exec);
+    let sql = settings_with_defaults_sql(has_scope_id, postgres_timestamps, true);
+    let mut args = match normalize_scope_id(scope_id) {
+        Some(scope_id) => vec![SqlArg::Text(scope.clone()), SqlArg::Text(scope_id)],
+        None => vec![SqlArg::Text(scope.clone())],
+    };
+    args.push(SqlArg::Text(scope));
+    args.push(SqlArg::Text(key_name));
+
+    SqlRuntime::fetch_optional(exec, &sql, &args)
+        .await?
+        .map(|row| decode_settings_row(&row, encryption_key))
+        .transpose()
 }
 
 async fn get_setting_explicit_exec(
@@ -1000,4 +1023,29 @@ fn exec_is_postgres(exec: &SqlExec<'_, '_>) -> bool {
         exec,
         SqlExec::Target(SqlTarget::Postgres(_)) | SqlExec::Tx(SqlTx::Postgres(_))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settings_with_defaults_sql;
+
+    #[test]
+    fn single_key_reads_filter_on_key_name_and_skip_the_scope_ordering() {
+        for has_scope_id in [false, true] {
+            for postgres in [false, true] {
+                let listing = settings_with_defaults_sql(has_scope_id, postgres, false);
+                assert!(listing.contains("ORDER BY d.category, d.key_name"));
+                assert!(!listing.contains("d.key_name = {}"));
+                // scope join (1 or 2 binds) + the definition scope filter.
+                assert_eq!(listing.matches("{}").count(), 2 + usize::from(has_scope_id));
+
+                let point = settings_with_defaults_sql(has_scope_id, postgres, true);
+                assert!(point.contains("AND d.key_name = {}"));
+                assert!(point.contains("LIMIT 1"));
+                assert!(!point.contains("ORDER BY"));
+                // ... plus the key_name bind.
+                assert_eq!(point.matches("{}").count(), 3 + usize::from(has_scope_id));
+            }
+        }
+    }
 }

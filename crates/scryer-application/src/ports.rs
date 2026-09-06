@@ -1890,6 +1890,14 @@ pub struct ImageProxyCacheEntryRecord {
     pub last_accessed_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Aggregate size of the on-disk image proxy cache, as recorded by the
+/// `byte_size` scalars persisted with each cache entry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ImageProxyCacheUsage {
+    pub total_bytes: u64,
+    pub entry_count: u64,
+}
+
 #[async_trait]
 pub trait ImageProxyRepository: Send + Sync {
     /// Registers a server-approved image source and returns its Scryer-owned URL.
@@ -1928,12 +1936,26 @@ pub trait ImageProxyRepository: Send + Sync {
         &self,
     ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
 
+    /// Returns the least-recently-accessed cache entries, oldest first,
+    /// bounded to `limit` rows so budget enforcement never loads the table.
+    async fn list_image_proxy_cache_entries_lru_oldest(
+        &self,
+        limit: u32,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
+
+    /// Sums the persisted `byte_size` scalars without reading entry rows.
+    async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage>;
+
     async fn clear_image_proxy_cache_entries(&self) -> AppResult<()>;
 
     async fn prune_image_proxy_sources_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<u64>;
+
+    /// Removes discovery-owned sources whose discovery item no longer exists.
+    /// Cache entries follow through the foreign-key cascade.
+    async fn prune_orphaned_discovery_image_proxy_sources(&self) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -3132,6 +3154,11 @@ pub trait DomainEventRepository: Send + Sync {
     async fn delete_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn get_subscriber_offset(&self, subscriber: &str) -> AppResult<i64>;
     async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()>;
+    /// The highest persisted event sequence, or 0 when the log is empty. Live
+    /// subscriptions start here so a new client never replays history.
+    async fn latest_sequence(&self) -> AppResult<i64> {
+        Ok(0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
