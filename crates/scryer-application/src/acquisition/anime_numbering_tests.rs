@@ -359,9 +359,12 @@ fn the_plain_series_title_anchors_nothing() {
     assert_eq!(resolution, NumberingResolution::Unchanged);
 }
 
-/// An alias of the series is still the series, not a cour.
+/// A cour's own name is normally a series alias too — a metadata provider's
+/// alias list for a long-running anime is the union of every cour's names — so
+/// an alias match is not evidence that the release named the series rather
+/// than a season within it. The cour still anchors.
 #[test]
-fn a_series_alias_anchors_nothing() {
+fn a_cour_name_that_is_also_a_series_alias_still_anchors() {
     let mut series = title(SERIES_NAME);
     series.aliases = vec!["Lantern Verge: Ember Circuit".to_string()];
     series.tagged_aliases = vec![TaggedAlias {
@@ -375,6 +378,53 @@ fn a_series_alias_anchors_nothing() {
         &official_episodes(true),
         &parsed(Some(1), &[8]),
         &["Lantern Verge Ember Circuit".to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("title-anchored candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::TitleAnchored);
+    assert_eq!(candidate.episode_numbers, vec![22]);
+}
+
+/// The parser projects every release onto the title it matched, so the series'
+/// canonical name is always among the variants. Anchoring has to look past it
+/// to the variant that says something the series name does not — otherwise no
+/// release ever anchors.
+#[test]
+fn the_projected_series_name_does_not_block_a_cour_variant() {
+    let resolution = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &parsed(Some(1), &[8]),
+        &[
+            SERIES_NAME.to_string(),
+            "Lantern Verge Glass Meridian".to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("title-anchored candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::TitleAnchored);
+    assert_eq!(candidate.episode_numbers, vec![34]);
+}
+
+/// A cour catalogued under the series' own name is the franchise, not a season
+/// within it. Without this guard the first cour — which is normally named for
+/// the series — would swallow every release that names the franchise.
+#[test]
+fn a_cour_named_for_the_series_anchors_nothing() {
+    let mut franchise_named = bridge();
+    franchise_named.seasons[0]
+        .titles
+        .push("Opening Movement".to_string());
+
+    let resolution = resolve(
+        &franchise_named,
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &parsed(Some(1), &[8]),
+        &[SERIES_NAME.to_string(), "Opening Movement".to_string()],
         None,
     );
 
@@ -402,6 +452,54 @@ fn a_name_shared_by_two_cours_anchors_nothing() {
     );
 
     assert_eq!(resolution, NumberingResolution::Unchanged);
+}
+
+/// The shape this rule exists for. Groups that title a release after its cour
+/// number it within that cour, so the bare number behind the cour name is the
+/// cour's episode 20 — official S01E56 — not series-wide absolute 20. The
+/// catalog carrying its own absolute numbers does not change that: it is what
+/// makes the wrong reading available in the first place.
+#[test]
+fn a_bare_number_behind_a_cour_name_counts_within_that_cour() {
+    let resolution = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(20),
+        &[
+            SERIES_NAME.to_string(),
+            "Lantern Verge Final Chorus".to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("title-anchored candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::TitleAnchored);
+    assert_eq!(candidate.season, 1);
+    assert_eq!(candidate.episode_numbers, vec![56]);
+    assert_eq!(candidate.episode_ids, vec!["ep-56".to_string()]);
+}
+
+/// A group that names the cour but numbers absolutely is still read correctly:
+/// 45 is past the end of a 10-episode cour, so that reading maps to nothing
+/// and the absolute one stands.
+#[test]
+fn a_number_past_the_named_cour_falls_back_to_absolute_numbering() {
+    let resolution = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(45),
+        &[
+            SERIES_NAME.to_string(),
+            "Lantern Verge Glass Meridian".to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![45]);
 }
 
 // ── precedence, ambiguity and tie-breaking ────────────────────────────────

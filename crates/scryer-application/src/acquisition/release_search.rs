@@ -30,8 +30,8 @@ use super::acquisition::{
 use super::*;
 use crate::acquisition_search_queries::{
     anidb_id_from_external_ids, build_movie_search_queries, build_search_queries,
-    imdb_id_from_title, mal_id_from_external_ids, movie_text_search_query,
-    tmdb_id_from_external_ids, tvdb_id_from_external_ids,
+    community_numbering_queries, imdb_id_from_title, mal_id_from_external_ids,
+    movie_text_search_query, tmdb_id_from_external_ids, tvdb_id_from_external_ids,
 };
 use crate::delay_profile::DelayProfile;
 use crate::quality::release_parser::ParseDisposition;
@@ -2326,6 +2326,28 @@ impl AppUseCase {
                 queries.insert(0, format!("{} {:0>3}", title.name.trim(), absolute));
             }
             queries.push(title.name.trim().to_string());
+
+            // An interactive search asks for the same release names the
+            // automatic lane does. Release groups number many anime per cour
+            // rather than per TVDB season, so without these forms a manual
+            // search for an episode of a long official season never mentions
+            // the season and episode numbers the groups actually post under,
+            // and the results it does return are whatever the bare title
+            // matched.
+            let anime_numbering_bridge = self
+                .services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .unwrap_or_default();
+            queries.extend(community_numbering_queries(
+                title,
+                episode_record.as_ref(),
+                season_num as i32,
+                episode_num as i32,
+                anime_numbering_bridge.as_ref(),
+            ));
         }
         let mut seen = HashSet::new();
         queries.retain(|query| !query.trim().is_empty() && seen.insert(query.to_ascii_lowercase()));
