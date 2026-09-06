@@ -111,7 +111,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
 
   return (
-    <Card className="border-border/80 bg-card/60">
+    <Card id={`pending-import-card-${item.id}`} className="border-border/80 bg-card/60">
       <CardHeader className="space-y-2">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
@@ -125,6 +125,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                 type="button"
                 size="sm"
                 variant={isActive ? "secondary" : "default"}
+                id={`pending-import-search-${item.id}`}
                 onClick={() => onOpenSearch(item)}
                 disabled={isBusy}
               >
