@@ -337,28 +337,43 @@ fn validate_indexer_connection_result(result: crate::IndexerValidationResult) ->
         return Ok(());
     }
 
-    let message = result.message.unwrap_or(result.status.clone());
-    if matches!(
-        result.status.as_str(),
-        "invalid_config" | "auth_failed" | "missing_host_binding"
-    ) {
-        return Err(AppError::Validation(message));
-    }
+    // Whatever the indexer said about itself is the only thing that tells an
+    // operator what to fix, so it is surfaced whichever status carried it. The
+    // old allowlist surfaced three statuses and masked every other one as
+    // "Internal server error", which named neither the indexer nor the problem.
+    let message = result
+        .message
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| format!("indexer reported status '{}'", result.status));
 
-    Err(AppError::Repository(format!(
-        "indexer connection test failed: {message}"
-    )))
+    Err(AppError::Validation(message))
 }
 
+/// Both call sites wrap the indexer interaction itself — the probe search and
+/// the caps fetch — so everything arriving here describes the remote indexer,
+/// not Scryer. `Repository` masks it as "Internal server error" behind a
+/// reference id, which is the one thing an operator saving an indexer cannot
+/// act on; hand back what the indexer actually said instead.
 fn map_indexer_connection_test_error(error: AppError) -> AppError {
     match error {
-        AppError::Validation(_) => error,
+        // Kinds that already carry a user-facing message and their own GraphQL
+        // code. Re-wrapping them would only bury what they say.
+        AppError::Validation(_)
+        | AppError::Unauthorized(_)
+        | AppError::NotFound(_)
+        | AppError::Canceled(_)
+        | AppError::TemporaryUnavailable { .. } => error,
         error => {
-            let message = error.to_string();
-            if let Some(user_message) = known_newznab_error_message(&message) {
-                AppError::Validation(user_message)
-            } else {
-                AppError::Repository(format!("indexer connection test failed: {message}"))
+            // `Repository`'s Display prepends "repository: ", which is noise in
+            // a toast, so unwrap it to the message the provider wrote.
+            let message = match error {
+                AppError::Repository(message) => message,
+                other => other.to_string(),
+            };
+            match known_newznab_error_message(&message) {
+                Some(user_message) => AppError::Validation(user_message),
+                None => AppError::Validation(format!("indexer connection test failed: {message}")),
             }
         }
     }
@@ -700,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_newznab_errors_are_not_user_facing() {
+    fn unknown_newznab_errors_have_no_curated_message() {
         assert_eq!(
             known_newznab_error_message("Newznab API error 777: Provider-specific oddity"),
             None
@@ -1184,6 +1199,16 @@ mod tests {
                 Arc::new(RecordingIndexerClient::new(false)),
             );
             provider.supports_validate_config = true;
+            provider
+        }
+
+        fn with_validation_result(status: &str, message: Option<&str>) -> Self {
+            let mut provider = Self::with_validate_config_support();
+            provider.validate_result = crate::IndexerValidationResult {
+                status: status.to_string(),
+                message: message.map(|message| message.to_string()),
+                retry_after_seconds: None,
+            };
             provider
         }
 
@@ -1684,7 +1709,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "repository: indexer connection test failed: repository: forced failure"
+            "validation: indexer connection test failed: forced failure"
         );
         assert!(indexer_repo.created.lock().await.is_empty());
     }
@@ -1770,7 +1795,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "repository: indexer connection test failed: repository: forced failure"
+            "validation: indexer connection test failed: forced failure"
         );
         let stored = indexer_repo
             .get_by_id("cfg-1")
@@ -2692,7 +2717,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "repository: indexer connection test failed: repository: forced failure"
+            "validation: indexer connection test failed: forced failure"
         );
     }
 
@@ -2814,6 +2839,67 @@ mod tests {
         assert_eq!(seen_management.len(), 1);
         assert_eq!(seen_management[0].base_url, "https://ipt.beelyrics.net");
         assert_eq!(*provider.plan_sync_calls.lock().unwrap(), 0);
+    }
+
+    /// A status outside the old three-name allowlist used to be masked as
+    /// "Internal server error" behind a reference id, leaving the operator
+    /// saving the indexer nothing to act on.
+    #[tokio::test]
+    async fn test_indexer_connection_surfaces_unlisted_validation_status_message() {
+        let provider = Arc::new(RecordingPluginProvider::with_validation_result(
+            "rate_limited",
+            Some("Request limit reached, try again in an hour"),
+        ));
+        let app = test_app(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            Some(provider),
+            Arc::new(NullSettingsRepository),
+        );
+
+        let error = app
+            .test_indexer_connection(
+                &test_admin(),
+                "torrent_rss",
+                Some(r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "validation: Request limit reached, try again in an hour"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_indexer_connection_names_the_status_when_no_message_is_sent() {
+        let provider = Arc::new(RecordingPluginProvider::with_validation_result(
+            "quota_exceeded",
+            None,
+        ));
+        let app = test_app(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            Some(provider),
+            Arc::new(NullSettingsRepository),
+        );
+
+        let error = app
+            .test_indexer_connection(
+                &test_admin(),
+                "torrent_rss",
+                Some(r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "validation: indexer reported status 'quota_exceeded'"
+        );
     }
 
     #[tokio::test]

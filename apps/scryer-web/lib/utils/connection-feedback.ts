@@ -1,3 +1,5 @@
+import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+
 type SetGlobalStatus = (status: string) => void;
 
 export class ReportedConnectionFeedbackError extends Error {
@@ -34,8 +36,11 @@ export async function runConnectionFeedback({
       setGlobalStatus(nextSuccessMessage);
     }
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : failureFallbackMessage;
+    // urql prefixes `CombinedError.message` with "[GraphQL] " and the server
+    // prefixes validation errors with "validation: ", so the raw message reads
+    // as machinery. The shared helper strips both and keeps the reference id on
+    // errors the server really did mask.
+    const message = userFacingGraphQlErrorMessage(error, failureFallbackMessage);
     setGlobalStatus(message);
     throw new ReportedConnectionFeedbackError(message);
   }

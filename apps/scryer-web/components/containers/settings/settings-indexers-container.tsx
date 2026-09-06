@@ -26,6 +26,7 @@ import type {
   IndexerDownloadClientMappingCatalog,
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
+import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { runConnectionFeedback } from "@/lib/utils/connection-feedback";
 import { normalizeIndexerConfigValues } from "@/lib/utils/url-input";
 import {
@@ -346,7 +347,7 @@ export function SettingsIndexersContainer({
       setSettingsIndexers(data.indexers || []);
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
       );
     }
   }, [client, settingsIndexerFilter, setGlobalStatus, t]);
@@ -360,7 +361,7 @@ export function SettingsIndexersContainer({
       setIndexerProxyConfigs(data?.indexerProxyConfigs || []);
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -387,7 +388,7 @@ export function SettingsIndexersContainer({
         setProviderTypes(data?.indexerProviderTypes || []);
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToLoad"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
         );
       }
     };
@@ -415,7 +416,7 @@ export function SettingsIndexersContainer({
       refreshIndexerProxyConfigs(),
     ]).catch((error: unknown) => {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
       );
     });
   }, [
@@ -634,7 +635,7 @@ export function SettingsIndexersContainer({
       ]);
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
       );
     } finally {
       setMutatingIndexerId(null);
@@ -810,7 +811,7 @@ export function SettingsIndexersContainer({
           ),
         );
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
         );
       } finally {
         setMutatingIndexerMappingIds((previous) =>
@@ -876,7 +877,7 @@ export function SettingsIndexersContainer({
         );
         // The backend rejects non-torrent indexers by name; keep that wording.
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
         );
       } finally {
         setMutatingIndexerSeedingProfileIds((previous) =>
@@ -905,7 +906,7 @@ export function SettingsIndexersContainer({
         await refreshIndexers();
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
         );
       } finally {
         setMutatingIndexerId(null);
@@ -931,7 +932,7 @@ export function SettingsIndexersContainer({
         await refreshIndexers();
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
         );
       } finally {
         setMutatingIndexerId(null);
@@ -963,7 +964,7 @@ export function SettingsIndexersContainer({
       }
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete")),
       );
     } finally {
       setMutatingIndexerId(null);
@@ -1095,7 +1096,7 @@ export function SettingsIndexersContainer({
       await Promise.all([refreshIndexerProxyConfigs(), refreshIndexers()]);
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
       );
     } finally {
       setMutatingProxyId(null);
@@ -1126,7 +1127,7 @@ export function SettingsIndexersContainer({
       await refreshIndexerProxyConfigs();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : "Indexer proxy test failed",
+        userFacingGraphQlErrorMessage(error, "Indexer proxy test failed"),
       );
     } finally {
       setTestingProxyId(null);
@@ -1155,7 +1156,7 @@ export function SettingsIndexersContainer({
       await Promise.all([refreshIndexerProxyConfigs(), refreshIndexers()]);
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete")),
       );
     } finally {
       setMutatingProxyId(null);
