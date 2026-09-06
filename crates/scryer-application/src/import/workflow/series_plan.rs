@@ -223,6 +223,7 @@ fn reconcile_unresolved_pack_member_from_expected_scope(
     ) {
         ScopedPackMemberReconciliation::Unresolved => {
             reconcile_pack_member_from_absolute_numbering(
+                title,
                 pack,
                 source_path,
                 catalog,
@@ -242,6 +243,7 @@ fn reconcile_unresolved_pack_member_from_expected_scope(
 /// season-1 episode and the pack declares the season the absolute lands in.
 /// Without that cross-check the remap would be a guess.
 fn reconcile_pack_member_from_absolute_numbering(
+    title: &scryer_domain::Title,
     pack: &VerifiedEpisodePack,
     source_path: &Path,
     catalog: &[scryer_domain::Episode],
@@ -250,7 +252,7 @@ fn reconcile_pack_member_from_absolute_numbering(
     if pack.is_extras_release {
         return ScopedPackMemberReconciliation::Unresolved;
     }
-    let parsed = parsed_release_from_file_stem(source_path);
+    let parsed = parsed_pack_member_identity_for_catalog(title, source_path, catalog);
     let Some(identity) = parsed.episode.as_ref() else {
         return ScopedPackMemberReconciliation::Unresolved;
     };
@@ -343,7 +345,7 @@ fn reconcile_pack_member_from_scene_numbering(
         return ScopedPackMemberReconciliation::Unresolved;
     }
 
-    let parsed = parsed_release_from_file_stem(source_path);
+    let parsed = parsed_pack_member_identity_for_catalog(title, source_path, catalog);
     let Some(identity) = parsed.episode.as_ref() else {
         return ScopedPackMemberReconciliation::Unresolved;
     };
@@ -628,6 +630,22 @@ fn plan_parsed_pack_identity(
         message: "Automatic import found a bare episode number without a usable season folder. Open Manual Import and assign the correct episode."
             .to_string(),
     }
+}
+
+/// A pack member's own parse for reconciliation: the title's canonical context
+/// first — so a member named in a shape only a series/anime target can read
+/// resolves the same way here as it does in the manual preview — then today's
+/// context-free stem parse, so nothing that reconciles now stops reconciling.
+fn parsed_pack_member_identity_for_catalog(
+    title: &scryer_domain::Title,
+    source_path: &Path,
+    catalog: &[scryer_domain::Episode],
+) -> crate::ParsedReleaseMetadata {
+    let parsed = parsed_pack_member_for_catalog(title, source_path, catalog);
+    if parsed.episode.is_some() {
+        return parsed;
+    }
+    parsed_release_from_file_stem(source_path)
 }
 
 fn parsed_pack_member_for_catalog(
@@ -1402,6 +1420,19 @@ mod series_plan_tests {
         Path::new("/downloads/Quiet Meridian Season 13").join(file_name)
     }
 
+    /// The series these absolute-lane fixtures belong to. Members are read
+    /// with its context first, so the lane needs it.
+    fn scene_pack_title() -> scryer_domain::Title {
+        scryer_domain::Title {
+            name: "Quiet Meridian".to_string(),
+            facet: scryer_domain::MediaFacet::Series,
+            library_id: scryer_domain::default_library_id_for_facet(
+                &scryer_domain::MediaFacet::Series,
+            ),
+            ..anime_pack_title()
+        }
+    }
+
     fn reconciled_absolute_member(
         pack: &VerifiedEpisodePack,
         file_name: &str,
@@ -1409,6 +1440,7 @@ mod series_plan_tests {
         expected_episode_ids: Option<&HashSet<String>>,
     ) -> ScopedPackMemberReconciliation {
         reconcile_pack_member_from_absolute_numbering(
+            &scene_pack_title(),
             pack,
             &pack_member(file_name),
             catalog,

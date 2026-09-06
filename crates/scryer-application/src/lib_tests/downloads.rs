@@ -12279,3 +12279,231 @@ async fn manual_import_preview_suggests_members_outside_the_grabbed_season_of_a_
     assert_eq!(suggested, expected);
     drop(layout.source_root);
 }
+
+/// A verified season pack whose members carry a fused episode label
+/// (`..._Ep01_...`) suggests one catalog episode per member. Before the file
+/// stem was parsed with the title's own context the label read as no episode
+/// at all and every member offered "Skip (unassigned)".
+#[tokio::test]
+async fn manual_import_preview_suggests_fused_label_members_of_a_verified_season_pack() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let collection_id = episode.collection_id.clone();
+    let mut catalog = vec![episode.clone()];
+    for episode_number in 2..=5u32 {
+        catalog.push(
+            app.create_episode(
+                &user,
+                title.id.clone(),
+                collection_id.clone(),
+                "standard".into(),
+                Some(episode_number.to_string()),
+                Some("1".into()),
+                Some(format!("S01E{episode_number:02}")),
+                Some(format!("Episode {episode_number}")),
+                None,
+                Some(1_500),
+                false,
+                false,
+            )
+            .await
+            .expect("create pack member episode"),
+        );
+    }
+
+    let release_title = "Fail.Closed.Pack.S01.1080p.WEB-DL.x264";
+    let item_id = "manual-preview-fused-label-pack";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Collection {
+            collection_id: collection_id.clone().expect("season collection"),
+        },
+    )
+    .await;
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    for episode_number in 1..=5u32 {
+        write_pack_video(
+            source_dir.path(),
+            &format!("Fail_Closed_Pack_Ep{episode_number:02}_Dubbed_(1A2B3C4D).mkv"),
+        );
+    }
+    // No catalog episode 9: the member is offered unassigned rather than
+    // pinned to something it does not name.
+    write_pack_video(
+        source_dir.path(),
+        "Fail_Closed_Pack_Ep09_Dubbed_(1A2B3C4D).mkv",
+    );
+
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    let release_evidence =
+        crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .expect("resolve durable release evidence");
+
+    let suggested_episode_ids =
+        crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+            &app,
+            source_dir.path(),
+            &title,
+            &release_evidence,
+            &catalog,
+        )
+        .await
+        .expect("preview manual import");
+
+    let suggested = suggested_episode_ids
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let mut expected = catalog
+        .iter()
+        .map(|episode| Some(episode.id.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    expected.insert(None);
+    assert_eq!(suggested, expected);
+}
+
+/// A fused-label file that now names an episode outside the grab is left
+/// unassigned. The single-grab "largest file" fallback only covers files with
+/// no episode of their own, so reading the label must not pre-select the
+/// grabbed episode under a number the file plainly contradicts.
+#[tokio::test]
+async fn manual_import_preview_fused_label_outside_single_episode_grab_is_not_suggested() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let scoped_episode =
+        create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+
+    let release_title = "Fail.Closed.Pack.S01E02.1080p.WEB-DL.x264";
+    let item_id = "manual-preview-fused-label-outside-grab";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Episode {
+            episode_id: scoped_episode.id.clone(),
+        },
+    )
+    .await;
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(
+        source_dir.path(),
+        "Fail_Closed_Pack_Ep05_Dubbed_(1A2B3C4D).mkv",
+    );
+
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    let release_evidence =
+        crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .expect("resolve durable release evidence");
+
+    let suggested_episode_ids =
+        crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+            &app,
+            source_dir.path(),
+            &title,
+            &release_evidence,
+            std::slice::from_ref(&scoped_episode),
+        )
+        .await
+        .expect("preview manual import");
+
+    assert_eq!(suggested_episode_ids, vec![None]);
+}
+
+/// A pack member carrying a fused episode label (`_Ep09_`) reads as an
+/// inferred season 1 that no catalog episode answers, exactly like the bare
+/// `E###` shape. The pack's declared season plus the catalog's absolute
+/// numbering are what identify it — and the label only reads as an episode at
+/// all because the member is parsed with the title's own context.
+#[tokio::test]
+async fn alternate_numbered_verified_pack_member_reconciles_from_fused_label() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir,
+            import_artifacts,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let scoped_episode =
+        create_absolute_numbered_pack_episode(&app, &user, &title.id, &episode, 2, 1, 9).await;
+    let release_title = "Fail.Closed.Pack.S02.1080p.WEB-DL.x264";
+    let item_id = "fused-label-verified-pack-member";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Collection {
+            collection_id: scoped_episode
+                .collection_id
+                .clone()
+                .expect("season two collection"),
+        },
+    )
+    .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(
+        source_dir.path(),
+        "Fail_Closed_Pack_Ep09_Dubbed_(1A2B3C4D).mkv",
+    );
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("fused-label pack member should import")
+    };
+
+    assert_eq!(result.decision, scryer_domain::ImportDecision::Imported);
+    assert_eq!(result.episode_ids, vec![scoped_episode.id.clone()]);
+    let artifacts = import_artifacts
+        .artifacts_for_file("fail_closed_pack_ep09_dubbed_(1a2b3c4d).mkv")
+        .await;
+    assert_eq!(artifacts.len(), 1, "{artifacts:?}");
+    assert_eq!(artifacts[0].result, "imported", "{artifacts:?}");
+    assert_eq!(
+        artifacts[0].episode_id.as_deref(),
+        Some(scoped_episode.id.as_str())
+    );
+    assert!(
+        library_video_file_names(library_dir.path())
+            .iter()
+            .any(|file_name| file_name.contains("S02E01")),
+        "catalog numbering must drive the destination"
+    );
+}

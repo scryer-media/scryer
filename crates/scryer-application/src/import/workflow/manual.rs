@@ -1073,6 +1073,28 @@ async fn preview_manual_import(
         _ => None,
     };
 
+    // Built once for the whole preview: the context every file name is read
+    // against. Facet, aliases, year and ids come from the title; the episode
+    // list is the grab's intention — the episodes this grab covers (pack-vouched
+    // members included), or the whole catalog when the grab named none. Without
+    // it a member is read with a facet guessed from its own name, which for a
+    // fansub-shaped name is no facet at all. Suggestions only: the import's
+    // quality evidence still comes from the release name, never the file.
+    let file_parse_context = {
+        let intended = available_episodes
+            .iter()
+            .filter(|episode| grabbed_episode_ids.contains(&episode.id))
+            .collect::<Vec<_>>();
+        let episodes = if intended.is_empty() {
+            available_episodes.iter().collect::<Vec<_>>()
+        } else {
+            intended
+        };
+        crate::quality::release_parser::build_release_parse_context_from_episodes(
+            title, episodes, None,
+        )
+    };
+
     // Loaded once for the whole preview: community (per-cour) anime numbering
     // for this title, when SMG published one. `None` for every non-anime title
     // and for anime whose community numbering matches the catalog's.
@@ -1098,8 +1120,19 @@ async fn preview_manual_import(
             .to_string();
 
         // File parsing is only for user-facing episode suggestions. It must
-        // not become release/quality evidence for the later import.
-        let mut parsed = parsed_release_from_file_stem(path);
+        // not become release/quality evidence for the later import. The
+        // title's context is read first; when it yields no episode the old
+        // contextless parse still runs, so no file that gets a suggestion
+        // today can lose one.
+        let mut parsed = source_video_stem(Some(path))
+            .map(|stem| {
+                normalize_release_title_signal(crate::parse_release_metadata_for_target(
+                    &stem,
+                    &file_parse_context,
+                ))
+            })
+            .filter(|parsed| parsed.episode.is_some())
+            .unwrap_or_else(|| parsed_release_from_file_stem(path));
         // Translate community anime numbering into the catalog's own before the
         // suggestion lookups, so a file named in per-cour numbering points at
         // the episode the user actually has. Inert without a bridge.
