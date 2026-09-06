@@ -271,7 +271,49 @@ fn looks_like_structured_query_token(token: &str) -> bool {
     false
 }
 
-fn normalize_structured_dispatch_query(query: &str, absolute_episode: Option<u32>) -> String {
+/// The season and episode a trailing `Sxx` / `SxxEyy` token asks for, if it is
+/// one of those.
+fn structured_query_token_numbers(token: &str) -> Option<(u32, Option<u32>)> {
+    let trimmed = token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+    let rest = trimmed.to_ascii_uppercase();
+    let rest = rest.strip_prefix('S')?;
+    if let Some((season_part, episode_part)) = rest.split_once('E') {
+        let season = season_part.parse::<u32>().ok()?;
+        let episode = episode_part.parse::<u32>().ok()?;
+        return Some((season, Some(episode)));
+    }
+    rest.parse::<u32>().ok().map(|season| (season, None))
+}
+
+/// Whether a trailing structured token asks for the same thing the dispatch
+/// already carries in its season/episode parameters.
+///
+/// This is what makes the collapse safe. `{title} S01E05` alongside
+/// `season=1&ep=5` is the same request written twice, so dropping one saves an
+/// API call. A token that names a *different* season and episode is not a
+/// duplicate at all — it is a second, genuinely different ask, which is how an
+/// anime numbered per cour is searched for alongside its official numbering.
+fn structured_query_token_agrees(token: &str, season: Option<u32>, episode: Option<u32>) -> bool {
+    let Some((token_season, token_episode)) = structured_query_token_numbers(token) else {
+        // OVA/SPECIAL markers name no season or episode to contradict.
+        return true;
+    };
+    if season.is_some_and(|season| season != token_season) {
+        return false;
+    }
+    match (token_episode, episode) {
+        (Some(token_episode), Some(episode)) => token_episode == episode,
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+fn normalize_structured_dispatch_query(
+    query: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+) -> String {
     let mut tokens: Vec<&str> = query.split_whitespace().collect();
     while let Some(last) = tokens.last().copied() {
         let trimmed = last.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
@@ -284,7 +326,9 @@ fn normalize_structured_dispatch_query(query: &str, absolute_episode: Option<u32
             trimmed.chars().all(|ch| ch.is_ascii_digit())
                 && trimmed.parse::<u32>().ok() == Some(value)
         });
-        let removable_structured = removable_numeric || looks_like_structured_query_token(trimmed);
+        let removable_structured = removable_numeric
+            || (looks_like_structured_query_token(trimmed)
+                && structured_query_token_agrees(trimmed, season, episode));
         if removable_structured {
             tokens.pop();
             continue;
@@ -346,7 +390,8 @@ fn dedupe_structured_dispatch_queries(
     let mut seen = std::collections::HashSet::new();
 
     for query in queries {
-        let normalized = normalize_structured_dispatch_query(&query, absolute_episode);
+        let normalized =
+            normalize_structured_dispatch_query(&query, season, episode, absolute_episode);
         let key_source = if normalized.is_empty() {
             query.trim()
         } else {
@@ -462,7 +507,8 @@ fn dedupe_text_safe_structured_dispatch_queries(
     let mut seen = std::collections::HashSet::new();
 
     for query in queries {
-        let normalized = normalize_structured_dispatch_query(&query, absolute_episode);
+        let normalized =
+            normalize_structured_dispatch_query(&query, season, episode, absolute_episode);
         let key_source = if normalized.is_empty() {
             query.trim()
         } else {
