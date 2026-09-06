@@ -1200,6 +1200,13 @@ impl AppUseCase {
         self.services.events.domain_events.list(&filter).await
     }
 
+    /// The current tail of the event log; subscriptions start from here so a
+    /// fresh client only sees events that happen after it connected.
+    pub async fn latest_domain_event_sequence(&self, actor: &User) -> AppResult<i64> {
+        require_actor_view_library(self, actor).await?;
+        self.services.events.domain_events.latest_sequence().await
+    }
+
     pub async fn list_activity_events_after_sequence(
         &self,
         actor: &User,

@@ -523,6 +523,7 @@ impl AppUseCase {
         actor: &User,
         pending_import_id: &str,
         mut request: NewTitle,
+        attach_to_existing_title: bool,
     ) -> AppResult<ResolvePendingImportResult> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
@@ -591,7 +592,7 @@ impl AppUseCase {
             }
         };
 
-        if self
+        if let Some(existing_title) = self
             .services
             .catalog
             .titles
@@ -602,11 +603,21 @@ impl AppUseCase {
                 &target_identity_value,
             )
             .await?
-            .is_some()
         {
-            return Err(AppError::Validation(
-                "title already exists in this library".into(),
-            ));
+            if !attach_to_existing_title {
+                return Err(AppError::Validation(
+                    "title already exists in this library".into(),
+                ));
+            }
+
+            self.bind_pending_import_to_existing_title(&item, &existing_title)
+                .await?;
+            return Ok(ResolvePendingImportResult {
+                title: existing_title,
+                created: false,
+                library_scan: None,
+                metadata_hydration_state: AddTitleHydrationState::NotRequired,
+            });
         }
 
         let outcome = self
@@ -619,9 +630,23 @@ impl AppUseCase {
             .await?;
 
         if outcome.reused_existing_title {
-            return Err(AppError::Validation(
-                "title already exists in this library".into(),
-            ));
+            // Someone else created the title between the check above and the
+            // insert. The create-and-bind store call leaves the pending import
+            // untouched whenever it reuses a title, so bind it here.
+            if !attach_to_existing_title {
+                return Err(AppError::Validation(
+                    "title already exists in this library".into(),
+                ));
+            }
+
+            self.bind_pending_import_to_existing_title(&item, &outcome.title)
+                .await?;
+            return Ok(ResolvePendingImportResult {
+                title: outcome.title,
+                created: false,
+                library_scan: None,
+                metadata_hydration_state: outcome.metadata_hydration_state,
+            });
         }
 
         Ok(ResolvePendingImportResult {
@@ -632,6 +657,41 @@ impl AppUseCase {
         })
     }
 
+    /// Put the pending import into exactly the state the create-and-bind path
+    /// leaves it in, but against a title that already exists: a movie item is
+    /// consumed outright (its file is imported by the title's next scan, the
+    /// same as after a created title), while a series/anime item stays pending
+    /// with `title_id` set so the user can still bind episodes.
+    async fn bind_pending_import_to_existing_title(
+        &self,
+        item: &LibraryScanUnmatchedItem,
+        title: &Title,
+    ) -> AppResult<()> {
+        if item.facet == MediaFacet::Movie {
+            self.services
+                .library
+                .library_scan_unmatched_items
+                .delete_library_scan_unmatched_item(
+                    &item.library_id,
+                    item.facet.clone(),
+                    &item.item_path,
+                )
+                .await?;
+            return Ok(());
+        }
+
+        let mut bound = item.clone();
+        bound.title_id = Some(title.id.clone());
+        bound.status = PendingImportStatus::Pending;
+        bound.updated_at = Utc::now().to_rfc3339();
+        self.services
+            .library
+            .library_scan_unmatched_items
+            .upsert_library_scan_unmatched_item(&bound)
+            .await?;
+        Ok(())
+    }
+
     pub async fn pending_import_title_search(
         &self,
         actor: &User,
@@ -640,7 +700,7 @@ impl AppUseCase {
         limit: i32,
         language: &str,
         year: Option<i32>,
-    ) -> AppResult<Vec<RichMetadataSearchItem>> {
+    ) -> AppResult<Vec<PendingImportTitleSearchItem>> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
             return Err(AppError::Validation("pending import id is required".into()));
@@ -682,11 +742,15 @@ impl AppUseCase {
             .filter(|tvdb_id| seen_tvdb_ids.insert((*tvdb_id).to_string()))
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let existing_tvdb_ids = self
+        // Candidates the library already owns are annotated, not dropped: when
+        // the only real candidate is already there, hiding it made the dialog
+        // look like a search failure. The UI turns the annotation into an
+        // "attach to existing title" action instead.
+        let existing_title_ids_by_tvdb_id = self
             .services
             .catalog
             .titles
-            .list_existing_external_ids_in_library_and_facet(
+            .map_existing_external_ids_to_title_ids_in_library_and_facet(
                 &item.library_id,
                 item.facet.clone(),
                 "tvdb",
@@ -694,20 +758,25 @@ impl AppUseCase {
             )
             .await?;
 
-        let mut filtered = Vec::with_capacity(limit as usize);
+        let mut annotated = Vec::with_capacity(limit as usize);
         for result in results {
-            let tvdb_id = result.tvdb_id.trim();
-            if !tvdb_id.is_empty() && existing_tvdb_ids.contains(tvdb_id) {
-                continue;
-            }
+            let existing_title_id = {
+                let tvdb_id = result.tvdb_id.trim();
+                (!tvdb_id.is_empty())
+                    .then(|| existing_title_ids_by_tvdb_id.get(tvdb_id).cloned())
+                    .flatten()
+            };
 
-            filtered.push(result);
-            if filtered.len() >= limit as usize {
+            annotated.push(PendingImportTitleSearchItem {
+                item: result,
+                existing_title_id,
+            });
+            if annotated.len() >= limit as usize {
                 break;
             }
         }
 
-        Ok(filtered)
+        Ok(annotated)
     }
 
     pub async fn preview_title_bound_pending_import(

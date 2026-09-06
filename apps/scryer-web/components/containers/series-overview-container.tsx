@@ -37,6 +37,7 @@ import type { CatalogDiscoveryItem } from "@/lib/types/discovery";
 import type { TitleRatings } from "@/components/views/title-ratings-strip";
 import { DEFAULT_SERIES_LIBRARY_PATH } from "@/lib/constants/settings";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { qualityProfileSettingsToEntries } from "@/lib/utils/quality-profiles";
 import {
   hasPrimaryMediaFile,
@@ -804,9 +805,18 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const retainedEpisodeIds = episodeIdsForEpisodeRecord(
         retainedEpisodesByCollection,
       );
-      setEpisodesByCollection((current) =>
-        retainEquivalentSnapshot(current, retainedEpisodesByCollection),
-      );
+      // Prune the live state, not the render-phase ref. A snapshot that applies
+      // between an episode-detail response and its commit would otherwise write
+      // the pre-detail copy back over it, silently dropping that episode's
+      // playback links, overview and image until the title is reopened.
+      setEpisodesByCollection((current) => {
+        const retained = Object.fromEntries(
+          Object.entries(current).filter(([collectionId]) =>
+            nextCollectionIds.has(collectionId),
+          ),
+        );
+        return retainEquivalentSnapshot(current, retained);
+      });
       setEpisodeDetailsLoaded((current) => {
         const retained = new Set<string>();
         for (const episodeId of current) {
@@ -1892,7 +1902,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         setGlobalStatus(t("status.queuedLatest", { name: title.name }));
         await refreshTitleDetail();
       } catch (error: unknown) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")));
+        setGlobalStatus(
+          autoSearchOutcomeMessage(error, t, title.name) ??
+            userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
+        );
       }
     },
     [refreshTitleDetail, client, confirmReplaceConflict, title, t, setGlobalStatus],
@@ -1901,25 +1914,32 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const handleAutoSearchSeriesMovie = React.useCallback(
     async (link: SeriesMovieLink) => {
       if (!title) return;
-      const input = {
-        titleId: title.id,
-        scope: { seriesMovie: link.id },
-      };
-      const payload = await retryWithReplaceOnConflict(
-        input,
-        async (nextInput) => {
-          const { data, error } = await client.mutation(queueBestReleaseMutation, {
-            input: nextInput,
-          }).toPromise();
-          if (error) throw error;
-          return data?.queueBestRelease;
-        },
-        "A download is already in progress for this series movie.",
-        confirmReplaceConflict,
-      );
-      assertNoReplaceConflict(payload, "A download is already in progress for this series movie.");
-      setGlobalStatus(t("status.queuedLatest", { name: link.movie.title }));
-      await refreshTitleDetail();
+      try {
+        const input = {
+          titleId: title.id,
+          scope: { seriesMovie: link.id },
+        };
+        const payload = await retryWithReplaceOnConflict(
+          input,
+          async (nextInput) => {
+            const { data, error } = await client.mutation(queueBestReleaseMutation, {
+              input: nextInput,
+            }).toPromise();
+            if (error) throw error;
+            return data?.queueBestRelease;
+          },
+          "A download is already in progress for this series movie.",
+          confirmReplaceConflict,
+        );
+        assertNoReplaceConflict(payload, "A download is already in progress for this series movie.");
+        setGlobalStatus(t("status.queuedLatest", { name: link.movie.title }));
+        await refreshTitleDetail();
+      } catch (error: unknown) {
+        setGlobalStatus(
+          autoSearchOutcomeMessage(error, t, link.movie.title) ??
+            userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
+        );
+      }
     },
     [refreshTitleDetail, client, confirmReplaceConflict, title, t, setGlobalStatus],
   );

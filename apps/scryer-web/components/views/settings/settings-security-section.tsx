@@ -23,7 +23,10 @@ type SettingsSecuritySectionProps = {
   loading: boolean;
   enableConfirmOpen: boolean;
   disableConfirmOpen: boolean;
-  adminPasswordRequiredOpen: boolean;
+  setPasswordOpen: boolean;
+  newPassword: string;
+  newPasswordConfirm: string;
+  setPasswordError: string | null;
   confirmBusy: boolean;
   confirmPassword: string;
   confirmError: string | null;
@@ -35,8 +38,10 @@ type SettingsSecuritySectionProps = {
   onCancelEnable: () => void;
   onConfirmDisable: () => Promise<void> | void;
   onCancelDisable: () => void;
-  onConfirmAdminPasswordRequired: () => void;
-  onCancelAdminPasswordRequired: () => void;
+  onNewPasswordChange: (value: string) => void;
+  onNewPasswordConfirmChange: (value: string) => void;
+  onConfirmSetPassword: () => Promise<void> | void;
+  onCancelSetPassword: () => void;
   onPasswordMinLengthDraftChange: (value: string) => void;
   onPasswordMinLengthSubmit: (value?: string) => Promise<void> | void;
   onSkipLocalIpsChange: (enabled: boolean) => void;
@@ -55,7 +60,10 @@ export function SettingsSecuritySection({
   loading,
   enableConfirmOpen,
   disableConfirmOpen,
-  adminPasswordRequiredOpen,
+  setPasswordOpen,
+  newPassword,
+  newPasswordConfirm,
+  setPasswordError,
   confirmBusy,
   confirmPassword,
   confirmError,
@@ -67,8 +75,10 @@ export function SettingsSecuritySection({
   onCancelEnable,
   onConfirmDisable,
   onCancelDisable,
-  onConfirmAdminPasswordRequired,
-  onCancelAdminPasswordRequired,
+  onNewPasswordChange,
+  onNewPasswordConfirmChange,
+  onConfirmSetPassword,
+  onCancelSetPassword,
   onPasswordMinLengthDraftChange,
   onPasswordMinLengthSubmit,
   onSkipLocalIpsChange,
@@ -84,6 +94,8 @@ export function SettingsSecuritySection({
   const t = useTranslate();
   const busy = loading || confirmBusy;
   const confirmDisabled = confirmPassword.trim().length === 0;
+  const setPasswordDisabled =
+    newPassword.length === 0 || newPasswordConfirm.length === 0;
 
   return (
     <>
@@ -318,18 +330,58 @@ export function SettingsSecuritySection({
       </div>
 
       <ConfirmDialog
-        open={adminPasswordRequiredOpen}
-        contentId="settings-security-admin-password-required-dialog"
-        title={t("settings.securityAdminPasswordRequiredTitle")}
-        description={t("settings.securityAdminPasswordRequiredDescription")}
-        confirmLabel={t("settings.securityAdminPasswordRequiredAction")}
+        open={setPasswordOpen}
+        contentId="settings-security-set-password-dialog"
+        title={t("settings.securitySetAdminPasswordTitle")}
+        description={t("settings.securitySetAdminPasswordDescription")}
+        confirmLabel={t("settings.securitySetAdminPasswordAction")}
         cancelLabel={t("label.cancel")}
-        confirmButtonId="settings-security-admin-password-required-confirm"
-        cancelButtonId="settings-security-admin-password-required-cancel"
+        confirmButtonId="settings-security-set-password-confirm"
+        cancelButtonId="settings-security-set-password-cancel"
         confirmButtonVariant="default"
-        onConfirm={onConfirmAdminPasswordRequired}
-        onCancel={onCancelAdminPasswordRequired}
-      />
+        confirmButtonClassName="bg-[var(--scry-success-solid)] text-[var(--scry-success-on-solid)] hover:bg-[var(--scry-success-solid-hover)] focus-visible:ring-[var(--scry-success-border-strong)]"
+        isBusy={confirmBusy}
+        confirmDisabled={setPasswordDisabled}
+        onConfirm={onConfirmSetPassword}
+        onCancel={onCancelSetPassword}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="security-new-password">
+              {t("profile.newPassword")}
+            </Label>
+            <Input
+              id="security-new-password"
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => onNewPasswordChange(event.target.value)}
+            />
+            <p className="text-xs text-[var(--scry-muted3)]">
+              {t("settings.securitySetAdminPasswordMinLength", {
+                count: settings.passwordMinLength,
+              })}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="security-new-password-confirm">
+              {t("profile.confirmPassword")}
+            </Label>
+            <Input
+              id="security-new-password-confirm"
+              type="password"
+              autoComplete="new-password"
+              value={newPasswordConfirm}
+              onChange={(event) => onNewPasswordConfirmChange(event.target.value)}
+            />
+          </div>
+          {setPasswordError ? (
+            <p id="settings-security-set-password-error" className="text-xs text-destructive">
+              {setPasswordError}
+            </p>
+          ) : null}
+        </div>
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={enableConfirmOpen}

@@ -1741,6 +1741,52 @@ file = "postgres/migrations/0208_oauth_client_kind.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 209
+description = "anime numbering bridges"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0209_anime_numbering_bridges.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0209_anime_numbering_bridges.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 210
+description = "compress post-processing script output tails"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0210_compress_post_processing_output_pre.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0210_compress_post_processing_output.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "compress_post_processing_output"
+engine = "all"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0210_compress_post_processing_output_post.sql"
+engine = "sqlite"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

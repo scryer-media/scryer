@@ -194,20 +194,25 @@ const QUOTA_EXHAUSTED_REMAINING_FRACTION: f64 = 0.01;
 pub(crate) struct SchedulerAvailability {
     cooled_hosts: std::collections::HashSet<String>,
     exhausted_accounts: std::collections::HashSet<String>,
+    /// Indexer config ids under a persisted system backoff that has not
+    /// expired. The search client would refuse them anyway, so a scope whose
+    /// only uncovered indexers are here has no eligible target this cycle.
+    backed_off_indexers: std::collections::HashSet<String>,
 }
 
 impl SchedulerAvailability {
-    /// An indexer can be searched when its host is not cooling down and its
-    /// account quota (keyed by indexer config id) is not exhausted.
+    /// An indexer can be searched when its host is not cooling down, its
+    /// account quota (keyed by indexer config id) is not exhausted, and it is
+    /// not sitting in a failure backoff.
     pub fn indexer_available(&self, host_key: Option<&str>, indexer_id: &str) -> bool {
         if let Some(host) = host_key
             && self.cooled_hosts.contains(host)
         {
             return false;
         }
-        !self
-            .exhausted_accounts
-            .contains(&indexer_id.trim().to_ascii_lowercase())
+        let indexer_key = indexer_id.trim().to_ascii_lowercase();
+        !self.exhausted_accounts.contains(&indexer_key)
+            && !self.backed_off_indexers.contains(&indexer_key)
     }
 }
 
@@ -257,9 +262,30 @@ impl AppUseCase {
                 );
             }
         }
+        let backed_off_indexers = match self
+            .services
+            .integrations
+            .indexer_configs
+            .list_system_backoffs()
+            .await
+        {
+            Ok(backoffs) => backoffs
+                .into_iter()
+                .filter(|(_, backoff)| backoff.disabled_until > now)
+                .map(|(indexer_id, _)| indexer_id.trim().to_ascii_lowercase())
+                .collect(),
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    "indexer backoffs unavailable; backoff pre-skip disabled this cycle"
+                );
+                std::collections::HashSet::new()
+            }
+        };
         SchedulerAvailability {
             cooled_hosts,
             exhausted_accounts,
+            backed_off_indexers,
         }
     }
 
@@ -903,11 +929,26 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_json_string, compute_search_fingerprint, convergence_scope_key,
-        profile_criteria_version, series_pack_collection_scope_key, series_pack_set_scope_key,
+        SchedulerAvailability, canonical_json_string, compute_search_fingerprint,
+        convergence_scope_key, profile_criteria_version, series_pack_collection_scope_key,
+        series_pack_set_scope_key,
     };
     use crate::contracts::SubmissionScope;
     use crate::quality_profile::{AcceptanceCriteria, QualityProfileCriteria};
+
+    #[test]
+    fn pre_skip_treats_backed_off_indexers_as_unavailable() {
+        let availability = SchedulerAvailability {
+            cooled_hosts: ["cooled.example".to_string()].into_iter().collect(),
+            exhausted_accounts: ["quota-idx".to_string()].into_iter().collect(),
+            backed_off_indexers: ["backoff-idx".to_string()].into_iter().collect(),
+        };
+        assert!(availability.indexer_available(Some("open.example"), "healthy-idx"));
+        assert!(!availability.indexer_available(Some("cooled.example"), "healthy-idx"));
+        assert!(!availability.indexer_available(Some("open.example"), "quota-idx"));
+        assert!(!availability.indexer_available(Some("open.example"), "Backoff-Idx"));
+        assert!(!availability.indexer_available(None, " backoff-idx "));
+    }
 
     #[test]
     fn fingerprint_is_stable_and_order_independent_for_audio() {

@@ -45,8 +45,13 @@ export function useGlobalStatusToast(setGlobalStatus: SetGlobalStatus, {
     const content = options?.toastId
       ? createElement("span", { id: options.toastId }, toastMessage)
       : toastMessage;
+    // The stable id lives on the rendered span only. Handing it to sonner as
+    // the toast id re-uses one toast slot across saves: a dismissal sonner
+    // still has in flight for the previous toast (its exit runs on a deferred
+    // frame) then lands on the freshly created one, which vanishes within a
+    // frame or two and never gets read. Fresh sonner ids keep every toast
+    // independent while the span id stays a stable DOM contract.
     const toastOptions = {
-      ...(options?.toastId ? { id: options.toastId } : {}),
       ...(isDisconnected
         ? { icon: createElement(Unplug, { "aria-hidden": true }) }
         : {}),

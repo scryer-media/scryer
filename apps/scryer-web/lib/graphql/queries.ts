@@ -2120,6 +2120,10 @@ export const indexersQuery = `query Indexers($providerType: String) {
     lastQueryAt
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
+    capsCategories {
+      code
+      label
+    }
     createdAt
     updatedAt
   }
@@ -2321,6 +2325,10 @@ const indexerFieldSelection = `
     lastErrorAt
     lastQueryAt
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
+    }
+    capsCategories {
+      code
+      label
     }
     createdAt
     updatedAt`;
@@ -3452,6 +3460,7 @@ export const searchMetadataQuery = `query SearchMetadata($query: String!, $type:
 
 export const pendingImportTitleSearchQuery = `query PendingImportTitleSearch($pendingImportId: ID!, $query: String!, $limit: Int = 8, $language: String! = "eng", $year: Int) {
   pendingImportTitleSearch(pendingImportId: $pendingImportId, query: $query, limit: $limit, language: $language, year: $year) {${METADATA_SEARCH_FIELDS}
+    existingTitleId
   }
 }`;
 

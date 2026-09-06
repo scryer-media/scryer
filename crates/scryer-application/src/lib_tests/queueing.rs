@@ -3435,6 +3435,7 @@ async fn queue_best_release_reports_auto_eligibility_reason_counts() {
             code: "title_mismatch".to_string(),
             summary: "release title does not match the target title".to_string(),
             count: 2,
+            block_codes: Vec::new(),
         }]
     );
     assert!(

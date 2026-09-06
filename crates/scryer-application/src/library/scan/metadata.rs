@@ -145,9 +145,43 @@ pub(crate) struct PreparedMovieLibraryScanCandidate {
     pub(crate) identity_hint: Option<MetadataIdentityHint>,
     pub(crate) query: String,
     pub(crate) year_hint: Option<u32>,
+    /// Ordered year hints to try for this candidate, primary first. Normally a
+    /// single entry (`year_hint`); when the filename year and the folder year
+    /// disagree it also carries the folder year and a year-less retry so a
+    /// mislabelled filename still auto-matches.
+    pub(crate) year_hint_variants: Vec<Option<u32>>,
     pub(crate) query_variants: Vec<String>,
     pub(crate) search_candidates: Vec<String>,
     pub(crate) metadata_lookup_attempted: bool,
+}
+
+/// Ordered year hints for a movie metadata lookup: the primary hint first,
+/// then the folder-derived year, then a year-less retry. Only produced when
+/// the two years are both known and disagree; otherwise the primary hint is
+/// the only variant so no additional gateway requests are issued.
+pub(crate) fn movie_year_hint_variants(
+    primary_year_hint: Option<u32>,
+    folder_year: Option<u32>,
+) -> Vec<Option<u32>> {
+    match (primary_year_hint, folder_year) {
+        (Some(primary), Some(folder)) if primary != folder => {
+            vec![Some(primary), Some(folder), None]
+        }
+        _ => vec![primary_year_hint],
+    }
+}
+
+/// The ordered year hints a movie candidate should be looked up with, falling
+/// back to the primary hint alone so every batch-key producer and consumer
+/// walks the same list.
+pub(crate) fn movie_candidate_year_hint_variants(
+    candidate: &PreparedMovieLibraryScanCandidate,
+) -> Vec<Option<u32>> {
+    if candidate.year_hint_variants.is_empty() {
+        vec![candidate.year_hint]
+    } else {
+        candidate.year_hint_variants.clone()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -398,30 +432,64 @@ fn summarize_metadata_search_item(item: &MetadataSearchItem) -> String {
 pub(crate) fn build_library_scan_unmatched_search_attempts(
     type_hint: &'static str,
     search_candidates: &[String],
-    year_hint: Option<u32>,
+    year_hint_variants: &[Option<u32>],
     identity_hint: Option<&MetadataIdentityHint>,
     batch_search_results: &MetadataSearchResults,
 ) -> Vec<LibraryScanUnmatchedSearchAttempt> {
-    search_candidates
-        .iter()
-        .filter_map(|search_candidate| {
-            let key =
-                BatchMetadataSearchKey::new(type_hint, search_candidate, year_hint, identity_hint)?;
-            let results = batch_search_results
-                .get(&key)
-                .map_or(&[][..], |items| items.as_slice());
+    let primary_year_hint = year_hint_variants.first().copied().flatten();
 
-            Some(LibraryScanUnmatchedSearchAttempt {
-                query: search_candidate.clone(),
-                result_count: results.len(),
-                top_results: results
-                    .iter()
-                    .take(3)
-                    .map(summarize_metadata_search_item)
-                    .collect(),
-            })
+    year_hint_variants
+        .iter()
+        .flat_map(|year_hint| {
+            search_candidates
+                .iter()
+                .filter_map(move |search_candidate| {
+                    let key = BatchMetadataSearchKey::new(
+                        type_hint,
+                        search_candidate,
+                        *year_hint,
+                        identity_hint,
+                    )?;
+                    let results = batch_search_results
+                        .get(&key)
+                        .map_or(&[][..], |items| items.as_slice());
+
+                    Some(LibraryScanUnmatchedSearchAttempt {
+                        query: unmatched_search_attempt_query_label(
+                            search_candidate,
+                            *year_hint,
+                            primary_year_hint,
+                        ),
+                        result_count: results.len(),
+                        top_results: results
+                            .iter()
+                            .take(3)
+                            .map(summarize_metadata_search_item)
+                            .collect(),
+                    })
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// Attempts made with the primary year hint keep the bare query text so the
+/// persisted payload is unchanged for the common single-year case. Retries
+/// with a different (or absent) year are labelled so the pending-import UI
+/// shows what was actually tried.
+fn unmatched_search_attempt_query_label(
+    search_candidate: &str,
+    year_hint: Option<u32>,
+    primary_year_hint: Option<u32>,
+) -> String {
+    if year_hint == primary_year_hint {
+        return search_candidate.to_string();
+    }
+
+    match year_hint {
+        Some(year) => format!("{search_candidate} ({year})"),
+        None => format!("{search_candidate} (no year)"),
+    }
 }
 
 pub(crate) fn library_scan_unmatched_reason_code(
@@ -551,17 +619,23 @@ pub(crate) fn build_movie_metadata_batch_stats(
         }
 
         stats.logical_lookups = stats.logical_lookups.saturating_add(1);
-        total_requested_searches =
-            total_requested_searches.saturating_add(candidate.search_candidates.len());
-        for search_candidate in &candidate.search_candidates {
-            push_unique_batch_metadata_search(
-                &mut batch_searches,
-                &mut seen_batch_searches,
-                METADATA_TYPE_MOVIE,
-                search_candidate,
-                candidate.year_hint,
-                candidate.identity_hint.as_ref(),
-            );
+        total_requested_searches = total_requested_searches.saturating_add(
+            candidate
+                .search_candidates
+                .len()
+                .saturating_mul(candidate.year_hint_variants.len().max(1)),
+        );
+        for year_hint in movie_candidate_year_hint_variants(candidate) {
+            for search_candidate in &candidate.search_candidates {
+                push_unique_batch_metadata_search(
+                    &mut batch_searches,
+                    &mut seen_batch_searches,
+                    METADATA_TYPE_MOVIE,
+                    search_candidate,
+                    year_hint,
+                    candidate.identity_hint.as_ref(),
+                );
+            }
         }
     }
 
@@ -605,23 +679,26 @@ pub(crate) fn build_series_metadata_batch_stats(
 pub(crate) fn movie_candidate_batch_search_keys(
     candidate: &PreparedMovieLibraryScanCandidate,
 ) -> AppResult<Vec<BatchMetadataSearchKey>> {
-    let mut keys = Vec::with_capacity(candidate.search_candidates.len());
+    let year_hint_variants = movie_candidate_year_hint_variants(candidate);
+    let mut keys = Vec::with_capacity(candidate.search_candidates.len() * year_hint_variants.len());
 
-    for search_candidate in &candidate.search_candidates {
-        keys.push(
-            BatchMetadataSearchKey::new(
-                METADATA_TYPE_MOVIE,
-                search_candidate,
-                candidate.year_hint,
-                candidate.identity_hint.as_ref(),
-            )
-            .ok_or_else(|| {
-                AppError::Repository(format!(
-                    "movie metadata lookup key unexpectedly missing for query '{}'",
-                    search_candidate
-                ))
-            })?,
-        );
+    for year_hint in year_hint_variants {
+        for search_candidate in &candidate.search_candidates {
+            keys.push(
+                BatchMetadataSearchKey::new(
+                    METADATA_TYPE_MOVIE,
+                    search_candidate,
+                    year_hint,
+                    candidate.identity_hint.as_ref(),
+                )
+                .ok_or_else(|| {
+                    AppError::Repository(format!(
+                        "movie metadata lookup key unexpectedly missing for query '{}'",
+                        search_candidate
+                    ))
+                })?,
+            );
+        }
     }
 
     Ok(keys)
@@ -918,28 +995,33 @@ pub(crate) fn select_movie_metadata_from_batch_results(
         return Ok(None);
     }
 
-    for search_candidate in &candidate.search_candidates {
-        let key = BatchMetadataSearchKey::new(
-            METADATA_TYPE_MOVIE,
-            search_candidate,
-            candidate.year_hint,
-            candidate.identity_hint.as_ref(),
-        )
-        .ok_or_else(|| {
-            AppError::Repository("movie metadata lookup key unexpectedly missing".to_string())
-        })?;
-        let results_for_query = batch_search_results.get(&key).ok_or_else(|| {
-            AppError::Repository(format!(
-                "movie metadata lookup result missing for query '{}'",
-                search_candidate
-            ))
-        })?;
+    // Year hints are the outer loop on purpose: every query variant is tried
+    // with the primary year before the folder year, and only then without a
+    // year at all.
+    for year_hint in movie_candidate_year_hint_variants(candidate) {
+        for search_candidate in &candidate.search_candidates {
+            let key = BatchMetadataSearchKey::new(
+                METADATA_TYPE_MOVIE,
+                search_candidate,
+                year_hint,
+                candidate.identity_hint.as_ref(),
+            )
+            .ok_or_else(|| {
+                AppError::Repository("movie metadata lookup key unexpectedly missing".to_string())
+            })?;
+            let results_for_query = batch_search_results.get(&key).ok_or_else(|| {
+                AppError::Repository(format!(
+                    "movie metadata lookup result missing for query '{}'",
+                    search_candidate
+                ))
+            })?;
 
-        if let Some(best) = select_safe_batch_match(results_for_query.as_ref()) {
-            return Ok(with_metadata_match_fallback_name(
-                best,
-                movie_candidate_fallback_title(candidate),
-            ));
+            if let Some(best) = select_safe_batch_match(results_for_query.as_ref()) {
+                return Ok(with_metadata_match_fallback_name(
+                    best,
+                    movie_candidate_fallback_title(candidate),
+                ));
+            }
         }
     }
 
@@ -1344,6 +1426,7 @@ async fn build_prepared_movie_library_scan_candidate(
             identity_hint: Some(identity_hint),
             query: String::new(),
             year_hint: None,
+            year_hint_variants: vec![None],
             query_variants: Vec::new(),
             search_candidates: vec![String::new()],
             metadata_lookup_attempted: true,
@@ -1414,6 +1497,15 @@ async fn build_prepared_movie_library_scan_candidate(
         .as_ref()
         .is_some_and(MetadataIdentityHint::has_external_ids);
     let metadata_lookup_attempted = has_external_ids || !query.trim().is_empty();
+    // A candidate anchored on a real external id resolves by id, so the year
+    // retries would only add gateway traffic. Retry years only for the
+    // text-matched case, where a filename year that disagrees with the folder
+    // year is what blocks the auto-match.
+    let year_hint_variants = if has_external_ids {
+        vec![year_hint]
+    } else {
+        movie_year_hint_variants(year_hint, query_evidence.folder_year)
+    };
 
     if metadata_lookup_attempted {
         // Lead with an empty-query, id-anchored lookup whenever the hint carries
@@ -1444,6 +1536,7 @@ async fn build_prepared_movie_library_scan_candidate(
         identity_hint,
         query,
         year_hint,
+        year_hint_variants,
         query_variants,
         search_candidates,
         metadata_lookup_attempted,
@@ -1982,6 +2075,7 @@ mod tests {
                 .unwrap_or_default()
                 .to_string(),
             year_hint: None,
+            year_hint_variants: vec![None],
             query_variants: search_candidates
                 .iter()
                 .map(|value| (*value).to_string())
@@ -2626,6 +2720,127 @@ mod tests {
         assert_eq!(
             build_title_match_candidates(&raw_candidates),
             vec!["glass harbor".to_string(), "the lantern".to_string()]
+        );
+    }
+
+    fn year_retry_search_item(auto_match_safe: bool) -> MetadataSearchItem {
+        MetadataSearchItem {
+            tvdb_id: "movie-harborlight".into(),
+            smg_id: None,
+            primary_source: None,
+            external_ids: vec![],
+            name: "Harborlight Divide".into(),
+            year: Some(1999),
+            auto_match_safe,
+            auto_match_signals: vec!["exact_title".into()],
+        }
+    }
+
+    #[tokio::test]
+    async fn movie_candidate_retries_folder_year_when_filename_year_disagrees() {
+        let file = build_library_file(
+            "/library/Movies/Harborlight Divide (1999)/Harborlight Divide (2005).mkv",
+        );
+        let candidate = prepare_movie_library_scan_candidate(file, "/library/Movies".to_string())
+            .await
+            .expect("prepared movie candidate");
+
+        assert_eq!(candidate.year_hint, Some(2005));
+        assert_eq!(
+            candidate.year_hint_variants,
+            vec![Some(2005), Some(1999), None]
+        );
+
+        let (keys, stats) = build_movie_metadata_batch_stats(std::slice::from_ref(&candidate));
+        assert_eq!(stats.executed_requests, keys.len());
+        assert_eq!(
+            stats.executed_requests + stats.coalesced_requests,
+            candidate.search_candidates.len() * 3
+        );
+        assert!(keys.iter().any(|key| key.year == Some(2005)));
+        assert!(keys.iter().any(|key| key.year == Some(1999)));
+        assert!(keys.iter().any(|key| key.year.is_none()));
+
+        // SMG returns the same title for every year here but only marks it
+        // auto-match safe for the folder year (or with no year at all).
+        let results: MetadataSearchResults = keys
+            .into_iter()
+            .map(|key| {
+                let auto_match_safe = key.year != Some(2005);
+                (key, Arc::new(vec![year_retry_search_item(auto_match_safe)]))
+            })
+            .collect();
+
+        let selected = select_movie_metadata_from_batch_results(&candidate, &results)
+            .expect("movie batch selection")
+            .expect("folder-year retry auto-match");
+
+        assert_eq!(selected.tvdb_id, "movie-harborlight");
+    }
+
+    #[tokio::test]
+    async fn movie_candidate_with_agreeing_years_issues_no_extra_requests() {
+        let file = build_library_file(
+            "/library/Movies/Harborlight Divide (1999)/Harborlight Divide (1999).mkv",
+        );
+        let candidate = prepare_movie_library_scan_candidate(file, "/library/Movies".to_string())
+            .await
+            .expect("prepared movie candidate");
+
+        assert_eq!(candidate.year_hint, Some(1999));
+        assert_eq!(candidate.year_hint_variants, vec![Some(1999)]);
+
+        let (keys, stats) = build_movie_metadata_batch_stats(std::slice::from_ref(&candidate));
+
+        assert!(keys.iter().all(|key| key.year == Some(1999)));
+        assert_eq!(stats.executed_requests, keys.len());
+        assert_eq!(
+            stats.executed_requests + stats.coalesced_requests,
+            candidate.search_candidates.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn unmatched_search_attempts_record_year_retry_variants() {
+        let file = build_library_file(
+            "/library/Movies/Harborlight Divide (1999)/Harborlight Divide (2005).mkv",
+        );
+        let candidate = prepare_movie_library_scan_candidate(file, "/library/Movies".to_string())
+            .await
+            .expect("prepared movie candidate");
+        let (keys, _stats) = build_movie_metadata_batch_stats(std::slice::from_ref(&candidate));
+        let results: MetadataSearchResults = keys
+            .into_iter()
+            .map(|key| (key, Arc::new(Vec::new())))
+            .collect();
+
+        let attempts = build_library_scan_unmatched_search_attempts(
+            METADATA_TYPE_MOVIE,
+            &candidate.search_candidates,
+            &movie_candidate_year_hint_variants(&candidate),
+            candidate.identity_hint.as_ref(),
+            &results,
+        );
+
+        assert_eq!(attempts.len(), candidate.search_candidates.len() * 3);
+        let primary = candidate
+            .search_candidates
+            .first()
+            .expect("at least one search candidate");
+        assert!(attempts.iter().any(|attempt| attempt.query == *primary));
+        assert!(
+            attempts
+                .iter()
+                .any(|attempt| attempt.query == format!("{primary} (1999)"))
+        );
+        assert!(
+            attempts
+                .iter()
+                .any(|attempt| attempt.query == format!("{primary} (no year)"))
+        );
+        assert_eq!(
+            library_scan_unmatched_reason_code(&attempts),
+            "no_metadata_search_results"
         );
     }
 

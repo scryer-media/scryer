@@ -1336,6 +1336,19 @@ impl AppUseCase {
             .filter(|collection| collection.monitored)
             .map(|collection| collection.id.clone())
             .collect::<HashSet<_>>();
+        // Community-numbered anime has to be translated before it is routed:
+        // a feed item named `S04E20` belongs to the episode the bridge says it
+        // is, not to the season-4 slot the catalog does not have.
+        let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
+            self.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .unwrap_or_default()
+        } else {
+            None
+        };
 
         // Route single-episode postings per episode; keep pack items (absolute
         // ranges and season packs) whole so each pack is evaluated once.
@@ -1346,7 +1359,24 @@ impl AppUseCase {
         )> = Vec::new();
         let mut seen_pack_keys: HashSet<String> = HashSet::new();
         for release in releases {
-            let parsed = parse_release_metadata_for_target(&release.title, &title_parse_context);
+            let mut parsed =
+                parse_release_metadata_for_target(&release.title, &title_parse_context);
+            let numbering = crate::anime_numbering::translate_release_numbering(
+                anime_numbering_bridge.as_ref(),
+                title,
+                &catalog_episodes,
+                &mut parsed,
+                release
+                    .published_at
+                    .as_deref()
+                    .and_then(crate::quality_profile::parse_published_at)
+                    .map(|published| published.date_naive()),
+            );
+            if numbering.is_ambiguous() {
+                // Unplaceable: routing it anywhere would be a guess, and the
+                // scoring pass would refuse it on arrival anyway.
+                continue;
+            }
             let coverage = crate::acquisition_coverage::resolve_release_coverage(
                 &parsed,
                 &catalog_episodes,
@@ -2145,7 +2175,17 @@ impl AppUseCase {
             };
             let route_key = crate::acquisition_workflow::DownloadRouteKey::for_candidate(candidate)
                 .map(|route| format!("__rss_failed_route:{route:?}"));
-            let decision_code = if !is_allowed {
+            let decision_code = if candidate.auto_decision_code.as_deref().is_some_and(|code| {
+                code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
+                    || code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
+            }) {
+                // Scoring already settled this one, and re-evaluating would
+                // overwrite the reason with a vaguer one.
+                ReleaseAutoDecisionCode::parse(
+                    candidate.auto_decision_code.as_deref().unwrap_or_default(),
+                )
+                .unwrap_or(ReleaseAutoDecisionCode::AnimeNumberingAmbiguous)
+            } else if !is_allowed {
                 ReleaseAutoDecisionCode::QualityBlocked
             } else if route_key
                 .as_ref()

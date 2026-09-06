@@ -14,6 +14,10 @@ use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+/// How much of each captured stream a run keeps. The store compresses the
+/// tails (zstd) so a larger window costs little at rest.
+const OUTPUT_TAIL_BYTES: usize = 32 * 1024;
+
 /// Context passed from the import pipeline into post-processing.
 /// All fields that the caller already has are included here so the
 /// execution engine does not need to re-query the database.
@@ -470,7 +474,7 @@ async fn execute_script(
     let timeout = std::time::Duration::from_secs(script.timeout_secs.max(1) as u64);
 
     if script.debug {
-        // Capture stdout/stderr (last 4KB each).
+        // Capture stdout/stderr (last OUTPUT_TAIL_BYTES of each).
         let stderr_pipe = child.stderr.take();
         let stdout_pipe = child.stdout.take();
 
@@ -509,8 +513,8 @@ async fn execute_script(
                         ScriptRunStatus::Failed
                     },
                     exit_code: status.code(),
-                    stdout_tail: Some(last_bytes_utf8(&stdout_bytes, 4096)),
-                    stderr_tail: Some(last_bytes_utf8(&stderr_bytes, 4096)),
+                    stdout_tail: Some(last_bytes_utf8(&stdout_bytes, OUTPUT_TAIL_BYTES)),
+                    stderr_tail: Some(last_bytes_utf8(&stderr_bytes, OUTPUT_TAIL_BYTES)),
                     duration_ms: Some(duration_ms),
                     env_payload_json: Some(env_json.to_string()),
                     started_at,
@@ -561,8 +565,8 @@ async fn execute_script(
                     file_path: Some(path_to_stored_string(&ctx.dest_path)),
                     status: ScriptRunStatus::Timeout,
                     exit_code: None,
-                    stdout_tail: Some(last_bytes_utf8(&stdout_bytes, 4096)),
-                    stderr_tail: Some(last_bytes_utf8(&stderr_bytes, 4096)),
+                    stdout_tail: Some(last_bytes_utf8(&stdout_bytes, OUTPUT_TAIL_BYTES)),
+                    stderr_tail: Some(last_bytes_utf8(&stderr_bytes, OUTPUT_TAIL_BYTES)),
                     duration_ms: Some(duration_ms),
                     env_payload_json: Some(env_json.to_string()),
                     started_at,

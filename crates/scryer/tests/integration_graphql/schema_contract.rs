@@ -574,6 +574,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Stored OAuth client kinds add one enum behind the existing registration
     // payload and create input: ENUM 112->113, public types 628->629. Root,
     // object, and input-object counts are unchanged.
+    // In-library pending-import candidates add
+    // MetadataSearchItemPayload.existingTitleId and
+    // ResolvePendingImportInput.attachToExistingTitle. Both hang off existing
+    // types, so no census counts change.
+    // Caps-driven routing categories add IndexerConfigPayload.capsCategories
+    // and its IndexerCapsCategoryPayload element type: OBJECT 326->327,
+    // public types 629->630. Root-field, input-object, and enum counts are
+    // unchanged.
     assert_eq!(
         query_field_count, 135,
         "query fields: {query_field_names:?}"
@@ -583,8 +591,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 629);
-    assert_eq!(kind_count("OBJECT"), 326);
+    assert_eq!(public_types.len(), 630);
+    assert_eq!(kind_count("OBJECT"), 327);
     assert_eq!(kind_count("INPUT_OBJECT"), 178);
     assert_eq!(kind_count("ENUM"), 113);
     assert_eq!(kind_count("SCALAR"), 10);

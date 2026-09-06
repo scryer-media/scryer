@@ -10,8 +10,8 @@ use reqwest::header::{
     ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
 };
 use scryer_application::{
-    AppError, AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyRepository,
-    ImageProxySourceRecord, TitleImageKind, TitleImageRepository,
+    AppError, AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage,
+    ImageProxyRepository, ImageProxySourceRecord, TitleImageKind, TitleImageRepository,
 };
 use scryer_outbound_http::{
     HostRpsProfile, OutboundHttpClient, OutboundHttpError, RateLimitRegistry, RequestPolicy,
@@ -26,6 +26,9 @@ const DEFAULT_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const FRESH_DAYS: i64 = 7;
 const STALE_DAYS: i64 = 30;
 const ACCESS_TOUCH_MINUTES: i64 = 60;
+/// Least-recently-used rows fetched per eviction round while the cache is
+/// over budget; keeps enforcement bounded instead of loading the whole table.
+const EVICTION_BATCH: u32 = 64;
 const IMAGE_PROXY_HOST_RPS: f64 = 100.0;
 const IMAGE_PROXY_HOST_RPS_BURST: u32 = 100;
 const IMAGE_PROXY_HOST_RPS_LANE: &str = "image_proxy";
@@ -59,6 +62,9 @@ pub struct ImageProxyRuntime {
     inflight: Arc<Mutex<HashMap<String, Weak<InflightFetch>>>>,
     source_flush: Arc<Mutex<()>>,
     cache_lifecycle: Arc<RwLock<()>>,
+    /// Coalesces budget enforcement across concurrent background persists:
+    /// one pass runs at a time and later writers skip rather than queue.
+    budget_gate: Arc<Mutex<()>>,
 }
 
 impl ImageProxyRuntime {
@@ -80,6 +86,7 @@ impl ImageProxyRuntime {
             inflight: Arc::new(Mutex::new(HashMap::new())),
             source_flush: Arc::new(Mutex::new(())),
             cache_lifecycle: Arc::new(RwLock::new(())),
+            budget_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -182,6 +189,16 @@ impl ImageProxyRuntime {
         self.repository
             .prune_image_proxy_sources_before(cutoff)
             .await?;
+        let orphaned = self
+            .repository
+            .prune_orphaned_discovery_image_proxy_sources()
+            .await?;
+        if orphaned > 0 {
+            tracing::info!(
+                removed = orphaned,
+                "pruned image proxy sources whose discovery items no longer exist"
+            );
+        }
         self.reconcile_cache_state().await?;
         self.enforce_budget().await?;
         Ok(())
@@ -549,7 +566,12 @@ impl ImageProxyRuntime {
                     .repository
                     .upsert_image_proxy_cache_entry(&entry)
                     .await?;
-                runtime.enforce_budget().await
+                // A pass already in flight will observe this row on its next
+                // batch or the next writer will; never stack enforcement runs.
+                match runtime.budget_gate.clone().try_lock_owned() {
+                    Ok(_gate) => runtime.enforce_budget().await,
+                    Err(_) => Ok(()),
+                }
             }
             .await;
             if let Err(error) = result {
@@ -629,21 +651,30 @@ impl ImageProxyRuntime {
 
     async fn enforce_budget(&self) -> AppResult<()> {
         let max = self.effective_max_bytes();
-        let entries = self.repository.list_image_proxy_cache_entries_lru().await?;
-        let mut total = entries
-            .iter()
-            .map(|entry| entry.byte_size.max(0) as u64)
-            .sum::<u64>();
-        for entry in entries {
-            if total <= max {
+        let ImageProxyCacheUsage {
+            mut total_bytes,
+            mut entry_count,
+        } = self.repository.image_proxy_cache_usage().await?;
+        while total_bytes > max && entry_count > 0 {
+            let batch = self
+                .repository
+                .list_image_proxy_cache_entries_lru_oldest(EVICTION_BATCH)
+                .await?;
+            if batch.is_empty() {
                 break;
             }
-            self.remove_cache_file(&self.cache_path(&entry.token, &entry.variant))
-                .await?;
-            self.repository
-                .delete_image_proxy_cache_entry(&entry.token, &entry.variant)
-                .await?;
-            total = total.saturating_sub(entry.byte_size.max(0) as u64);
+            for entry in batch {
+                if total_bytes <= max {
+                    return Ok(());
+                }
+                self.remove_cache_file(&self.cache_path(&entry.token, &entry.variant))
+                    .await?;
+                self.repository
+                    .delete_image_proxy_cache_entry(&entry.token, &entry.variant)
+                    .await?;
+                total_bytes = total_bytes.saturating_sub(entry.byte_size.max(0) as u64);
+                entry_count = entry_count.saturating_sub(1);
+            }
         }
         Ok(())
     }
@@ -748,19 +779,9 @@ fn approved_content_type(value: &str) -> Option<&'static str> {
     }
 }
 
-#[cfg(feature = "image-processing")]
-fn valid_raster_bytes(content_type: &str, bytes: &[u8]) -> bool {
-    let format = match content_type {
-        "image/jpeg" => image::ImageFormat::Jpeg,
-        "image/png" => image::ImageFormat::Png,
-        "image/webp" => image::ImageFormat::WebP,
-        "image/avif" => image::ImageFormat::Avif,
-        _ => return false,
-    };
-    image::load_from_memory_with_format(bytes, format).is_ok()
-}
-
-#[cfg(not(feature = "image-processing"))]
+/// Structural container check only: the bytes are served verbatim to the
+/// browser, so a full decode buys nothing and costs a CPU-bound pass per
+/// fetch. Truncated or foreign payloads still fail on their trailers.
 fn valid_raster_bytes(content_type: &str, bytes: &[u8]) -> bool {
     match content_type {
         "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]) && bytes.ends_with(&[0xff, 0xd9]),
@@ -831,9 +852,9 @@ mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use scryer_application::{
-        AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyRegistration,
-        ImageProxyRepository, ImageProxySourceRecord, TitleImageBlob, TitleImageKind,
-        TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask,
+        AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage,
+        ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, TitleImageBlob,
+        TitleImageKind, TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask,
     };
     use scryer_domain::{DomainEvent, NewDomainEvent};
     use scryer_outbound_http::{HostKey, HostRpsProfile, HostRpsProfileSource, RateLimitRegistry};
@@ -849,6 +870,9 @@ mod tests {
         cache_deletes: AtomicUsize,
         cache_clears: AtomicUsize,
         memory_clears: AtomicUsize,
+        full_lru_lists: AtomicUsize,
+        usage_reads: AtomicUsize,
+        orphan_sweeps: AtomicUsize,
     }
 
     #[async_trait]
@@ -947,6 +971,7 @@ mod tests {
         async fn list_image_proxy_cache_entries_lru(
             &self,
         ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+            self.full_lru_lists.fetch_add(1, Ordering::Relaxed);
             let mut entries = self
                 .cache_entries
                 .lock()
@@ -954,6 +979,32 @@ mod tests {
                 .clone();
             entries.sort_by_key(|entry| entry.last_accessed_at);
             Ok(entries)
+        }
+
+        async fn list_image_proxy_cache_entries_lru_oldest(
+            &self,
+            limit: u32,
+        ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+            let mut entries = self
+                .cache_entries
+                .lock()
+                .expect("cache entries lock")
+                .clone();
+            entries.sort_by_key(|entry| entry.last_accessed_at);
+            entries.truncate(limit as usize);
+            Ok(entries)
+        }
+
+        async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage> {
+            self.usage_reads.fetch_add(1, Ordering::Relaxed);
+            let entries = self.cache_entries.lock().expect("cache entries lock");
+            Ok(ImageProxyCacheUsage {
+                total_bytes: entries
+                    .iter()
+                    .map(|entry| entry.byte_size.max(0) as u64)
+                    .sum(),
+                entry_count: entries.len() as u64,
+            })
         }
 
         async fn clear_image_proxy_cache_entries(&self) -> AppResult<()> {
@@ -969,6 +1020,11 @@ mod tests {
             &self,
             _cutoff: chrono::DateTime<Utc>,
         ) -> AppResult<u64> {
+            Ok(0)
+        }
+
+        async fn prune_orphaned_discovery_image_proxy_sources(&self) -> AppResult<u64> {
+            self.orphan_sweeps.fetch_add(1, Ordering::Relaxed);
             Ok(0)
         }
     }
@@ -1067,6 +1123,9 @@ mod tests {
             cache_deletes: AtomicUsize::new(0),
             cache_clears: AtomicUsize::new(0),
             memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
             blob: TitleImageBlob {
@@ -1232,6 +1291,9 @@ mod tests {
             cache_deletes: AtomicUsize::new(0),
             cache_clears: AtomicUsize::new(0),
             memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
             blob: TitleImageBlob {
@@ -1315,6 +1377,9 @@ mod tests {
             cache_deletes: AtomicUsize::new(0),
             cache_clears: AtomicUsize::new(0),
             memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
             blob: TitleImageBlob {
@@ -1418,6 +1483,9 @@ mod tests {
             cache_deletes: AtomicUsize::new(0),
             cache_clears: AtomicUsize::new(0),
             memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
             blob: TitleImageBlob {
@@ -1533,6 +1601,9 @@ mod tests {
             cache_deletes: AtomicUsize::new(0),
             cache_clears: AtomicUsize::new(0),
             memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
             blob: TitleImageBlob {
@@ -1568,20 +1639,137 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "image-processing")]
     #[test]
-    fn raster_validation_decodes_the_complete_image() {
+    fn raster_validation_checks_container_structure_without_decoding() {
+        // Truncated payloads fail on their trailers.
         assert!(!valid_raster_bytes("image/jpeg", &[0xff, 0xd8, 0xff]));
         assert!(!valid_raster_bytes(
             "image/png",
             b"\x89PNG\r\n\x1a\ntruncated"
         ));
+        assert!(!valid_raster_bytes(
+            "image/webp",
+            b"RIFF\x10\x00\x00\x00WEBPVP8 "
+        ));
+        assert!(!valid_raster_bytes("image/gif", b"GIF89a"));
 
-        let image = image::DynamicImage::new_rgba8(1, 1);
-        let mut encoded = std::io::Cursor::new(Vec::new());
-        image
-            .write_to(&mut encoded, image::ImageFormat::Png)
-            .expect("encode valid test image");
-        assert!(valid_raster_bytes("image/png", encoded.get_ref()));
+        // Well-formed containers pass without the pixel data being decodable:
+        // the bytes are relayed verbatim, never rasterised on the server.
+        let jpeg = [&[0xff, 0xd8, 0xff, 0xe0][..], &[0u8; 16], &[0xff, 0xd9]].concat();
+        assert!(valid_raster_bytes("image/jpeg", &jpeg));
+        let png = [
+            &b"\x89PNG\r\n\x1a\n"[..],
+            &[0u8; 12],
+            b"\x00\x00\x00\x00IEND\xaeB`\x82",
+        ]
+        .concat();
+        assert!(valid_raster_bytes("image/png", &png));
+        let webp = [&b"RIFF"[..], &12u32.to_le_bytes(), b"WEBPVP8 ", &[0u8; 4]].concat();
+        assert!(valid_raster_bytes("image/webp", &webp));
+        let avif = [&[0, 0, 0, 0x1c][..], b"ftypavif", &[0u8; 16]].concat();
+        assert!(valid_raster_bytes("image/avif", &avif));
+    }
+
+    #[tokio::test]
+    async fn budget_enforcement_reads_the_usage_scalar_and_evicts_in_bounded_batches() {
+        let tokens = ["2".repeat(64), "3".repeat(64), "4".repeat(64)];
+        let now = Utc::now();
+        let entry = |token: &str, age_minutes: i64| ImageProxyCacheEntryRecord {
+            token: token.to_string(),
+            variant: "original".to_string(),
+            content_type: "image/png".to_string(),
+            byte_size: 4,
+            upstream_etag: None,
+            upstream_last_modified: None,
+            fetched_at: now,
+            last_accessed_at: now - chrono::Duration::minutes(age_minutes),
+        };
+        let image_repository = Arc::new(TestImageRepository {
+            source: ImageProxySourceRecord {
+                token: tokens[0].clone(),
+                upstream_url: None,
+                owner_type: Some("episode".to_string()),
+                owner_id: Some("episode-budget".to_string()),
+                image_kind: "episode_still".to_string(),
+                fallback_class: "landscape".to_string(),
+                last_seen_at: now,
+            },
+            cache_entries: Mutex::new(vec![
+                entry(&tokens[0], 30),
+                entry(&tokens[1], 20),
+                entry(&tokens[2], 10),
+            ]),
+            cache_reads: AtomicUsize::new(0),
+            cache_read_delay: None,
+            cache_write_started: None,
+            cache_write_release: None,
+            cache_deletes: AtomicUsize::new(0),
+            cache_clears: AtomicUsize::new(0),
+            memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            orphan_sweeps: AtomicUsize::new(0),
+        });
+        let title_images = Arc::new(TestTitleImageRepository {
+            blob: TitleImageBlob {
+                content_type: "image/avif".to_string(),
+                etag: "\"unused\"".to_string(),
+                bytes: Vec::new(),
+            },
+            reads: AtomicUsize::new(0),
+        });
+        let temp = tempfile::tempdir().expect("temporary image cache");
+        let mut runtime =
+            ImageProxyRuntime::new(image_repository.clone(), title_images, temp.path());
+        runtime.environment_override_bytes = None;
+        let runtime = Arc::new(runtime);
+        tokio::fs::create_dir_all(&runtime.cache_dir)
+            .await
+            .expect("create image cache directory");
+        for token in &tokens {
+            tokio::fs::write(runtime.cache_path(token, "original"), [1, 2, 3, 4])
+                .await
+                .expect("seed cached image");
+        }
+
+        // 12 bytes cached against an 8 byte budget: exactly the oldest entry goes.
+        ImageProxyCacheControl::set_configured_max_bytes(runtime.as_ref(), 8)
+            .await
+            .expect("apply cache budget");
+
+        let remaining = image_repository
+            .cache_entries
+            .lock()
+            .expect("cache entries lock")
+            .iter()
+            .map(|entry| entry.token.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining, vec![tokens[1].clone(), tokens[2].clone()]);
+        assert!(
+            !tokio::fs::try_exists(runtime.cache_path(&tokens[0], "original"))
+                .await
+                .expect("evicted path")
+        );
+        assert_eq!(image_repository.cache_deletes.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            image_repository.full_lru_lists.load(Ordering::Relaxed),
+            0,
+            "budget enforcement must never list the whole cache table"
+        );
+        assert_eq!(image_repository.usage_reads.load(Ordering::Relaxed), 1);
+
+        // Under budget: one scalar read, no listing, no deletes.
+        ImageProxyCacheControl::set_configured_max_bytes(runtime.as_ref(), 1024)
+            .await
+            .expect("raise cache budget");
+        assert_eq!(image_repository.cache_deletes.load(Ordering::Relaxed), 1);
+        assert_eq!(image_repository.full_lru_lists.load(Ordering::Relaxed), 0);
+        assert_eq!(image_repository.usage_reads.load(Ordering::Relaxed), 2);
+
+        // Maintenance still reconciles with the full listing and sweeps
+        // orphaned discovery sources exactly once per pass.
+        runtime.prune().await.expect("prune image cache");
+        assert_eq!(image_repository.orphan_sweeps.load(Ordering::Relaxed), 1);
+        assert_eq!(image_repository.full_lru_lists.load(Ordering::Relaxed), 1);
     }
 }

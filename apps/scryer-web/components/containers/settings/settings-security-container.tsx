@@ -1,18 +1,22 @@
 import * as React from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useClient } from "urql";
 import { toast } from "sonner";
 import { ExternalAccountInvitesContainer } from "@/components/containers/settings/external-account-invites-container";
 import { OAuthClientRegistrationsPanel } from "@/components/containers/settings/oauth-client-registrations-panel";
 import { SettingsSecuritySection } from "@/components/views/settings/settings-security-section";
 import { disposeWsClient } from "@/lib/graphql/ws-client";
-import { updateSecuritySettingsMutation } from "@/lib/graphql/mutations";
+import {
+  setUserPasswordMutation,
+  updateSecuritySettingsMutation,
+} from "@/lib/graphql/mutations";
 import { securitySettingsQuery } from "@/lib/graphql/queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useAuth } from "@/lib/hooks/use-auth";
 import type { SecuritySettings } from "@/lib/types/settings";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
+import { readEnableFormLoginIntent } from "@/lib/utils/routing";
 import { LatestWinsSaveQueue } from "@/lib/utils/latest-wins-save-queue";
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -53,6 +57,7 @@ function parsePasswordMinLengthDraft(value: string): number | null {
 
 export function SettingsSecurityContainer() {
   const navigate = useNavigate();
+  const location = useLocation();
   const client = useClient();
   const t = useTranslate();
   const { token, user, login, adoptSession, logout } = useAuth();
@@ -62,7 +67,11 @@ export function SettingsSecurityContainer() {
   const [loading, setLoading] = React.useState(true);
   const [enableConfirmOpen, setEnableConfirmOpen] = React.useState(false);
   const [disableConfirmOpen, setDisableConfirmOpen] = React.useState(false);
-  const [adminPasswordRequiredOpen, setAdminPasswordRequiredOpen] = React.useState(false);
+  const [setPasswordOpen, setSetPasswordOpen] = React.useState(false);
+  const [newPassword, setNewPassword] = React.useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = React.useState("");
+  const [setPasswordError, setSetPasswordError] = React.useState<string | null>(null);
+  const enableIntentConsumedRef = React.useRef(false);
   const [confirmBusy, setConfirmBusy] = React.useState(false);
   const [saveBusy, setSaveBusy] = React.useState(false);
   const [confirmPassword, setConfirmPassword] = React.useState("");
@@ -96,11 +105,14 @@ export function SettingsSecurityContainer() {
   const effectivePasswordMinLength =
     draftPasswordMinLength ?? settings.passwordMinLength;
 
-  const openAdminPasswordRequiredDialog = React.useCallback(() => {
+  const openSetPasswordDialog = React.useCallback(() => {
     setEnableConfirmOpen(false);
     setConfirmPassword("");
     setConfirmError(null);
-    setAdminPasswordRequiredOpen(true);
+    setNewPassword("");
+    setNewPasswordConfirm("");
+    setSetPasswordError(null);
+    setSetPasswordOpen(true);
   }, []);
 
   React.useEffect(() => {
@@ -249,7 +261,7 @@ export function SettingsSecurityContainer() {
 
     if (enabled) {
       if (user?.hasPassword === false) {
-        openAdminPasswordRequiredDialog();
+        openSetPasswordDialog();
         return;
       }
 
@@ -262,13 +274,39 @@ export function SettingsSecurityContainer() {
     setDisableConfirmOpen(true);
   }, [
     confirmBusy,
-    openAdminPasswordRequiredDialog,
+    openSetPasswordDialog,
     saveBusy,
     settings.formLoginEnabled,
     user?.hasPassword,
   ]);
 
-  const handleConfirmEnable = React.useCallback(async () => {
+  // The header's "Enable login" entry lands here with a navigation-state
+  // intent so the user sees the same dialog they would get from the button.
+  // The ref only guards re-renders between consuming the intent and the
+  // replace-navigation that clears it; once the state is clear it re-arms,
+  // so a second header click while already on Security opens the dialog
+  // again instead of being swallowed.
+  React.useEffect(() => {
+    if (!readEnableFormLoginIntent(location.state)) {
+      enableIntentConsumedRef.current = false;
+      return;
+    }
+    if (loading || enableIntentConsumedRef.current) {
+      return;
+    }
+    enableIntentConsumedRef.current = true;
+    navigate(location.pathname, { replace: true, state: null });
+    handleToggle(true);
+  }, [handleToggle, loading, location.pathname, location.state, navigate]);
+
+  // Shared tail of both enable paths: prove the password, then flip the
+  // setting and adopt the verified session. Failures land in the confirm
+  // dialog either way, because by then the account has a password.
+  const runEnableFormLogin = React.useCallback(async (password: string) => {
+    const showError = (message: string) => {
+      setEnableConfirmOpen(true);
+      setConfirmError(message);
+    };
     const effectiveChangesNow =
       !settings.envOverrideActive && !settings.effectiveFormLoginEnabled;
 
@@ -278,23 +316,23 @@ export function SettingsSecurityContainer() {
     let verifiedSession: Awaited<ReturnType<typeof login>>;
     const currentUsername = user?.username.trim();
     if (!currentUsername) {
-      setConfirmError(t("settings.securityCredentialsInvalid"));
+      showError(t("settings.securityCredentialsInvalid"));
       setConfirmBusy(false);
       return;
     }
 
     try {
-      verifiedSession = await login(currentUsername, confirmPassword, {
+      verifiedSession = await login(currentUsername, password, {
         persistSession: false,
       });
     } catch {
-      setConfirmError(t("settings.securityCredentialsInvalid"));
+      showError(t("settings.securityCredentialsInvalid"));
       setConfirmBusy(false);
       return;
     }
 
     if (!hasAppPermission(verifiedSession.user, APP_PERMISSIONS.manageUsers)) {
-      setConfirmError(t("settings.securityCredentialsInsufficient"));
+      showError(t("settings.securityCredentialsInsufficient"));
       setConfirmBusy(false);
       return;
     }
@@ -330,12 +368,11 @@ export function SettingsSecurityContainer() {
     } catch (error) {
       const saveErrorMessage = errorMessage(error, t("settings.securitySaveFailed"));
       if (saveErrorMessage === DEFAULT_ADMIN_PASSWORD_FORM_LOGIN_ERROR) {
-        openAdminPasswordRequiredDialog();
+        openSetPasswordDialog();
         return;
       }
 
-      setEnableConfirmOpen(true);
-      setConfirmError(saveErrorMessage);
+      showError(saveErrorMessage);
       toast.error(saveErrorMessage);
     } finally {
       setConfirmBusy(false);
@@ -343,9 +380,8 @@ export function SettingsSecurityContainer() {
   }, [
     adoptSession,
     applySecuritySettings,
-    confirmPassword,
     login,
-    openAdminPasswordRequiredDialog,
+    openSetPasswordDialog,
     settings.effectiveFormLoginEnabled,
     settings.envOverrideActive,
     settings.skipLoginForLocalIps,
@@ -358,6 +394,11 @@ export function SettingsSecurityContainer() {
     user?.username,
   ]);
 
+  const handleConfirmEnable = React.useCallback(
+    () => runEnableFormLogin(confirmPassword),
+    [confirmPassword, runEnableFormLogin],
+  );
+
   const handleCancelEnable = React.useCallback(() => {
     if (confirmBusy) {
       return;
@@ -368,14 +409,59 @@ export function SettingsSecurityContainer() {
     setConfirmError(null);
   }, [confirmBusy]);
 
-  const handleConfirmAdminPasswordRequired = React.useCallback(() => {
-    setAdminPasswordRequiredOpen(false);
-    navigate("/settings/profile");
-  }, [navigate]);
+  const handleConfirmSetPassword = React.useCallback(async () => {
+    const password = newPassword;
+    if (password.length < effectivePasswordMinLength) {
+      setSetPasswordError(
+        t("settings.securityPasswordTooShort", { count: effectivePasswordMinLength }),
+      );
+      return;
+    }
+    if (password !== newPasswordConfirm) {
+      setSetPasswordError(t("profile.passwordMismatch"));
+      return;
+    }
+    const userId = user?.id;
+    if (!userId) {
+      setSetPasswordError(t("settings.securityCredentialsInvalid"));
+      return;
+    }
 
-  const handleCancelAdminPasswordRequired = React.useCallback(() => {
-    setAdminPasswordRequiredOpen(false);
-  }, []);
+    setConfirmBusy(true);
+    setSetPasswordError(null);
+    try {
+      const result = await client
+        .mutation(setUserPasswordMutation, { input: { userId, password } })
+        .toPromise();
+      if (result.error) throw result.error;
+    } catch (error) {
+      setSetPasswordError(errorMessage(error, t("status.failedToUpdate")));
+      setConfirmBusy(false);
+      return;
+    }
+
+    setSetPasswordOpen(false);
+    setConfirmPassword(password);
+    await runEnableFormLogin(password);
+  }, [
+    client,
+    effectivePasswordMinLength,
+    newPassword,
+    newPasswordConfirm,
+    runEnableFormLogin,
+    t,
+    user?.id,
+  ]);
+
+  const handleCancelSetPassword = React.useCallback(() => {
+    if (confirmBusy) {
+      return;
+    }
+    setSetPasswordOpen(false);
+    setNewPassword("");
+    setNewPasswordConfirm("");
+    setSetPasswordError(null);
+  }, [confirmBusy]);
 
   const handleConfirmDisable = React.useCallback(async () => {
     const effectiveChangesNow =
@@ -694,7 +780,10 @@ export function SettingsSecurityContainer() {
       loading={loading}
       enableConfirmOpen={enableConfirmOpen}
       disableConfirmOpen={disableConfirmOpen}
-      adminPasswordRequiredOpen={adminPasswordRequiredOpen}
+      setPasswordOpen={setPasswordOpen}
+      newPassword={newPassword}
+      newPasswordConfirm={newPasswordConfirm}
+      setPasswordError={setPasswordError}
       confirmBusy={confirmBusy}
       confirmPassword={confirmPassword}
       confirmError={confirmError}
@@ -706,8 +795,10 @@ export function SettingsSecurityContainer() {
       onCancelEnable={handleCancelEnable}
       onConfirmDisable={handleConfirmDisable}
       onCancelDisable={handleCancelDisable}
-      onConfirmAdminPasswordRequired={handleConfirmAdminPasswordRequired}
-      onCancelAdminPasswordRequired={handleCancelAdminPasswordRequired}
+      onNewPasswordChange={setNewPassword}
+      onNewPasswordConfirmChange={setNewPasswordConfirm}
+      onConfirmSetPassword={handleConfirmSetPassword}
+      onCancelSetPassword={handleCancelSetPassword}
       onPasswordMinLengthDraftChange={setPasswordMinLengthDraft}
       onPasswordMinLengthSubmit={handlePasswordMinLengthSubmit}
       onSkipLocalIpsChange={handleSkipLocalIpsChange}

@@ -1093,6 +1093,48 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(existing)
     }
+    /// Same lookup as `list_existing_external_ids_in_library_and_facet`, but
+    /// keeping the owning title id for each matched external id so callers can
+    /// point the user at the title they already have. The default fans out over
+    /// the library's titles; SQL stores override with a single query.
+    async fn map_existing_external_ids_to_title_ids_in_library_and_facet(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        source: &str,
+        values: &[String],
+    ) -> AppResult<BTreeMap<String, String>> {
+        let library_id = library_id.trim();
+        let source = source.trim();
+        if library_id.is_empty() || source.is_empty() || values.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let requested = values
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<BTreeSet<_>>();
+        if requested.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut existing = BTreeMap::new();
+        for title in self
+            .list_for_libraries(Some(facet), &[library_id.to_string()], None)
+            .await?
+        {
+            for external_id in &title.external_ids {
+                let value = external_id.value.trim();
+                if external_id.source.eq_ignore_ascii_case(source) && requested.contains(value) {
+                    existing
+                        .entry(value.to_string())
+                        .or_insert_with(|| title.id.clone());
+                }
+            }
+        }
+        Ok(existing)
+    }
     async fn list_for_matching(
         &self,
         facet: Option<MediaFacet>,
@@ -1848,6 +1890,14 @@ pub struct ImageProxyCacheEntryRecord {
     pub last_accessed_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Aggregate size of the on-disk image proxy cache, as recorded by the
+/// `byte_size` scalars persisted with each cache entry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ImageProxyCacheUsage {
+    pub total_bytes: u64,
+    pub entry_count: u64,
+}
+
 #[async_trait]
 pub trait ImageProxyRepository: Send + Sync {
     /// Registers a server-approved image source and returns its Scryer-owned URL.
@@ -1886,12 +1936,26 @@ pub trait ImageProxyRepository: Send + Sync {
         &self,
     ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
 
+    /// Returns the least-recently-accessed cache entries, oldest first,
+    /// bounded to `limit` rows so budget enforcement never loads the table.
+    async fn list_image_proxy_cache_entries_lru_oldest(
+        &self,
+        limit: u32,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
+
+    /// Sums the persisted `byte_size` scalars without reading entry rows.
+    async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage>;
+
     async fn clear_image_proxy_cache_entries(&self) -> AppResult<()>;
 
     async fn prune_image_proxy_sources_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<u64>;
+
+    /// Removes discovery-owned sources whose discovery item no longer exists.
+    /// Cache entries follow through the foreign-key cascade.
+    async fn prune_orphaned_discovery_image_proxy_sources(&self) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -2033,6 +2097,27 @@ pub trait ShowRepository: Send + Sync {
         Ok(episodes)
     }
     async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>>;
+    /// The community season layout stored for an anime title, or `None` when
+    /// SMG has never sent one.
+    ///
+    /// Defaulted rather than required: the bridge is a cache of an upstream
+    /// dataset, and a store that does not keep it simply reports none, which
+    /// leaves every lane on plain TVDB numbering.
+    async fn get_anime_numbering_bridge(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<scryer_domain::AnimeNumberingBridge>> {
+        Ok(None)
+    }
+    /// Replace a title's stored bridge. `None` clears it, which is what a
+    /// hydration that no longer reports one means.
+    async fn replace_anime_numbering_bridge(
+        &self,
+        _title_id: &str,
+        _bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn list_episode_external_ids(&self, episode_id: &str)
     -> AppResult<Vec<ScopedExternalId>>;
     async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>>;
@@ -3069,6 +3154,11 @@ pub trait DomainEventRepository: Send + Sync {
     async fn delete_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn get_subscriber_offset(&self, subscriber: &str) -> AppResult<i64>;
     async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()>;
+    /// The highest persisted event sequence, or 0 when the log is empty. Live
+    /// subscriptions start here so a new client never replays history.
+    async fn latest_sequence(&self) -> AppResult<i64> {
+        Ok(0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

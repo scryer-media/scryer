@@ -979,6 +979,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
+        table: "title_anime_numbering_bridges",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
         table: "title_recommendation_cards",
         classification: BackupTableClassification::ResetOnRestore,
     },
