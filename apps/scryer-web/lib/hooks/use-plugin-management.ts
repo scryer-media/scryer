@@ -13,6 +13,7 @@ import {
   uninstallPluginMutation,
 } from "@/lib/graphql/mutations";
 import { wsClient } from "@/lib/graphql/ws-client";
+import { claimPluginTerminalOperation } from "@/lib/utils/plugin-install-state";
 import type {
   PluginInstallProgressRecord,
   RegistryPluginRecord,
@@ -136,6 +137,9 @@ export function usePluginManagement({
   const [pluginErrors, setPluginErrors] = useState<Record<string, string>>({});
   const [pluginsError, setPluginsError] = useState<string | null>(null);
   const installProgressSubscriptionsRef = useRef(new Map<string, () => void>());
+  // Whichever of `next`, `error` and `complete` reaches a plugin first owns
+  // winding its operation down; the others must not undo that work.
+  const terminalPluginOperationsRef = useRef(new Set<string>());
 
   const beginPluginMutation = useCallback((pluginId: string) => {
     setMutatingPluginIds((current) =>
@@ -261,6 +265,7 @@ export function usePluginManagement({
       initialSnapshot: PluginInstallProgressRecord,
     ) => {
       stopPluginInstallProgressSubscription(plugin.id);
+      terminalPluginOperationsRef.current.delete(plugin.id);
       setPluginProgress((current) => ({
         ...current,
         [plugin.id]: initialSnapshot,
@@ -282,6 +287,14 @@ export function usePluginManagement({
             }));
 
             if (snapshot.state === "SUCCEEDED" || snapshot.state === "FAILED") {
+              if (
+                !claimPluginTerminalOperation(
+                  terminalPluginOperationsRef.current,
+                  plugin.id,
+                )
+              ) {
+                return;
+              }
               stopPluginInstallProgressSubscription(plugin.id);
               void (async () => {
                 try {
@@ -319,6 +332,14 @@ export function usePluginManagement({
             }
           },
           error: (error) => {
+            if (
+              !claimPluginTerminalOperation(
+                terminalPluginOperationsRef.current,
+                plugin.id,
+              )
+            ) {
+              return;
+            }
             stopPluginInstallProgressSubscription(plugin.id);
             clearPluginProgress(plugin.id);
             endPluginMutation(plugin.id);
@@ -329,6 +350,22 @@ export function usePluginManagement({
           },
           complete: () => {
             installProgressSubscriptionsRef.current.delete(plugin.id);
+            // A stream that ends without a terminal snapshot — the finished
+            // snapshot aged out before this connection attached, a reconnect
+            // resubscribed too late, an auth epoch bumped the socket — used to
+            // leave the row pinned on "Installing" with nothing left to correct
+            // it. Reconcile the way reloading the page did.
+            if (
+              !claimPluginTerminalOperation(
+                terminalPluginOperationsRef.current,
+                plugin.id,
+              )
+            ) {
+              return;
+            }
+            clearPluginProgress(plugin.id);
+            endPluginMutation(plugin.id);
+            void loadPlugins(false).catch(() => undefined);
           },
         },
       );
