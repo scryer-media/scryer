@@ -244,6 +244,17 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
     getSortedCategoryCodesByScope(scope, value),
   );
   const [pickerRect, setPickerRect] = React.useState<DOMRect | null>(null);
+  const panelScrollTopRef = React.useRef(0);
+
+  // The panel is portalled, so any remount — a transient `disabled` flip while a
+  // save is in flight, for instance — would otherwise drop the reader back at the
+  // top of a long category list mid-selection.
+  const attachFloatingPanel = React.useCallback((node: HTMLDivElement | null) => {
+    floatingPanelRef.current = node;
+    if (node) {
+      node.scrollTop = panelScrollTopRef.current;
+    }
+  }, []);
 
   const syncPickerRect = React.useCallback(() => {
     if (!pickerRef.current || typeof window === "undefined") {
@@ -255,6 +266,7 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
 
   React.useEffect(() => {
     if (!isOpen) {
+      panelScrollTopRef.current = 0;
       setDraftCategories(getSortedCategoryCodesByScope(scope, value));
       return;
     }
@@ -308,33 +320,25 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
     });
   }, [pickerRect]);
 
+  // State updaters must stay pure: notifying the parent from inside one runs the
+  // save twice under StrictMode and re-enters the parent mid-render.
   const toggleCategory = (code: string) => {
-    setDraftCategories((previous) => {
-      const current = new Set(previous.map((entry) => entry.trim()));
-      if (current.has(code)) {
-        current.delete(code);
-      } else {
-        current.add(code);
-      }
-      const sorted = getSortedCategoryCodesByScope(scope, Array.from(current));
-      onChange(sorted);
-      return sorted;
-    });
+    if (disabled) {
+      return;
+    }
+    const next = new Set(draftCategories.map((entry) => entry.trim()));
+    if (next.has(code)) {
+      next.delete(code);
+    } else {
+      next.add(code);
+    }
+    const sorted = getSortedCategoryCodesByScope(scope, Array.from(next));
+    setDraftCategories(sorted);
+    onChange(sorted);
   };
 
   const toggleCategoryHeader = (groupKey: "movies" | "series" | "other") => {
-    const groupCode = INDEXER_CATEGORY_DEFINITIONS[groupKey].code;
-    setDraftCategories((previous) => {
-      const next = new Set(previous.map((entry) => entry.trim()));
-      if (next.has(groupCode)) {
-        next.delete(groupCode);
-      } else {
-        next.add(groupCode);
-      }
-      const sorted = getSortedCategoryCodesByScope(scope, Array.from(next));
-      onChange(sorted);
-      return sorted;
-    });
+    toggleCategory(INDEXER_CATEGORY_DEFINITIONS[groupKey].code);
   };
 
   const capsOverlay = React.useMemo(
@@ -362,11 +366,18 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
     setCustomCodeDraft("");
   };
 
-  const floatingPanel = isOpen && panelPlacement && !disabled
+  // `disabled` deliberately does not gate this: it flips true for the moment a
+  // routing save is in flight, and unmounting the portal on that blip is what made
+  // the panel jump back to the top after every checkbox. Every control inside is
+  // already disabled individually.
+  const floatingPanel = isOpen && panelPlacement
     ? createPortal(
         <div
           id={panelId}
-          ref={floatingPanelRef}
+          ref={attachFloatingPanel}
+          onScroll={(event) => {
+            panelScrollTopRef.current = event.currentTarget.scrollTop;
+          }}
           className="z-50 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-lg"
           style={{
             position: "fixed",
