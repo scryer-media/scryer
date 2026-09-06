@@ -39,6 +39,17 @@ impl DomainEventRepository for DomainEventStore {
         fetch_domain_events(self.datastore.read_exec(), &sql, &args).await
     }
 
+    async fn latest_sequence(&self) -> AppResult<i64> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM domain_events",
+            &[],
+        )
+        .await?
+        .ok_or_else(|| AppError::Repository("missing domain event sequence".into()))?;
+        row.i64("sequence")
+    }
+
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,

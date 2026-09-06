@@ -48,31 +48,31 @@ use crate::{
     ExternalImportSetupSecretDraftInput, ExternalImportSetupSecretDraftRepository,
     ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus, FileImporter,
     HousekeepingRepository, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
-    ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifact,
-    ImportArtifactRepository, ImportRepository, IndexerProxyConfigRepository, IndexerQueryStats,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository, LibraryProbeRepository,
-    LibraryProbeSignature, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedItemRepository, MediaFileRepository, MediaRequestCounts, MediaRequestQuery,
-    MediaRequestRepository, MediaRequestResolution, NewBlocklistEntry, NewMediaRequest,
-    NotificationChannelRepository, NotificationSubscriptionRepository,
-    OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord, OAuthRefreshGrantRecord,
-    OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository, PendingRelease,
-    PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb, PluginDescriptorLoader,
-    PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
-    RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision, SchedulerBatchRequest,
-    SchedulerFeedback, SchedulerLease, SchedulerSnapshot, SchedulerSnapshotFilter,
-    ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, StagedNzbRef,
-    StagedNzbStore, SystemInfoProvider, TitleEpisodeProgressSummary, TitleImageBlob,
-    TitleImageKind, TitleImageProcessor, TitleImageRepository, TitleImageSourceResult,
-    TitleImageSyncTask, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
-    TitleMovieMediaSummary, TitleQualitySummary, UiSettings, UiSettingsUpdate, UpstreamScheduler,
-    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
-    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
-    WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
-    ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
-    types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
-    types::TotpRecoveryCodeRecord,
+    ImageProxyCacheUsage, ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord,
+    ImportArtifact, ImportArtifactRepository, ImportRepository, IndexerProxyConfigRepository,
+    IndexerQueryStats, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository,
+    LibraryProbeRepository, LibraryProbeSignature, LibraryRepository, LibraryRootDraft,
+    LibraryScanUnmatchedItem, LibraryScanUnmatchedItemRepository, MediaFileRepository,
+    MediaRequestCounts, MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
+    NewBlocklistEntry, NewMediaRequest, NotificationChannelRepository,
+    NotificationSubscriptionRepository, OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord,
+    OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository,
+    PendingRelease, PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb,
+    PluginDescriptorLoader, PluginInstallationRepository, PostProcessingScriptRepository,
+    ReleaseDecision, RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision,
+    SchedulerBatchRequest, SchedulerFeedback, SchedulerLease, SchedulerSnapshot,
+    SchedulerSnapshotFilter, ScopeIndexerCoverageRepository, SeedingProfileRepository,
+    SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
+    TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
+    TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
+    UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository, UserUiSettingsRepository,
+    VerifiedExternalIdentity, WebauthnChallengeRecord, WebauthnCredentialRecord,
+    WebauthnRepository, WorkflowOperationInfo, WorkflowOperationRepository,
+    ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo, ports::LogicalBackupExporter,
+    ports::TotpRepository, types::TotpCredentialRecord, types::TotpEnrollmentChallengeRecord,
+    types::TotpFailedAttemptRecord, types::TotpRecoveryCodeRecord,
 };
 
 #[derive(Default)]
@@ -1106,6 +1106,17 @@ impl ImageProxyRepository for NullImageProxyRepository {
         Ok(Vec::new())
     }
 
+    async fn list_image_proxy_cache_entries_lru_oldest(
+        &self,
+        _limit: u32,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage> {
+        Ok(ImageProxyCacheUsage::default())
+    }
+
     async fn clear_image_proxy_cache_entries(&self) -> AppResult<()> {
         Ok(())
     }
@@ -1114,6 +1125,10 @@ impl ImageProxyRepository for NullImageProxyRepository {
         &self,
         _cutoff: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<u64> {
+        Ok(0)
+    }
+
+    async fn prune_orphaned_discovery_image_proxy_sources(&self) -> AppResult<u64> {
         Ok(0)
     }
 }
