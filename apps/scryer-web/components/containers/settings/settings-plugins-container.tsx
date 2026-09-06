@@ -450,6 +450,18 @@ export function SettingsPluginsContainer() {
           },
           complete: () => {
             installProgressSubscriptionsRef.current.delete(plugin.id);
+            // A stream that ends without a terminal snapshot — the finished
+            // snapshot aged out before this connection attached, a reconnect
+            // resubscribed too late, an auth epoch bumped the socket — used to
+            // leave the row pinned on "Installing" with nothing left to correct
+            // it. Reconcile the way reloading the page did.
+            if (
+              claimPluginTerminalOperation(terminalPluginOperationsRef.current, plugin.id)
+            ) {
+              clearPluginBusyState(plugin.id);
+              clearPluginProgress(plugin.id);
+              endPluginMutation(plugin.id);
+            }
             void refreshPlugins();
           },
         },
