@@ -2947,8 +2947,7 @@ fn parses_fused_episode_label_in_fansub_shape_for_anime_target() {
 fn parses_fused_episode_label_variants_for_series_target() {
     let target = context(ContextFacetHint::Series, "Umbra Vector");
 
-    let analysis =
-        analyze_release_for_target("Umbra.Vector.S01EP04.1080p.AMZN.WEB-DL", &target);
+    let analysis = analyze_release_for_target("Umbra.Vector.S01EP04.1080p.AMZN.WEB-DL", &target);
     let episode = analysis
         .best_candidate()
         .expect("best candidate")
@@ -3044,7 +3043,6 @@ fn fused_episode_label_is_not_read_on_movie_target() {
     }
 }
 
-
 /// A movie target that cannot seed an episode family must not mint episode or
 /// season role candidates either. Those roles still bound the title zone and
 /// drive the identity-unit rules even when no episode family survives scoring,
@@ -3062,14 +3060,17 @@ fn movie_target_without_episode_context_mints_no_episode_roles() {
             !analysis.annotations.iter().any(|annotation| {
                 annotation.primary_role == TokenRole::EpisodeMarker
                     || annotation.primary_role == TokenRole::SeasonMarker
-                    || annotation.alternate_roles.contains(&TokenRole::EpisodeMarker)
-                    || annotation.alternate_roles.contains(&TokenRole::SeasonMarker)
+                    || annotation
+                        .alternate_roles
+                        .contains(&TokenRole::EpisodeMarker)
+                    || annotation
+                        .alternate_roles
+                        .contains(&TokenRole::SeasonMarker)
             }),
             "{raw} still minted an episode or season role on a movie target"
         );
 
-        let analysis =
-            analyze_release_for_target(raw, &context(ContextFacetHint::Series, raw));
+        let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Series, raw));
         assert!(
             analysis.annotations.iter().any(|annotation| {
                 annotation.primary_role == TokenRole::EpisodeMarker
@@ -3110,7 +3111,11 @@ fn movie_target_keeps_episode_shaped_tokens_in_its_title() {
 #[test]
 fn series_target_still_reads_episode_shaped_tokens_as_episodes() {
     for (raw, season, number) in [
-        ("Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay", 1u32, 4u32),
+        (
+            "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            1u32,
+            4u32,
+        ),
         (
             "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
             1,
@@ -3143,12 +3148,10 @@ fn movie_target_with_episode_context_still_mints_episode_roles() {
         ..Default::default()
     });
 
-    let analysis =
-        analyze_release_for_target("Umbra.Vector.S01E04.1080p.WEB-DL", &target);
+    let analysis = analyze_release_for_target("Umbra.Vector.S01E04.1080p.WEB-DL", &target);
     let candidate = analysis.best_candidate().expect("best candidate");
     let episode = candidate.projected.episode.as_ref().expect("episode");
 
     assert_eq!(episode.season, Some(1));
     assert_eq!(episode.episode_numbers, vec![4]);
 }
-
