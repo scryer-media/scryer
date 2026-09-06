@@ -1048,6 +1048,7 @@ function TitleContextPanel({
   onDelete,
   onClearSelection,
   canManageTitle,
+  canManageTitlesInLibrary,
   canRequestMedia,
   manageableDiscoveryFacets,
   requestableDiscoveryFacets,
@@ -1127,6 +1128,7 @@ function TitleContextPanel({
   onDelete: (title: TitleRecord) => void;
   onClearSelection: () => void;
   canManageTitle: boolean;
+  canManageTitlesInLibrary: (libraryId: string | null | undefined) => boolean;
   canRequestMedia: boolean;
   manageableDiscoveryFacets: ReadonlySet<Facet>;
   requestableDiscoveryFacets: ReadonlySet<Facet>;
@@ -1166,6 +1168,10 @@ function TitleContextPanel({
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const releaseSearchOpen = title !== null && releaseSearchTitleId === title.id;
   const releaseSearchActionLoading = releaseSearchOpen && releaseSearchLoading;
+  // The action bar only carries mutations, so a viewer without manage rights
+  // on this title's library gets no bar rather than a row of failing buttons.
+  const canManageThisTitle =
+    title !== null && canManageTitlesInLibrary(title.libraryId);
   const panelClassName = cn(
     "min-h-0 w-full min-w-0 flex-col overflow-visible min-[981px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
@@ -1527,71 +1533,73 @@ function TitleContextPanel({
           </TitleWorkspaceHero>
         </div>
 
-        <TitleWorkspaceActionGrid>
-          <TitleWorkspaceActionButton
-            id="title-overview-toggle-monitoring"
-            icon={title.monitored ? EyeOff : Eye}
-            label={
-              title.monitored
-                ? t("title.unmonitorAction")
-                : t("title.monitorAction")
-            }
-            active={title.monitored}
-            pressed={title.monitored}
-            loading={isTogglingMonitored}
-            disabled={bulkActionBusy || !onToggleMonitored}
-            onClick={() => void onToggleMonitored?.(title, !title.monitored)}
-          />
-          <TitleWorkspaceActionButton
-            id={titleOverviewSearchButtonId(title.id)}
-            icon={Zap}
-            label={t("label.search")}
-            loading={autoQueueLoading}
-            disabled={bulkActionBusy}
-            onClick={() => void handleAutoQueue()}
-          />
-          <TitleWorkspaceActionButton
-            icon={Search}
-            label={t("label.interactive")}
-            active={releaseSearchOpen}
-            loading={releaseSearchActionLoading}
-            disabled={bulkActionBusy && !releaseSearchOpen}
-            expanded={releaseSearchOpen}
-            controlsId={releaseSearchPanelId}
-            onClick={handleInteractiveSearchAction}
-          />
-          <TitleWorkspaceActionButton
-            icon={RefreshCw}
-            label={t("label.refresh")}
-            loading={refreshLoading}
-            disabled={bulkActionBusy || refreshLoading}
-            onClick={() => void onRefreshTitles()}
-          />
-          <TitleWorkspaceActionButton
-            icon={ClipboardList}
-            label={t("activity.history")}
-            disabled={bulkActionBusy}
-            onClick={() => setHistoryOpen(true)}
-          />
-          <TitleWorkspaceActionButton
-            id="title-overview-edit-settings"
-            icon={Edit}
-            label={t("label.edit")}
-            active={settingsOpen}
-            disabled={bulkActionBusy || !canManageTitle}
-            expanded={settingsOpen}
-            controlsId="title-overview-settings-panel"
-            onClick={() => setSettingsOpen((current) => !current)}
-          />
-          <TitleWorkspaceActionButton
-            icon={Trash2}
-            label={t("label.delete")}
-            destructive
-            loading={isDeleting}
-            disabled={bulkActionBusy}
-            onClick={() => onDelete(title)}
-          />
-        </TitleWorkspaceActionGrid>
+        {canManageThisTitle ? (
+          <TitleWorkspaceActionGrid>
+            <TitleWorkspaceActionButton
+              id="title-overview-toggle-monitoring"
+              icon={title.monitored ? EyeOff : Eye}
+              label={
+                title.monitored
+                  ? t("title.unmonitorAction")
+                  : t("title.monitorAction")
+              }
+              active={title.monitored}
+              pressed={title.monitored}
+              loading={isTogglingMonitored}
+              disabled={bulkActionBusy || !onToggleMonitored}
+              onClick={() => void onToggleMonitored?.(title, !title.monitored)}
+            />
+            <TitleWorkspaceActionButton
+              id={titleOverviewSearchButtonId(title.id)}
+              icon={Zap}
+              label={t("label.search")}
+              loading={autoQueueLoading}
+              disabled={bulkActionBusy}
+              onClick={() => void handleAutoQueue()}
+            />
+            <TitleWorkspaceActionButton
+              icon={Search}
+              label={t("label.interactive")}
+              active={releaseSearchOpen}
+              loading={releaseSearchActionLoading}
+              disabled={bulkActionBusy && !releaseSearchOpen}
+              expanded={releaseSearchOpen}
+              controlsId={releaseSearchPanelId}
+              onClick={handleInteractiveSearchAction}
+            />
+            <TitleWorkspaceActionButton
+              icon={RefreshCw}
+              label={t("label.refresh")}
+              loading={refreshLoading}
+              disabled={bulkActionBusy || refreshLoading}
+              onClick={() => void onRefreshTitles()}
+            />
+            <TitleWorkspaceActionButton
+              icon={ClipboardList}
+              label={t("activity.history")}
+              disabled={bulkActionBusy}
+              onClick={() => setHistoryOpen(true)}
+            />
+            <TitleWorkspaceActionButton
+              id="title-overview-edit-settings"
+              icon={Edit}
+              label={t("label.edit")}
+              active={settingsOpen}
+              disabled={bulkActionBusy}
+              expanded={settingsOpen}
+              controlsId="title-overview-settings-panel"
+              onClick={() => setSettingsOpen((current) => !current)}
+            />
+            <TitleWorkspaceActionButton
+              icon={Trash2}
+              label={t("label.delete")}
+              destructive
+              loading={isDeleting}
+              disabled={bulkActionBusy}
+              onClick={() => onDelete(title)}
+            />
+          </TitleWorkspaceActionGrid>
+        ) : null}
 
         {settingsOpen ? (
           <div
@@ -2016,6 +2024,7 @@ export function MediaContentView({
     catalogDiscoveryGroups: CatalogDiscoveryGroup[];
     canViewCatalog: boolean;
     canManageTitle: boolean;
+    canManageTitlesInLibrary: (libraryId: string | null | undefined) => boolean;
     canRequestMedia: boolean;
     canManageCatalogDiscovery: boolean;
     canRequestCatalogDiscovery: boolean;
@@ -2296,6 +2305,7 @@ export function MediaContentView({
     catalogDiscoveryGroups,
     canViewCatalog,
     canManageTitle,
+    canManageTitlesInLibrary,
     canManageCatalogDiscovery,
     canRequestCatalogDiscovery,
     manageableDiscoveryFacets,
@@ -4155,6 +4165,7 @@ export function MediaContentView({
                       onDelete={handleDeleteCatalogTitle}
                       onClearSelection={onCloseOverview}
                       canManageTitle={canManageTitle}
+                      canManageTitlesInLibrary={canManageTitlesInLibrary}
                       canRequestMedia={canRequestCatalogDiscovery}
                       manageableDiscoveryFacets={manageableDiscoveryFacetSet}
                       requestableDiscoveryFacets={requestableDiscoveryFacetSet}
