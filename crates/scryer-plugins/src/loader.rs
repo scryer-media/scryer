@@ -8,9 +8,9 @@ use std::time::Instant;
 use scryer_application::{
     AppError, AppResult, ArchiveExtractorClient, ArchiveExtractorPluginProvider, DownloadClient,
     DownloadClientPluginProvider, ExternalPluginWasm, IndexerClient, IndexerErrorRecorder,
-    IndexerPluginProvider, NotificationClient, NotificationPluginProvider,
-    NullIndexerErrorRecorder, PluginDescriptorLoader, RuntimePluginLoad, SubtitlePluginProvider,
-    SubtitleProviderClient, SubtitleSyncClient,
+    IndexerPluginProvider, IndexerStatsTracker, NotificationClient, NotificationPluginProvider,
+    NullIndexerErrorRecorder, NullIndexerStatsTracker, PluginDescriptorLoader, RuntimePluginLoad,
+    SubtitlePluginProvider, SubtitleProviderClient, SubtitleSyncClient,
 };
 use scryer_domain::{
     DownloadClientConfig, IndexerConfig, IndexerProxyConfig, NotificationChannelConfig,
@@ -498,6 +498,7 @@ pub struct WasmIndexerPluginProvider {
     plugins: HashMap<String, LoadedPlugin>,
     aliases: HashMap<String, String>,
     indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
 impl WasmIndexerPluginProvider {
@@ -507,7 +508,19 @@ impl WasmIndexerPluginProvider {
             plugins: HashMap::new(),
             aliases: HashMap::new(),
             indexer_error_recorder: Arc::new(NullIndexerErrorRecorder),
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
         }
+    }
+
+    /// Attach the tracker that counts outbound indexer API requests. Every
+    /// client this provider builds shares it, so the dashboard total covers
+    /// every indexer rather than whichever one happened to be wired up.
+    pub fn with_indexer_stats_tracker(
+        mut self,
+        indexer_stats: Arc<dyn IndexerStatsTracker>,
+    ) -> Self {
+        self.indexer_stats = indexer_stats;
+        self
     }
 
     pub fn with_indexer_error_recorder(
@@ -919,7 +932,9 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         };
 
         match built {
-            Ok(client) => Some(Arc::new(client)),
+            Ok(client) => Some(Arc::new(
+                client.with_indexer_stats_tracker(Arc::clone(&self.indexer_stats)),
+            )),
             Err(e) => {
                 tracing::warn!(
                     indexer = config.name.as_str(),

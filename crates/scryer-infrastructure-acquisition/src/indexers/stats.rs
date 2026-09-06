@@ -5,7 +5,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use scryer_application::{IndexerQueryStats, IndexerStatsTracker};
 
 use crate::queries::sql_runtime::StoreDatastore;
@@ -24,6 +24,13 @@ struct IndexerEntry {
     api_max: Option<u32>,
     grab_current: Option<u32>,
     grab_max: Option<u32>,
+    /// Requests sent to this indexer in the current quota window. Mirrors the
+    /// persisted `indexer_api_quotas.queries_today` so the dashboard can be
+    /// read without touching the database, and is seeded from it at boot by
+    /// [`InMemoryIndexerStatsTracker::hydrate`].
+    api_requests_today: u32,
+    /// UTC day the current `api_requests_today` window opened on.
+    api_requests_window_started_on: Option<NaiveDate>,
 }
 
 impl IndexerEntry {
@@ -36,6 +43,21 @@ impl IndexerEntry {
             api_max: None,
             grab_current: None,
             grab_max: None,
+            api_requests_today: 0,
+            api_requests_window_started_on: None,
+        }
+    }
+
+    /// Roll the request counter over when the UTC day has changed, matching
+    /// the reset the persisted row performs on its next write.
+    fn roll_request_window(&mut self, today: NaiveDate) {
+        match self.api_requests_window_started_on {
+            Some(started_on) if started_on == today => {}
+            Some(_) => {
+                self.api_requests_today = 0;
+                self.api_requests_window_started_on = Some(today);
+            }
+            None => self.api_requests_window_started_on = Some(today),
         }
     }
 }
@@ -46,6 +68,8 @@ struct PendingQuotaUpdate {
     api_max: Option<u32>,
     grab_current: Option<u32>,
     grab_max: Option<u32>,
+    /// Requests sent since the last flush. The only thing that advances the
+    /// persisted `queries_today`.
     query_delta: u32,
 }
 
@@ -69,7 +93,22 @@ impl PendingQuotaUpdate {
         if grab_max.is_some() {
             self.grab_max = grab_max;
         }
+        // Reporting a provider quota reading is not itself an API hit. Hits are
+        // counted at the send site by `record_api_request_sent`; counting them
+        // here too both double-counted successful searches and missed every
+        // request that never produced a parsed response.
+    }
+
+    fn merge_request_sent(&mut self) {
         self.query_delta = self.query_delta.saturating_add(1);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.query_delta == 0
+            && self.api_current.is_none()
+            && self.api_max.is_none()
+            && self.grab_current.is_none()
+            && self.grab_max.is_none()
     }
 
     fn merge_requeued(&mut self, older: Self) {
@@ -104,6 +143,57 @@ impl InMemoryIndexerStatsTracker {
             datastore,
             pending_quota_updates: Arc::new(Mutex::new(HashMap::new())),
             quota_flush_scheduled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Seed the in-memory counters from the persisted quota rows.
+    ///
+    /// Called once at boot, before any indexer traffic. Without it the
+    /// dashboard restarts at zero every time the process does while the
+    /// indexer's own counter keeps climbing, which is exactly the discrepancy
+    /// operators were reporting. Rows from an earlier UTC day are ignored: the
+    /// window has already rolled over and the next persisted write resets them.
+    pub async fn hydrate(&self) {
+        let Some(datastore) = &self.datastore else {
+            return;
+        };
+        let quotas = match crate::queries::indexer::load_indexer_quotas(datastore).await {
+            Ok(quotas) => quotas,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "failed to load persisted indexer quotas; API hit counts start from zero"
+                );
+                return;
+            }
+        };
+
+        let today = Utc::now().date_naive();
+        let mut entries = self.entries.lock().unwrap();
+        for quota in quotas {
+            let window_started_on = quota
+                .window_started_on
+                .as_deref()
+                .and_then(|day| day.parse::<NaiveDate>().ok());
+            let entry = entries
+                .entry(quota.indexer_id.clone())
+                // The name is unknown until this indexer is first used; the
+                // first send overwrites this placeholder.
+                .or_insert_with(|| IndexerEntry::new(&quota.indexer_id));
+            entry.api_current = quota.api_current;
+            entry.api_max = quota.api_max;
+            entry.grab_current = quota.grab_current;
+            entry.grab_max = quota.grab_max;
+            match window_started_on {
+                Some(started_on) if started_on == today => {
+                    entry.api_requests_today = quota.api_requests_today;
+                    entry.api_requests_window_started_on = Some(started_on);
+                }
+                _ => {
+                    entry.api_requests_today = 0;
+                    entry.api_requests_window_started_on = Some(today);
+                }
+            }
         }
     }
 
@@ -142,7 +232,7 @@ impl InMemoryIndexerStatsTracker {
 
         let mut failed_updates = Vec::new();
         for (indexer_id, update) in updates {
-            if update.query_delta == 0 {
+            if update.is_empty() {
                 continue;
             }
             if let Err(error) = crate::queries::indexer::upsert_indexer_quota(
@@ -241,12 +331,37 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
         }
     }
 
+    fn record_api_request_sent(&self, indexer_id: &str, indexer_name: &str) {
+        let today = Utc::now().date_naive();
+        {
+            let mut entries = self.entries.lock().unwrap();
+            let entry = entries
+                .entry(indexer_id.to_string())
+                .or_insert_with(|| IndexerEntry::new(indexer_name));
+            entry.indexer_name = indexer_name.to_string();
+            entry.roll_request_window(today);
+            entry.api_requests_today = entry.api_requests_today.saturating_add(1);
+        }
+
+        if self.datastore.is_some() {
+            self.pending_quota_updates
+                .lock()
+                .unwrap()
+                .entry(indexer_id.to_string())
+                .or_default()
+                .merge_request_sent();
+            self.schedule_quota_flush();
+        }
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats> {
         let mut entries = self.entries.lock().unwrap();
         let cutoff = Utc::now() - chrono::Duration::hours(24);
+        let today = Utc::now().date_naive();
         entries
             .iter_mut()
             .map(|(id, entry)| {
+                entry.roll_request_window(today);
                 entry.queries.retain(|(ts, _)| *ts > cutoff);
                 entry.grabs.retain(|ts| *ts > cutoff);
                 let successful = entry.queries.iter().filter(|(_, s)| *s).count() as u32;
@@ -260,6 +375,10 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
                     failed_last_24h: total - successful,
                     grabs_last_24h: entry.grabs.len() as u32,
                     last_query_at,
+                    api_requests_today: entry.api_requests_today,
+                    api_requests_window_started_at: entry
+                        .api_requests_window_started_on
+                        .map(|day| day.to_string()),
                     api_current: entry.api_current,
                     api_max: entry.api_max,
                     grab_current: entry.grab_current,
@@ -404,9 +523,11 @@ mod tests {
     fn requeued_updates_preserve_newer_limits_and_sum_deltas() {
         let mut older = PendingQuotaUpdate::default();
         older.merge(Some(1), Some(100), Some(2), Some(20));
+        older.merge_request_sent();
 
         let mut newer = PendingQuotaUpdate::default();
         newer.merge(Some(5), None, None, Some(50));
+        newer.merge_request_sent();
         newer.merge_requeued(older);
 
         assert_eq!(newer.api_current, Some(5));
@@ -446,6 +567,9 @@ mod tests {
 
         let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
         tracker.record_query("idx-1", "Indexer One", true);
+        // Two requests sent, then the quota readings those responses carried.
+        tracker.record_api_request_sent("idx-1", "Indexer One");
+        tracker.record_api_request_sent("idx-1", "Indexer One");
         tracker.record_api_limits("idx-1", Some(1), Some(100), None, None);
         tracker.record_api_limits("idx-1", Some(2), None, Some(3), Some(50));
         tracker.flush_pending_quota_updates().await;
@@ -465,6 +589,7 @@ mod tests {
         assert_eq!(row.get::<i64, _>("grab_max"), 50);
         assert_eq!(row.get::<i64, _>("queries_today"), 2);
 
+        tracker.record_api_request_sent("idx-1", "Indexer One");
         tracker.record_api_limits("idx-1", None, Some(101), None, None);
         tracker.flush_pending_quota_updates().await;
 
@@ -483,6 +608,163 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sent_requests_are_the_persisted_hit_count_and_quota_readings_are_not() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        // Four requests left for this indexer: two search pages, a caps
+        // refresh and a retry that timed out. None of them parsed a quota.
+        for _ in 0..4 {
+            tracker.record_api_request_sent("idx-hits", "Hit Counter");
+        }
+        // A quota reading is a report about the account, not a request.
+        tracker.record_api_limits("idx-hits", Some(11), Some(1000), None, None);
+        tracker.flush_pending_quota_updates().await;
+
+        let row = sqlx::query(
+            "SELECT queries_today, api_current, api_max
+             FROM indexer_api_quotas WHERE indexer_id = ?",
+        )
+        .bind("idx-hits")
+        .fetch_one(&pool)
+        .await
+        .expect("quota row should exist");
+        assert_eq!(row.get::<i64, _>("queries_today"), 4);
+        assert_eq!(row.get::<i64, _>("api_current"), 11);
+        assert_eq!(row.get::<i64, _>("api_max"), 1000);
+
+        let stats = tracker
+            .all_stats()
+            .into_iter()
+            .find(|stats| stats.indexer_id == "idx-hits")
+            .expect("indexer stats");
+        assert_eq!(stats.api_requests_today, 4);
+        assert_eq!(
+            stats.queries_last_24h, 0,
+            "search runs and API hits are different numbers"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_quota_reading_alone_still_persists() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        tracker.record_api_limits("idx-quota-only", Some(7), Some(100), None, None);
+        tracker.flush_pending_quota_updates().await;
+
+        let row = sqlx::query(
+            "SELECT queries_today, api_current FROM indexer_api_quotas WHERE indexer_id = ?",
+        )
+        .bind("idx-quota-only")
+        .fetch_one(&pool)
+        .await
+        .expect("a quota-only update must not be skipped by the flush");
+        assert_eq!(row.get::<i64, _>("api_current"), 7);
+        assert_eq!(
+            row.get::<i64, _>("queries_today"),
+            0,
+            "reporting a quota reading must not invent an API hit"
+        );
+    }
+
+    #[tokio::test]
+    async fn hydrate_restores_todays_count_and_drops_a_stale_window() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+        sqlx::query(
+            "INSERT INTO indexer_api_quotas
+                (indexer_id, api_current, api_max, queries_today, last_reset_at)
+             VALUES ('idx-today', 5, 500, 123, datetime('now')),
+                    ('idx-stale', 9, 900, 456, datetime('now', '-3 days'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed quota rows");
+
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        tracker.hydrate().await;
+
+        let stats = tracker.all_stats();
+        let today = stats
+            .iter()
+            .find(|stats| stats.indexer_id == "idx-today")
+            .expect("today's row");
+        assert_eq!(
+            today.api_requests_today, 123,
+            "a restart must not zero the day's spend"
+        );
+        assert_eq!(today.api_current, Some(5));
+        assert_eq!(today.api_max, Some(500));
+
+        let stale = stats
+            .iter()
+            .find(|stats| stats.indexer_id == "idx-stale")
+            .expect("stale row");
+        assert_eq!(
+            stale.api_requests_today, 0,
+            "a window from an earlier UTC day has already rolled over"
+        );
+
+        // Counting continues from the hydrated value rather than from zero.
+        tracker.record_api_request_sent("idx-today", "Today Indexer");
+        let resumed = tracker
+            .all_stats()
+            .into_iter()
+            .find(|stats| stats.indexer_id == "idx-today")
+            .expect("today's row");
+        assert_eq!(resumed.api_requests_today, 124);
+    }
+
+    #[tokio::test]
+    async fn the_persisted_window_resets_on_a_utc_day_boundary_not_a_rolling_day() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+        // Opened 20 hours ago but on the previous UTC day: a rolling 24-hour
+        // window would keep accumulating, a calendar day resets.
+        sqlx::query(
+            "INSERT INTO indexer_api_quotas (indexer_id, queries_today, last_reset_at)
+             VALUES ('idx-day', 40, datetime('now', 'start of day', '-4 hours'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed quota row");
+
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        tracker.record_api_request_sent("idx-day", "Day Indexer");
+        tracker.flush_pending_quota_updates().await;
+
+        let queries_today: i64 =
+            sqlx::query_scalar("SELECT queries_today FROM indexer_api_quotas WHERE indexer_id = ?")
+                .bind("idx-day")
+                .fetch_one(&pool)
+                .await
+                .expect("quota row should exist");
+        assert_eq!(
+            queries_today, 1,
+            "a new UTC day starts the count over instead of adding to yesterday's"
+        );
+    }
+
+    #[tokio::test]
     async fn quota_flush_waits_for_the_shared_sqlite_writer_gate() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -494,6 +776,7 @@ mod tests {
         let writer_gate = Arc::new(tokio::sync::Mutex::new(()));
         let tracker = tracker_with_gate(&pool, Arc::clone(&writer_gate));
         let guard = writer_gate.lock().await;
+        tracker.record_api_request_sent("idx-gated", "Gated Indexer");
         tracker.record_api_limits("idx-gated", Some(7), Some(100), None, None);
 
         let flushing_tracker = tracker.clone();
@@ -536,6 +819,7 @@ mod tests {
             .await
             .expect("in-memory sqlite should open");
         let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        tracker.record_api_request_sent("idx-retry", "Retry Indexer");
         tracker.record_api_limits("idx-retry", Some(9), Some(200), None, None);
 
         tracker.flush_pending_quota_updates().await;

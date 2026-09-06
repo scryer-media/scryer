@@ -3498,6 +3498,21 @@ pub trait IndexerStatsTracker: Send + Sync {
         grab_current: Option<u32>,
         grab_max: Option<u32>,
     );
+
+    /// One outbound HTTP request to this indexer has just been sent.
+    ///
+    /// Called at the send site, before any response exists, so a timeout, a
+    /// retry, an extra pagination request, a caps refresh and a solver replay
+    /// all count. This is the number shown on the dashboard and compared
+    /// against the indexer's own quota page; unlike `record_query` it is
+    /// persisted and survives a restart.
+    ///
+    /// Defaulted to a no-op so trackers that do not persist anything (tests,
+    /// the null tracker) need not implement it.
+    fn record_api_request_sent(&self, indexer_id: &str, indexer_name: &str) {
+        let _ = (indexer_id, indexer_name);
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
 
     fn is_at_quota(&self, indexer_id: &str) -> bool {

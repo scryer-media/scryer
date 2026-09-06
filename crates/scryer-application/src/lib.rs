@@ -40,6 +40,7 @@ mod image_proxy;
 mod import;
 mod indexer_category;
 mod indexer_errors;
+mod indexer_requests;
 pub use indexer_category::{
     CATEGORY_MISMATCH_CODE, IndexerCategoryFamily, NZB_HEAD_PROBE_BYTES, enforce_nzb_category_gate,
     indexer_category_contradicts_facet, indexer_category_family, nzb_head_category,
@@ -407,6 +408,10 @@ pub use indexer_errors::{
     classify_indexer_http_response, classify_newznab_error_message,
     indexer_error_history_is_persistable, indexer_response_content_type,
     redact_indexer_response_headers, unknown_indexer_error,
+};
+pub use indexer_requests::{
+    CALL_OTHER, CALL_SOLVER, INDEXER_API_REQUESTS_METRIC, IndexerRequestResult,
+    IndexerRequestTally, newznab_call_label,
 };
 pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,

@@ -11,10 +11,11 @@ use reqwest::StatusCode;
 use scryer_application::{
     AppError, AppResult, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse,
     ExternalPluginWasm, IndexerClient, IndexerErrorOperation, IndexerErrorRepository,
-    IndexerManagementClient, IndexerPluginProvider, IndexerRoutingPlan, IndexerSearchResponse,
-    IndexerSyncPlan, IndexerValidationResult, ManagedIndexerChildPlan, ManagedIndexerRoutingScope,
-    NewIndexerError, NullIndexerErrorRepository, RateLimitCooldownAction, RuntimePluginLoad,
-    SearchMode, classify_indexer_http_response,
+    IndexerManagementClient, IndexerPluginProvider, IndexerRequestResult, IndexerRequestTally,
+    IndexerRoutingPlan, IndexerSearchResponse, IndexerStatsTracker, IndexerSyncPlan,
+    IndexerValidationResult, ManagedIndexerChildPlan, ManagedIndexerRoutingScope, NewIndexerError,
+    NullIndexerErrorRepository, NullIndexerStatsTracker, RateLimitCooldownAction,
+    RuntimePluginLoad, SearchMode, classify_indexer_http_response,
     external_import::{EXTERNAL_IMPORT_HOST_RPS_LANE, EXTERNAL_IMPORT_HOST_RPS_PROFILE},
     indexer_error_history_is_persistable, indexer_response_content_type, unknown_indexer_error,
 };
@@ -367,6 +368,7 @@ impl RoutingScope {
 pub struct NativeProwlarrIndexerProvider {
     delegate: Arc<dyn IndexerPluginProvider>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
 impl NativeProwlarrIndexerProvider {
@@ -381,7 +383,17 @@ impl NativeProwlarrIndexerProvider {
         Self {
             delegate,
             indexer_errors,
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
         }
+    }
+
+    /// Attach the tracker that counts requests to Prowlarr's own API.
+    pub fn with_indexer_stats_tracker(
+        mut self,
+        indexer_stats: Arc<dyn IndexerStatsTracker>,
+    ) -> Self {
+        self.indexer_stats = indexer_stats;
+        self
     }
 }
 
@@ -392,6 +404,7 @@ pub struct ProwlarrManagementClient {
     outbound_http: OutboundHttpClient,
     api_state: Arc<RwLock<Option<ResolvedProwlarrApi>>>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
 #[derive(Clone)]
@@ -399,9 +412,23 @@ struct ProwlarrErrorCapture {
     indexer_id: String,
     indexer_name: String,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
 impl ProwlarrErrorCapture {
+    /// Prowlarr's own transport is the one place plugin-host accounting cannot
+    /// see, so requests to the parent config are counted here. Searches are
+    /// not: a Prowlarr parent is management-only and its synced children are
+    /// ordinary newznab clients counted by the plugin host.
+    fn tally(&self, operation: IndexerErrorOperation) -> IndexerRequestTally {
+        IndexerRequestTally::new(
+            self.indexer_id.clone(),
+            self.indexer_name.clone(),
+            operation,
+            Arc::clone(&self.indexer_stats),
+        )
+    }
+
     async fn record(
         &self,
         operation: IndexerErrorOperation,
@@ -440,10 +467,24 @@ impl ProwlarrErrorCapture {
         &self,
         operation: IndexerErrorOperation,
         response: reqwest::Response,
+        tally: Option<&IndexerRequestTally>,
     ) {
         match captured_response(response).await {
-            Ok(response) => self.record(operation, response).await,
-            Err(error) => warn!(error = %error, "failed to read Prowlarr rate-limit response"),
+            Ok(response) => {
+                // A 429 that the transport will retry is still one request the
+                // indexer served, and this observer is the only place it is
+                // visible before the retry replaces it.
+                if let Some(tally) = tally {
+                    tally.note_response(&response);
+                }
+                self.record(operation, response).await
+            }
+            Err(error) => {
+                if let Some(tally) = tally {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+                warn!(error = %error, "failed to read Prowlarr rate-limit response")
+            }
         }
     }
 }
@@ -534,6 +575,18 @@ impl ProwlarrManagementClient {
         config: &IndexerConfig,
         indexer_errors: Arc<dyn IndexerErrorRepository>,
     ) -> Self {
+        Self::new_with_indexer_error_repository_and_stats(
+            config,
+            indexer_errors,
+            Arc::new(NullIndexerStatsTracker),
+        )
+    }
+
+    pub fn new_with_indexer_error_repository_and_stats(
+        config: &IndexerConfig,
+        indexer_errors: Arc<dyn IndexerErrorRepository>,
+        indexer_stats: Arc<dyn IndexerStatsTracker>,
+    ) -> Self {
         let http_client = indexer_reqwest_client();
         Self {
             parent_config_id: config.id.clone(),
@@ -542,6 +595,7 @@ impl ProwlarrManagementClient {
             outbound_http: OutboundHttpClient::new(http_client, RateLimitRegistry::new()),
             api_state: Arc::new(RwLock::new(None)),
             indexer_errors,
+            indexer_stats,
         }
     }
 
@@ -556,6 +610,7 @@ impl ProwlarrManagementClient {
             indexer_id: self.parent_config_id.clone(),
             indexer_name: self.parent_indexer_name.clone(),
             indexer_errors: Arc::clone(&self.indexer_errors),
+            indexer_stats: Arc::clone(&self.indexer_stats),
         }
     }
 
@@ -620,11 +675,16 @@ impl ProwlarrManagementClient {
         let api_key = config.api_key.clone();
         let url = api_url(&base_url, path);
         let error_capture = self.error_capture();
+        // The builder runs once per attempt inside the transport's retry loop,
+        // so counting here counts retries, which is what the indexer saw.
+        let tally = Arc::new(error_capture.tally(operation));
+        let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
             .send_with_rate_limit_observer(
                 self.request_policy(path),
                 || {
+                    tally.note_sent(&url);
                     self.outbound_http
                         .client()
                         .get(&url)
@@ -634,14 +694,24 @@ impl ProwlarrManagementClient {
                 },
                 move |response| {
                     let error_capture = error_capture.clone();
+                    let observer_tally = Arc::clone(&observer_tally);
                     async move {
                         error_capture
-                            .observe_rate_limited_response(operation, response)
+                            .observe_rate_limited_response(
+                                operation,
+                                response,
+                                Some(observer_tally.as_ref()),
+                            )
                             .await;
                     }
                 },
             )
             .await
+            .inspect_err(|error| {
+                if matches!(error, OutboundHttpError::Transport { .. }) {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+            })
             .map_err(|error| match error {
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
@@ -662,9 +732,14 @@ impl ProwlarrManagementClient {
             })?;
 
         let retry_after_seconds = retry_after_seconds(response.headers());
-        let captured = captured_response(response)
-            .await
-            .map_err(captured_response_error)?;
+        let captured = match captured_response(response).await {
+            Ok(captured) => captured,
+            Err(error) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+                return Err(captured_response_error(error));
+            }
+        };
+        tally.note_response(&captured);
         let status = StatusCode::from_u16(captured.status).expect("reqwest status is valid");
 
         if status.is_success() {
@@ -705,11 +780,16 @@ impl ProwlarrManagementClient {
         let request_path = format!("/{indexer_id}/api?t=caps");
         let child_key = indexer_id.to_string();
         let error_capture = self.error_capture();
+        // A child caps refresh is proxied through to the child indexer, so it
+        // spends a request; the parent row is where an operator sees it.
+        let tally = Arc::new(error_capture.tally(IndexerErrorOperation::CapsRefresh));
+        let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
             .send_with_rate_limit_observer(
                 self.child_request_policy(&request_path, &child_key),
                 || {
+                    tally.note_sent(&url);
                     self.outbound_http
                         .client()
                         .get(&url)
@@ -718,17 +798,24 @@ impl ProwlarrManagementClient {
                 },
                 move |response| {
                     let error_capture = error_capture.clone();
+                    let observer_tally = Arc::clone(&observer_tally);
                     async move {
                         error_capture
                             .observe_rate_limited_response(
                                 IndexerErrorOperation::CapsRefresh,
                                 response,
+                                Some(observer_tally.as_ref()),
                             )
                             .await;
                     }
                 },
             )
             .await
+            .inspect_err(|error| {
+                if matches!(error, OutboundHttpError::Transport { .. }) {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+            })
             .map_err(|error| match error {
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
@@ -749,9 +836,14 @@ impl ProwlarrManagementClient {
             })?;
 
         let retry_after_seconds = retry_after_seconds(response.headers());
-        let captured = captured_response(response)
-            .await
-            .map_err(captured_response_error)?;
+        let captured = match captured_response(response).await {
+            Ok(captured) => captured,
+            Err(error) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+                return Err(captured_response_error(error));
+            }
+        };
+        tally.note_response(&captured);
         let status = StatusCode::from_u16(captured.status).expect("reqwest status is valid");
 
         if status.is_success() {
@@ -1003,9 +1095,10 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
     ) -> Option<Arc<dyn IndexerManagementClient>> {
         if is_prowlarr_provider(&config.provider_type) {
             return Some(Arc::new(
-                ProwlarrManagementClient::new_with_indexer_error_repository(
+                ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
                     config,
                     Arc::clone(&self.indexer_errors),
+                    Arc::clone(&self.indexer_stats),
                 ),
             ));
         }
@@ -1696,6 +1789,32 @@ mod tests {
     #[derive(Default)]
     struct RecordingIndexerErrorRepository {
         errors: tokio::sync::Mutex<Vec<NewIndexerError>>,
+    }
+
+    /// Counts what the dashboard would show: one per request actually sent.
+    #[derive(Default)]
+    struct CountingIndexerStatsTracker {
+        sent: std::sync::atomic::AtomicU32,
+    }
+
+    impl IndexerStatsTracker for CountingIndexerStatsTracker {
+        fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+        fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+        fn record_api_request_sent(&self, _indexer_id: &str, _indexer_name: &str) {
+            self.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
+            Vec::new()
+        }
     }
 
     #[async_trait]
@@ -2455,9 +2574,11 @@ mod tests {
             .await;
 
         let repository = Arc::new(RecordingIndexerErrorRepository::default());
-        let client = ProwlarrManagementClient::new_with_indexer_error_repository(
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
             &test_indexer_config(&server.uri()),
             repository.clone(),
+            stats.clone(),
         );
 
         let status = client
@@ -2466,6 +2587,11 @@ mod tests {
             .expect("second attempt succeeds");
         assert_eq!(status.app_name, "Prowlarr");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            stats.sent.load(Ordering::Relaxed),
+            2,
+            "the retried 429 was a request Prowlarr served and must be counted"
+        );
 
         let errors = repository.errors.lock().await;
         assert_eq!(errors.len(), 1);

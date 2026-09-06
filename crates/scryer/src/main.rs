@@ -1167,6 +1167,10 @@ async fn bootstrap_application(
         .with_seed_goal_resolution(datastore.seeding_profiles()),
     );
     let indexer_stats = datastore.indexer_stats_tracker();
+    // Seed the API hit counters from the persisted rows before any indexer
+    // traffic starts. Without this the dashboard restarts at zero every time
+    // the process does, while the indexer's own counter keeps climbing.
+    indexer_stats.hydrate().await;
     let indexer_learning = datastore.indexer_search_learning_repository();
     let indexer_errors = datastore.indexer_errors();
     let indexer_error_recorder =
@@ -1181,13 +1185,15 @@ async fn bootstrap_application(
             &indexer_runtime_plugins,
             &disabled_builtin_plugins,
         )
-        .with_indexer_error_recorder(indexer_error_recorder),
+        .with_indexer_error_recorder(indexer_error_recorder)
+        .with_indexer_stats_tracker(indexer_stats.clone()),
     ));
     let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
         NativeProwlarrIndexerProvider::new_with_indexer_error_repository(
             dynamic_provider,
             indexer_errors.clone(),
-        ),
+        )
+        .with_indexer_stats_tracker(indexer_stats.clone()),
     );
     let subtitle_plugin_provider: Arc<dyn SubtitlePluginProvider> =
         Arc::new(scryer_plugins::DynamicSubtitlePluginProvider::new(
