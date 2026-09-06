@@ -171,6 +171,14 @@ struct StrategyTierContext {
     rate_limit_seconds: Option<i64>,
     category: Option<String>,
     per_indexer_categories: Option<Vec<String>>,
+    /// Whether this indexer is reached through Prowlarr's newznab proxy rather
+    /// than a direct nab endpoint. Prowlarr accepts every nab function, rewrites
+    /// a text-only faceted search back to `t=search` before it reaches the
+    /// tracker, and filters the response by the requested categories itself, so
+    /// it can be handed routed categories on a strategy that carries no facet.
+    /// A direct nab provider infers the function from the category prefixes and
+    /// fails hard when that function is unavailable, so it cannot.
+    prowlarr_nab_proxy: bool,
     mode: SearchMode,
     operation: IndexerErrorOperation,
     tagged_aliases: Vec<scryer_domain::TaggedAlias>,
@@ -265,7 +273,15 @@ fn prepare_search_strategies(
             .flatten();
         let facet = (!strategy.generic_query_only && !strategy.omit_request_facet)
             .then(|| strategy.request_facet.clone());
-        let newznab_categories = (!strategy.generic_query_only)
+        // `cat=` is a generic nab parameter, so dropping it along with the
+        // facet discards the operator's routing selection for no protocol
+        // reason. Prowlarr-proxied indexers keep it: Prowlarr resolves the
+        // function and the category filter on our behalf. Direct nab providers
+        // still lose it, because the shipped provider reads the request shape
+        // off the category prefixes and would turn `t=search` into the very
+        // function this indexer's caps ruled out.
+        let keep_routed_categories = !strategy.generic_query_only || context.prowlarr_nab_proxy;
+        let newznab_categories = keep_routed_categories
             .then(|| context.per_indexer_categories.clone())
             .flatten();
         let season = (!strategy.generic_query_only)
@@ -2693,6 +2709,7 @@ impl MultiIndexerSearchClient {
                     rate_limit_seconds,
                     category: _,
                     per_indexer_categories: _,
+                    prowlarr_nab_proxy: _,
                     mode,
                     operation,
                     tagged_aliases: _,
@@ -4329,6 +4346,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 HashMap::new()
             };
             let rss_category_request = request_categories.clone();
+            let prowlarr_nab_proxy = Self::is_prowlarr_nab_proxy(config);
             let indexer_id = config.id.clone();
             let indexer_name = config.name.clone();
             let facet = facet.clone();
@@ -4384,6 +4402,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         rate_limit_seconds,
                         category: category_for_indexer.clone(),
                         per_indexer_categories: rss_category_request.clone(),
+                        prowlarr_nab_proxy,
                         mode,
                         operation,
                         tagged_aliases: tagged_aliases_for_indexer.clone(),
@@ -4718,6 +4737,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             rate_limit_seconds,
                             category: category_for_indexer,
                             per_indexer_categories: rss_category_request,
+                            prowlarr_nab_proxy,
                             mode,
                             operation,
                             tagged_aliases: tagged_aliases_for_indexer.clone(),
@@ -6096,6 +6116,89 @@ mod tests {
         );
     }
 
+    fn generic_query_strategy_request(
+        prowlarr_nab_proxy: bool,
+        generic_query_only: bool,
+    ) -> IndexerSearchStrategyRequest {
+        let context = StrategyTierContext {
+            client: Arc::new(MockIndexerClient {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            search_limit: Arc::new(Semaphore::new(1)),
+            rate_limiter: IndexerRateLimiter::new(),
+            indexer_id: "indexer-1".into(),
+            search_timeout: std::time::Duration::from_secs(5),
+            rate_limit_seconds: None,
+            category: Some("movie".to_string()),
+            per_indexer_categories: Some(vec!["2040".to_string()]),
+            prowlarr_nab_proxy,
+            mode: SearchMode::Auto,
+            operation: IndexerErrorOperation::AutomaticSearch,
+            tagged_aliases: Vec::new(),
+            cancel_token: CancellationToken::new(),
+            deadline_at: None,
+        };
+        let strategy = SearchStrategy {
+            request_query: "Amber Circuit 2026".to_string(),
+            request_facet: "movie".to_string(),
+            ids: HashMap::new(),
+            season: None,
+            episode: None,
+            absolute_episode: None,
+            generic_query_only,
+            omit_request_facet: false,
+            label: "freetext".to_string(),
+        };
+
+        let mut prepared = prepare_search_strategies(&context, vec![strategy]);
+        assert_eq!(prepared.len(), 1);
+        prepared.remove(0).request
+    }
+
+    #[test]
+    fn prowlarr_proxy_keeps_routed_categories_on_a_generic_query_strategy() {
+        // Prowlarr accepts every nab function, rewrites a text-only faceted
+        // search back to `t=search` before it reaches the tracker, and filters
+        // the response by the requested categories itself. Dropping `cat=` here
+        // silently discarded the operator's routing selection.
+        let request = generic_query_strategy_request(true, true);
+
+        assert_eq!(
+            request.newznab_categories,
+            Some(vec!["2040".to_string()]),
+            "a Prowlarr-proxied indexer keeps its routed categories"
+        );
+        // The rest of the structured context still goes, which is what makes
+        // this a generic query in the first place.
+        assert_eq!(request.facet, None);
+        assert_eq!(request.category, None);
+    }
+
+    #[test]
+    fn direct_nab_still_drops_routed_categories_on_a_generic_query_strategy() {
+        // A direct nab provider reads the request shape off the category
+        // prefixes, so handing it `2040` with no facet would turn `t=search`
+        // into `t=movie` — the function this indexer's caps ruled out.
+        let request = generic_query_strategy_request(false, true);
+
+        assert_eq!(request.newznab_categories, None);
+        assert_eq!(request.facet, None);
+    }
+
+    #[test]
+    fn facet_scoped_strategies_keep_routed_categories_on_either_transport() {
+        for prowlarr_nab_proxy in [true, false] {
+            let request = generic_query_strategy_request(prowlarr_nab_proxy, false);
+
+            assert_eq!(
+                request.newznab_categories,
+                Some(vec!["2040".to_string()]),
+                "transport must not change a facet-scoped strategy"
+            );
+            assert_eq!(request.facet, Some("movie".to_string()));
+        }
+    }
+
     struct MockIndexerConfigRepository {
         configs: Vec<IndexerConfig>,
     }
@@ -7316,6 +7419,7 @@ mod tests {
                 rate_limit_seconds: None,
                 category: None,
                 per_indexer_categories: None,
+                prowlarr_nab_proxy: false,
                 mode: SearchMode::Auto,
                 operation: IndexerErrorOperation::AutomaticSearch,
                 tagged_aliases: Vec::new(),
@@ -8745,7 +8849,11 @@ mod tests {
         assert!(recorded[0].ids.is_empty());
         assert_eq!(recorded[0].query, "12 Lanterns of Winter");
         assert_eq!(recorded[0].facet, None);
-        assert!(recorded[0].categories.is_empty());
+        // The facet-scoped function is given up; the routed categories are not.
+        // Prowlarr resolves the nab function itself and filters the response by
+        // the categories it was asked for, so `cat=` still means something here
+        // even with no facet and no caps snapshot.
+        assert_eq!(recorded[0].categories, vec!["2000".to_string()]);
         assert_eq!(recorded[0].season, None);
         assert_eq!(recorded[0].episode, None);
         assert_eq!(recorded[0].absolute_episode, None);
@@ -8859,7 +8967,9 @@ mod tests {
         assert_eq!(recorded[0].query, "12 Lanterns of Winter");
         assert_eq!(recorded[0].category, None);
         assert_eq!(recorded[0].facet, None);
-        assert!(recorded[0].categories.is_empty());
+        // Dropping the caller's routed categories here silently discarded the
+        // operator's per-indexer selection for no protocol reason.
+        assert_eq!(recorded[0].categories, vec!["2000".to_string()]);
     }
 
     #[tokio::test]
@@ -9003,7 +9113,8 @@ mod tests {
         assert!(recorded[0].ids.is_empty());
         assert_eq!(recorded[0].category, None);
         assert_eq!(recorded[0].facet, None);
-        assert!(recorded[0].categories.is_empty());
+        // Structured context goes, routed categories stay.
+        assert_eq!(recorded[0].categories, vec!["5070".to_string()]);
         assert_eq!(recorded[0].season, None);
         assert_eq!(recorded[0].episode, None);
         assert_eq!(recorded[0].absolute_episode, None);
@@ -9225,9 +9336,88 @@ mod tests {
         assert!(recorded[1].ids.is_empty());
         assert_eq!(recorded[1].query, "Storm Signal");
         assert_eq!(recorded[1].facet, None);
-        assert!(recorded[1].categories.is_empty());
+        // Same rule as the RSS bare-query form above: only the facet-scoped
+        // function is given up, and the sweep keeps sweeping what it was routed.
+        assert_eq!(recorded[1].categories, recorded[0].categories);
         assert_eq!(recorded[1].season, None);
         assert_eq!(recorded[1].episode, None);
+    }
+
+    #[tokio::test]
+    async fn direct_nab_basic_query_fallback_still_drops_routed_categories() {
+        // Twin of the Prowlarr case above, on the transport that cannot take
+        // them. A direct nab provider reads the request shape off the category
+        // prefixes, so a `5000` with no facet would turn `t=search` into the
+        // `tvsearch` this snapshot just said has no `q`, and a first-page error
+        // there is fatal.
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.caps_snapshot_json = Some(
+            serde_json::to_string(&prowlarr_caps_snapshot(
+                &["q", "imdbid"],
+                &["season", "ep", "tvdbid"],
+            ))
+            .expect("serialize direct caps snapshot"),
+        );
+
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(|call| {
+                if call.ids.is_empty() {
+                    response_with_titles(&["Storm.Signal.S01E02.2026"])
+                } else {
+                    Ok(IndexerSearchResponse {
+                        completion: IndexerSearchCompletion::Complete,
+                        indexer_outcomes: Vec::new(),
+                        results: vec![],
+                        api_current: None,
+                        api_max: None,
+                        grab_current: None,
+                        grab_max: None,
+                    })
+                }
+            }),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![config],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: movie_caps(),
+            }),
+        );
+
+        let _response = multi
+            .search(
+                "Storm Signal".to_string(),
+                HashMap::from([("tvdb_id".to_string(), "424242".to_string())]),
+                Some("series".to_string()),
+                Some("series".to_string()),
+                None,
+                Some(vec!["5000".to_string()]),
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(2),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let recorded = calls.lock().expect("calls").clone();
+        let freetext = recorded
+            .iter()
+            .find(|call| call.ids.is_empty())
+            .expect("the freetext sweep should have fired");
+        assert_eq!(freetext.facet, None);
+        assert!(
+            freetext.categories.is_empty(),
+            "direct nab must not receive routed categories without a facet: {recorded:?}"
+        );
     }
 
     #[tokio::test]
