@@ -53,12 +53,35 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         ContextFacetHint::Unknown => None,
     };
     let facts = crate::trash_guides::derive_facts(inputs.raw_input, category_hint);
-    let lexed = lex_lossless(inputs.sanitized_input);
-    let annotations = annotate_tokens(&lexed.tokens);
+    let mut lexed = lex_lossless(inputs.sanitized_input);
+    // A fused episode label (`EP01`, `S01EP01`, `EPISODE07`) is rewritten to the
+    // canonical `E01` / `S01E01` shape before annotation so that every downstream
+    // rule sees one uniform token. Only `Token::normalized` is touched; `raw` and
+    // `span` keep pointing at the original text. Gated on the caller declaring a
+    // series-ish facet: on movie and unknown targets `EP##` is far more often an
+    // installment shorthand than an episode label. The rewrite is also held back
+    // unless the canonical shape actually resolves to a standard episode, so a
+    // trailing-garbage label (`EP01V2`) is left exactly as the lexer produced it
+    // rather than reaching the title as `E01V2`.
+    let mut rewrote_fused_label = false;
+    if fused_episode_labels_enabled(inputs.target.facet_hint) {
+        for token in &mut lexed.tokens {
+            if let Some(rewritten) = defused_episode_label(&token.normalized)
+                && parse_standard_episode_token(&rewritten).is_some()
+            {
+                token.normalized = rewritten;
+                rewrote_fused_label = true;
+            }
+        }
+    }
     let context_index = build_context_index(inputs.target);
+    let annotations = annotate_tokens(&lexed.tokens, &context_index);
     let alias_oracle = build_alias_oracle(&lexed.tokens, &context_index);
     let mut parse_hints = inputs.sanitize_hints.to_vec();
     parse_hints.extend(lexed.hints.clone());
+    if rewrote_fused_label {
+        parse_hints.push("lex:fused_episode_label".to_string());
+    }
     parse_hints.extend(alias_oracle.parse_hints.iter().cloned());
     if annotations.iter().any(|annotation| annotation.role_pruned) {
         parse_hints.push("annotation:role_pruned".to_string());
@@ -456,12 +479,13 @@ struct CompoundMetadata {
     audio_channels: Option<&'static str>,
 }
 
-fn annotate_tokens(tokens: &[Token]) -> Vec<TokenAnnotations> {
+fn annotate_tokens(tokens: &[Token], context: &ContextIndex) -> Vec<TokenAnnotations> {
+    let episode_roles_allowed = episode_families_seedable(context);
     tokens
         .iter()
         .enumerate()
         .map(|(index, token)| {
-            let mut roles = classify_token(token, tokens.get(index + 1));
+            let mut roles = classify_token(token, tokens.get(index + 1), episode_roles_allowed);
             roles.sort_by(|left, right| {
                 right
                     .confidence
@@ -492,7 +516,11 @@ fn annotate_tokens(tokens: &[Token]) -> Vec<TokenAnnotations> {
         .collect()
 }
 
-fn classify_token(token: &Token, next: Option<&Token>) -> Vec<RoleCandidate> {
+fn classify_token(
+    token: &Token,
+    next: Option<&Token>,
+    episode_roles_allowed: bool,
+) -> Vec<RoleCandidate> {
     let mut roles = Vec::new();
     let normalized = token.normalized.as_str();
     let compound = detect_compound_metadata(normalized);
@@ -694,14 +722,14 @@ fn classify_token(token: &Token, next: Option<&Token>) -> Vec<RoleCandidate> {
             strong_anchor: false,
         });
     }
-    if parse_standard_episode_token(normalized).is_some() {
+    if episode_roles_allowed && parse_standard_episode_token(normalized).is_some() {
         roles.push(RoleCandidate {
             role: TokenRole::EpisodeMarker,
             confidence: 100,
             strong_anchor: false,
         });
     }
-    if parse_season_token(normalized).is_some() {
+    if episode_roles_allowed && parse_season_token(normalized).is_some() {
         roles.push(RoleCandidate {
             role: TokenRole::SeasonMarker,
             confidence: 94,
@@ -1226,14 +1254,26 @@ fn seed_beam(context: &ContextIndex, token_count: usize) -> Vec<ParseState> {
         .collect()
 }
 
+/// Whether an episode-bearing family can be seeded for this target at all.
+///
+/// A movie target only reaches the episode families when its own context
+/// carries episode evidence; every other facet always can. Token annotation
+/// shares this predicate so that a target which can never produce an episode
+/// candidate does not mint episode/season role candidates either — those roles
+/// still steer the title boundary and identity-unit rules even when no episode
+/// family survives scoring.
+fn episode_families_seedable(context: &ContextIndex) -> bool {
+    context.facet_hint != ContextFacetHint::Movie
+        || !context.episodes.is_empty()
+        || !context.air_dates.is_empty()
+        || !context.absolute_numbers.is_empty()
+}
+
 fn seeded_families(context: &ContextIndex) -> Vec<(ParseFamily, i32)> {
     match context.facet_hint {
         ContextFacetHint::Movie => {
             let mut families = vec![(ParseFamily::Movie, 0)];
-            if !context.episodes.is_empty()
-                || !context.air_dates.is_empty()
-                || !context.absolute_numbers.is_empty()
-            {
+            if episode_families_seedable(context) {
                 families.extend([
                     (ParseFamily::AnimeAbsolute, -8),
                     (ParseFamily::DailyEpisode, -8),
@@ -4715,6 +4755,41 @@ fn is_strong_anchor(role: TokenRole) -> bool {
             | TokenRole::ExternalId
             | TokenRole::ChecksumOrHash
     )
+}
+
+/// Whether fused episode labels (`EP01`) may be rewritten for this target.
+///
+/// Series and anime targets ask for episode identity, so a fused label is read as
+/// one. Movie targets use `EP4`/`EP04` as installment shorthand, and an unknown
+/// target has not told us which of the two it is, so both leave the token alone.
+fn fused_episode_labels_enabled(facet: ContextFacetHint) -> bool {
+    matches!(facet, ContextFacetHint::Series | ContextFacetHint::Anime)
+}
+
+/// Rewrite a fused episode label into the canonical `E`-prefixed shape.
+///
+/// `EP01` -> `E01`, `EPISODE07` -> `E07`, `S01EP04` -> `S01E04`, `EPS01-04` ->
+/// `E01-04`. At least two leading ASCII digits are required after the label, so
+/// the single-digit installment shorthand (`EP4`) is deliberately not a label.
+/// Already-canonical tokens (`E01`, `S01E01`) return `None` — no self-rewrite.
+fn defused_episode_label(token: &str) -> Option<String> {
+    let (prefix, rest) = if let Some(rest) = token.strip_prefix('S') {
+        let split = rest.find(|ch: char| !ch.is_ascii_digit())?;
+        if split == 0 {
+            return None;
+        }
+        (&token[..1 + split], &rest[split..])
+    } else {
+        ("", token)
+    };
+    for label in ["EPISODES", "EPISODE", "EPS", "EP"] {
+        if let Some(tail) = rest.strip_prefix(label)
+            && tail.chars().take(2).filter(char::is_ascii_digit).count() == 2
+        {
+            return Some(format!("{prefix}E{tail}"));
+        }
+    }
+    None
 }
 
 fn parse_standard_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {

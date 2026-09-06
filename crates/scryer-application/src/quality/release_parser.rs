@@ -46,7 +46,7 @@ pub fn build_release_parse_context_for_title(
     build_release_parse_context_from_episodes(title, episodes.iter(), facet_hint)
 }
 
-fn build_release_parse_context_from_episodes<'a>(
+pub(crate) fn build_release_parse_context_from_episodes<'a>(
     title: &Title,
     episodes: impl IntoIterator<Item = &'a Episode>,
     facet_hint: Option<&str>,

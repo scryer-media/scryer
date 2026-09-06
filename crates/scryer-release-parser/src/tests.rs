@@ -4,7 +4,7 @@ use crate::enrichment::{enrich_candidate, project_final_metadata};
 use crate::{
     AudioCodec, ContextAlias, ContextEpisode, ContextFacetHint, ContextTitle,
     ContextTitleMatchKind, ExternalIdSource, ParseFamily, ParsedEpisodeReleaseType,
-    ReleaseParseContext, ReleaseSource, StreamingService, VideoCodec,
+    ReleaseParseContext, ReleaseSource, StreamingService, TokenRole, VideoCodec,
     analyze_release_against_targets, analyze_release_for_target,
 };
 
@@ -2899,3 +2899,256 @@ fn ambiguous_parse_still_extracts_structure_independent_metadata() {
             .any(|hint| hint == "enrichment:ambiguous_structure_independent")
     );
 }
+
+/// A fused episode label (`Ep03`, `S01EP04`, `Episode07`) is the same identity
+/// claim as `E03` / `S01E04`, so a series target reads it as one.
+#[test]
+fn parses_fused_episode_label_for_series_target() {
+    let analysis = analyze_release_for_target(
+        "Umbra.Vector.Ep03.1080p.WEB-DL",
+        &context(ContextFacetHint::Series, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+
+    assert_eq!(candidate.family, ParseFamily::StandardEpisode);
+    assert_eq!(candidate.projected.normalized_title, "UMBRA VECTOR");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![3]);
+    assert!(
+        analysis
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "lex:fused_episode_label")
+    );
+}
+
+#[test]
+fn parses_fused_episode_label_in_fansub_shape_for_anime_target() {
+    for (raw, expected) in [
+        ("[Synth-Raws]_Umbra_Vector_Ep03_Dubbed_(1A2B3C4D)", 3u32),
+        ("[Synth-Raws]_Umbra_Vector_Ep12_Dubbed_(1A2B3C4D)", 12),
+    ] {
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Anime, "Umbra Vector"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+        let episode = candidate
+            .projected
+            .episode
+            .as_ref()
+            .unwrap_or_else(|| panic!("episode for {raw}"));
+
+        assert_eq!(candidate.family, ParseFamily::StandardEpisode, "{raw}");
+        assert_eq!(episode.episode_numbers, vec![expected], "{raw}");
+    }
+}
+
+#[test]
+fn parses_fused_episode_label_variants_for_series_target() {
+    let target = context(ContextFacetHint::Series, "Umbra Vector");
+
+    let analysis =
+        analyze_release_for_target("Umbra.Vector.S01EP04.1080p.AMZN.WEB-DL", &target);
+    let episode = analysis
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .episode
+        .clone()
+        .expect("episode");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![4]);
+
+    let analysis = analyze_release_for_target("Umbra.Vector.EPS01-04.Complete.720p", &target);
+    let episode = analysis
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .episode
+        .clone()
+        .expect("episode");
+    assert_eq!(episode.episode_numbers, vec![1, 2, 3, 4]);
+
+    let analysis = analyze_release_for_target("Umbra.Vector.Episode07.1080p", &target);
+    let episode = analysis
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .episode
+        .clone()
+        .expect("episode");
+    assert_eq!(episode.episode_numbers, vec![7]);
+}
+
+/// A single unpadded digit after the label is the movie-installment shorthand,
+/// not an episode number, so it is deliberately left unparsed.
+#[test]
+fn single_digit_fused_label_is_not_an_episode_for_series_target() {
+    let analysis = analyze_release_for_target(
+        "Umbra.Vector.Ep4.1080p",
+        &context(ContextFacetHint::Series, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert!(candidate.projected.episode.is_none());
+    assert!(
+        !analysis
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "lex:fused_episode_label")
+    );
+}
+
+/// The rewrite is gated on the caller declaring a series-ish facet: a target
+/// that has not said which kind of thing it is keeps the old reading.
+#[test]
+fn fused_episode_label_is_not_read_on_unknown_target() {
+    let analysis = analyze_release_for_target(
+        "Umbra.Vector.Ep03.1080p",
+        &context(ContextFacetHint::Unknown, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert!(candidate.projected.episode.is_none());
+    assert!(
+        !analysis
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "lex:fused_episode_label")
+    );
+}
+
+/// `EP04` on a movie target is installment shorthand, not an episode label.
+#[test]
+fn fused_episode_label_is_not_read_on_movie_target() {
+    for known_years in [Vec::new(), vec![1977]] {
+        let mut target = context(ContextFacetHint::Movie, "Umbra Vector");
+        target.known_years = known_years.clone();
+
+        let analysis = analyze_release_for_target(
+            "Umbra.Vector.EP04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            &target,
+        );
+        let candidate = analysis.best_candidate().expect("best candidate");
+
+        assert_eq!(candidate.family, ParseFamily::Movie, "{known_years:?}");
+        assert!(candidate.projected.episode.is_none(), "{known_years:?}");
+        assert_eq!(candidate.projected.year, Some(1977), "{known_years:?}");
+        assert!(
+            !analysis
+                .parse_hints
+                .iter()
+                .any(|hint| hint == "lex:fused_episode_label"),
+            "{known_years:?}"
+        );
+    }
+}
+
+
+/// A movie target that cannot seed an episode family must not mint episode or
+/// season role candidates either. Those roles still bound the title zone and
+/// drive the identity-unit rules even when no episode family survives scoring,
+/// so on a movie they cut the title short and can take the year with it.
+#[test]
+fn movie_target_without_episode_context_mints_no_episode_roles() {
+    for raw in [
+        "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+        "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+        "Umbra.Vector.S01.A.Synthetic.Subtitle.1977.1080p.BluRay",
+    ] {
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Movie, "Umbra Vector"));
+        assert!(
+            !analysis.annotations.iter().any(|annotation| {
+                annotation.primary_role == TokenRole::EpisodeMarker
+                    || annotation.primary_role == TokenRole::SeasonMarker
+                    || annotation.alternate_roles.contains(&TokenRole::EpisodeMarker)
+                    || annotation.alternate_roles.contains(&TokenRole::SeasonMarker)
+            }),
+            "{raw} still minted an episode or season role on a movie target"
+        );
+
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Series, raw));
+        assert!(
+            analysis.annotations.iter().any(|annotation| {
+                annotation.primary_role == TokenRole::EpisodeMarker
+                    || annotation.primary_role == TokenRole::SeasonMarker
+            }),
+            "{raw} lost its episode or season role on a series target"
+        );
+    }
+}
+
+/// With no context title to anchor on — the shape a contextless movie parse
+/// falls back to — the episode-shaped token now stays in the title and the
+/// year survives instead of being swallowed with it.
+#[test]
+fn movie_target_keeps_episode_shaped_tokens_in_its_title() {
+    for raw in [
+        "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+        "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+    ] {
+        let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Movie, ""));
+        let candidate = analysis.best_candidate().expect("best candidate");
+
+        assert_eq!(candidate.family, ParseFamily::Movie, "{raw}");
+        assert!(candidate.projected.episode.is_none(), "{raw}");
+        assert!(
+            candidate
+                .projected
+                .normalized_title
+                .ends_with("A SYNTHETIC SUBTITLE"),
+            "{raw} kept only {:?}",
+            candidate.projected.normalized_title
+        );
+        assert_eq!(candidate.projected.year, Some(1977), "{raw}");
+    }
+}
+
+/// The same strings on a series target keep reading as episodes.
+#[test]
+fn series_target_still_reads_episode_shaped_tokens_as_episodes() {
+    for (raw, season, number) in [
+        ("Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay", 1u32, 4u32),
+        (
+            "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            1,
+            4,
+        ),
+    ] {
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Series, "Umbra Vector"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+        let episode = candidate
+            .projected
+            .episode
+            .as_ref()
+            .unwrap_or_else(|| panic!("episode for {raw}"));
+
+        assert_eq!(candidate.family, ParseFamily::StandardEpisode, "{raw}");
+        assert_eq!(episode.season, Some(season), "{raw}");
+        assert_eq!(episode.episode_numbers, vec![number], "{raw}");
+    }
+}
+
+/// A movie target whose own context carries episode evidence still seeds the
+/// episode families, so it keeps the episode roles too.
+#[test]
+fn movie_target_with_episode_context_still_mints_episode_roles() {
+    let mut target = context(ContextFacetHint::Movie, "Umbra Vector");
+    target.episodes.push(ContextEpisode {
+        season: Some(1),
+        episode: Some(4),
+        ..Default::default()
+    });
+
+    let analysis =
+        analyze_release_for_target("Umbra.Vector.S01E04.1080p.WEB-DL", &target);
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![4]);
+}
+

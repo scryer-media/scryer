@@ -1123,7 +1123,17 @@ async fn reconcile_unresolved_scene_episode_from_scoped_release(
         return Ok(None);
     };
 
-    let file_metadata = parsed_release_from_file_stem(source_video);
+    // Read the file with the title's own context first, the same way the pack
+    // lanes and the manual preview do, so all three agree on what a member
+    // names; the context-free stem parse still backs it up.
+    let catalog = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .unwrap_or_default();
+    let file_metadata = parsed_pack_member_identity_for_catalog(title, source_video, &catalog);
     let Some(file_episode) = file_metadata.episode.as_ref() else {
         return Ok(None);
     };
