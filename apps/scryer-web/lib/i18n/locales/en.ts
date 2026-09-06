@@ -820,6 +820,9 @@ const en: LocaleDictionary = {
   "settings.indexerRoutingEnabled": "Enabled",
   "settings.indexerRoutingCategoriesPlaceholder": "Select categories",
   "settings.indexerRoutingNoIndexers": "No indexers found.",
+  "settings.indexerRoutingCustomCategories": "Custom codes",
+  "settings.indexerRoutingCustomCategoryPlaceholder": "Numeric id from the indexer caps",
+  "settings.indexerRoutingCustomCategoryAdd": "Add",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Movies",
   "settings.indexerCategoryOther": "Other",
@@ -2450,6 +2453,8 @@ const en: LocaleDictionary = {
     "{{client}} connection test passed.",
   "status.downloadClientConnectionTestFailed":
     "{{client}} connection test failed.",
+  "status.autoSearchNoCandidates": "No release found for {{name}}: no indexer returned a candidate. Check indexer routing categories and indexer health.",
+  "status.autoSearchAllRejected": "No release found for {{name}}: automatic search rejected all {{count}} candidates. {{reasons}}",
   "status.queueFailed": "Queue operation failed.",
   "status.apiError": "Request failed",
   "status.permissionDenied": "You do not have permission for this action.",

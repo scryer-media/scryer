@@ -491,6 +491,9 @@ const ja: LocaleDictionary = {
   "settings.indexerRoutingEnabled": "有効",
   "settings.indexerRoutingCategoriesPlaceholder": "カテゴリを選択",
   "settings.indexerRoutingNoIndexers": "インデクサーが見つかりません。",
+  "settings.indexerRoutingCustomCategories": "カスタムコード",
+  "settings.indexerRoutingCustomCategoryPlaceholder": "インデクサーの caps にある数値 ID",
+  "settings.indexerRoutingCustomCategoryAdd": "追加",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "映画",
   "settings.indexerCategoryOther": "その他",
@@ -1321,6 +1324,8 @@ const ja: LocaleDictionary = {
     "{{client}}の接続テストに成功しました。",
   "status.downloadClientConnectionTestFailed":
     "{{client}}の接続テストに失敗しました。",
+  "status.autoSearchNoCandidates": "{{name}} のリリースが見つかりません: どのインデクサーも候補を返しませんでした。ルーティングカテゴリとインデクサーの状態を確認してください。",
+  "status.autoSearchAllRejected": "{{name}} のリリースが見つかりません: 自動検索が {{count}} 件の候補をすべて却下しました。{{reasons}}",
   "status.queueFailed": "キュー操作に失敗しました。",
   "status.apiError": "リクエスト失敗",
   "user.created": "ユーザー{{name}}を作成しました。",
