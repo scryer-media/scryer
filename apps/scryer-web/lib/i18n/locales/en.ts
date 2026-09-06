@@ -253,10 +253,13 @@ const en: LocaleDictionary = {
     "Enter your password before Scryer starts requiring login.",
   "settings.securityConfirmPassword": "Password",
   "settings.securityConfirmAction": "Enable",
-  "settings.securityAdminPasswordRequiredTitle": "Set the admin password first",
-  "settings.securityAdminPasswordRequiredDescription":
-    "Form login requires the admin account to have a password. Open your profile to set the initial password, then return here to enable form login.",
-  "settings.securityAdminPasswordRequiredAction": "Open Profile",
+  "settings.securitySetAdminPasswordTitle": "Set the admin password",
+  "settings.securitySetAdminPasswordDescription":
+    "Your account has no password yet. Choose one now and Scryer will enable login with it.",
+  "settings.securitySetAdminPasswordAction": "Set password and enable",
+  "settings.securitySetAdminPasswordMinLength": "At least {{count}} characters.",
+  "settings.securityPasswordTooShort":
+    "Password must be at least {{count}} characters.",
   "settings.securityDisableConfirmTitle": "Disable form login?",
   "settings.securityDisableConfirmDescription":
     "Scryer will return to open admin mode after reload.",

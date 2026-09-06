@@ -78,7 +78,10 @@ import {
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { useSearchContext } from "@/lib/context/search-context";
 import { cn } from "@/lib/utils";
-import { buildViewPath } from "@/lib/utils/routing";
+import {
+  ENABLE_FORM_LOGIN_LOCATION_STATE,
+  buildViewPath,
+} from "@/lib/utils/routing";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
@@ -560,7 +563,9 @@ export const RootHeader = React.memo(function RootHeader({
 
   const handleEnableLogin = React.useCallback(() => {
     setAccountMenuOpen(false);
-    navigate(buildViewPath("settings", "security"));
+    navigate(buildViewPath("settings", "security"), {
+      state: ENABLE_FORM_LOGIN_LOCATION_STATE,
+    });
   }, [navigate]);
 
   const handleLogout = React.useCallback(() => {
