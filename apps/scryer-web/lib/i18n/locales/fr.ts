@@ -501,6 +501,9 @@ const fr: LocaleDictionary = {
   "settings.indexerRoutingEnabled": "Activé",
   "settings.indexerRoutingCategoriesPlaceholder": "Sélectionner des catégories",
   "settings.indexerRoutingNoIndexers": "Aucun indexeur trouvé.",
+  "settings.indexerRoutingCustomCategories": "Codes personnalisés",
+  "settings.indexerRoutingCustomCategoryPlaceholder": "Identifiant numérique issu des caps de l'indexeur",
+  "settings.indexerRoutingCustomCategoryAdd": "Ajouter",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Films",
   "settings.indexerCategoryOther": "Autre",
@@ -1351,6 +1354,8 @@ const fr: LocaleDictionary = {
     "Test de connexion {{client}} réussi.",
   "status.downloadClientConnectionTestFailed":
     "Test de connexion {{client}} échoué.",
+  "status.autoSearchNoCandidates": "Aucune release trouvée pour {{name}} : aucun indexeur n'a renvoyé de candidat. Vérifiez les catégories de routage et l'état des indexeurs.",
+  "status.autoSearchAllRejected": "Aucune release trouvée pour {{name}} : la recherche automatique a rejeté les {{count}} candidats. {{reasons}}",
   "status.queueFailed": "L'opération de mise en file d'attente a échoué.",
   "status.apiError": "La requête a échoué",
   "user.created": "Utilisateur {{name}} créé.",

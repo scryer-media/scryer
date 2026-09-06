@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { resolveFloatingPanelPlacement } from "@/lib/floating-panel";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { ChevronDown } from "lucide-react";
@@ -154,6 +155,39 @@ export function getSortedCategoryCodesByScope(scope: ViewCategoryId, values: str
   return [...orderedKnownCodes, ...unknownCodes];
 }
 
+function knownCategoryCodesForScope(scope: ViewCategoryId): Set<string> {
+  return new Set(
+    INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope].flatMap((groupKey) => {
+      const group = INDEXER_CATEGORY_DEFINITIONS[groupKey];
+      return [group.code, ...group.categories.map((category) => category.code)];
+    }),
+  );
+}
+
+/**
+ * Codes the routing entry carries that the standard newznab tree does not
+ * list: an indexer's own categories (a "Movies-DE" subcat, a custom id above
+ * 100000) that only exist in that indexer's caps document.
+ */
+export function customCategoryCodes(scope: ViewCategoryId, values: string[]): string[] {
+  const known = knownCategoryCodesForScope(scope);
+  return normalizeCategoryCodes(values).filter((code) => !known.has(code));
+}
+
+/**
+ * Normalize a typed custom code. Newznab and torznab take numeric ids in the
+ * `cat` parameter, so a name such as "Movies-DE" would be sent verbatim and
+ * silently match nothing; only digits are accepted.
+ */
+export function parseCustomCategoryCode(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "" || !/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const withoutLeadingZeros = trimmed.replace(/^0+(?=\d)/, "");
+  return withoutLeadingZeros;
+}
+
 type IndexerCategoryPickerProps = {
   value: string[];
   scope: ViewCategoryId;
@@ -290,6 +324,23 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
     });
   };
 
+  const [customCodeDraft, setCustomCodeDraft] = React.useState("");
+  const customCodes = React.useMemo(
+    () => customCategoryCodes(scope, draftCategories),
+    [scope, draftCategories],
+  );
+  const parsedCustomCode = parseCustomCategoryCode(customCodeDraft);
+  const canAddCustomCode =
+    parsedCustomCode !== null && !selectedSet.has(parsedCustomCode);
+
+  const addCustomCode = () => {
+    if (!canAddCustomCode || parsedCustomCode === null) {
+      return;
+    }
+    toggleCategory(parsedCustomCode);
+    setCustomCodeDraft("");
+  };
+
   const floatingPanel = isOpen && panelPlacement && !disabled
     ? createPortal(
         <div
@@ -352,6 +403,58 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
               </div>
             );
           })}
+          <div className="mt-2 border-t border-border pt-2">
+            <div className="mb-1 px-2 text-sm text-foreground">
+              {t("settings.indexerRoutingCustomCategories")}
+            </div>
+            {customCodes.length > 0 ? (
+              <div className="space-y-1 pl-3">
+                {customCodes.map((code) => (
+                  <label
+                    key={code}
+                    className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent/60"
+                  >
+                    <span className="flex items-center gap-2 text-foreground">
+                      <Checkbox
+                        id={categoryIdPrefix ? selectorId(categoryIdPrefix, code) : undefined}
+                        checked={selectedSet.has(code)}
+                        onCheckedChange={() => toggleCategory(code)}
+                        aria-label={`${t("indexerCategory.labelCategory")}: ${code}`}
+                        disabled={disabled}
+                      />
+                      {code}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+            <form
+              className="mt-1 flex items-center gap-2 px-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                addCustomCode();
+              }}
+            >
+              <Input
+                {...integerInputProps}
+                id={categoryIdPrefix ? selectorId(categoryIdPrefix, "custom-code") : undefined}
+                value={customCodeDraft}
+                onChange={(event) => setCustomCodeDraft(sanitizeDigits(event.target.value))}
+                placeholder={t("settings.indexerRoutingCustomCategoryPlaceholder")}
+                aria-label={t("settings.indexerRoutingCustomCategories")}
+                disabled={disabled}
+                className="h-8 text-sm"
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                disabled={disabled || !canAddCustomCode}
+              >
+                {t("settings.indexerRoutingCustomCategoryAdd")}
+              </Button>
+            </form>
+          </div>
         </div>,
         document.body,
       )

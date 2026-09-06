@@ -141,6 +141,7 @@ import { DeletePreviewSummary } from "@/components/common/delete-preview-summary
 import { BulkRenamePreviewSummary } from "@/components/common/bulk-rename-preview-summary";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
@@ -3575,7 +3576,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         setGlobalStatus(queuedMessage);
       } catch (error) {
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
+          autoSearchOutcomeMessage(error, t, title.name) ??
+            userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
         );
       }
     },

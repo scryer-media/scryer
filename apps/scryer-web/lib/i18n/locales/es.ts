@@ -500,6 +500,9 @@ const es: LocaleDictionary = {
   "settings.indexerRoutingEnabled": "Habilitado",
   "settings.indexerRoutingCategoriesPlaceholder": "Seleccionar categorías",
   "settings.indexerRoutingNoIndexers": "No se encontraron indexadores.",
+  "settings.indexerRoutingCustomCategories": "Códigos personalizados",
+  "settings.indexerRoutingCustomCategoryPlaceholder": "ID numérico de las caps del indexador",
+  "settings.indexerRoutingCustomCategoryAdd": "Añadir",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Películas",
   "settings.indexerCategoryOther": "Otros",
@@ -1349,6 +1352,8 @@ const es: LocaleDictionary = {
     "Prueba de conexión de {{client}} exitosa.",
   "status.downloadClientConnectionTestFailed":
     "Prueba de conexión de {{client}} fallida.",
+  "status.autoSearchNoCandidates": "No se encontró ninguna release para {{name}}: ningún indexador devolvió candidatos. Revisa las categorías de enrutamiento y el estado de los indexadores.",
+  "status.autoSearchAllRejected": "No se encontró ninguna release para {{name}}: la búsqueda automática rechazó los {{count}} candidatos. {{reasons}}",
   "status.queueFailed": "La operación de cola falló.",
   "status.apiError": "La solicitud falló",
   "user.created": "Usuario {{name}} creado.",

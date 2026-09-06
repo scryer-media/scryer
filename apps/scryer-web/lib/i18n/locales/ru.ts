@@ -770,6 +770,9 @@ const ru: LocaleDictionary = {
     "settings.indexerRoutingNoCategories": "Категории не выбраны.",
     "settings.indexerRoutingCategoriesPlaceholder": "Выберите категории",
     "settings.indexerRoutingNoIndexers": "Индексаторы не найдены.",
+    "settings.indexerRoutingCustomCategories": "Свои коды",
+    "settings.indexerRoutingCustomCategoryPlaceholder": "Числовой id из caps индексатора",
+    "settings.indexerRoutingCustomCategoryAdd": "Добавить",
     "settings.indexerCategorySeries": "Сериалы",
     "settings.indexerCategoryMovies": "Фильмы",
     "settings.indexerCategoryOther": "Прочее",
@@ -3049,6 +3052,8 @@ const ru: LocaleDictionary = {
     "status.jellyfinConnectionTestFailed":
         "Не удалось проверить подключение к {{connection}}.",
 
+    "status.autoSearchNoCandidates": "Релиз для {{name}} не найден: ни один индексатор не вернул кандидатов. Проверьте категории маршрутизации и состояние индексаторов.",
+    "status.autoSearchAllRejected": "Релиз для {{name}} не найден: автоматический поиск отклонил все {{count}} кандидатов. {{reasons}}",
     "status.queueFailed":
         "Операция с очередью завершилась ошибкой.",
     "status.apiError":

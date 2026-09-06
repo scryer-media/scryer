@@ -656,6 +656,10 @@ pub struct AutoEligibilityReason {
     pub code: String,
     pub summary: String,
     pub count: usize,
+    /// Rule codes that vetoed the release when `code` is `quality_blocked`
+    /// (for example `managed_required_audio_missing`). Empty for every other
+    /// decision code, so the generic summary is the whole story there.
+    pub block_codes: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
