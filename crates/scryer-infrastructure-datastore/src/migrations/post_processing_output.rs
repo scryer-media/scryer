@@ -56,22 +56,46 @@ pub async fn compress_post_processing_output_sqlite(
             )
             .bind(&id)
             .bind(row.try_get::<String, _>("script_id").map_err(repo_error)?)
-            .bind(row.try_get::<String, _>("script_name").map_err(repo_error)?)
-            .bind(row.try_get::<Option<String>, _>("title_id").map_err(repo_error)?)
-            .bind(row.try_get::<Option<String>, _>("title_name").map_err(repo_error)?)
-            .bind(row.try_get::<Option<String>, _>("facet").map_err(repo_error)?)
-            .bind(row.try_get::<Option<String>, _>("file_path").map_err(repo_error)?)
+            .bind(
+                row.try_get::<String, _>("script_name")
+                    .map_err(repo_error)?,
+            )
+            .bind(
+                row.try_get::<Option<String>, _>("title_id")
+                    .map_err(repo_error)?,
+            )
+            .bind(
+                row.try_get::<Option<String>, _>("title_name")
+                    .map_err(repo_error)?,
+            )
+            .bind(
+                row.try_get::<Option<String>, _>("facet")
+                    .map_err(repo_error)?,
+            )
+            .bind(
+                row.try_get::<Option<String>, _>("file_path")
+                    .map_err(repo_error)?,
+            )
             .bind(row.try_get::<String, _>("status").map_err(repo_error)?)
-            .bind(row.try_get::<Option<i64>, _>("exit_code").map_err(repo_error)?)
+            .bind(
+                row.try_get::<Option<i64>, _>("exit_code")
+                    .map_err(repo_error)?,
+            )
             .bind(stdout_tail)
             .bind(stderr_tail)
-            .bind(row.try_get::<Option<i64>, _>("duration_ms").map_err(repo_error)?)
+            .bind(
+                row.try_get::<Option<i64>, _>("duration_ms")
+                    .map_err(repo_error)?,
+            )
             .bind(
                 row.try_get::<Option<String>, _>("env_payload_json")
                     .map_err(repo_error)?,
             )
             .bind(row.try_get::<String, _>("started_at").map_err(repo_error)?)
-            .bind(row.try_get::<Option<String>, _>("completed_at").map_err(repo_error)?)
+            .bind(
+                row.try_get::<Option<String>, _>("completed_at")
+                    .map_err(repo_error)?,
+            )
             .execute(&mut **tx)
             .await
             .map_err(repo_error)?;
@@ -192,7 +216,12 @@ mod tests {
 
         let long_output = "script line\n".repeat(400);
         for (id, stdout_tail, stderr_tail, exit_code) in [
-            ("run-a", Some(long_output.as_str()), Some("warning: x"), Some(0)),
+            (
+                "run-a",
+                Some(long_output.as_str()),
+                Some("warning: x"),
+                Some(0),
+            ),
             ("run-b", None, None, None),
         ] {
             sqlx::query(
@@ -214,7 +243,9 @@ mod tests {
         }
 
         let mut tx = pool.begin().await.unwrap();
-        compress_post_processing_output_sqlite(&mut tx).await.unwrap();
+        compress_post_processing_output_sqlite(&mut tx)
+            .await
+            .unwrap();
         let rows = sqlx::query(
             "SELECT id, script_id, title_id, facet, status, exit_code, stdout_tail,
                     stderr_tail, duration_ms, env_payload_json, started_at, completed_at
@@ -235,13 +266,22 @@ mod tests {
             decode_script_output_tail(&stderr.unwrap()).unwrap(),
             "warning: x"
         );
-        assert_eq!(rows[0].try_get::<String, _>("script_id").unwrap(), "script-1");
+        assert_eq!(
+            rows[0].try_get::<String, _>("script_id").unwrap(),
+            "script-1"
+        );
         assert_eq!(
             rows[0].try_get::<Option<String>, _>("title_id").unwrap(),
             Some("title-1".to_string())
         );
-        assert_eq!(rows[0].try_get::<Option<i64>, _>("exit_code").unwrap(), Some(0));
-        assert_eq!(rows[0].try_get::<Option<i64>, _>("duration_ms").unwrap(), Some(12));
+        assert_eq!(
+            rows[0].try_get::<Option<i64>, _>("exit_code").unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            rows[0].try_get::<Option<i64>, _>("duration_ms").unwrap(),
+            Some(12)
+        );
         assert_eq!(
             rows[0]
                 .try_get::<Option<String>, _>("env_payload_json")
@@ -249,19 +289,28 @@ mod tests {
             Some("{\"k\":1}".to_string())
         );
         assert_eq!(
-            rows[0].try_get::<Option<String>, _>("completed_at").unwrap(),
+            rows[0]
+                .try_get::<Option<String>, _>("completed_at")
+                .unwrap(),
             Some("2026-09-05T00:00:01Z".to_string())
         );
 
         assert_eq!(rows[1].try_get::<String, _>("id").unwrap(), "run-b");
         assert_eq!(
-            rows[1].try_get::<Option<Vec<u8>>, _>("stdout_tail").unwrap(),
+            rows[1]
+                .try_get::<Option<Vec<u8>>, _>("stdout_tail")
+                .unwrap(),
             None
         );
         assert_eq!(
-            rows[1].try_get::<Option<Vec<u8>>, _>("stderr_tail").unwrap(),
+            rows[1]
+                .try_get::<Option<Vec<u8>>, _>("stderr_tail")
+                .unwrap(),
             None
         );
-        assert_eq!(rows[1].try_get::<Option<i64>, _>("exit_code").unwrap(), None);
+        assert_eq!(
+            rows[1].try_get::<Option<i64>, _>("exit_code").unwrap(),
+            None
+        );
     }
 }

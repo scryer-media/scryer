@@ -1,5 +1,5 @@
 TRaSH Guides sync summary
-Source revision: c172aa9a9b808bc60454ba29531758c250775bb5
+Source revision: 31a2716d03a3f554a5a2a6bd76456109d900af05
 
 Active release-group rules: 830
   by facet: movies=277, series=175, anime=378
