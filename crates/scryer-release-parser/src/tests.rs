@@ -3155,3 +3155,94 @@ fn movie_target_with_episode_context_still_mints_episode_roles() {
     assert_eq!(episode.season, Some(1));
     assert_eq!(episode.episode_numbers, vec![4]);
 }
+
+/// The fansub convention `[Group] Title - NN [res][subs][CRC]` with a
+/// hyphenated group name used to file the group's own tokens as title words:
+/// the group was reported correctly *and* left glued to the front of the title.
+#[test]
+fn hyphenated_bracketed_group_stays_out_of_the_title_zone() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        // Deliberately unrelated, so nothing in the context can pull the title
+        // zone straight — this is the context-free reading.
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumen-scribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+    assert!(
+        !candidate
+            .projected
+            .normalized_title_variants
+            .iter()
+            .any(|variant| variant.contains("LUMEN")),
+        "no variant may carry the group tag: {:?}",
+        candidate.projected.normalized_title_variants
+    );
+}
+
+/// The payoff for anime numbering: the series name and the cour subtitle are
+/// offered together as a variant, which is what community-season anchoring
+/// compares against.
+#[test]
+fn hyphenated_bracketed_group_release_offers_its_series_and_cour_variant() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let variants = &candidate.projected.normalized_title_variants;
+
+    assert!(
+        variants
+            .iter()
+            .any(|variant| variant == "LANTERN VERGE FINAL CHORUS"),
+        "series-and-cour variant missing: {variants:?}"
+    );
+}
+
+/// Guard against over-correcting: one trailing bracket group with a
+/// multi-token tag parsed correctly before and must still.
+#[test]
+fn hyphenated_bracketed_group_with_one_trailing_bracket_is_unchanged() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumen-scribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+}
+
+/// The same, for a single-token tag with many trailing brackets.
+#[test]
+fn single_token_bracketed_group_with_many_trailing_brackets_is_unchanged() {
+    let analysis = analyze_release_for_target(
+        "[Lumenscribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumenscribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+}
