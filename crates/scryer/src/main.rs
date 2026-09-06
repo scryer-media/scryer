@@ -92,7 +92,7 @@ use scryer_interface::context::{
 use scryer_interface::{
     LogBuffer, build_schema_with_log_buffer_and_restore_and_application_upgrade,
 };
-use scryer_logging::{JsonContextFormatter, LogContextLayer, enable_context_spans};
+use scryer_logging::{JsonContextFormatter, LocalTimer, LogContextLayer, enable_context_spans};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -654,12 +654,14 @@ async fn run_application() {
                     .init();
             }
             LogFormat::Text => {
-                let stdout_layer = tracing_subscriber::fmt::layer();
+                let stdout_layer = tracing_subscriber::fmt::layer().with_timer(LocalTimer);
                 let buffer_layer = tracing_subscriber::fmt::layer()
+                    .with_timer(LocalTimer)
                     .with_writer(log_buffer::LogBufferWriter::new(log_ring_buffer.clone()))
                     .with_ansi(false);
                 let file_layer = log_file_writer.map(|writer| {
                     tracing_subscriber::fmt::layer()
+                        .with_timer(LocalTimer)
                         .with_writer(writer)
                         .with_ansi(false)
                 });
