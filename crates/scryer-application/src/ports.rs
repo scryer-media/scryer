@@ -5766,6 +5766,11 @@ pub trait IndexerClient: Send + Sync {
         operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
+        // Alternative `(season, episode)` numberings that denote the same
+        // wanted episode. Only the multi-indexer client, which owns the
+        // numbering guard, reads them; a single-indexer adapter searches on
+        // `season`/`episode` exactly as before.
+        _admissible_episode_numberings: Vec<(u32, u32)>,
         absolute_episode: Option<u32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
