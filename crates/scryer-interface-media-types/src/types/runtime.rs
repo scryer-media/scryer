@@ -202,6 +202,8 @@ pub struct IndexerQueryStatsPayload {
     pub api_requests_today: i32,
     /// UTC time the current api_requests_today window opened, or null when the counter has never been persisted.
     pub api_requests_window_started_at: Option<DateTime<Utc>>,
+    /// UTC time corrected Scryer-owned API request observation began. The first UTC day is partial.
+    pub api_requests_observed_since: Option<DateTime<Utc>>,
     /// Current API request count, or null when not reported.
     pub api_current: Option<i32>,
     /// API request limit, or null when not reported.

@@ -23,6 +23,7 @@ use super::{
     _0010_download_client_remove_failed_default as migration_0010,
     _0011_long_tail_reconverge_default as migration_0011,
     _0012_legacy_newznab_wrappers_01822 as migration_0012,
+    _0013_indexer_request_accounting as migration_0013,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +106,12 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec {
         id: "0012_legacy_newznab_wrappers_01822",
         description: "migrate legacy Newznab wrapper plugins to provider profiles",
+        phase: MigrationPhase::Early,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: "0013_indexer_request_accounting",
+        description: "establish the corrected indexer request accounting epoch",
         phase: MigrationPhase::Early,
         legacy_state_key: None,
     },
@@ -247,6 +254,14 @@ impl ApplicationMigrator {
                             "legacy Newznab wrapper configurations were left unconverted; those indexers need operator attention"
                         );
                     }
+                }
+                "0013_indexer_request_accounting" => {
+                    let datastore = self.ledger.datastore.clone();
+                    self.run_retryable(
+                        spec,
+                        async move { migration_0013::migrate(&datastore).await },
+                    )
+                    .await;
                 }
                 _ => unreachable!("early migration registry and dispatcher must agree"),
             }

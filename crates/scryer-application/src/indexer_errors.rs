@@ -132,15 +132,19 @@ pub trait IndexerErrorRepository: Send + Sync {
 /// stored one), so there is no `indexers` row to key error history on and
 /// `indexer_errors.indexer_id` is a foreign key onto that table.
 pub const CONNECTION_TEST_INDEXER_ID: &str = "test-connection";
+pub const PREVIEW_MANAGED_SYNC_INDEXER_ID: &str = "preview-managed-sync";
+pub const SYNTHETIC_INDEXER_IDS: &[&str] =
+    &[CONNECTION_TEST_INDEXER_ID, PREVIEW_MANAGED_SYNC_INDEXER_ID];
 
 /// Whether error history may be persisted for this indexer id.
 ///
-/// Capture paths ask before recording: writing history for the connection-test
-/// id can only ever fail the foreign key, and a storage failure raised behind a
-/// failed probe buries the probe's own error — which is the one thing the
-/// operator asked the connection test for.
+/// Capture paths ask before recording: synthetic ids have no durable
+/// `indexers` row, so persisting history would fail its foreign key and bury
+/// the operation's useful error behind a storage error.
 pub fn indexer_error_history_is_persistable(indexer_id: &str) -> bool {
-    indexer_id.trim() != CONNECTION_TEST_INDEXER_ID
+    !SYNTHETIC_INDEXER_IDS
+        .iter()
+        .any(|synthetic_id| indexer_id.trim().eq_ignore_ascii_case(synthetic_id))
 }
 
 pub trait IndexerErrorRecorder: Send + Sync {

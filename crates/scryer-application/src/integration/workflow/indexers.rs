@@ -341,6 +341,18 @@ impl AppUseCase {
         &self,
         config: &IndexerConfig,
     ) -> AppResult<Option<String>> {
+        self.fetch_caps_snapshot_json_for_config_with_accounting(
+            config,
+            crate::IndexerAccountingContext::for_config(config).as_ref(),
+        )
+        .await
+    }
+
+    pub(crate) async fn fetch_caps_snapshot_json_for_config_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        accounting: Option<&crate::IndexerAccountingContext>,
+    ) -> AppResult<Option<String>> {
         let Some(refresher) = self
             .services
             .integrations
@@ -349,7 +361,7 @@ impl AppUseCase {
         else {
             return Ok(None);
         };
-        let Some(snapshot) = refresher.fetch_for_config(config).await? else {
+        let Some(snapshot) = refresher.fetch_for_config_with_accounting(config, accounting).await? else {
             if config.is_direct_nab() {
                 return Err(AppError::Repository(
                     "caps refresh returned no Newznab caps snapshot".into(),
@@ -587,11 +599,21 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn validate_enabled_indexer_proxy_config_id(&self, raw_id: &str) -> AppResult<String> {
+    async fn validate_enabled_indexer_proxy_config_id_for_provider(
+        &self,
+        provider_type: &str,
+        raw_id: &str,
+    ) -> AppResult<String> {
         let id = raw_id.trim();
         if id.is_empty() {
             return Err(AppError::Validation(
                 "indexer proxy config id cannot be empty".into(),
+            ));
+        }
+        if provider_type.trim().eq_ignore_ascii_case("prowlarr") {
+            return Err(AppError::Validation(
+                "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
+                    .into(),
             ));
         }
         let config = self
@@ -653,7 +675,10 @@ impl AppUseCase {
         let base_url =
             derive_indexer_base_url_from_config_fields(&fields, Some(&normalized_config_json))?;
         let indexer_proxy_config_id = match input.indexer_proxy_config_id {
-            Some(id) => Some(self.validate_enabled_indexer_proxy_config_id(&id).await?),
+            Some(id) => Some(
+                self.validate_enabled_indexer_proxy_config_id_for_provider(&provider_type, &id)
+                    .await?,
+            ),
             None => None,
         };
         let download_client_id = input
@@ -835,10 +860,13 @@ impl AppUseCase {
                     ));
                 }
                 Some(Some(
-                    self.validate_enabled_indexer_proxy_config_id(&id).await?,
+                    self.validate_enabled_indexer_proxy_config_id_for_provider(&effective_provider, &id)
+                        .await?,
                 ))
             }
             Some(None) => Some(None),
+            None if effective_provider.trim().eq_ignore_ascii_case("prowlarr")
+                && existing.indexer_proxy_config_id.is_some() => Some(None),
             None => None,
         };
         let should_validate_connection = normalized_provider.is_some()

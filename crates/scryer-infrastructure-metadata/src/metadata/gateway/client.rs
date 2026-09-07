@@ -5488,6 +5488,7 @@ fn metadata_gateway_transient_delay(attempt: u32) -> Duration {
 
 fn map_metadata_gateway_outbound_error(request_label: &str, error: OutboundHttpError) -> AppError {
     match error {
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch closed"),
         OutboundHttpError::RateLimited(rate_limited) => {
             let retry_after_seconds = rate_limited
                 .retry_after

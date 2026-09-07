@@ -536,6 +536,11 @@ impl AppServicesBuilder {
         Arc<dyn IndexerStatsTracker>
     );
     app_services_builder_setter!(
+        with_indexer_artifact_resolver,
+        integrations.indexer_artifact_resolver,
+        Option<Arc<dyn IndexerArtifactResolver>>
+    );
+    app_services_builder_setter!(
         with_upstream_scheduler,
         integrations.upstream_scheduler,
         Arc<dyn UpstreamScheduler>

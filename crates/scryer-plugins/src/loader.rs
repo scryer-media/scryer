@@ -866,6 +866,19 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         config: &IndexerConfig,
         indexer_proxy_config: Option<&IndexerProxyConfig>,
     ) -> Option<Arc<dyn IndexerClient>> {
+        self.client_for_provider_with_accounting(
+            config,
+            indexer_proxy_config,
+            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
+        )
+    }
+
+    fn client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        indexer_proxy_config: Option<&IndexerProxyConfig>,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerClient>> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let loaded = self.get_loaded(&provider)?;
 
@@ -933,7 +946,9 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
 
         match built {
             Ok(client) => Some(Arc::new(
-                client.with_indexer_stats_tracker(Arc::clone(&self.indexer_stats)),
+                client
+                    .with_indexer_stats_tracker(Arc::clone(&self.indexer_stats))
+                    .with_accounting_context(accounting),
             )),
             Err(e) => {
                 tracing::warn!(
@@ -1072,6 +1087,20 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         }
 
         Some(client)
+    }
+
+    fn client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        indexer_proxy_config: Option<&IndexerProxyConfig>,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerClient>> {
+        // Probes carry submitted settings and a separately selected accounting
+        // identity; never reuse a client cached for a persisted configuration.
+        self.inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned")
+            .client_for_provider_with_accounting(config, indexer_proxy_config, accounting)
     }
 
     fn available_provider_types(&self) -> Vec<String> {

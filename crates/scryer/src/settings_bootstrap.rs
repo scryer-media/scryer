@@ -193,6 +193,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: false,
         },
         ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: crate::startup_migrations::_0013_indexer_request_accounting::INDEXER_REQUEST_ACCOUNTING_V2_STARTED_AT_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: crate::startup_migrations::_0008_title_credits_rehydration_018::TITLE_CREDITS_REHYDRATION_018_STATE_KEY,

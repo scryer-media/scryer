@@ -1845,6 +1845,9 @@ pub fn send_blocking_reqwest_request(
         BlockingOutboundHttpError::DeadlineExceeded => {
             unreachable!("unbounded blocking request has no dispatch deadline")
         }
+        BlockingOutboundHttpError::DispatchRejected => {
+            unreachable!("unobserved blocking request cannot reject its dispatch")
+        }
     })
 }
 
@@ -1862,11 +1865,31 @@ pub fn send_blocking_reqwest_request_with_cooldown_budget_until(
     max_cooldown_wait: Option<Duration>,
     deadline: std::time::Instant,
 ) -> Result<reqwest::blocking::Response, BlockingOutboundHttpError> {
+    send_blocking_reqwest_request_with_cooldown_budget_until_and_dispatch_observer(
+        request,
+        max_cooldown_wait,
+        deadline,
+        || Ok(()),
+    )
+}
+
+/// As [`send_blocking_reqwest_request_with_cooldown_budget_until`], with a
+/// fallible observer at the final local dispatch boundary.
+pub fn send_blocking_reqwest_request_with_cooldown_budget_until_and_dispatch_observer<F>(
+    request: reqwest::blocking::RequestBuilder,
+    max_cooldown_wait: Option<Duration>,
+    deadline: std::time::Instant,
+    observe_dispatch: F,
+) -> Result<reqwest::blocking::Response, BlockingOutboundHttpError>
+where
+    F: FnOnce() -> Result<(), BlockingOutboundHttpError>,
+{
     send_blocking_reqwest_request_with_cooldown_policy_inner(
         request,
         max_cooldown_wait,
         None,
         Some(deadline),
+        observe_dispatch,
     )
 }
 
@@ -1880,27 +1903,45 @@ pub fn send_blocking_reqwest_request_with_cooldown_policy(
         max_cooldown_wait,
         destination_cooldown_override,
         None,
+        || Ok(()),
+    )
+}
+
+/// Calls `observe_dispatch` after local admission, cooldown, and pacing gates
+/// and immediately before the request leaves the process. An observer error
+/// prevents the request from reaching the network.
+pub fn send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer<F>(
+    request: reqwest::blocking::RequestBuilder,
+    max_cooldown_wait: Option<Duration>,
+    destination_cooldown_override: Option<DestinationKey>,
+    observe_dispatch: F,
+) -> Result<reqwest::blocking::Response, BlockingOutboundHttpError>
+where
+    F: FnOnce() -> Result<(), BlockingOutboundHttpError>,
+{
+    send_blocking_reqwest_request_with_cooldown_policy_inner(
+        request,
+        max_cooldown_wait,
+        destination_cooldown_override,
+        None,
+        observe_dispatch,
     )
 }
 
 fn send_blocking_reqwest_request_with_cooldown_policy_inner(
-    mut request: reqwest::blocking::RequestBuilder,
+    request: reqwest::blocking::RequestBuilder,
     max_cooldown_wait: Option<Duration>,
     destination_cooldown_override: Option<DestinationKey>,
     deadline: Option<std::time::Instant>,
+    observe_dispatch: impl FnOnce() -> Result<(), BlockingOutboundHttpError>,
 ) -> Result<reqwest::blocking::Response, BlockingOutboundHttpError> {
     let registry = RateLimitRegistry::new();
+    let (request_client, request) = request.build_split();
+    let mut request = request?;
     let has_destination_override = destination_cooldown_override.is_some();
-    let destination = destination_cooldown_override.or_else(|| {
-        request
-            .try_clone()
-            .and_then(|clone| clone.build().ok())
-            .and_then(|request| destination_key_from_url(request.url()))
-    });
-    let host = request
-        .try_clone()
-        .and_then(|clone| clone.build().ok())
-        .and_then(|request| host_key_from_url(request.url()));
+    let destination =
+        destination_cooldown_override.or_else(|| destination_key_from_url(request.url()));
+    let host = host_key_from_url(request.url());
 
     if let Some(destination) = destination.as_ref() {
         if let Some(remaining) = registry.active_destination_cooldown(destination) {
@@ -1934,10 +1975,11 @@ fn send_blocking_reqwest_request_with_cooldown_policy_inner(
         if remaining.is_zero() {
             return Err(BlockingOutboundHttpError::DeadlineExceeded);
         }
-        request = request.timeout(remaining);
+        *request.timeout_mut() = Some(remaining);
     }
 
-    let response = request.send()?;
+    observe_dispatch()?;
+    let response = request_client.execute(request)?;
     let response_destination = if has_destination_override {
         destination
     } else {
@@ -1954,6 +1996,8 @@ fn send_blocking_reqwest_request_with_cooldown_policy_inner(
 
 #[derive(Debug, Error)]
 pub enum BlockingOutboundHttpError {
+    #[error("outbound dispatch was rejected before send")]
+    DispatchRejected,
     #[error(transparent)]
     Request(#[from] reqwest::Error),
     #[error(
@@ -2003,14 +2047,21 @@ impl OutboundHttpClient {
         &self.registry
     }
 
-    async fn send_builder_with_trusted_redirects(
+    async fn send_builder_with_trusted_redirects<D>(
         &self,
         builder: RequestBuilder,
         request_label: &str,
         host_rps_override: Option<&HostRpsRequestOverride>,
         max_hops: usize,
-    ) -> Result<Response, reqwest::Error> {
-        let mut response = builder.send().await?;
+        observe_dispatch: &D,
+    ) -> Result<Response, TrustedRedirectSendError>
+    where
+        D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+    {
+        let mut response = builder
+            .send()
+            .await
+            .map_err(TrustedRedirectSendError::Request)?;
         for _ in 0..max_hops {
             let Some(next_url) = redirect_target_url(&response) else {
                 return Ok(response);
@@ -2034,7 +2085,13 @@ impl OutboundHttpClient {
                     "outbound HTTP redirect host RPS wait"
                 );
             }
-            response = self.client.get(next_url).send().await?;
+            observe_dispatch(&next_url).map_err(TrustedRedirectSendError::Rejected)?;
+            response = self
+                .client
+                .get(next_url)
+                .send()
+                .await
+                .map_err(TrustedRedirectSendError::Request)?;
         }
         Ok(response)
     }
@@ -2111,17 +2168,103 @@ impl OutboundHttpClient {
         O: Fn(Response) -> OFut,
         OFut: Future<Output = ()>,
     {
+        self.send_async_with_observers(policy, build_request, observe_rate_limited_response, |_| {
+            Ok(())
+        })
+        .await
+    }
+
+    /// Sends with a synchronous hook that runs for each actual initial
+    /// dispatch after cooldown and host-pacing gates. It is suitable for
+    /// observed indexer accounting; rejected local gates never reach it.
+    pub async fn send_with_dispatch_observer<F, D>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+    {
+        match self
+            .send_async_with_observers(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                |_| async {},
+                observe_dispatch,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
+    /// Combines the 429 response hook with an actual-dispatch hook. The latter
+    /// is invoked after local gates and once per initial retry attempt.
+    pub async fn send_with_rate_limit_and_dispatch_observer<F, O, OFut, D>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+        D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+    {
+        match self
+            .send_async_with_observers(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                observe_rate_limited_response,
+                observe_dispatch,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
+    async fn send_async_with_observers<F, Fut, E, O, OFut, D>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+        observe_dispatch: D,
+    ) -> Result<Response, OutboundRequestError<E>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<RequestBuilder, E>>,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+        D: Fn(&reqwest::Url) -> Result<(), OutboundHttpError> + Send + Sync,
+    {
         let mut attempt = 0u32;
 
         loop {
             attempt += 1;
             let builder = build_request().await.map_err(OutboundRequestError::Build)?;
-            let request_destination = policy.destination_cooldown_override.clone().or_else(|| {
-                builder
-                    .try_clone()
-                    .and_then(|clone| clone.build().ok())
-                    .and_then(|request| destination_key_from_url(request.url()))
-            });
+            let (request_client, request) = builder.build_split();
+            let request = request.map_err(|source| {
+                OutboundRequestError::Http(OutboundHttpError::Transport {
+                    scope: policy.scope.clone(),
+                    request_label: policy.request_label.clone(),
+                    attempts: attempt,
+                    source,
+                })
+            })?;
+            let dispatch_url = request.url().clone();
+            let request_destination = policy
+                .destination_cooldown_override
+                .clone()
+                .or_else(|| destination_key_from_url(&dispatch_url));
 
             if let Some(destination) = request_destination.as_ref()
                 && let Some(wait_duration) = self
@@ -2149,10 +2292,7 @@ impl OutboundHttpClient {
                 );
             }
 
-            if let Some(host) = builder
-                .try_clone()
-                .and_then(|clone| clone.build().ok())
-                .and_then(|request| host_key_from_url(request.url()))
+            if let Some(host) = host_key_from_url(&dispatch_url)
                 && let Some(wait_duration) = self
                     .registry
                     .acquire_host_rps_for_request(&host, policy.host_rps_override.as_ref())
@@ -2178,14 +2318,20 @@ impl OutboundHttpClient {
                 );
             }
 
+            observe_dispatch(&dispatch_url).map_err(OutboundRequestError::Http)?;
+            let builder = RequestBuilder::from_parts(request_client, request);
             let send_result = match policy.redirect_mode {
-                RedirectMode::NoFollow => builder.send().await,
+                RedirectMode::NoFollow => builder
+                    .send()
+                    .await
+                    .map_err(TrustedRedirectSendError::Request),
                 RedirectMode::TrustedFollow { max_hops } => {
                     self.send_builder_with_trusted_redirects(
                         builder,
                         policy.request_label.as_ref(),
                         policy.host_rps_override.as_ref(),
                         max_hops,
+                        &observe_dispatch,
                     )
                     .await
                 }
@@ -2258,7 +2404,10 @@ impl OutboundHttpClient {
                         },
                     )));
                 }
-                Err(source) => {
+                Err(TrustedRedirectSendError::Rejected(error)) => {
+                    return Err(OutboundRequestError::Http(error));
+                }
+                Err(TrustedRedirectSendError::Request(source)) => {
                     if is_retryable_transport_error(&source) && policy.retry_allowed(attempt) {
                         let backoff = policy.backoff_for_retry(attempt.saturating_sub(1));
                         counter!(
@@ -2297,6 +2446,12 @@ impl OutboundHttpClient {
     }
 }
 
+#[derive(Debug)]
+enum TrustedRedirectSendError {
+    Request(reqwest::Error),
+    Rejected(OutboundHttpError),
+}
+
 #[derive(Debug, Error)]
 #[error("request '{request_label}' was rate limited for scope '{scope}' after {attempts} attempts")]
 pub struct RateLimitedError {
@@ -2309,6 +2464,8 @@ pub struct RateLimitedError {
 
 #[derive(Debug, Error)]
 pub enum OutboundHttpError {
+    #[error("outbound dispatch was rejected before send")]
+    DispatchRejected,
     #[error(transparent)]
     RateLimited(#[from] RateLimitedError),
     #[error(
@@ -3230,6 +3387,42 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 
+    #[tokio::test]
+    async fn dispatch_observer_counts_each_retry_attempt() {
+        let (url, hits) = spawn_http_server(vec![
+            http_response(429, &[("Retry-After", "bogus")], ""),
+            http_response(
+                200,
+                &[("Content-Type", "application/json")],
+                "{\"ok\":true}",
+            ),
+        ])
+        .await;
+        let client =
+            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let observer_dispatches = Arc::clone(&dispatches);
+
+        let response = client
+            .send_with_rate_limit_and_dispatch_observer(
+                RequestPolicy::safe_read("test-server", "retry-observer")
+                    .with_max_retries(1)
+                    .with_backoff(Duration::from_millis(5), Duration::from_millis(5)),
+                || client.client().get(&url),
+                |_| async {},
+                move |_| {
+                    observer_dispatches.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .await
+            .expect("request should succeed after one retry");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+    }
+
     #[test]
     fn retryable_transport_error_text_matches_transient_disconnects() {
         assert!(retryable_transport_error_text(
@@ -3405,6 +3598,75 @@ mod tests {
             error,
             BlockingOutboundHttpError::CooldownBudgetExceeded { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn blocked_cooldown_does_not_run_dispatch_observer_or_hit_server() {
+        let (url, hits) =
+            spawn_http_server(vec![http_response(200, &[], "must not be sent")]).await;
+        let destination = DestinationKey::from(format!(
+            "cooldown-test-{}",
+            bound_url_socket_addr(&url).port()
+        ));
+        let registry = RateLimitRegistry::new();
+        let _ = registry.record_destination_cooldown_blocking(
+            &destination,
+            Duration::from_secs(5),
+            RetryAfterSource::Seconds,
+        );
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let observer_dispatches = Arc::clone(&dispatches);
+
+        let error = tokio::task::spawn_blocking(move || {
+            let client = blocking_reqwest_client_builder().build().unwrap();
+            send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
+                client.get(url),
+                Some(Duration::ZERO),
+                Some(destination),
+                move || {
+                    observer_dispatches.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        })
+        .await
+        .expect("blocking task should complete")
+        .expect_err("cooldown should reject before dispatch");
+
+        assert!(matches!(
+            error,
+            BlockingOutboundHttpError::CooldownBudgetExceeded { .. }
+        ));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_blocking_request_does_not_run_dispatch_observer_or_hit_server() {
+        let (url, hits) =
+            spawn_http_server(vec![http_response(200, &[], "must not be sent")]).await;
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let observer_dispatches = Arc::clone(&dispatches);
+
+        let error = tokio::task::spawn_blocking(move || {
+            let client = blocking_reqwest_client_builder().build().unwrap();
+            send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
+                client.get(url).header("invalid\nheader", "value"),
+                Some(Duration::ZERO),
+                None,
+                move || {
+                    observer_dispatches.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        })
+        .await
+        .expect("blocking task should complete")
+        .expect_err("invalid request must fail before dispatch");
+
+        assert!(matches!(error, BlockingOutboundHttpError::Request(_)));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -3707,6 +3969,49 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(origin_hits.load(Ordering::SeqCst), 1);
         assert_eq!(target_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_redirect_dispatch_never_reaches_target() {
+        let (target_bound_url, target_hits) = spawn_http_server(vec![http_response(
+            200,
+            &[("Content-Type", "text/plain")],
+            "must not be requested",
+        )])
+        .await;
+        let (origin_bound_url, origin_hits) = spawn_http_server(vec![http_response(
+            302,
+            &[("Location", target_bound_url.as_str())],
+            "",
+        )])
+        .await;
+        let client = reqwest_client_builder()
+            .build()
+            .expect("client should build");
+        let outbound = OutboundHttpClient::new(client.clone(), RateLimitRegistry::isolated());
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let observer_dispatches = Arc::clone(&dispatches);
+
+        let error = outbound
+            .send_with_dispatch_observer(
+                RequestPolicy::safe_read("redirect-test", "redirect-observer"),
+                || client.get(origin_bound_url.clone()),
+                move |_| {
+                    let attempt = observer_dispatches.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        Ok(())
+                    } else {
+                        Err(OutboundHttpError::DispatchRejected)
+                    }
+                },
+            )
+            .await
+            .expect_err("redirect dispatch should be rejected");
+
+        assert!(matches!(error, OutboundHttpError::DispatchRejected));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        assert_eq!(origin_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(target_hits.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

@@ -3116,6 +3116,7 @@ export const systemHealthQuery = `query SystemHealth {
       lastQueryAt
       apiRequestsToday
       apiRequestsWindowStartedAt
+      apiRequestsObservedSince
       apiCurrent
       apiMax
       grabCurrent

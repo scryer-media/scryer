@@ -895,6 +895,16 @@ export function SettingsIndexersSection({
       (proxy) => proxy.isEnabled || proxy.id === selectedIndexerProxyId,
     );
   }, [indexerProxyConfigs, selectedIndexerProxyId]);
+  React.useEffect(() => {
+    if (!isManagedSyncProvider || !indexerDraft.indexerProxyConfigId) {
+      return;
+    }
+    setIndexerDraft((previous) =>
+      previous.indexerProxyConfigId
+        ? { ...previous, indexerProxyConfigId: null }
+        : previous,
+    );
+  }, [indexerDraft.indexerProxyConfigId, isManagedSyncProvider, setIndexerDraft]);
   // Protocol families for the provider the editor is currently on: seeding
   // profiles only apply to torrent-capable indexers.
   const draftProtocolFamilies = React.useMemo(
@@ -1615,7 +1625,8 @@ export function SettingsIndexersSection({
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2">
+            {!isManagedSyncProvider ? (
+              <div className="space-y-2">
               <Label className="block" htmlFor="settings-indexer-proxy-select">
                 Indexer proxy
               </Label>
@@ -1655,7 +1666,8 @@ export function SettingsIndexersSection({
                   Assigned proxy is disabled.
                 </p>
               ) : null}
-            </div>
+              </div>
+            ) : null}
             {indexerDownloadClientMappingCatalogResource.catalog ? (
               <IndexerDownloadClientSelect
                 model={getIndexerDownloadClientDraftMappingViewModel(

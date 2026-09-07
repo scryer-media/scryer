@@ -48,7 +48,35 @@ struct PluginHttpHostState {
     destination_cooldown_key: Option<scryer_outbound_http::DestinationKey>,
     max_http_response_bytes: Option<u64>,
     last_responses: HashMap<String, PluginHttpLastResponse>,
+    indexer_request_accounting: Option<IndexerRequestAccountingContext>,
     indexer_error_capture: Option<ActiveIndexerErrorCapture>,
+}
+
+/// Immutable identity and tracker used to account for actual indexer HTTP
+/// dispatches. It intentionally remains separate from error-response capture:
+/// a transport error must not decide which indexer's quota is charged.
+#[derive(Clone)]
+pub(crate) struct IndexerRequestAccountingContext {
+    pub(crate) indexer_id: String,
+    pub(crate) indexer_name: String,
+    pub(crate) operation: IndexerErrorOperation,
+    pub(crate) stats: Arc<dyn IndexerStatsTracker>,
+    pub(crate) indexer_origin: Option<String>,
+}
+
+impl IndexerRequestAccountingContext {
+    pub(crate) fn tally(&self) -> IndexerRequestTally {
+        let tally = IndexerRequestTally::new(
+            self.indexer_id.clone(),
+            self.indexer_name.clone(),
+            self.operation,
+            Arc::clone(&self.stats),
+        );
+        match self.indexer_origin.as_deref() {
+            Some(origin) => tally.with_indexer_origin(origin),
+            None => tally,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -278,6 +306,7 @@ impl PluginHttpHost {
                     .map(scryer_outbound_http::DestinationKey::from),
                 max_http_response_bytes,
                 last_responses: HashMap::new(),
+                indexer_request_accounting: None,
                 indexer_error_capture: None,
             })),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -345,6 +374,15 @@ impl PluginHttpHost {
             Err(error) => {
                 tracing::warn!(error = %error, "failed to start indexer HTTP error capture")
             }
+        }
+    }
+
+    pub(crate) fn set_indexer_request_accounting(
+        &self,
+        context: Option<IndexerRequestAccountingContext>,
+    ) {
+        if let Ok(mut state) = self.state.lock() {
+            state.indexer_request_accounting = context;
         }
     }
 
@@ -679,15 +717,21 @@ impl PluginHttpHost {
             .and_then(|response| response.rate_limit_message.clone()))
     }
 
-    /// A tally for the operation currently being captured, or `None` when this
-    /// request belongs to no indexer operation and so is nobody's API hit.
+    /// The immutable accounting identity takes precedence over error capture.
+    /// Error capture remains a fallback for legacy callers while adapters are
+    /// migrated to set the accounting context explicitly.
     fn request_tally(state: &Arc<Mutex<PluginHttpHostState>>) -> Option<IndexerRequestTally> {
+        let state = state.lock().ok()?;
         state
-            .lock()
-            .ok()?
-            .indexer_error_capture
+            .indexer_request_accounting
             .as_ref()
-            .map(|capture| capture.context.tally())
+            .map(IndexerRequestAccountingContext::tally)
+            .or_else(|| {
+                state
+                    .indexer_error_capture
+                    .as_ref()
+                    .map(|capture| capture.context.tally())
+            })
     }
 
     fn capture_indexer_response(
@@ -937,19 +981,23 @@ fn execute_request_with_extra_headers(
         builder = builder.body(body);
     }
 
-    let result = scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_policy(
+    let result = scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
         builder,
         timeout,
         destination_cooldown_key.cloned(),
+        || {
+            if let Some(tally) = tally
+                && !tally.try_note_sent(&request.url) {
+                return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
+            }
+            Ok(())
+        },
     );
 
     if let Some(tally) = tally {
         match &result {
-            // Dispatched, so the indexer served it whatever came back. The
-            // outcome is resolved by the caller once the body has been read.
-            Ok(_) => tally.note_sent(&request.url),
+            Ok(_) => {}
             Err(scryer_outbound_http::BlockingOutboundHttpError::Request(_)) => {
-                tally.note_sent(&request.url);
                 tally.note_result(IndexerRequestResult::NoResponse);
             }
             // Rejected by the local cooldown or deadline gate before dispatch.
@@ -957,7 +1005,8 @@ fn execute_request_with_extra_headers(
             // indexer is rate limited, which is when the number matters most.
             Err(
                 scryer_outbound_http::BlockingOutboundHttpError::CooldownBudgetExceeded { .. }
-                | scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded,
+                | scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded
+                | scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected,
             ) => {}
         }
     }
@@ -1123,13 +1172,11 @@ fn execute_challenge_solver_request(
         "challenge solver request started"
     );
 
-    // The solve payload is `request.get` against `request.url`, so the solver
-    // fetches the indexer with the user's API key in the query string. That is
-    // a request billed to the account, and it is counted here. As with the
-    // direct send, the count happens after the cooldown gate: this call carries
-    // a zero cooldown budget, so an undispatched rejection is common.
+    // The solve payload is `request.get` against `request.url`, but the network
+    // send is to the solver. It must still pass the operation's shutdown gate
+    // and is recorded as auxiliary transport activity.
     let solve_result =
-        scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_budget_until(
+        scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_budget_until_and_dispatch_observer(
             proxy_client.post(&endpoint).timeout(solver_timeout).json(
                 &solver::solver_solve_request(
                     provider,
@@ -1139,17 +1186,25 @@ fn execute_challenge_solver_request(
             ),
             Some(Duration::ZERO),
             solver_deadline,
+            || {
+                if let Some(tally) = tally
+                    && !tally.try_note_auxiliary_sent_call(CALL_SOLVER)
+                {
+                    return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
+                }
+                Ok(())
+            },
         );
     if let Some(tally) = tally {
         match &solve_result {
-            Ok(_) => tally.note_sent_call(CALL_SOLVER),
             Err(scryer_outbound_http::BlockingOutboundHttpError::Request(_)) => {
-                tally.note_sent_call(CALL_SOLVER);
                 tally.note_result(IndexerRequestResult::NoResponse);
             }
+            Ok(_) => {}
             Err(
                 scryer_outbound_http::BlockingOutboundHttpError::CooldownBudgetExceeded { .. }
-                | scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded,
+                | scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded
+                | scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected,
             ) => {}
         }
     }
@@ -1165,6 +1220,9 @@ fn execute_challenge_solver_request(
         }
         scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded => {
             solver::solver_error_message(provider, solver::SolverErrorKind::Timeout).to_string()
+        }
+        scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected => {
+            solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable).to_string()
         }
     })?;
 
@@ -1919,6 +1977,7 @@ mod tests {
                     "response": "<html>Trawl</html>"
                 }
             })))
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -1983,8 +2042,8 @@ mod tests {
         assert!(solved.headers.is_empty());
         assert_eq!(
             stats.sent(),
-            1,
-            "the solver fetched the indexer URL with the account's API key, so the solve is a              billed request even though Scryer never contacted the indexer itself"
+            0,
+            "a solver POST is auxiliary transport and does not charge the indexer dashboard"
         );
         let requests = server.received_requests().await.expect("recorded requests");
         assert_eq!(requests.len(), 1);
@@ -2022,6 +2081,7 @@ mod tests {
                     "response": "<html>Just a moment</html>"
                 }
             })))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -2033,6 +2093,7 @@ mod tests {
                     .insert_header("content-type", "application/xml")
                     .set_body_bytes(b"<rss></rss>"),
             )
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -2096,8 +2157,8 @@ mod tests {
         assert_eq!(solved.body, b"<rss></rss>");
         assert_eq!(
             stats.sent(),
-            2,
-            "a solve that has to refetch costs the account twice: the solver's own fetch and              Scryer's replay with the clearance session"
+            1,
+            "only Scryer's clearance-session replay is a direct indexer dispatch"
         );
     }
 
