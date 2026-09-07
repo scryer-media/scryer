@@ -19,6 +19,7 @@ function TextareaFallback({
   value,
   onChange,
   readOnly,
+  autoFocus,
   height = "320px",
   minLines,
   maxLines,
@@ -33,6 +34,7 @@ function TextareaFallback({
   return (
     <textarea
       id={id}
+      autoFocus={autoFocus}
       autoComplete="off"
       data-1p-ignore="true"
       data-lpignore="true"
