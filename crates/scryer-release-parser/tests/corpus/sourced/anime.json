@@ -19361,7 +19361,7 @@
       },
       "accepted_failure": {
         "reason": "The bounded 1-200 identity is retained, but the trailing nested season/cour parenthetical is not attached as a season restriction.",
-        "tradeoff": "The annotation rule uses explicit season scope consumed by the selected identity. Reaching into a later nested title/cour block risks borrowing protected title numbers and requires a separate attachment grammar. Only the exact missing season annotations are accepted; bounded coverage remains asserted.",
+        "tradeoff": "The annotation rule uses explicit season scope consumed by the selected identity. Reaching into a later nested title/cour block risks borrowing protected title numbers and requires a separate attachment grammar. Only the exact missing season annotations are accepted; bounds remain asserted and identity:unresolved_pack_scope prevents automatic coverage from ignoring the unattached restriction.",
         "mismatches": [
           {
             "field": "episode.season_numbers",

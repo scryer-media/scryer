@@ -872,6 +872,7 @@ mod tests {
             "Known Anime All Seasons OVA Only",
             "Known Anime S01 (WEB 1080p) | S02 | 01-13 | Batch",
             "Known Anime S01 (WEB 1080p) | S02E05 | 01-13 | Batch",
+            "Known Anime 1-200 (Seasons 1-5 (First Arc+Second Arc)) [1080p]",
         ] {
             assert_eq!(
                 resolve_release_coverage(

@@ -110,7 +110,9 @@ Subsequent fixture calibration removed the explicit year from those 27 title
 contexts: the release name and expected year were unchanged. Case `anime-0389`
 now asserts its explicit absolute range, 1-200, alongside the named seasons
 without requiring unbounded whole-season coverage; its exact deferred
-named-season representation is recorded as an accepted failure. Case
+named-season representation is recorded as an accepted failure. Its unresolved
+scope diagnostic blocks automatic coverage while that restriction cannot be
+attached safely. Case
 `anime-0492` likewise retains named seasons and its explicit global E001-E316
 range without inferring per-season coordinates or whole-season coverage. Case
 `anime-0309` does not treat one S00E01 special as complete season zero. The

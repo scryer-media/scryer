@@ -682,3 +682,49 @@ fn mixed_scope_episode_annotations_cannot_be_release_groups() {
         );
     }
 }
+
+#[test]
+fn unattached_season_restrictions_block_automatic_global_range_coverage() {
+    let release = "Known Anime 1-200 (Seasons 1-5 (First Arc+Second Arc)) [1080p]";
+    let analysis =
+        analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Known Anime"));
+    let projected = &analysis.best_candidate().unwrap().projected;
+    assert_eq!(
+        projected.episode.as_ref().unwrap().absolute_episode_numbers,
+        (1..=200).collect::<Vec<_>>()
+    );
+    assert!(
+        projected
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+    );
+
+    let mut target = context(ContextFacetHint::Anime, "Known Anime");
+    target.aliases.push(ContextAlias {
+        name: "Seasons 1-5".into(),
+    });
+    let protected = analyze_release_for_target("Known Anime 1-200 (Seasons 1-5) [1080p]", &target);
+    assert!(
+        !protected
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+    );
+}
+
+#[test]
+fn season_only_folder_with_technical_suffix_needs_no_title_context() {
+    for folder in ["S02 (BD)", "S02 (WEB)", "S02 (1080p)"] {
+        let analysis = analyze_release_for_target(folder, &context(ContextFacetHint::Unknown, ""));
+        let episode = analysis
+            .best_candidate()
+            .unwrap()
+            .projected
+            .episode
+            .as_ref()
+            .unwrap();
+        assert_eq!(episode.season, Some(2), "{folder}");
+        assert!(episode.episode_numbers.is_empty(), "{folder}");
+    }
+}

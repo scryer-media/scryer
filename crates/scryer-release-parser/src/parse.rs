@@ -263,7 +263,7 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         let technical_recovery =
             recover_independent_technical_metadata(&lexed.tokens, &technical_candidate);
         apply_independent_technical_metadata(&mut best_candidate.projected, technical_recovery);
-        if has_unresolved_pack_scope(&lexed.tokens, best_candidate) {
+        if has_unresolved_pack_scope(&lexed.tokens, best_candidate, &alias_oracle) {
             push_parse_hint(
                 &mut best_candidate.projected.parse_hints,
                 "identity:unresolved_pack_scope",
@@ -500,7 +500,11 @@ fn apply_independent_technical_metadata(
     }
 }
 
-fn has_unresolved_pack_scope(tokens: &[Token], candidate: &ReleaseParseCandidate) -> bool {
+fn has_unresolved_pack_scope(
+    tokens: &[Token],
+    candidate: &ReleaseParseCandidate,
+    alias_oracle: &AliasOracle,
+) -> bool {
     let contradictory_whole_series_extras = candidate
         .projected
         .parse_hints
@@ -554,11 +558,59 @@ fn has_unresolved_pack_scope(tokens: &[Token], candidate: &ReleaseParseCandidate
         .parse_hints
         .iter()
         .any(|hint| hint == "identity:unresolved_mixed_pack_scope");
+    // Explicit scope that could not be attached is not an unrestricted range.
+    // Keep its bounds for diagnostics, but require manual coverage resolution.
+    let unattached_season_scope = matches!(
+        candidate.identity,
+        ReleaseIdentity::RangePackIdentity { season: None, .. }
+    ) && candidate
+        .projected
+        .episode
+        .as_ref()
+        .is_some_and(|episode| episode.season_numbers.is_empty())
+        && visible.iter().any(|(index, token)| {
+            if *token != "SEASONS" {
+                return false;
+            }
+            let Some(scope) = parse_numbered_season_scope_at(tokens, *index) else {
+                return false;
+            };
+            let Some(start) = index.checked_sub(2) else {
+                return false;
+            };
+            let Some(range) = parse_direct_bounded_global_range_at(tokens, start) else {
+                return false;
+            };
+            if candidate.identity
+                != (ReleaseIdentity::RangePackIdentity {
+                    season: None,
+                    range_start: range.range_start,
+                    range_end: range.range_end,
+                })
+            {
+                return false;
+            }
+            let end = scope.consumed.iter().max().copied().unwrap_or(*index) + 1;
+            !alias_oracle
+                .hits_at
+                .iter()
+                .take(index + 1)
+                .flatten()
+                .any(|hit| {
+                    hit.token_range.start_token <= *index
+                        && hit.token_range.end_token >= end
+                        && matches!(
+                            hit.evidence,
+                            AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+                        )
+                })
+        });
     if !(complete_pack
         || counted_seasons
         || bare_unknown_pack
         || oversized_season_range
         || mixed_season_scope
+        || unattached_season_scope
         || contradictory_whole_series_extras)
     {
         return false;
@@ -578,6 +630,7 @@ fn has_unresolved_pack_scope(tokens: &[Token], candidate: &ReleaseParseCandidate
     contradictory_whole_series_extras
         || oversized_season_range
         || mixed_season_scope
+        || unattached_season_scope
         || !has_supported_coverage
 }
 
@@ -1911,14 +1964,19 @@ fn season_unit_inside_context_title(
 ) -> bool {
     let index = unit.token_range.start_token;
     parse_season_marker_at(tokens, index).is_some()
-        && alias_oracle.hits_at[..=index].iter().flatten().any(|hit| {
-            hit.token_range.len() > 1
-                && hit.token_range.end_token > index
-                && matches!(
-                    hit.evidence,
-                    AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
-                )
-        })
+        && alias_oracle
+            .hits_at
+            .iter()
+            .take(index + 1)
+            .flatten()
+            .any(|hit| {
+                hit.token_range.len() > 1
+                    && hit.token_range.end_token > index
+                    && matches!(
+                        hit.evidence,
+                        AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+                    )
+            })
 }
 
 /// A bounded run of symbolic separators may divide title aliases in an upload
