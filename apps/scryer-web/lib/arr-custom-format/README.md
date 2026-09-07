@@ -12,6 +12,12 @@ at least one optional condition when none are required; all groups must match.
 Unsupported conditions disable their entire format, including optional or
 negated conditions. The output retains a false-guarded score entry with a reason.
 
+Score recommendations prefer an unambiguous exported weight or named default.
+Without exported weights, clear preference names suggest +100, undesirable
+names suggest -100, and plain extras/sample conditions suggest -1000. Neutral
+names remain blank. Each suggestion explains its reason and stays editable;
+heuristics never infer a hard block from a name, condition type, or negation.
+
 `specifications.ts` maps verified Sonarr/Radarr enums to the existing rule input.
 Unrepresentable values are disabled. Year conditions are disabled because
 Radarr's movie-metadata fallback is unavailable. Original language uses actual
