@@ -29,7 +29,9 @@ use scryer_domain::{
     AppPermission, Id, LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate,
     MaintenanceCandidateState, MaintenanceEffectArming, MaintenanceEvaluationMode, Title, User,
 };
-use scryer_rules::maintenance::{MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine};
+use scryer_rules::maintenance::{
+    MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, MaintenanceRulesEvaluator,
+};
 use serde::Serialize;
 use tracing::warn;
 
@@ -492,8 +494,8 @@ impl AppUseCase {
             let descriptor = descriptor_for(kind);
             let high_risk = descriptor.risk_class == MaintenanceRiskClass::High;
 
-            // One compile per rule; every candidate's fresh re-evaluation
-            // shares it.
+            // One compile and evaluator per rule; every candidate's fresh
+            // re-evaluation reuses the evaluator sequentially.
             let engine = match MaintenanceRulesEngine::build(&[MaintenancePolicy {
                 id: detail.rule_set.id.clone(),
                 name: detail.rule_set.name.clone(),
@@ -505,6 +507,7 @@ impl AppUseCase {
                     continue;
                 }
             };
+            let mut evaluator = engine.evaluator();
 
             // The selection covers abandoned leases as well as due work: a
             // candidate whose worker died mid-run is `executing` with nothing
@@ -538,7 +541,7 @@ impl AppUseCase {
                     .execute_one_maintenance_candidate(
                         &detail,
                         kind,
-                        &engine,
+                        &mut evaluator,
                         candidate,
                         &libraries,
                         &tag_conflicts,
@@ -658,7 +661,7 @@ impl AppUseCase {
         &self,
         detail: &MaintenanceRuleSetDetail,
         kind: MaintenanceActionKind,
-        engine: &MaintenanceRulesEngine,
+        evaluator: &mut MaintenanceRulesEvaluator,
         candidate: LifecycleCandidate,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         tag_conflicts: &HashSet<String>,
@@ -751,7 +754,7 @@ impl AppUseCase {
         let decision = self
             .maintenance_execution_safety_checks(
                 detail,
-                engine,
+                evaluator,
                 &candidate,
                 libraries,
                 tag_conflicts,
@@ -1017,7 +1020,7 @@ impl AppUseCase {
     async fn maintenance_execution_safety_checks(
         &self,
         detail: &MaintenanceRuleSetDetail,
-        engine: &MaintenanceRulesEngine,
+        evaluator: &mut MaintenanceRulesEvaluator,
         candidate: &LifecycleCandidate,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         tag_conflicts: &HashSet<String>,
@@ -1268,8 +1271,7 @@ impl AppUseCase {
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
         );
-        let outcome = engine
-            .evaluator()
+        let outcome = evaluator
             .evaluate(&input)
             .ok()
             .and_then(|result| result.records.first().map(|record| record.decision.outcome));

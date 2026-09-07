@@ -24,7 +24,7 @@ mod tests;
 
 use std::collections::BTreeSet;
 
-use regorus::Value;
+use regorus::{Value, unstable::Module};
 use serde::Serialize;
 
 use crate::RulesError;
@@ -123,6 +123,17 @@ pub trait PolicyFamily: Sized + 'static {
         _policy_path: &str,
     ) -> Result<BTreeSet<String>, String> {
         Ok(BTreeSet::new())
+    }
+
+    /// Resolve referenced facts from the module the engine already parsed for
+    /// this policy. Families that cannot use the AST retain their existing
+    /// source-based implementation through the default.
+    fn referenced_facts_from_module(
+        policy: &Self::Policy,
+        policy_path: &str,
+        _module: &Module,
+    ) -> Result<BTreeSet<String>, String> {
+        Self::referenced_facts(policy, policy_path)
     }
 
     /// The Rego head an author writes to hold a subject themselves —

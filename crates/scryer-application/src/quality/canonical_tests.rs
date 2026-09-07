@@ -1307,6 +1307,150 @@ score_entry["quality_not_in_profile_tiers"] := -10000 if {
     assert_eq!(codes, &["quality_not_in_profile_tiers".to_string()]);
 }
 
+fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
+    let policy = scryer_rules::UserPolicy {
+        id: id.to_string(),
+        name: id.to_string(),
+        rego_source: scryer_rules::rewrite_package_declaration(source, id),
+        origin: scryer_rules::PolicyOrigin::User,
+        applied_facets: vec!["movie".to_string()],
+    };
+    scryer_rules::UserRulesEngine::build(&[policy]).expect("rule fixture should compile")
+}
+
+#[test]
+fn batch_rule_evaluator_replaces_input_for_each_candidate() {
+    let engine = rule_engine(
+        "batch_title",
+        r#"
+score_entry["marked"] := 200 if {
+    contains(lower(input.release.raw_title), "marked")
+}
+"#,
+    );
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let tags: Vec<String> = Vec::new();
+    let mut context = ctx(&profile, &weights, &tags);
+    context.rules = Some(&engine);
+    let mut batch = RuleEvaluationBatch::from_context(&context);
+    let batch_context = context.without_rules();
+
+    let marked = ReleaseEvidence::announced(
+        parse_release_metadata("Marked.Movie.2024.1080p.WEB-DL.H.264"),
+        Some(8 * GIB),
+    );
+    let plain = ReleaseEvidence::announced(
+        parse_release_metadata("Plain.Movie.2024.1080p.WEB-DL.H.264"),
+        Some(8 * GIB),
+    );
+
+    let marked_score = score_release_in_batch(&marked, &batch_context, &mut batch);
+    let plain_score = score_release_in_batch(&plain, &batch_context, &mut batch);
+
+    assert!(
+        marked_score
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "marked")
+    );
+    assert!(
+        !plain_score
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "marked")
+    );
+}
+
+#[test]
+fn batch_rule_evaluator_matches_one_shot_analyzed_scoring() {
+    let engine = rule_engine(
+        "analysis_bonus",
+        r#"
+score_entry["analysis_bonus"] := 250 if {
+    input.file != null
+    input.file.video_codec == "H.264"
+}
+"#,
+    );
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let tags: Vec<String> = Vec::new();
+    let mut context = ctx(&profile, &weights, &tags);
+    context.rules = Some(&engine);
+    let evidence = announced(8.0).with_analysis(analyzed(8.0, Some("h264")));
+
+    let one_shot = score_release(&evidence, &context);
+    let mut batch = RuleEvaluationBatch::from_context(&context);
+    let batch_context = context.without_rules();
+    let batched = score_release_in_batch(&evidence, &batch_context, &mut batch);
+
+    assert_eq!(batched.release_score, one_shot.release_score);
+    assert_eq!(batched.total, one_shot.total);
+    assert_eq!(batched.truth_variance, one_shot.truth_variance);
+    assert_eq!(batched.truth_verdict, one_shot.truth_verdict);
+    assert!(
+        batched
+            .analyzed_decision
+            .expect("the analyzed pass ran")
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "analysis_bonus")
+    );
+}
+
+#[test]
+fn batch_rule_evaluator_keeps_its_original_engine_snapshot() {
+    let first_engine = rule_engine("first_snapshot", r#"score_entry["first"] := 100"#);
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let tags: Vec<String> = Vec::new();
+    let mut original_context = ctx(&profile, &weights, &tags);
+    original_context.rules = Some(&first_engine);
+    let mut batch = RuleEvaluationBatch::from_context(&original_context);
+    let batch_context = original_context.without_rules();
+
+    let updated_engine = rule_engine("updated_snapshot", r#"score_entry["updated"] := 200"#);
+    let mut updated_context = ctx(&profile, &weights, &tags);
+    updated_context.rules = Some(&updated_engine);
+    assert!(updated_context.rules.is_some());
+
+    let score = score_release_in_batch(&announced(8.0), &batch_context, &mut batch);
+    assert!(
+        score
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "first")
+    );
+    assert!(
+        !score
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "updated")
+    );
+}
+
+#[test]
+#[should_panic(expected = "batched canonical scoring requires a context without a rules engine")]
+fn batch_rule_evaluator_rejects_a_different_context_snapshot() {
+    let first_engine = rule_engine("first_snapshot", r#"score_entry["first"] := 100"#);
+    let second_engine = rule_engine("second_snapshot", r#"score_entry["second"] := 200"#);
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let tags: Vec<String> = Vec::new();
+    let mut first_context = ctx(&profile, &weights, &tags);
+    first_context.rules = Some(&first_engine);
+    let mut batch = RuleEvaluationBatch::from_context(&first_context);
+    let mut second_context = ctx(&profile, &weights, &tags);
+    second_context.rules = Some(&second_engine);
+
+    let _ = score_release_in_batch(&announced(8.0), &second_context, &mut batch);
+}
+
 // ── Size basis: grab and import agree inside the overhead band (option c) ───
 
 #[test]

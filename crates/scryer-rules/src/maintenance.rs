@@ -401,6 +401,14 @@ impl PolicyFamily for MaintenanceFamily {
         validation::maintenance_fact_references(&policy.rego_source, policy_path)
     }
 
+    fn referenced_facts_from_module(
+        _policy: &Self::Policy,
+        _policy_path: &str,
+        module: &regorus::unstable::Module,
+    ) -> Result<BTreeSet<String>, String> {
+        validation::maintenance_fact_references_from_module(module)
+    }
+
     fn hold_rule_name() -> Option<&'static str> {
         Some(HOLD_RULE_NAME)
     }
@@ -621,6 +629,52 @@ mod tests {
             MaintenanceOutcome::Match
         );
         assert!(result.records[0].decision.reason_codes.is_empty());
+    }
+
+    #[test]
+    fn evaluator_reuse_tracks_changed_known_and_unknown_facts() {
+        let engine = MaintenanceRulesEngine::build(&[policy(
+            "monitored_movie",
+            "match if {\n  input.facts.monitored\n}\n",
+        )])
+        .expect("policy should compile");
+        let mut evaluator = engine.evaluator();
+
+        let mut input = synthetic_maintenance_input();
+        input.facts.monitored = Observation::known(true);
+        assert_eq!(
+            evaluator.evaluate(&input).unwrap().records[0]
+                .decision
+                .outcome,
+            MaintenanceOutcome::Match
+        );
+
+        input.facts.monitored = Observation::known(false);
+        assert_eq!(
+            evaluator.evaluate(&input).unwrap().records[0]
+                .decision
+                .outcome,
+            MaintenanceOutcome::NoMatch
+        );
+
+        input.facts.monitored = Observation::unknown("source_unavailable");
+        let held = evaluator.evaluate(&input).unwrap();
+        assert_eq!(
+            held.records[0].decision.outcome,
+            MaintenanceOutcome::Unknown
+        );
+        assert_eq!(
+            held.records[0].decision.reason_codes,
+            vec!["source_unavailable".to_string()]
+        );
+
+        input.facts.monitored = Observation::known(true);
+        assert_eq!(
+            evaluator.evaluate(&input).unwrap().records[0]
+                .decision
+                .outcome,
+            MaintenanceOutcome::Match
+        );
     }
 
     #[test]

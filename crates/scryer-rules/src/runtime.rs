@@ -45,8 +45,8 @@ impl RuntimeLimits {
         Self {
             max_execution_time: Duration::from_secs(1),
             timer_check_interval: NonZeroU32::new(4096).expect("non-zero"),
-            max_policy_bytes: NonZeroUsize::new(1024 * 1024).expect("non-zero"),
-            max_policy_lines: NonZeroUsize::new(20_000).expect("non-zero"),
+            max_policy_bytes: NonZeroUsize::new(16 * 1024 * 1024).expect("non-zero"),
+            max_policy_lines: NonZeroUsize::new(200_000).expect("non-zero"),
             max_policy_col: NonZeroU32::new(1024).expect("non-zero"),
             max_input_bytes: 1024 * 1024,
         }
@@ -156,7 +156,18 @@ pub(crate) fn rewrite_package_declaration_with_prefix(
 ) -> String {
     let pkg_line = format!("package {package_prefix}.{rule_id}");
     let has_import = rego_source.lines().any(|l| l.trim() == "import rego.v1");
+    let has_package = rego_source
+        .lines()
+        .any(|line| line.trim().starts_with("package "));
     let mut output = String::with_capacity(rego_source.len() + pkg_line.len() + 20);
+    if !has_package {
+        output.push_str(&pkg_line);
+        output.push('\n');
+        if !has_import {
+            output.push_str("import rego.v1\n");
+        }
+    }
+
     let mut found = false;
 
     for line in rego_source.lines() {
@@ -171,14 +182,6 @@ pub(crate) fn rewrite_package_declaration_with_prefix(
             output.push_str(line);
             output.push('\n');
         }
-    }
-
-    if !found {
-        let mut header = format!("{pkg_line}\n");
-        if !has_import {
-            header.push_str("import rego.v1\n");
-        }
-        return format!("{header}{output}");
     }
 
     output
@@ -217,5 +220,23 @@ mod tests {
             "x".repeat(256)
         );
         assert!(engine.add_policy("t.rego".to_string(), big).is_err());
+    }
+
+    #[test]
+    fn release_defaults_expand_source_bounds_without_widening_columns() {
+        let release = RuntimeLimits::release_defaults();
+        assert_eq!(release.max_policy_bytes.get(), 16 * 1024 * 1024);
+        assert_eq!(release.max_policy_lines.get(), 200_000);
+        assert_eq!(release.max_policy_col.get(), 1024);
+
+        let maintenance = RuntimeLimits::maintenance_defaults();
+        assert_eq!(maintenance.max_policy_bytes.get(), 256 * 1024);
+        assert_eq!(maintenance.max_policy_lines.get(), 5_000);
+        assert_eq!(maintenance.max_policy_col.get(), 1024);
+
+        let request = RuntimeLimits::request_defaults();
+        assert_eq!(request.max_policy_bytes.get(), 256 * 1024);
+        assert_eq!(request.max_policy_lines.get(), 5_000);
+        assert_eq!(request.max_policy_col.get(), 1024);
     }
 }

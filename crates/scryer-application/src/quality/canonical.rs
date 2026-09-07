@@ -136,6 +136,38 @@ pub(crate) struct ScoringContext<'a> {
     pub is_filler: bool,
 }
 
+impl<'a> ScoringContext<'a> {
+    /// Remove the rule-engine reference after an evaluator snapshot has been
+    /// created for a synchronous batch. This makes a batched score use exactly
+    /// one engine: the evaluator it was handed cannot be combined with another
+    /// context's engine by accident.
+    pub(crate) fn without_rules(mut self) -> Self {
+        self.rules = None;
+        self
+    }
+}
+
+/// Mutable rule runtime for one synchronous canonical-scoring batch.
+///
+/// The evaluator owns a clone of the resolved engine snapshot. It is not
+/// shared between tasks: Regorus mutates its input on every evaluation.
+pub(crate) struct RuleEvaluationBatch {
+    evaluator: Option<scryer_rules::UserRulesEvaluator>,
+}
+
+impl RuleEvaluationBatch {
+    /// Capture the rule snapshot that is already present in this scoring
+    /// context. Empty contexts retain no evaluator and skip rule evaluation.
+    pub(crate) fn from_context(ctx: &ScoringContext<'_>) -> Self {
+        Self {
+            evaluator: ctx
+                .rules
+                .filter(|engine| !engine.is_empty())
+                .map(scryer_rules::UserRulesEngine::evaluator),
+        }
+    }
+}
+
 /// Whether the file backed up what the release claimed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TruthVerdict {
@@ -245,8 +277,39 @@ pub(crate) struct ScoredRelease {
 /// present — over those, and reports the difference as a bounded variance plus a
 /// verdict. Pure and synchronous by construction.
 pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>) -> ScoredRelease {
-    let announced_decision =
-        run_term_pipeline(&evidence.parsed, evidence.announced_size_bytes, None, ctx);
+    let mut rules = RuleEvaluationBatch::from_context(ctx);
+    score_release_with_rules(evidence, ctx, &mut rules)
+}
+
+/// Score a candidate in a batch that already owns the sole rule evaluator.
+///
+/// Callers must pass a context produced with [`ScoringContext::without_rules`]
+/// after constructing the batch. Keeping the context engine-free prevents a
+/// batch evaluator from ever being silently paired with a second snapshot.
+pub(crate) fn score_release_in_batch(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    assert!(
+        ctx.rules.is_none(),
+        "batched canonical scoring requires a context without a rules engine"
+    );
+    score_release_with_rules(evidence, ctx, rules)
+}
+
+fn score_release_with_rules(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    let announced_decision = run_term_pipeline(
+        &evidence.parsed,
+        evidence.announced_size_bytes,
+        None,
+        ctx,
+        rules,
+    );
     let release_score = announced_decision.preference_score;
 
     let mut analyzed_decision = None;
@@ -266,6 +329,7 @@ pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>
                 Some(analyzed.actual_size_bytes),
                 analyzed.rule_file_doc.clone(),
                 ctx,
+                rules,
             );
             let mut classified =
                 classify_truth(&evidence.parsed, &announced_decision, &analyzed_pass);
@@ -368,6 +432,7 @@ fn run_term_pipeline(
     size_bytes: Option<i64>,
     file_doc: Option<scryer_rules::FileDoc>,
     ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
 ) -> QualityProfileDecision {
     let mut resolved_profile = ctx.profile.clone();
     resolved_profile.criteria.required_audio_languages = ctx.required_audio_languages.to_vec();
@@ -403,6 +468,7 @@ fn run_term_pipeline(
         file_doc,
         &mut decision,
         ctx,
+        rules,
     );
     apply_min_score_gate(&resolved_profile, &mut decision);
     decision
@@ -417,13 +483,11 @@ fn append_rule_scores(
     file_doc: Option<scryer_rules::FileDoc>,
     decision: &mut QualityProfileDecision,
     ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
 ) {
-    let Some(engine) = ctx.rules else {
+    let Some(evaluator) = rules.evaluator.as_mut() else {
         return;
     };
-    if engine.is_empty() {
-        return;
-    }
 
     let input = crate::user_rule_input::build_rule_input(
         parsed,
@@ -459,7 +523,6 @@ fn append_rule_scores(
         file_doc,
     );
 
-    let mut evaluator = engine.evaluator();
     match evaluator.evaluate(&input, ctx.category) {
         Ok(result) => {
             for entry in result.entries {
