@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -126,7 +126,7 @@ impl PendingQuotaUpdate {
 pub struct InMemoryIndexerStatsTracker {
     entries: Arc<Mutex<HashMap<String, IndexerEntry>>>,
     datastore: Option<StoreDatastore>,
-    pending_quota_updates: Arc<Mutex<HashMap<String, PendingQuotaUpdate>>>,
+    pending_quota_updates: Arc<Mutex<BTreeMap<(String, NaiveDate), PendingQuotaUpdate>>>,
     quota_flush_scheduled: Arc<AtomicBool>,
     quota_runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
 }
@@ -142,7 +142,7 @@ impl InMemoryIndexerStatsTracker {
         Self {
             entries: Arc::new(Mutex::new(HashMap::new())),
             datastore,
-            pending_quota_updates: Arc::new(Mutex::new(HashMap::new())),
+            pending_quota_updates: Arc::new(Mutex::new(BTreeMap::new())),
             quota_flush_scheduled: Arc::new(AtomicBool::new(false)),
             quota_runtime: Arc::new(Mutex::new(tokio::runtime::Handle::try_current().ok())),
         }
@@ -248,11 +248,11 @@ impl InMemoryIndexerStatsTracker {
                 self.quota_flush_scheduled.store(false, Ordering::Release);
                 return;
             }
-            pending.drain().collect::<Vec<_>>()
+            std::mem::take(&mut *pending)
         };
 
         let mut failed_updates = Vec::new();
-        for (indexer_id, update) in updates {
+        for ((indexer_id, sent_on), update) in updates {
             if update.is_empty() {
                 continue;
             }
@@ -263,7 +263,10 @@ impl InMemoryIndexerStatsTracker {
                 update.api_max,
                 update.grab_current,
                 update.grab_max,
-                update.query_delta,
+                crate::queries::indexer::DailyRequestCount {
+                    sent_on,
+                    count: update.query_delta,
+                },
             )
             .await
             {
@@ -272,7 +275,7 @@ impl InMemoryIndexerStatsTracker {
                     error = %error,
                     "failed to flush coalesced indexer quota update; requeueing"
                 );
-                failed_updates.push((indexer_id, update));
+                failed_updates.push(((indexer_id, sent_on), update));
             }
         }
 
@@ -341,19 +344,26 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
 
         if self.datastore.is_some() {
             let mut pending = self.pending_quota_updates.lock().unwrap();
-            pending.entry(indexer_id.to_string()).or_default().merge(
-                api_current,
-                api_max,
-                grab_current,
-                grab_max,
-            );
+            pending
+                .entry((indexer_id.to_string(), Utc::now().date_naive()))
+                .or_default()
+                .merge(api_current, api_max, grab_current, grab_max);
             drop(pending);
             self.schedule_quota_flush();
         }
     }
 
     fn record_api_request_sent(&self, indexer_id: &str, indexer_name: &str) {
-        let today = Utc::now().date_naive();
+        self.record_api_request_sent_on(indexer_id, indexer_name, Utc::now().date_naive());
+    }
+
+    fn all_stats(&self) -> Vec<IndexerQueryStats> {
+        self.collect_stats()
+    }
+}
+
+impl InMemoryIndexerStatsTracker {
+    fn record_api_request_sent_on(&self, indexer_id: &str, indexer_name: &str, today: NaiveDate) {
         {
             let mut entries = self.entries.lock().unwrap();
             let entry = entries
@@ -368,14 +378,14 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
             self.pending_quota_updates
                 .lock()
                 .unwrap()
-                .entry(indexer_id.to_string())
+                .entry((indexer_id.to_string(), today))
                 .or_default()
                 .merge_request_sent();
             self.schedule_quota_flush();
         }
     }
 
-    fn all_stats(&self) -> Vec<IndexerQueryStats> {
+    fn collect_stats(&self) -> Vec<IndexerQueryStats> {
         let mut entries = self.entries.lock().unwrap();
         let cutoff = Utc::now() - chrono::Duration::hours(24);
         let today = Utc::now().date_naive();
@@ -801,6 +811,43 @@ mod tests {
             .find(|stats| stats.indexer_id == "idx-today")
             .expect("today's row");
         assert_eq!(resumed.api_requests_today, 124);
+    }
+
+    #[tokio::test]
+    async fn midnight_batches_and_retries_preserve_the_send_day_through_hydration() {
+        for fail_first_flush in [false, true] {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .expect("in-memory sqlite should open");
+            if !fail_first_flush {
+                create_quota_table(&pool).await;
+            }
+            let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+            let today = Utc::now().date_naive();
+            let yesterday = today.pred_opt().unwrap();
+            tracker.record_api_request_sent_on("idx-midnight", "Midnight Indexer", yesterday);
+            tracker.record_api_request_sent_on("idx-midnight", "Midnight Indexer", yesterday);
+            if fail_first_flush {
+                tracker.flush_pending_quota_updates().await;
+                assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 1);
+                create_quota_table(&pool).await;
+            }
+            tracker.record_api_request_sent_on("idx-midnight", "Midnight Indexer", today);
+            assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 2);
+            assert_eq!(tracker.all_stats()[0].api_requests_today, 1);
+            tracker.flush_pending_quota_updates().await;
+
+            let restored = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+            restored.hydrate().await;
+            assert_eq!(
+                restored.all_stats()[0].api_requests_today,
+                1,
+                "yesterday's requests must not become today's after restart"
+            );
+            assert!(tracker.pending_quota_updates.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]
