@@ -12822,6 +12822,159 @@ async fn manual_import_preview_suggests_fused_label_members_of_a_verified_season
     assert_eq!(suggested, expected);
 }
 
+#[tokio::test]
+async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title_episode() {
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "PSYCHO-PASS".into(),
+                facet: MediaFacet::Anime,
+                monitored: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let episode =
+        create_pack_episode_in_season(&app, &user, &title.id, 1, 3, Some(3), "standard").await;
+    let movie_title = "Psycho-Pass: Sinners of the System - Case.3 In the Realm Beyond Is ____";
+    let link = app
+        .services
+        .catalog
+        .shows
+        .upsert_series_movie_link(test_series_movie_link(
+            &title.id,
+            movie_title,
+            Some(2019),
+            None,
+            Some("case-three"),
+        ))
+        .await
+        .unwrap();
+    let filename = "Psycho-Pass.Sinners.of.the.System.Case.3.In.the.Realm.Beyond.Is.2019.720p.WEB-DL.AV1.AAC2.0-NTb.mkv";
+    for (name, expected) in [
+        (filename.to_string(), (None, Some(link.id.clone()))),
+        (
+            "Psycho-Pass.S01E03.720p.WEB-DL.mkv".into(),
+            (Some(episode.id.clone()), None),
+        ),
+        (
+            format!("Psycho-Pass.S01E03.{filename}"),
+            (Some(episode.id.clone()), None),
+        ),
+    ] {
+        let source_dir = tempfile::tempdir().unwrap();
+        write_pack_video(source_dir.path(), &name);
+        let completed = series_pack_completed_download(
+            "foreign-movie",
+            &title.id,
+            "Psycho-Pass.Sinners.Case3.Foreign.Weaver",
+            source_dir.path(),
+        );
+        let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .unwrap();
+        let suggestions =
+            crate::import::workflow::preview_manual_import_suggested_targets_for_tests(
+                &app,
+                source_dir.path(),
+                &title,
+                &evidence,
+                std::slice::from_ref(&episode),
+            )
+            .await
+            .unwrap();
+        assert_eq!(suggestions, vec![expected], "{name}");
+    }
+
+    use crate::library::filename_parser::{
+        SeriesMovieFilenameMatch, match_series_movie_filename as matcher,
+    };
+    assert!(matches!(
+        matcher(std::slice::from_ref(&link), filename, Some(2020)),
+        SeriesMovieFilenameMatch::NoMatch
+    ));
+    assert!(matches!(
+        matcher(
+            std::slice::from_ref(&link),
+            "Psycho-Pass.Case.3.2019.mkv",
+            Some(2019)
+        ),
+        SeriesMovieFilenameMatch::NoMatch
+    ));
+    let mut duplicate_input = test_series_movie_link(
+        &title.id,
+        movie_title,
+        Some(2019),
+        None,
+        Some("duplicate-case-three"),
+    );
+    duplicate_input.movie.id = "duplicate-movie".into();
+    app.services
+        .catalog
+        .shows
+        .upsert_series_movie_link(duplicate_input)
+        .await
+        .unwrap();
+    let source_dir = tempfile::tempdir().unwrap();
+    write_pack_video(source_dir.path(), filename);
+    let completed = series_pack_completed_download(
+        "foreign-ambiguous-movie",
+        &title.id,
+        filename,
+        source_dir.path(),
+    );
+    let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+        &app, &completed, None,
+    )
+    .await
+    .unwrap();
+    let suggestions = crate::import::workflow::preview_manual_import_suggested_targets_for_tests(
+        &app,
+        source_dir.path(),
+        &title,
+        &evidence,
+        std::slice::from_ref(&episode),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        suggestions,
+        vec![(None, None)],
+        "ambiguous movie titles must not fall back to episode 3"
+    );
+    use crate::library::filename_parser::{
+        LibraryFilenameFallbackPolicy, LibraryFilenameParseInput, LibraryFilenameParseMode,
+        parse_library_filename,
+    };
+    let links = app
+        .services
+        .catalog
+        .shows
+        .list_series_movie_links_for_title(&title.id)
+        .await
+        .unwrap();
+    let parsed = parse_library_filename(&LibraryFilenameParseInput {
+        path: &source_dir.path().join(filename),
+        display_name: None,
+        library_root: None,
+        title: Some(&title),
+        facet: Some(&title.facet),
+        collections: &[],
+        series_movie_links: &links,
+        episodes: std::slice::from_ref(&episode),
+        existing_record: None,
+        mode: LibraryFilenameParseMode::TitleScan,
+        fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+        anime_numbering_bridge: None,
+    });
+    assert_eq!(parsed.unmatched_reason(), Some("series_movie_ambiguous"));
+}
+
 /// A fused-label file that now names an episode outside the grab is left
 /// unassigned. The single-grab "largest file" fallback only covers files with
 /// no episode of their own, so reading the label must not pre-select the

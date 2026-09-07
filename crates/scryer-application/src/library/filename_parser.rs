@@ -266,6 +266,21 @@ pub(crate) fn parse_library_filename(
             };
         }
     }
+    if matches!(
+        match_series_movie_filename(input.series_movie_links, &raw_name, fallback.year),
+        SeriesMovieFilenameMatch::Ambiguous
+    ) {
+        return LibraryFilenameParse {
+            query_evidence: query_build.evidence,
+            parsed_release: fallback,
+            episode_identity: None,
+            target: LibraryFilenameTarget::Unmatched {
+                reason: "series_movie_ambiguous",
+            },
+            strategy: LibraryFilenameParseStrategy::ReleaseParserFallback,
+            release_fallback_used,
+        };
+    }
     let fallback_episode = fallback.episode.clone();
     if fallback_episode.is_some()
         && !raw_name_has_explicit_episode_marker(&raw_name)
@@ -765,31 +780,46 @@ fn resolve_series_movie_from_name(
     raw_name: &str,
     filename_year: Option<i32>,
 ) -> Option<LibraryFilenameSeriesMovieTarget> {
-    let raw_key = library_name_match_key(raw_name);
-    if raw_key.is_empty() {
-        return None;
-    }
-
-    input
-        .series_movie_links
-        .iter()
-        .filter_map(|link| {
-            if let (Some(filename_year), Some(movie_year)) = (filename_year, link.movie.year)
-                && filename_year != movie_year
-            {
-                return None;
-            }
-
-            let movie_matches = series_movie_match_keys(link)
-                .into_iter()
-                .any(|key| normalized_key_contains_phrase(&raw_key, &key));
-            if !movie_matches {
-                return None;
-            }
-
+    match match_series_movie_filename(input.series_movie_links, raw_name, filename_year) {
+        SeriesMovieFilenameMatch::Unique(link) => {
             Some(build_series_movie_target(link, input.episodes))
-        })
-        .next()
+        }
+        SeriesMovieFilenameMatch::NoMatch | SeriesMovieFilenameMatch::Ambiguous => None,
+    }
+}
+
+pub(crate) enum SeriesMovieFilenameMatch<'a> {
+    NoMatch,
+    Unique(&'a SeriesMovieLink),
+    Ambiguous,
+}
+
+/// Match a full linked movie title without turning a title number into an episode.
+/// Explicit episode coordinates and ambiguous movie names remain authoritative.
+pub(crate) fn match_series_movie_filename<'a>(
+    links: &'a [SeriesMovieLink],
+    raw_name: &str,
+    filename_year: Option<i32>,
+) -> SeriesMovieFilenameMatch<'a> {
+    let raw_key = library_name_match_key(raw_name);
+    if raw_key.is_empty() || raw_name_has_explicit_episode_marker(raw_name) {
+        return SeriesMovieFilenameMatch::NoMatch;
+    }
+    let mut matches = links.iter().filter(|link| {
+        if let (Some(filename_year), Some(movie_year)) = (filename_year, link.movie.year)
+            && filename_year != movie_year
+        {
+            return false;
+        }
+        series_movie_match_keys(link)
+            .into_iter()
+            .any(|key| normalized_key_contains_phrase(&raw_key, &key))
+    });
+    match (matches.next(), matches.next()) {
+        (Some(link), None) => SeriesMovieFilenameMatch::Unique(link),
+        (Some(_), Some(_)) => SeriesMovieFilenameMatch::Ambiguous,
+        _ => SeriesMovieFilenameMatch::NoMatch,
+    }
 }
 
 fn resolve_series_movie_from_episode_identity(

@@ -1128,6 +1128,20 @@ async fn preview_manual_import(
         )
     };
 
+    // Foreign downloads have no grabbed sub-target. Use the catalog's full movie
+    // names before allowing their numeric title tokens to suggest an episode.
+    let series_movie_links = if release_evidence.scope().is_none()
+        && matches!(facet, MediaFacet::Series | MediaFacet::Anime)
+    {
+        app.services
+            .catalog
+            .shows
+            .list_series_movie_links_for_title(title_id)
+            .await?
+    } else {
+        Vec::new()
+    };
+
     // For each file, parse and attempt auto-match
     let mut previews = Vec::new();
     for candidate in &video_files {
@@ -1302,6 +1316,27 @@ async fn preview_manual_import(
             suggested_episode_id = scoped_suggestion;
         }
 
+        use crate::library::filename_parser::SeriesMovieFilenameMatch;
+        let movie_match = if !unresolved_pack && !numbering_ambiguous {
+            crate::library::filename_parser::match_series_movie_filename(
+                &series_movie_links,
+                &file_name,
+                parsed.year,
+            )
+        } else {
+            SeriesMovieFilenameMatch::NoMatch
+        };
+        let named_series_movie_link_id = match movie_match {
+            SeriesMovieFilenameMatch::Unique(link) => Some(link.id.clone()),
+            _ => None,
+        };
+        if !matches!(movie_match, SeriesMovieFilenameMatch::NoMatch) {
+            suggested_episode_id = None;
+            suggested_episode_label = None;
+            parsed_season = None;
+            parsed_episodes.clear();
+        }
+
         previews.push(ManualImportFilePreview {
             file_path: path_to_stored_string(&candidate.canonical_path),
             file_name,
@@ -1312,10 +1347,12 @@ async fn preview_manual_import(
             parsed_episodes,
             suggested_episode_id,
             suggested_episode_label,
-            suggested_series_movie_link_id: grabbed_series_movie_link_id.clone().filter(|_| {
-                grabbed_fallback_path
-                    .as_ref()
-                    .is_some_and(|fallback| fallback == path)
+            suggested_series_movie_link_id: named_series_movie_link_id.or_else(|| {
+                grabbed_series_movie_link_id.clone().filter(|_| {
+                    grabbed_fallback_path
+                        .as_ref()
+                        .is_some_and(|fallback| fallback == path)
+                })
             }),
         });
     }
@@ -1343,6 +1380,29 @@ pub(crate) async fn preview_manual_import_suggested_episode_ids_for_tests(
     .into_iter()
     .map(|file| file.suggested_episode_id)
     .collect())
+}
+
+#[cfg(test)]
+pub(crate) async fn preview_manual_import_suggested_targets_for_tests(
+    app: &AppUseCase,
+    source_dir: &Path,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    available_episodes: &[scryer_domain::Episode],
+) -> AppResult<Vec<(Option<String>, Option<String>)>> {
+    Ok(
+        preview_manual_import(app, source_dir, title, release_evidence, available_episodes)
+            .await?
+            .files
+            .into_iter()
+            .map(|file| {
+                (
+                    file.suggested_episode_id,
+                    file.suggested_series_movie_link_id,
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Whether the preview may pre-select the single grabbed episode for a file.
