@@ -1123,7 +1123,17 @@ async fn reconcile_unresolved_scene_episode_from_scoped_release(
         return Ok(None);
     };
 
-    let file_metadata = parsed_release_from_file_stem(source_video);
+    // Read the file with the title's own context first, the same way the pack
+    // lanes and the manual preview do, so all three agree on what a member
+    // names; the context-free stem parse still backs it up.
+    let catalog = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .unwrap_or_default();
+    let file_metadata = parsed_pack_member_identity_for_catalog(title, source_video, &catalog);
     let Some(file_episode) = file_metadata.episode.as_ref() else {
         return Ok(None);
     };
@@ -1284,39 +1294,8 @@ fn normalized_episode_title_matches_or_is_near_match(candidate: &str, expected: 
         13..=24 => 2,
         _ => 3,
     };
-    bounded_levenshtein_distance(candidate, expected, max_distance).is_some()
-}
-
-fn bounded_levenshtein_distance(left: &str, right: &str, max_distance: usize) -> Option<usize> {
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
-    if left.len().abs_diff(right.len()) > max_distance {
-        return None;
-    }
-
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    for (left_index, left_char) in left.iter().enumerate() {
-        let mut current = Vec::with_capacity(right.len() + 1);
-        current.push(left_index + 1);
-        let mut row_min = left_index + 1;
-        for (right_index, right_char) in right.iter().enumerate() {
-            let cost = usize::from(left_char != right_char);
-            let distance = (previous[right_index + 1] + 1)
-                .min(current[right_index] + 1)
-                .min(previous[right_index] + cost);
-            row_min = row_min.min(distance);
-            current.push(distance);
-        }
-        if row_min > max_distance {
-            return None;
-        }
-        previous = current;
-    }
-
-    previous
-        .last()
-        .copied()
-        .filter(|distance| *distance <= max_distance)
+    crate::library::title_matching::bounded_levenshtein_distance(candidate, expected, max_distance)
+        .is_some()
 }
 
 #[cfg(test)]
@@ -1463,21 +1442,28 @@ async fn import_single_episode_file(
             || episode.air_date.is_some()
             || episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
     };
-    let file_episode = file_episode_identity_for_title(source_video, title);
-    let identity_episode = file_episode
+    let file_evidence = file_episode_evidence_for_title(source_video, title);
+    let identity_episode = file_evidence
         .as_ref()
-        .filter(|episode| episode_is_resolvable(episode))
+        .and_then(|evidence| {
+            evidence
+                .episode
+                .as_ref()
+                .filter(|episode| episode_is_resolvable(episode))
+                .map(|episode| (episode, evidence.normalized_title_variants.as_slice()))
+        })
         .or_else(|| {
             parsed
                 .episode
                 .as_ref()
                 .filter(|episode| episode_is_resolvable(episode))
+                .map(|episode| (episode, parsed.normalized_title_variants.as_slice()))
         });
     let (target_episodes, uses_catalog_identity) = if let Some(episodes) = planned_episodes {
         // The verified-pack preflight resolves member identity from catalog
         // episodes. Parsed metadata remains release evidence only.
         (episodes, true)
-    } else if let Some(ep_meta) = identity_episode {
+    } else if let Some((ep_meta, title_variants)) = identity_episode {
         // A file that positively identifies itself wins identity resolution.
         // The expected-scope gate below then holds it when that identity is not
         // part of the grabbed release. Acquisition is only an ambiguity
@@ -1489,7 +1475,7 @@ async fn import_single_episode_file(
             title,
             ep_meta,
             &season_str,
-            &parsed.normalized_title_variants,
+            title_variants,
             file_reference_date(source_video),
         )
         .await;
@@ -1525,6 +1511,40 @@ async fn import_single_episode_file(
                 episode_ids: resolved_episodes
                     .iter()
                     .map(|episode| episode.id.clone())
+                .collect(),
+            });
+        }
+        if matches!(
+            &numbering,
+            crate::anime_numbering::NumberingResolution::UnresolvedPack
+        ) {
+            let reason_code = "unresolved_pack_scope";
+            let message = "Automatic import could not prove this pack's exact catalog scope. Open Manual Import and assign the intended episodes.".to_string();
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "rejected",
+                Some(reason_code),
+                None,
+                &resolved_episodes,
+            )
+            .await?;
+            return Ok(EpisodeImportOutcome::Rejected {
+                rejection: crate::post_download_gate::ImportedFileRejection {
+                    message,
+                    recycle_reason: reason_code,
+                    skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                    blocking_rule_codes: vec![reason_code.to_string()],
+                },
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: Some(reason_code.to_string()),
+                episode_ids: resolved_episodes
+                    .iter()
+                    .map(|episode| episode.id.clone())
                     .collect(),
             });
         }
@@ -1540,7 +1560,11 @@ async fn import_single_episode_file(
         {
             (vec![episode], true)
         } else {
-            (resolved_episodes, false)
+            let translated = matches!(
+                numbering,
+                crate::anime_numbering::NumberingResolution::Resolved(_)
+            );
+            (resolved_episodes, translated)
         }
     } else if let Some(episode) =
         grabbed_episode_fallback(app, title, release_evidence, other_video_files).await?
@@ -1656,16 +1680,18 @@ async fn import_single_episode_file(
             .map(str::trim)
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(1);
-        let episode_number = resolved_episode
-            .and_then(|episode| episode.episode_number.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_default()
-            .to_string();
+        let episode_numbers = target_episodes
+            .iter()
+            .filter_map(|episode| episode.episode_number.as_deref()?.trim().parse::<u32>().ok())
+            .collect::<Vec<_>>();
+        let episode_number = episode_number_token_for_import(
+            &episode_numbers,
+            resolved_episode.and_then(|episode| episode.episode_number.as_deref()),
+        );
         let absolute_number = resolved_episode.and_then(|episode| episode.absolute_number.clone());
         (season, episode_number, absolute_number)
     } else {
-        let ep_meta = identity_episode.expect("the parse path resolved episode metadata");
+        let (ep_meta, _) = identity_episode.expect("the parse path resolved episode metadata");
         let season = ep_meta.season.unwrap_or(1);
         let episode_number = episode_number_token_for_import(
             &ep_meta.episode_numbers,
@@ -1680,7 +1706,7 @@ async fn import_single_episode_file(
     let post_processing_episode = if uses_catalog_identity {
         ep_num_str.parse::<u32>().ok()
     } else {
-        identity_episode.and_then(|episode| episode.episode_numbers.first().copied())
+        identity_episode.and_then(|(episode, _)| episode.episode_numbers.first().copied())
     };
     let episode_title = target_episodes.first().and_then(|ep| ep.title.as_deref());
     let import_purpose = release_evidence.purpose();
@@ -2232,9 +2258,6 @@ pub(crate) async fn resolve_target_episodes_with_numbering(
         .unwrap_or_default();
 
     let mut translated = ep_meta.clone();
-    if translated.season.is_none() {
-        translated.season = season_str.trim().parse::<u32>().ok();
-    }
     let resolution = crate::anime_numbering::translate_parsed_episode_numbering(
         &bridge,
         title,
@@ -2269,9 +2292,12 @@ pub(crate) async fn resolve_target_episodes_with_numbering(
             );
             (episodes, resolution)
         }
-        // An ambiguous release still reports what the literal reading found so
-        // the hold message can name it; the caller never imports it.
-        NumberingResolution::Ambiguous(_) | NumberingResolution::Unchanged => {
+        // An ambiguous or unbounded pack still reports what the literal
+        // reading found so the hold message can name it; the caller never
+        // imports it.
+        NumberingResolution::Ambiguous(_)
+        | NumberingResolution::UnresolvedPack
+        | NumberingResolution::Unchanged => {
             (literal().await, resolution)
         }
     }
@@ -2801,15 +2827,26 @@ fn file_reference_date(source_video: &Path) -> Option<chrono::NaiveDate> {
     Some(chrono::DateTime::<chrono::Utc>::from(modified).date_naive())
 }
 
-/// The episode a video file names on its own: its stem parsed with the
-/// title's canonical context (so absolute/anime numbering resolves the way
-/// the grab path resolves it), then the context-free stem parse the manual
-/// preview and obfuscation checks use.
+/// The parser-produced filename evidence for a video file: its stem parsed
+/// with the title's canonical context (so absolute/anime numbering resolves
+/// the way the grab path resolves it), then the context-free stem parse the
+/// manual preview and obfuscation checks use.
+fn file_episode_evidence_for_title(
+    source_video: &Path,
+    title: &scryer_domain::Title,
+) -> Option<crate::ParsedReleaseMetadata> {
+    source_video_stem(Some(source_video))
+        .map(|stem| parse_import_release_for_title(&stem, title))
+        .filter(|evidence| evidence.episode.is_some())
+        .or_else(|| {
+            let evidence = parsed_release_from_file_stem(source_video);
+            evidence.episode.is_some().then_some(evidence)
+        })
+}
+
 fn file_episode_identity_for_title(
     source_video: &Path,
     title: &scryer_domain::Title,
 ) -> Option<crate::ParsedEpisodeMetadata> {
-    source_video_stem(Some(source_video))
-        .and_then(|stem| parse_import_release_for_title(&stem, title).episode)
-        .or_else(|| parsed_release_from_file_stem(source_video).episode)
+    file_episode_evidence_for_title(source_video, title).and_then(|evidence| evidence.episode)
 }

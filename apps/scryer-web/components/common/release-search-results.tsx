@@ -8,10 +8,12 @@ import {
   Database,
   Download,
   FilePlus2,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
+import { releaseCoversMultipleEpisodes } from "@/lib/utils/release-queue-scope";
 import {
   releaseSearchResultQueueAdditionalId,
   releaseSearchResultQueueId,
@@ -202,6 +204,19 @@ function SearchResultRow({
         Approved
       </span>
     ) : null;
+  // A pack answers an episode search by covering that episode among others.
+  // The row says so, because "1 GB" and "15 GB" for the same episode is only
+  // explicable once you know one of them is the whole season.
+  const packBadge = releaseCoversMultipleEpisodes(result) ? (
+    <span
+      data-ui="release-search-result-pack"
+      title={t("label.multiEpisodePackHint")}
+      className="inline-flex items-center gap-1 rounded-[6px] bg-[var(--scry-info-bg-strong)] px-[7px] py-px text-[10px] font-bold text-[var(--scry-info-text)]"
+    >
+      <Layers className="h-2.5 w-2.5 shrink-0" />
+      {t("label.multiEpisodePack")}
+    </span>
+  ) : null;
   const parsedBits = [
     result.parsedRelease?.quality,
     result.parsedRelease?.videoCodec,
@@ -371,6 +386,7 @@ function SearchResultRow({
               </>
             ) : null}
             {approvedBadge}
+            {packBadge}
             {rejectionBadge}
           </div>
           {selectedTitleTags.length > 0 ? (
@@ -520,6 +536,7 @@ function SearchResultRow({
             <span className="font-[var(--font-code)] font-medium text-foreground/80">
               {bytesToWholeReadable(result.sizeBytes)}
             </span>
+            {packBadge}
             {rejectionBadge}
           </div>
           {parsedBits.length > 0 ? (
@@ -639,6 +656,7 @@ function SearchResultRow({
                   <span>{result.publishedAt}</span>
                 </>
               ) : null}
+              {packBadge}
               {rejectionBadge}
             </div>
             {parsedBits.length > 0 ? (

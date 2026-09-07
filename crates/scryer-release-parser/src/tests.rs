@@ -4,7 +4,7 @@ use crate::enrichment::{enrich_candidate, project_final_metadata};
 use crate::{
     AudioCodec, ContextAlias, ContextEpisode, ContextFacetHint, ContextTitle,
     ContextTitleMatchKind, ExternalIdSource, ParseFamily, ParsedEpisodeReleaseType,
-    ReleaseParseContext, ReleaseSource, StreamingService, VideoCodec,
+    ReleaseParseContext, ReleaseSource, StreamingService, TokenRole, VideoCodec,
     analyze_release_against_targets, analyze_release_for_target,
 };
 
@@ -210,6 +210,24 @@ fn metadata_like_episode_alias_tokens_are_protected() {
         source_label(candidate.projected.source.as_ref()),
         Some("WEB-DL")
     );
+    assert!(
+        candidate
+            .context_evidence
+            .iter()
+            .any(|evidence| evidence == "context:episode_title_hit")
+    );
+}
+
+#[test]
+fn metadata_like_episode_codec_alias_is_protected() {
+    let target = context_with_episode_alias("Fixture Series", "x265 Token");
+    let analysis = analyze_release_for_target(
+        "Fixture.Series.S02E04.x265.Token.1080p.WEB-DL.H264-Group",
+        &target,
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(candidate.projected.video_codec, Some(VideoCodec::H264));
     assert!(
         candidate
             .context_evidence
@@ -479,22 +497,18 @@ fn range_pack_parser_handles_anime_batch_release() {
 }
 
 #[test]
-fn anime_context_prefers_season_pack_with_trailing_episode_range() {
+fn anime_context_keeps_trailing_parenthetical_episode_range() {
     let analysis = analyze_release_for_target(
         "Emberfall Season 12 - (213 - 229) [Typis]",
         &context(ContextFacetHint::Anime, "Emberfall"),
     );
     let candidate = analysis.best_candidate().expect("best candidate");
 
-    assert_eq!(candidate.family, ParseFamily::SeasonPack);
-    assert_eq!(
-        candidate
-            .projected
-            .episode
-            .as_ref()
-            .map(|episode| episode.release_type),
-        Some(ParsedEpisodeReleaseType::SeasonPack)
-    );
+    assert_eq!(candidate.family, ParseFamily::EpisodeRangePack);
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+    assert_eq!(episode.season, Some(12));
+    assert_eq!(episode.episode_numbers, (213..=229).collect::<Vec<_>>());
+    assert!(!episode.full_season);
 }
 
 #[test]
@@ -1315,6 +1329,40 @@ fn series_pack_markers_cover_complete_and_multi_season_release_names() {
     assert!(complete_episode.is_series_pack);
     assert!(complete_episode.season_numbers.is_empty());
 
+    for (release, expected_seasons) in [
+        (
+            "Quiet Meridian Complete Series Seasons 1-2 [BD 1080p]",
+            vec![1, 2],
+        ),
+        (
+            "Quiet Meridian Complete Series S01-S02+OVAs [BD 1080p]",
+            vec![1, 2],
+        ),
+    ] {
+        let analysis = analyze_release_for_target(
+            release,
+            &context(ContextFacetHint::Series, "Quiet Meridian"),
+        );
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}: {:?}", analysis.tokens));
+        assert!(episode.is_series_pack, "{release}");
+        assert_eq!(episode.season_numbers, expected_seasons, "{release}");
+    }
+
+    let complete_season = analyze_release_for_target(
+        "Quiet Meridian Complete Season 2 [BD 1080p]",
+        &context(ContextFacetHint::Series, "Quiet Meridian"),
+    );
+    let complete_season_episode = complete_season
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("complete season marker should retain its season restriction");
+    assert_eq!(complete_season_episode.season, Some(2));
+    assert!(complete_season_episode.full_season);
+    assert!(!complete_season_episode.is_series_pack);
+
     let complete_with_extras = analyze_release_for_target(
         "[GT] No Map No Meridian Complete Series+OVAs+Movie [BD 1080p]",
         &context(ContextFacetHint::Series, "No Map No Meridian"),
@@ -1337,6 +1385,11 @@ fn series_pack_markers_cover_complete_and_multi_season_release_names() {
             "Salt and Signal",
             vec![1, 2],
         ),
+        (
+            "[GroupTag] Salt and Signal (Seasons 01+04) [BD 1080p]",
+            "Salt and Signal",
+            vec![1, 4],
+        ),
     ] {
         let analysis =
             analyze_release_for_target(release, &context(ContextFacetHint::Series, title));
@@ -1347,6 +1400,622 @@ fn series_pack_markers_cover_complete_and_multi_season_release_names() {
         assert!(episode.is_series_pack, "{release}");
         assert_eq!(episode.season_numbers, expected_seasons, "{release}");
     }
+}
+
+#[test]
+fn complete_qualifiers_advance_only_to_explicit_coverage() {
+    let pack = |release: &str| {
+        analyze_release_for_target(release, &context(ContextFacetHint::Series, "Show"))
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.clone())
+            .unwrap_or_else(|| panic!("{release}"))
+    };
+
+    let complete_range = pack("Show Complete 01-24 [BD 1080p]");
+    assert_eq!(
+        complete_range.absolute_episode_numbers,
+        (1..=24).collect::<Vec<_>>()
+    );
+    assert!(!complete_range.full_season);
+
+    let source_qualified_range = pack("Show Complete BD (01-24) [1080p]");
+    assert_eq!(
+        source_qualified_range.absolute_episode_numbers,
+        (1..=24).collect::<Vec<_>>()
+    );
+    assert!(!source_qualified_range.full_season);
+
+    let collection_scope = pack("Show Complete Collection [Seasons 1-2 + OVAs]");
+    assert!(collection_scope.is_series_pack);
+    assert_eq!(collection_scope.season_numbers, vec![1, 2]);
+
+    let all_seasons = pack("Show Complete Collection (All Seasons)");
+    assert!(all_seasons.is_series_pack);
+    assert!(all_seasons.season_numbers.is_empty());
+
+    let invalid_scope = analyze_release_for_target(
+        "Show Complete Series S01-S4294967295",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    assert!(
+        !invalid_scope
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .is_some_and(|episode| episode.is_series_pack)
+    );
+}
+
+#[test]
+fn explicit_trailing_episode_range_beats_multi_season_whole_coverage() {
+    let analysis = analyze_release_for_target(
+        "Show S01-S03 Complete E001-E316 [BD 1080p]",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    let episode = analysis
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("explicit episode range");
+    assert!(!episode.is_series_pack);
+    assert_eq!(episode.season, None);
+    assert!(episode.episode_numbers.is_empty());
+    assert_eq!(
+        episode.absolute_episode_numbers,
+        (1..=316).collect::<Vec<_>>()
+    );
+    assert!(!episode.absolute_episode_numbers.contains(&317));
+    assert!(!episode.full_season);
+}
+
+#[test]
+fn bounded_range_in_complete_group_beats_all_seasons_marker() {
+    let analysis = analyze_release_for_target(
+        "Show Remake Complete (1-220, all seasons) [H.264] [Dual Audio]",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    let episode = analysis
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("bounded range");
+    assert!(!episode.is_series_pack);
+    assert_eq!(episode.season, None);
+    assert_eq!(
+        episode.absolute_episode_numbers,
+        (1..=220).collect::<Vec<_>>()
+    );
+    assert!(!episode.full_season);
+
+    let candidate = analysis.best_candidate().expect("bounded range candidate");
+    let projected = project_final_metadata(
+        candidate.projected.clone(),
+        &enrich_candidate(&analysis.tokens, candidate, &analysis.raw_input),
+    );
+    assert!(projected.is_dual_audio);
+}
+
+#[test]
+fn complete_season_bounded_ranges_keep_season_relative_coverage() {
+    for (release, season, end) in [
+        ("Show Season 4 Complete (01-24)", 4, 24),
+        ("Show Complete Season 1 01-24", 1, 24),
+        ("Show Season 1 Complete EP 01-26", 1, 26),
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Series, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}"));
+        assert_eq!(episode.season, Some(season), "{release}");
+        assert_eq!(
+            episode.episode_numbers,
+            (1..=end).collect::<Vec<_>>(),
+            "{release}"
+        );
+        assert!(!episode.full_season, "{release}");
+        assert_eq!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::RangePack,
+            "{release}"
+        );
+    }
+
+    let intervening_title = analyze_release_for_target(
+        "Show Season 1 Complete Interlude 01-24",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    assert!(
+        !intervening_title
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .is_some_and(|episode| {
+                episode.season == Some(1) && episode.episode_numbers == (1..=24).collect::<Vec<_>>()
+            })
+    );
+
+    let invalid_scope = analyze_release_for_target(
+        "Show All Seasons S01-S999",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    assert!(
+        !invalid_scope
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .is_some_and(|episode| episode.is_series_pack)
+    );
+}
+
+#[test]
+fn series_qualifiers_preserve_direct_bounds_and_singular_restrictions() {
+    for release in [
+        "Show Complete Series (01-12)",
+        "Show All Seasons (01-12)",
+        "Show Complete Series S01-S02 (01-12)",
+        "Show Complete Series EP 01-12",
+        "Show All Seasons Episodes 01-12",
+        "Show Complete Series [S01-S02] [EP 001-024]",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}"));
+        assert!(!episode.is_series_pack, "{release}");
+        assert_eq!(episode.season, None, "{release}");
+        assert_eq!(
+            episode.absolute_episode_numbers,
+            if release.contains("024") {
+                (1..=24).collect::<Vec<_>>()
+            } else {
+                (1..=12).collect::<Vec<_>>()
+            },
+            "{release}"
+        );
+        assert!(
+            !episode
+                .absolute_episode_numbers
+                .contains(if release.contains("024") { &25 } else { &13 }),
+            "{release}"
+        );
+        assert!(!episode.full_season, "{release}");
+    }
+
+    for release in [
+        "Show Complete Series Season 2",
+        "Show Complete Series [Season 2]",
+        "Show All Seasons Season 2",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}"));
+        assert!(!episode.is_series_pack, "{release}");
+        assert_eq!(episode.season_numbers, vec![2], "{release}");
+    }
+
+    let singular_range = analyze_release_for_target(
+        "Show Complete Series Season 2 (01-12)",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let singular_range_episode = singular_range
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("season-relative bounded range");
+    assert_eq!(singular_range_episode.season, Some(2));
+    assert_eq!(
+        singular_range_episode.episode_numbers,
+        (1..=12).collect::<Vec<_>>()
+    );
+    assert!(singular_range_episode.absolute_episode_numbers.is_empty());
+    assert!(!singular_range_episode.full_season);
+
+    let singular_labeled_range = analyze_release_for_target(
+        "Show Complete Series Season 2 EP 01-12",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let singular_labeled_episode = singular_labeled_range
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("season-relative labeled range");
+    assert_eq!(singular_labeled_episode.season, Some(2));
+    assert_eq!(
+        singular_labeled_episode.episode_numbers,
+        (1..=12).collect::<Vec<_>>()
+    );
+    assert!(singular_labeled_episode.absolute_episode_numbers.is_empty());
+
+    let explicit_standard_range = analyze_release_for_target(
+        "Show Complete Series S02E01-S02E12",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let explicit_standard_episode = explicit_standard_range
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("explicit standard range");
+    assert_eq!(explicit_standard_episode.season, Some(2));
+    assert_eq!(
+        explicit_standard_episode.episode_numbers,
+        (1..=12).collect::<Vec<_>>()
+    );
+    assert!(
+        explicit_standard_episode
+            .absolute_episode_numbers
+            .is_empty()
+    );
+
+    for release in [
+        "Show Complete Series [S01-S02] S02E01-S02E12",
+        "Show Complete Series Season 1 S02E01-S02E12",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}"));
+        assert_eq!(episode.season, Some(2), "{release}");
+        assert_eq!(
+            episode.episode_numbers,
+            (1..=12).collect::<Vec<_>>(),
+            "{release}"
+        );
+        assert!(episode.absolute_episode_numbers.is_empty(), "{release}");
+    }
+
+    let oversized_standard_endpoint = analyze_release_for_target(
+        "Show Complete Series S02E01-S02E4294967295",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    assert!(
+        oversized_standard_endpoint
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .is_none_or(|episode| episode.episode_numbers.len() <= 1)
+    );
+
+    for release in [
+        "Show Complete Series Season 999",
+        "Show All Seasons Season 999",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        assert!(
+            !analysis
+                .best_candidate()
+                .and_then(|candidate| candidate.projected.episode.as_ref())
+                .is_some_and(|episode| episode.is_series_pack),
+            "{release}"
+        );
+    }
+}
+
+#[test]
+fn extras_only_series_qualifiers_do_not_claim_episode_coverage() {
+    for release in [
+        "Show Complete Series Movies Only",
+        "Show All Seasons OVA Only",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        let candidate = analysis
+            .best_candidate()
+            .unwrap_or_else(|| panic!("{release}"));
+        assert!(
+            !candidate
+                .projected
+                .episode
+                .as_ref()
+                .is_some_and(|episode| episode.is_series_pack),
+            "{release}"
+        );
+        assert!(
+            candidate
+                .projected
+                .parse_hints
+                .iter()
+                .any(|hint| hint == "identity:unresolved_pack_scope"),
+            "{release}"
+        );
+    }
+}
+
+#[test]
+fn localized_and_late_season_ranges_keep_explicit_bounds() {
+    let localized = analyze_release_for_target(
+        "Show [01-13TV全集+OVA]",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let localized_episode = localized
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("localized collection range");
+    assert_eq!(localized_episode.season, None);
+    assert_eq!(
+        localized_episode.absolute_episode_numbers,
+        (1..=13).collect::<Vec<_>>()
+    );
+    assert!(!localized_episode.full_season);
+
+    let late_scope = analyze_release_for_target(
+        "Show 01-12 S01 Batch",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let late_scope_episode = late_scope
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("late bounded season annotation");
+    assert_eq!(late_scope_episode.season, Some(1));
+    assert_eq!(
+        late_scope_episode.episode_numbers,
+        (1..=12).collect::<Vec<_>>()
+    );
+    assert!(late_scope_episode.absolute_episode_numbers.is_empty());
+    assert!(!late_scope_episode.full_season);
+
+    let roman_season = analyze_release_for_target(
+        "Show Season I 1-24 Complete",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let roman_season_episode = roman_season
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("roman season range");
+    assert_eq!(roman_season_episode.season, Some(1));
+    assert_eq!(
+        roman_season_episode.episode_numbers,
+        (1..=24).collect::<Vec<_>>()
+    );
+    assert!(roman_season_episode.absolute_episode_numbers.is_empty());
+
+    let unrelated_suffix =
+        analyze_release_for_target("Show [01-13TV]", &context(ContextFacetHint::Anime, "Show"));
+    assert!(
+        !unrelated_suffix
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .is_some_and(|episode| episode.absolute_episode_numbers == (1..=13).collect::<Vec<_>>())
+    );
+
+    let split_season_range = analyze_release_for_target(
+        "Show S2 - 01-13 [Batch]",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let split_season_episode = split_season_range
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("split season range");
+    assert_eq!(split_season_episode.season, Some(2));
+    assert_eq!(
+        split_season_episode.episode_numbers,
+        (1..=13).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        split_season_episode.release_type,
+        ParsedEpisodeReleaseType::MultiEpisode
+    );
+
+    for release in [
+        "Show 1-25 Complete [Season 1]",
+        "Show (01-24 Complete Batch) (Season 3)",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}"));
+        let expected_season = if release.contains("Season 1") { 1 } else { 3 };
+        assert_eq!(episode.season, Some(expected_season), "{release}");
+        assert!(episode.absolute_episode_numbers.is_empty(), "{release}");
+        assert!(!episode.full_season, "{release}");
+    }
+
+    let title_season = analyze_release_for_target(
+        "Known Anime S2 [01-12TV全集] [1080p]",
+        &context(ContextFacetHint::Anime, "Known Anime S2"),
+    );
+    let title_season_episode = title_season
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("localized global range after title season token");
+    assert_eq!(title_season_episode.season, None);
+    assert_eq!(
+        title_season_episode.absolute_episode_numbers,
+        (1..=12).collect::<Vec<_>>()
+    );
+
+    let roman_title_season = analyze_release_for_target(
+        "Known Anime Season I 1-12 (Complete)",
+        &context(ContextFacetHint::Anime, "Known Anime Season I"),
+    );
+    let roman_title_episode = roman_title_season
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("global range after roman title season token");
+    assert_eq!(roman_title_episode.season, None);
+    assert_eq!(
+        roman_title_episode.absolute_episode_numbers,
+        (1..=12).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mixed_season_episode_endpoints_remain_partial_named_scope() {
+    for release in [
+        "Show S01-S03E45",
+        "Show S01E001-S02E156",
+        "Show S01-S03E82+(S01 Remake)",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .unwrap_or_else(|| panic!("{release}"));
+        assert_eq!(episode.season, None, "{release}");
+        assert_eq!(
+            episode.season_numbers,
+            if release.contains("S03") {
+                vec![1, 2, 3]
+            } else {
+                vec![1, 2]
+            },
+            "{release}"
+        );
+        assert!(episode.is_multi_season, "{release}");
+        assert!(!episode.full_season, "{release}");
+    }
+}
+
+#[test]
+fn jpbd_is_blu_ray_with_title_and_compound_group_protection() {
+    let technical = analyze_release_for_target(
+        "Show S01E01 [JPBD] [x264]",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    assert_eq!(
+        technical
+            .best_candidate()
+            .and_then(|candidate| source_label(candidate.projected.source.as_ref())),
+        Some("BluRay")
+    );
+
+    let title = analyze_release_for_target(
+        "Known Anime JPBD S01E01",
+        &context(ContextFacetHint::Anime, "Known Anime JPBD"),
+    );
+    assert_eq!(
+        title
+            .best_candidate()
+            .and_then(|candidate| source_label(candidate.projected.source.as_ref())),
+        None
+    );
+
+    let existing_blu_ray = analyze_release_for_target(
+        "[BD] Show S01E01",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    assert_eq!(
+        existing_blu_ray
+            .best_candidate()
+            .and_then(|candidate| source_label(candidate.projected.source.as_ref())),
+        Some("BluRay")
+    );
+
+    let compound_group = analyze_release_for_target(
+        "[GroupJPBD] Show S01E01",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    assert_eq!(
+        compound_group
+            .best_candidate()
+            .and_then(|candidate| source_label(candidate.projected.source.as_ref())),
+        None
+    );
+}
+
+#[test]
+fn oversized_season_ranges_remain_unresolved_without_partial_fallback() {
+    for release in [
+        "Show S01-S999+OVA",
+        "Show S01-S02+S999",
+        "Show S999",
+        "Show S01-S4294967296+OVA",
+        "Show Season101",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        assert!(
+            !analysis
+                .best_candidate()
+                .and_then(|candidate| candidate.projected.episode.as_ref())
+                .is_some_and(|episode| {
+                    episode.is_series_pack
+                        || episode.season_numbers.len() > 100
+                        || episode.season.is_some_and(|season| season > 100)
+                }),
+            "{release}"
+        );
+    }
+
+    for release in [
+        "Show S01-S4294967295+OVA",
+        "Show S01-S4294967296+OVA",
+        "Show Season101",
+    ] {
+        let analysis =
+            analyze_release_for_target(release, &context(ContextFacetHint::Anime, "Show"));
+        assert!(
+            analysis.best_candidate().is_some_and(|candidate| {
+                candidate
+                    .projected
+                    .parse_hints
+                    .iter()
+                    .any(|hint| hint == "identity:oversized_season_range_scope")
+            }),
+            "{release}"
+        );
+    }
+
+    let standalone = analyze_release_for_target(
+        "Show S01E01 S01-S101",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let standalone_episode = standalone
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("explicit standalone episode");
+    assert_eq!(standalone_episode.season, Some(1));
+    assert_eq!(standalone_episode.episode_numbers, vec![1]);
+    assert!(
+        !standalone
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+    );
+
+    let protected_title = analyze_release_for_target(
+        "Show Season101",
+        &context(ContextFacetHint::Anime, "Show Season101"),
+    );
+    assert!(
+        !protected_title
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+    );
+
+    let leading_group = analyze_release_for_target(
+        "[Group-S101] Show",
+        &context(ContextFacetHint::Movie, "Show"),
+    );
+    assert!(
+        !leading_group
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+    );
+}
+
+#[test]
+fn multi_season_scope_with_direct_numeric_range_keeps_global_bounds() {
+    let analysis = analyze_release_for_target(
+        "Show S01-S02+OVA 001-024 [Batch]",
+        &context(ContextFacetHint::Anime, "Show"),
+    );
+    let episode = analysis
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("multi-season bounded range");
+    assert_eq!(episode.season, None);
+    assert_eq!(
+        episode.absolute_episode_numbers,
+        (1..=24).collect::<Vec<_>>()
+    );
+    assert!(!episode.is_series_pack);
+    assert!(!episode.full_season);
 }
 
 #[test]
@@ -1397,7 +2066,6 @@ fn movie_ova_and_bare_complete_markers_are_not_series_packs() {
         ("Show Complete Collection [BD 1080p]", "Show"),
         ("Show Complete Original Series [BD 1080p]", "Show"),
         ("Show Complete Subbed Collection [BD 1080p]", "Show"),
-        ("Show All Seasons [BD 1080p]", "Show"),
         (
             "Quiet Meridian Season 01 to 09 [BD 1080p]",
             "Quiet Meridian",
@@ -1415,6 +2083,48 @@ fn movie_ova_and_bare_complete_markers_are_not_series_packs() {
             "{release}"
         );
     }
+}
+
+#[test]
+fn all_seasons_is_a_scoped_series_marker() {
+    let analysis = analyze_release_for_target(
+        "Show All Seasons [BD 1080p]",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    assert!(
+        analysis
+            .best_candidate()
+            .and_then(|candidate| candidate.projected.episode.as_ref())
+            .is_some_and(|episode| episode.is_series_pack)
+    );
+}
+
+#[test]
+fn parenthetical_season_batch_keeps_exact_episode_range() {
+    let analysis = analyze_release_for_target(
+        "Show Complete Season 3 (01-12) [Batch] [BD 1080p]",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+    assert_eq!(candidate.family, ParseFamily::EpisodeRangePack);
+    assert_eq!(episode.season, Some(3));
+    assert_eq!(episode.episode_numbers, (1..=12).collect::<Vec<_>>());
+    assert!(!episode.full_season);
+}
+
+#[test]
+fn dimensions_do_not_suppress_explicit_season_ranges() {
+    let analysis = analyze_release_for_target(
+        "Show S01-S02 1920x1080 [BD]",
+        &context(ContextFacetHint::Series, "Show"),
+    );
+    let episode = analysis
+        .best_candidate()
+        .and_then(|candidate| candidate.projected.episode.as_ref())
+        .expect("season range should remain a pack");
+    assert!(episode.is_series_pack);
+    assert_eq!(episode.season_numbers, vec![1, 2]);
 }
 
 #[test]
@@ -2897,5 +3607,359 @@ fn ambiguous_parse_still_extracts_structure_independent_metadata() {
             .parse_hints
             .iter()
             .any(|hint| hint == "enrichment:ambiguous_structure_independent")
+    );
+}
+
+/// A fused episode label (`Ep03`, `S01EP04`, `Episode07`) is the same identity
+/// claim as `E03` / `S01E04`, so a series target reads it as one.
+#[test]
+fn parses_fused_episode_label_for_series_target() {
+    let analysis = analyze_release_for_target(
+        "Umbra.Vector.Ep03.1080p.WEB-DL",
+        &context(ContextFacetHint::Series, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+
+    assert_eq!(candidate.family, ParseFamily::StandardEpisode);
+    assert_eq!(candidate.projected.normalized_title, "UMBRA VECTOR");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![3]);
+    assert!(
+        analysis
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "lex:fused_episode_label")
+    );
+}
+
+#[test]
+fn parses_fused_episode_label_in_fansub_shape_for_anime_target() {
+    for (raw, expected) in [
+        ("[Synth-Raws]_Umbra_Vector_Ep03_Dubbed_(1A2B3C4D)", 3u32),
+        ("[Synth-Raws]_Umbra_Vector_Ep12_Dubbed_(1A2B3C4D)", 12),
+    ] {
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Anime, "Umbra Vector"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+        let episode = candidate
+            .projected
+            .episode
+            .as_ref()
+            .unwrap_or_else(|| panic!("episode for {raw}"));
+
+        assert_eq!(candidate.family, ParseFamily::StandardEpisode, "{raw}");
+        assert_eq!(episode.episode_numbers, vec![expected], "{raw}");
+    }
+}
+
+#[test]
+fn parses_fused_episode_label_variants_for_series_target() {
+    let target = context(ContextFacetHint::Series, "Umbra Vector");
+
+    let analysis = analyze_release_for_target("Umbra.Vector.S01EP04.1080p.AMZN.WEB-DL", &target);
+    let episode = analysis
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .episode
+        .clone()
+        .expect("episode");
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![4]);
+
+    let analysis = analyze_release_for_target("Umbra.Vector.EPS01-04.Complete.720p", &target);
+    let episode = analysis
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .episode
+        .clone()
+        .expect("episode");
+    assert_eq!(episode.episode_numbers, vec![1, 2, 3, 4]);
+
+    let analysis = analyze_release_for_target("Umbra.Vector.Episode07.1080p", &target);
+    let episode = analysis
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .episode
+        .clone()
+        .expect("episode");
+    assert_eq!(episode.episode_numbers, vec![7]);
+}
+
+/// A single unpadded digit after the label is the movie-installment shorthand,
+/// not an episode number, so it is deliberately left unparsed.
+#[test]
+fn single_digit_fused_label_is_not_an_episode_for_series_target() {
+    let analysis = analyze_release_for_target(
+        "Umbra.Vector.Ep4.1080p",
+        &context(ContextFacetHint::Series, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert!(candidate.projected.episode.is_none());
+    assert!(
+        !analysis
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "lex:fused_episode_label")
+    );
+}
+
+/// The rewrite is gated on the caller declaring a series-ish facet: a target
+/// that has not said which kind of thing it is keeps the old reading.
+#[test]
+fn fused_episode_label_is_not_read_on_unknown_target() {
+    let analysis = analyze_release_for_target(
+        "Umbra.Vector.Ep03.1080p",
+        &context(ContextFacetHint::Unknown, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert!(candidate.projected.episode.is_none());
+    assert!(
+        !analysis
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "lex:fused_episode_label")
+    );
+}
+
+/// `EP04` on a movie target is installment shorthand, not an episode label.
+#[test]
+fn fused_episode_label_is_not_read_on_movie_target() {
+    for known_years in [Vec::new(), vec![1977]] {
+        let mut target = context(ContextFacetHint::Movie, "Umbra Vector");
+        target.known_years = known_years.clone();
+
+        let analysis = analyze_release_for_target(
+            "Umbra.Vector.EP04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            &target,
+        );
+        let candidate = analysis.best_candidate().expect("best candidate");
+
+        assert_eq!(candidate.family, ParseFamily::Movie, "{known_years:?}");
+        assert!(candidate.projected.episode.is_none(), "{known_years:?}");
+        assert_eq!(candidate.projected.year, Some(1977), "{known_years:?}");
+        assert!(
+            !analysis
+                .parse_hints
+                .iter()
+                .any(|hint| hint == "lex:fused_episode_label"),
+            "{known_years:?}"
+        );
+    }
+}
+
+/// A movie target that cannot seed an episode family must not mint episode or
+/// season role candidates either. Those roles still bound the title zone and
+/// drive the identity-unit rules even when no episode family survives scoring,
+/// so on a movie they cut the title short and can take the year with it.
+#[test]
+fn movie_target_without_episode_context_mints_no_episode_roles() {
+    for raw in [
+        "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+        "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+        "Umbra.Vector.S01.A.Synthetic.Subtitle.1977.1080p.BluRay",
+    ] {
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Movie, "Umbra Vector"));
+        assert!(
+            !analysis.annotations.iter().any(|annotation| {
+                annotation.primary_role == TokenRole::EpisodeMarker
+                    || annotation.primary_role == TokenRole::SeasonMarker
+                    || annotation
+                        .alternate_roles
+                        .contains(&TokenRole::EpisodeMarker)
+                    || annotation
+                        .alternate_roles
+                        .contains(&TokenRole::SeasonMarker)
+            }),
+            "{raw} still minted an episode or season role on a movie target"
+        );
+
+        let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Series, raw));
+        assert!(
+            analysis.annotations.iter().any(|annotation| {
+                annotation.primary_role == TokenRole::EpisodeMarker
+                    || annotation.primary_role == TokenRole::SeasonMarker
+            }),
+            "{raw} lost its episode or season role on a series target"
+        );
+    }
+}
+
+/// With no context title to anchor on — the shape a contextless movie parse
+/// falls back to — the episode-shaped token now stays in the title and the
+/// year survives instead of being swallowed with it.
+#[test]
+fn movie_target_keeps_episode_shaped_tokens_in_its_title() {
+    for raw in [
+        "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+        "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+    ] {
+        let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Movie, ""));
+        let candidate = analysis.best_candidate().expect("best candidate");
+
+        assert_eq!(candidate.family, ParseFamily::Movie, "{raw}");
+        assert!(candidate.projected.episode.is_none(), "{raw}");
+        assert!(
+            candidate
+                .projected
+                .normalized_title
+                .ends_with("A SYNTHETIC SUBTITLE"),
+            "{raw} kept only {:?}",
+            candidate.projected.normalized_title
+        );
+        assert_eq!(candidate.projected.year, Some(1977), "{raw}");
+    }
+}
+
+/// The same strings on a series target keep reading as episodes.
+#[test]
+fn series_target_still_reads_episode_shaped_tokens_as_episodes() {
+    for (raw, season, number) in [
+        (
+            "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            1u32,
+            4u32,
+        ),
+        (
+            "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            1,
+            4,
+        ),
+    ] {
+        let analysis =
+            analyze_release_for_target(raw, &context(ContextFacetHint::Series, "Umbra Vector"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+        let episode = candidate
+            .projected
+            .episode
+            .as_ref()
+            .unwrap_or_else(|| panic!("episode for {raw}"));
+
+        assert_eq!(candidate.family, ParseFamily::StandardEpisode, "{raw}");
+        assert_eq!(episode.season, Some(season), "{raw}");
+        assert_eq!(episode.episode_numbers, vec![number], "{raw}");
+    }
+}
+
+/// A movie target whose own context carries episode evidence still seeds the
+/// episode families, so it keeps the episode roles too.
+#[test]
+fn movie_target_with_episode_context_still_mints_episode_roles() {
+    let mut target = context(ContextFacetHint::Movie, "Umbra Vector");
+    target.episodes.push(ContextEpisode {
+        season: Some(1),
+        episode: Some(4),
+        ..Default::default()
+    });
+
+    let analysis = analyze_release_for_target("Umbra.Vector.S01E04.1080p.WEB-DL", &target);
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+
+    assert_eq!(episode.season, Some(1));
+    assert_eq!(episode.episode_numbers, vec![4]);
+}
+
+/// The fansub convention `[Group] Title - NN [res][subs][CRC]` with a
+/// hyphenated group name used to file the group's own tokens as title words:
+/// the group was reported correctly *and* left glued to the front of the title.
+#[test]
+fn hyphenated_bracketed_group_stays_out_of_the_title_zone() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        // Deliberately unrelated, so nothing in the context can pull the title
+        // zone straight — this is the context-free reading.
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumen-scribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+    assert!(
+        !candidate
+            .projected
+            .normalized_title_variants
+            .iter()
+            .any(|variant| variant.contains("LUMEN")),
+        "no variant may carry the group tag: {:?}",
+        candidate.projected.normalized_title_variants
+    );
+}
+
+/// Taking the group's tokens out of the title zone has to leave the rest of
+/// the reading intact — the number the release carries, and the combined
+/// series-and-cour name that community-season anchoring later compares against,
+/// with nothing of the group in it.
+#[test]
+fn hyphenated_bracketed_group_release_keeps_its_number_and_cour_variant() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+    let variants = &candidate.projected.normalized_title_variants;
+
+    assert_eq!(episode.absolute_episode, Some(20));
+    assert!(
+        variants
+            .iter()
+            .any(|variant| variant == "LANTERN VERGE FINAL CHORUS"),
+        "series-and-cour variant missing: {variants:?}"
+    );
+    assert!(
+        variants.iter().all(|variant| !variant.contains("SCRIBE")),
+        "no variant may carry the group tag: {variants:?}"
+    );
+}
+
+/// Guard against over-correcting: one trailing bracket group with a
+/// multi-token tag parsed correctly before and must still.
+#[test]
+fn hyphenated_bracketed_group_with_one_trailing_bracket_is_unchanged() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumen-scribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+}
+
+/// The same, for a single-token tag with many trailing brackets.
+#[test]
+fn single_token_bracketed_group_with_many_trailing_brackets_is_unchanged() {
+    let analysis = analyze_release_for_target(
+        "[Lumenscribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumenscribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
     );
 }

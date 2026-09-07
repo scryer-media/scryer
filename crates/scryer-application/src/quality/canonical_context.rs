@@ -833,11 +833,15 @@ impl AppUseCase {
             )
             .await;
         for claim in recorded {
-            let already_listed = claim.release_key.is_some()
-                && queued
-                    .iter()
-                    .any(|queued| queued.release_key == claim.release_key);
-            if !already_listed {
+            if let Some(existing) = claim.release_key.and_then(|release_key| {
+                queued
+                    .iter_mut()
+                    .find(|queued| queued.release_key == Some(release_key))
+            }) {
+                existing.covers.extend(claim.covers);
+                existing.covers.sort();
+                existing.covers.dedup();
+            } else {
                 queued.push(claim);
             }
         }

@@ -1,3 +1,23 @@
+//! Gateway query compatibility contract.
+//!
+//! Keep every selected operation within SMG's general limits: at most 100 root
+//! fields, 100 aggregate requested `series`/`movie`/`metadataBulk` items, and
+//! 10,000 default unweighted gqlgen complexity units. The three discovery
+//! roots (`discoverPublicFeed`, `titleRecommendations`, and
+//! `collectionCompletions`) share a combined limit of 10 root fields.
+//!
+//! Synchronous discovery subject lists are capped at 5,000. Snapshot and
+//! context operations retain their configured 30,000-subject and
+//! 250-changed-subject limits. `sectionTypes` is capped at the schema's current
+//! raw enum count of 21 before deduplication. `metadataBulk` remains capped at
+//! 50 items.
+//!
+//! These are shape limits, so do not add operation-name or query-hash
+//! allowlists. Anonymous GraphQL GET remains supported by SMG, but Scryer
+//! discovery uses authenticated POST requests. The artwork builder legitimately
+//! produces 100 movie or series aliases (up to 1,200 scalar/object field
+//! complexity); checked-in documents peak at 191.
+
 pub const SEARCH_TVDB_QUERY: &str = include_str!("metadata_gateway/search_tvdb.graphql");
 pub const SEARCH_TVDB_BATCH_QUERY: &str =
     include_str!("metadata_gateway/search_tvdb_batch.graphql");

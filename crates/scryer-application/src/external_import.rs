@@ -832,6 +832,9 @@ impl ExternalArrClient {
             })
             .await
             .map_err(|error| match error {
+                OutboundHttpError::DispatchRejected => {
+                    AppError::canceled("external API dispatch rejected")
+                }
                 OutboundHttpError::RateLimited(rate_limited) => AppError::Repository(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => format!(

@@ -47,6 +47,9 @@ type IndexerQueryStats = {
   successfulLast24H: number;
   failedLast24H: number;
   lastQueryAt: string | null;
+  apiRequestsToday: number;
+  apiRequestsWindowStartedAt: string | null;
+  apiRequestsObservedSince: string | null;
   apiCurrent: number | null;
   apiMax: number | null;
   grabCurrent: number | null;
@@ -877,6 +880,10 @@ export function SystemView({
           <h3 className={SYSTEM_PANEL_TITLE_CLASS}>Indexer Stats (Last 24h)</h3>
         </div>
         <div className={SYSTEM_PANEL_BODY_CLASS}>
+          <p className={`mb-3 text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
+            Counts cover requests Scryer sends. Prowlarr child counts do not include requests
+            Prowlarr makes internally.
+          </p>
           {indexerStats === null ? (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
               {[0, 1, 2].map((item) => (
@@ -923,7 +930,32 @@ export function SystemView({
                   </div>
                   <div className="mt-3 space-y-2 text-xs">
                     <p>
-                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Queries:</span>{" "}
+                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Observed calls today:</span>{" "}
+                      {stat.apiRequestsToday}
+                      {stat.apiRequestsWindowStartedAt ? (
+                        <span className={SYSTEM_MUTED_TEXT_CLASS}>
+                          {" "}
+                          (since{" "}
+                          {formatUiDateTime(
+                            stat.apiRequestsWindowStartedAt,
+                            dateTimeFormat,
+                          )}
+                          )
+                        </span>
+                      ) : null}
+                    </p>
+                    {stat.apiRequestsObservedSince ? (
+                      <p className={SYSTEM_MUTED_TEXT_CLASS}>
+                        Observed since{" "}
+                        {formatUiDateTime(stat.apiRequestsObservedSince, dateTimeFormat)}.
+                        {new Date(stat.apiRequestsObservedSince).toISOString().slice(0, 10) ===
+                        new Date().toISOString().slice(0, 10)
+                          ? " First UTC day is partial."
+                          : ""}
+                      </p>
+                    ) : null}
+                    <p>
+                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Search runs:</span>{" "}
                       {stat.queriesLast24H}
                       {stat.failedLast24H > 0 && (
                         <span className="text-[var(--scry-danger-text-soft)]">
@@ -934,17 +966,17 @@ export function SystemView({
                     </p>
                     {stat.apiMax !== null && (
                       <p>
-                        <span className={SYSTEM_MUTED_TEXT_CLASS}>API usage:</span>{" "}
+                        <span className={SYSTEM_MUTED_TEXT_CLASS}>Provider API usage:</span>{" "}
                         <span className={quotaBadgeClass(stat.apiCurrent, stat.apiMax)}>
-                          {stat.apiCurrent ?? 0}/{stat.apiMax}
+                          {stat.apiCurrent ?? "Unknown"}/{stat.apiMax}
                         </span>
                       </p>
                     )}
                     {stat.grabMax !== null && (
                       <p>
-                        <span className={SYSTEM_MUTED_TEXT_CLASS}>Grabs:</span>{" "}
+                        <span className={SYSTEM_MUTED_TEXT_CLASS}>Provider grab usage:</span>{" "}
                         <span className={quotaBadgeClass(stat.grabCurrent, stat.grabMax)}>
-                          {stat.grabCurrent ?? 0}/{stat.grabMax}
+                          {stat.grabCurrent ?? "Unknown"}/{stat.grabMax}
                         </span>
                       </p>
                     )}

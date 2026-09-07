@@ -46,7 +46,7 @@ pub fn build_release_parse_context_for_title(
     build_release_parse_context_from_episodes(title, episodes.iter(), facet_hint)
 }
 
-fn build_release_parse_context_from_episodes<'a>(
+pub(crate) fn build_release_parse_context_from_episodes<'a>(
     title: &Title,
     episodes: impl IntoIterator<Item = &'a Episode>,
     facet_hint: Option<&str>,
@@ -512,7 +512,9 @@ fn bare_season_followed_by_release_metadata(token: &str, tokens: &[String]) -> b
     let target = normalize_alphanumeric_upper(token);
     tokens.iter().enumerate().any(|(index, candidate)| {
         normalize_alphanumeric_upper(candidate) == target
-            && tokens
+            && (tokens.get(index + 1).is_some_and(|next| {
+                matches!(normalize_alphanumeric_upper(next).as_str(), "BD" | "JPBD")
+            }) || tokens
                 .iter()
                 .skip(index + 1)
                 .take(METADATA_WINDOW)
@@ -520,7 +522,7 @@ fn bare_season_followed_by_release_metadata(token: &str, tokens: &[String]) -> b
                     let normalized = normalize_alphanumeric_upper(next);
                     looks_like_release_provenance_normalized(&normalized)
                         || parse_context_year(&normalized).is_some()
-                })
+                }))
     })
 }
 

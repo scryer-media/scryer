@@ -198,6 +198,12 @@ pub struct IndexerQueryStatsPayload {
     pub grabs_last_24h: i32,
     /// UTC time of the most recent query, or null when never queried.
     pub last_query_at: Option<DateTime<Utc>>,
+    /// Every HTTP request Scryer has sent to this indexer in the current quota window, counted at the send site: pagination, retries, RSS sweeps, caps refreshes and failures included. Persisted, so it survives a restart.
+    pub api_requests_today: i32,
+    /// UTC time the current api_requests_today window opened, or null when the counter has never been persisted.
+    pub api_requests_window_started_at: Option<DateTime<Utc>>,
+    /// UTC time corrected Scryer-owned API request observation began. The first UTC day is partial.
+    pub api_requests_observed_since: Option<DateTime<Utc>>,
     /// Current API request count, or null when not reported.
     pub api_current: Option<i32>,
     /// API request limit, or null when not reported.

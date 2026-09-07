@@ -114,11 +114,24 @@ pub(crate) fn resolve_release_coverage(
     collections: &[Collection],
     requested_episode: Option<&Episode>,
 ) -> ReleaseCoverage {
+    if parsed
+        .parse_hints
+        .iter()
+        .any(|hint| hint == "identity:unresolved_pack_scope")
+    {
+        return ReleaseCoverage::Unknown;
+    }
     let Some(episode) = parsed.episode.as_ref() else {
         return ReleaseCoverage::Title;
     };
 
-    if episode.is_series_pack {
+    // Explicit episode bounds constrain coverage even when a pack qualifier
+    // also describes the release. Never widen a bounded set to a collection.
+    let has_episode_bounds = !episode.episode_numbers.is_empty()
+        || !episode.absolute_episode_numbers.is_empty()
+        || episode.absolute_episode.is_some();
+
+    if episode.is_series_pack && !has_episode_bounds {
         let covered = eligible_series_pack_episode_ids(episodes, &episode.season_numbers);
         return if covered.is_empty() {
             ReleaseCoverage::Unknown
@@ -127,7 +140,7 @@ pub(crate) fn resolve_release_coverage(
         };
     }
 
-    if episode.release_type == ParsedEpisodeReleaseType::SeasonPack {
+    if episode.release_type == ParsedEpisodeReleaseType::SeasonPack && !has_episode_bounds {
         if let Some(season) = episode.season {
             if let Some(collection_id) = collection_id_for_season(collections, season) {
                 return ReleaseCoverage::Collection(collection_id);
@@ -175,6 +188,14 @@ pub(crate) fn resolve_release_coverage(
         }
     }
 
+    let within_named_seasons = |catalog_episode: &Episode| {
+        episode.season_numbers.is_empty()
+            || catalog_episode
+                .season_number
+                .as_deref()
+                .and_then(|value| value.parse::<u32>().ok())
+                .is_some_and(|season| episode.season_numbers.contains(&season))
+    };
     if covered.is_empty() && !episode.absolute_episode_numbers.is_empty() {
         let wanted = episode
             .absolute_episode_numbers
@@ -186,7 +207,9 @@ pub(crate) fn resolve_release_coverage(
                 .absolute_number
                 .as_deref()
                 .and_then(|value| value.parse::<u32>().ok());
-            if absolute.is_some_and(|number| wanted.contains(&number)) {
+            if within_named_seasons(catalog_episode)
+                && absolute.is_some_and(|number| wanted.contains(&number))
+            {
                 covered.push(catalog_episode.id.clone());
             }
         }
@@ -200,7 +223,7 @@ pub(crate) fn resolve_release_coverage(
                 .absolute_number
                 .as_deref()
                 .and_then(|value| value.parse::<u32>().ok());
-            if absolute == Some(absolute_episode) {
+            if within_named_seasons(catalog_episode) && absolute == Some(absolute_episode) {
                 covered.push(catalog_episode.id.clone());
             }
         }
@@ -235,6 +258,12 @@ pub(crate) fn parsed_numbering_contradicts_episode(
     }
     if let (Some(expected), Some(found)) = (expected_season, episode.season)
         && expected != found
+    {
+        return true;
+    }
+    if let Some(expected) = expected_season
+        && !episode.season_numbers.is_empty()
+        && !episode.season_numbers.contains(&expected)
     {
         return true;
     }
@@ -731,6 +760,322 @@ mod tests {
         let mut parsed = ParsedReleaseMetadata::empty("release", "test");
         parsed.episode = Some(episode);
         parsed
+    }
+
+    fn parse_anime_release(release: &str) -> ParsedReleaseMetadata {
+        let context = scryer_release_parser::ReleaseParseContext {
+            facet_hint: scryer_release_parser::ContextFacetHint::Anime,
+            title: scryer_release_parser::ContextTitle {
+                name: "Known Anime".into(),
+            },
+            aliases: Vec::new(),
+            known_years: Vec::new(),
+            imdb_ids: Vec::new(),
+            episodes: Vec::new(),
+        };
+        scryer_release_parser::analyze_release_for_target(release, &context)
+            .best_candidate()
+            .expect("release candidate")
+            .projected
+            .clone()
+    }
+
+    #[test]
+    fn parsed_complete_series_bounds_exclude_later_catalog_episodes() {
+        let episodes = vec![
+            episode("first", "1", "1", Some("1")),
+            episode("last", "2", "6", Some("12")),
+            episode("later", "2", "7", Some("13")),
+            episode("unnamed-season", "3", "1", Some("25")),
+        ];
+        for release in [
+            "Known Anime Complete Series (01-12)",
+            "Known Anime All Seasons (01-12)",
+            "Known Anime Complete Series [S01-S02] (01-12)",
+            "Known Anime Complete Series EP 01-12",
+            "Known Anime All Seasons Episodes 01-12",
+            "Known Anime Complete Series [S01-S02] [EP 001-012]",
+            "Known Anime [01-12TV全集+特典映像] [1080p]",
+        ] {
+            assert_eq!(
+                resolve_release_coverage(
+                    &parse_anime_release(release),
+                    &episodes,
+                    &[],
+                    episodes.last(),
+                ),
+                ReleaseCoverage::EpisodeSet(vec!["first".into(), "last".into()]),
+                "{release}",
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_singular_season_restrictions_keep_relative_coordinates() {
+        let episodes = vec![
+            episode("wrong-season", "1", "1", Some("1")),
+            episode("first", "2", "1", Some("13")),
+            episode("last", "2", "12", Some("24")),
+            episode("later", "2", "13", Some("25")),
+        ];
+        for release in [
+            "Known Anime Complete Series Season 2 (01-12)",
+            "Known Anime All Seasons [S02] (01-12)",
+            "Known Anime Complete Series Season 2 EP 01-12",
+            "Known Anime Complete Series [S01-S02] S02E01-S02E12",
+            "Known Anime Complete Series Season 1 S02E01-S02E12",
+            "Known Anime S2 [01-12TV全集] [1080p]",
+            "Known Anime 01-12 / S02 / Batch",
+            "Known Anime (01-12 Complete Batch) (Season 2)",
+        ] {
+            assert_eq!(
+                resolve_release_coverage(
+                    &parse_anime_release(release),
+                    &episodes,
+                    &[],
+                    episodes.last(),
+                ),
+                ReleaseCoverage::EpisodeSet(vec!["first".into(), "last".into()]),
+                "{release}",
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_oversized_season_ranges_cannot_fall_back_to_title_coverage() {
+        let episodes = vec![episode("wanted", "1", "1", Some("1"))];
+        for release in [
+            "Known Anime S01-S101+OVA",
+            "Known Anime Complete Series S01-S101+OVA",
+            "Known Anime All Seasons S01-S101+OVA",
+            "Known Anime [Complete Series S01-S101+OVA]",
+            "Known Anime [All Seasons S01-S101+OVA]",
+        ] {
+            assert_eq!(
+                resolve_release_coverage(
+                    &parse_anime_release(release),
+                    &episodes,
+                    &[collection("season-1", "1")],
+                    episodes.first(),
+                ),
+                ReleaseCoverage::Unknown,
+                "{release}",
+            );
+        }
+    }
+
+    #[test]
+    fn contradictory_pack_scopes_cannot_cover_numbered_episodes() {
+        let episodes = vec![episode("wanted", "1", "1", Some("1"))];
+        for release in [
+            "Known Anime Complete Series Movies Only",
+            "Known Anime All Seasons OVA Only",
+            "Known Anime S01 (WEB 1080p) | S02 | 01-13 | Batch",
+            "Known Anime S01 (WEB 1080p) | S02E05 | 01-13 | Batch",
+            "Known Anime 1-200 (Seasons 1-5 (First Arc+Second Arc)) [1080p]",
+        ] {
+            assert_eq!(
+                resolve_release_coverage(
+                    &parse_anime_release(release),
+                    &episodes,
+                    &[collection("season-1", "1")],
+                    episodes.first(),
+                ),
+                ReleaseCoverage::Unknown,
+                "{release}",
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_season_annotations_do_not_establish_complete_coverage() {
+        let episodes = vec![
+            episode("first", "1", "1", Some("1")),
+            episode("second-season", "2", "1", Some("25")),
+            episode("third-season-later", "3", "200", Some("248")),
+            episode("unnamed-season", "4", "1", Some("249")),
+        ];
+        for release in [
+            "Known Anime S01-S03E45",
+            "Known Anime S01-S03(E117)",
+            "Known Anime S01E001-S02E156 Complete",
+            "Known Anime Seasons 1-2 and 4 Episodes of S3 Uncut Episodes 1-104",
+        ] {
+            let coverage = resolve_release_coverage(
+                &parse_anime_release(release),
+                &episodes,
+                &[collection("season-3", "3")],
+                Some(&episodes[2]),
+            );
+            assert!(
+                !coverage.covers_episode(&episodes[2]),
+                "partial season widened to later episodes: {release}: {coverage:?}",
+            );
+            assert!(
+                !coverage.covers_episode(&episodes[3]),
+                "unnamed season covered: {release}: {coverage:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn global_bounds_retain_named_season_restrictions_in_acquisition() {
+        let episodes = vec![
+            episode("first", "1", "1", Some("1")),
+            episode("last", "3", "20", Some("68")),
+            episode("unnamed-season", "4", "1", Some("10")),
+            episode("later", "3", "21", Some("69")),
+        ];
+        let parsed = parse_anime_release("Known Anime S01-S03 001-068 [1080p]");
+        assert_eq!(
+            resolve_release_coverage(&parsed, &episodes, &[], episodes.get(2)),
+            ReleaseCoverage::EpisodeSet(vec!["first".into(), "last".into()])
+        );
+        assert!(parsed_release_contradicts_requested_episode(
+            &parsed,
+            &episodes[2]
+        ));
+        assert!(!parsed_release_contradicts_requested_episode(
+            &parsed,
+            &episodes[0]
+        ));
+        assert!(!parsed_release_contradicts_requested_episode(
+            &parsed,
+            &episodes[1]
+        ));
+    }
+
+    #[test]
+    fn parsed_singular_season_restrictions_exclude_other_seasons() {
+        let episodes = vec![
+            episode("season-1", "1", "1", Some("1")),
+            episode("season-2", "2", "1", Some("13")),
+            episode("season-3", "3", "1", Some("25")),
+        ];
+        for release in [
+            "Known Anime Complete Series Season 2",
+            "Known Anime Complete Series [Season 2]",
+            "Known Anime All Seasons Season 2",
+        ] {
+            let coverage = resolve_release_coverage(
+                &parse_anime_release(release),
+                &episodes,
+                &[collection("season-2", "2")],
+                episodes.first(),
+            );
+            assert!(!coverage.covers_episode(&episodes[0]), "{release}");
+            assert!(coverage.covers_episode(&episodes[1]), "{release}");
+            assert!(!coverage.covers_episode(&episodes[2]), "{release}");
+        }
+    }
+
+    #[test]
+    fn numbered_episode_completion_title_keeps_exact_coverage() {
+        let episodes = vec![
+            episode("wanted", "1", "1", Some("1")),
+            episode("later", "1", "2", Some("2")),
+        ];
+        let parsed = parse_anime_release("Known.Anime.S01E01.The.Complete.Series.1080p.WEB-DL");
+        assert_eq!(
+            resolve_release_coverage(&parsed, &episodes, &[], episodes.first()),
+            ReleaseCoverage::SingleEpisode("wanted".into()),
+        );
+    }
+
+    #[test]
+    fn explicit_episode_bounds_override_whole_pack_flags() {
+        let episodes = vec![
+            episode("ep-1", "1", "1", Some("1")),
+            episode("ep-2", "1", "2", Some("2")),
+            episode("ep-3", "1", "3", Some("3")),
+        ];
+        let collections = vec![collection("season-1", "1")];
+        for identity in [
+            ParsedEpisodeMetadata {
+                season: Some(1),
+                episode_numbers: vec![1, 2],
+                full_season: true,
+                release_type: ParsedEpisodeReleaseType::SeasonPack,
+                ..Default::default()
+            },
+            ParsedEpisodeMetadata {
+                absolute_episode_numbers: vec![1, 2],
+                full_season: true,
+                is_series_pack: true,
+                release_type: ParsedEpisodeReleaseType::SeasonPack,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                resolve_release_coverage(
+                    &parsed_with_episode(identity),
+                    &episodes,
+                    &collections,
+                    episodes.last(),
+                ),
+                ReleaseCoverage::EpisodeSet(vec!["ep-1".into(), "ep-2".into()])
+            );
+        }
+    }
+
+    #[test]
+    fn unmatched_episode_bounds_do_not_fall_back_to_requested_collection() {
+        let episodes = vec![episode("ep-3", "1", "3", Some("3"))];
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata {
+            season: Some(1),
+            episode_numbers: vec![1, 2],
+            full_season: true,
+            is_series_pack: true,
+            release_type: ParsedEpisodeReleaseType::SeasonPack,
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_release_coverage(
+                &parsed,
+                &episodes,
+                &[collection("season-1", "1")],
+                episodes.first(),
+            ),
+            ReleaseCoverage::Unknown
+        );
+    }
+
+    #[test]
+    fn restricted_series_pack_excludes_unnamed_seasons() {
+        let episodes = vec![
+            episode("s1", "1", "1", Some("1")),
+            episode("s2", "2", "1", Some("13")),
+            episode("s3", "3", "1", Some("25")),
+            episode("s4", "4", "1", Some("37")),
+            episode("special", "0", "1", None),
+        ];
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata {
+            season_numbers: vec![1, 4],
+            full_season: true,
+            is_series_pack: true,
+            release_type: ParsedEpisodeReleaseType::SeasonPack,
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_release_coverage(&parsed, &episodes, &[], episodes.get(2)),
+            ReleaseCoverage::EpisodeSet(vec!["s1".into(), "s4".into()])
+        );
+    }
+
+    #[test]
+    fn unresolved_pack_scope_does_not_become_title_coverage() {
+        let mut parsed = ParsedReleaseMetadata::empty("Show Complete Pack (3 Seasons)", "test");
+        assert_eq!(
+            resolve_release_coverage(&parsed, &[], &[], None),
+            ReleaseCoverage::Title
+        );
+        parsed
+            .parse_hints
+            .push("identity:unresolved_pack_scope".into());
+        assert_eq!(
+            resolve_release_coverage(&parsed, &[], &[], None),
+            ReleaseCoverage::Unknown
+        );
     }
 
     #[test]

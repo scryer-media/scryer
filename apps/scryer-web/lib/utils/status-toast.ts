@@ -27,6 +27,7 @@ const NO_TOAST_PATTERNS: RegExp[] = [
 ];
 
 const ERROR_PATTERNS: RegExp[] = [
+  /^search results expired, please search again$/i,
   /\bfailed to\b/i,
   /\bfailed\b/i,
   /\brequest failed\b/i,

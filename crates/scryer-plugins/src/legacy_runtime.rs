@@ -146,6 +146,16 @@ impl LegacyPlugin {
         self.store.data().http.begin_indexer_error_capture(context);
     }
 
+    pub(crate) fn set_indexer_request_accounting(
+        &mut self,
+        context: Option<crate::plugin_http_host::IndexerRequestAccountingContext>,
+    ) {
+        self.store
+            .data()
+            .http
+            .set_indexer_request_accounting(context);
+    }
+
     pub(crate) fn finish_indexer_error_capture(&mut self, operation_failed: bool) {
         self.store
             .data()

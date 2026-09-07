@@ -13,11 +13,11 @@ use scryer_application::{
     IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCandidateWrite,
     IndexerSearchCompletion, IndexerSearchEligibility, IndexerSearchIncompleteReason,
     IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
-    IndexerSearchLearningRepository, IndexerSearchOutcome, IndexerSearchPageSink,
-    IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult, IndexerSearchRunWrite,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
-    NullIndexerErrorRepository, NullIndexerProxyConfigRepository,
+    IndexerSearchLearningRepository, IndexerSearchNumberingContext, IndexerSearchOutcome,
+    IndexerSearchPageSink, IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult,
+    IndexerSearchRunWrite, IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink,
+    IndexerSearchStrategyRequest, IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError,
+    NormalizedIndexerSearchCandidate, NullIndexerErrorRepository, NullIndexerProxyConfigRepository,
     NullIndexerSearchLearningRepository, NullUpstreamScheduler, RateLimitCooldownAction,
     RateLimitSignal, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
     ReusableIndexerSearchCandidate, RssFreshnessContext, SchedulerAdmission, SchedulerBatchRequest,
@@ -171,6 +171,14 @@ struct StrategyTierContext {
     rate_limit_seconds: Option<i64>,
     category: Option<String>,
     per_indexer_categories: Option<Vec<String>>,
+    /// Whether this indexer is reached through Prowlarr's newznab proxy rather
+    /// than a direct nab endpoint. Prowlarr accepts every nab function, rewrites
+    /// a text-only faceted search back to `t=search` before it reaches the
+    /// tracker, and filters the response by the requested categories itself, so
+    /// it can be handed routed categories on a strategy that carries no facet.
+    /// A direct nab provider infers the function from the category prefixes and
+    /// fails hard when that function is unavailable, so it cannot.
+    prowlarr_nab_proxy: bool,
     mode: SearchMode,
     operation: IndexerErrorOperation,
     tagged_aliases: Vec<scryer_domain::TaggedAlias>,
@@ -265,7 +273,15 @@ fn prepare_search_strategies(
             .flatten();
         let facet = (!strategy.generic_query_only && !strategy.omit_request_facet)
             .then(|| strategy.request_facet.clone());
-        let newznab_categories = (!strategy.generic_query_only)
+        // `cat=` is a generic nab parameter, so dropping it along with the
+        // facet discards the operator's routing selection for no protocol
+        // reason. Prowlarr-proxied indexers keep it: Prowlarr resolves the
+        // function and the category filter on our behalf. Direct nab providers
+        // still lose it, because the shipped provider reads the request shape
+        // off the category prefixes and would turn `t=search` into the very
+        // function this indexer's caps ruled out.
+        let keep_routed_categories = !strategy.generic_query_only || context.prowlarr_nab_proxy;
+        let newznab_categories = keep_routed_categories
             .then(|| context.per_indexer_categories.clone())
             .flatten();
         let season = (!strategy.generic_query_only)
@@ -436,6 +452,7 @@ struct FilterStrategyContext<'a> {
     query: &'a str,
     season: Option<u32>,
     episode: Option<u32>,
+    numbering_context: &'a IndexerSearchNumberingContext,
     tagged_aliases: &'a [scryer_domain::TaggedAlias],
     title_guard_mode: TitleGuardMode,
     strategy_label: &'a str,
@@ -1045,6 +1062,10 @@ struct StrategyBatchHealth {
     any_error: bool,
     retry_after: Option<std::time::Duration>,
     had_rate_limit: bool,
+    /// A rate limit the scheduler's cooldown cannot size, so it still has to
+    /// reach the escalating ladder below. See
+    /// `RateLimitSignal::warrants_system_backoff`.
+    rate_limit_needs_system_backoff: bool,
     had_solver_failure: bool,
     representative_error: Option<String>,
     rate_limit_error: Option<String>,
@@ -1063,6 +1084,8 @@ impl StrategyBatchHealth {
     ) {
         self.any_error = true;
         self.had_rate_limit |= rate_limited;
+        self.rate_limit_needs_system_backoff |= rate_limit_signal_from_error(error)
+            .is_some_and(|signal| signal.warrants_system_backoff());
         let message = sanitize_indexer_error_message(&error.to_string());
         if rate_limited {
             self.rate_limit_error.get_or_insert(message);
@@ -1116,7 +1139,11 @@ impl StrategyBatchHealth {
             .await;
         }
 
-        if self.any_error && !self.any_success && !self.had_rate_limit && !self.had_solver_failure {
+        if self.any_error
+            && !self.any_success
+            && (!self.had_rate_limit || self.rate_limit_needs_system_backoff)
+            && !self.had_solver_failure
+        {
             let backoff = backoff_tracker
                 .record_failure(indexer_id, self.retry_after)
                 .await;
@@ -1224,7 +1251,13 @@ fn should_run_fallback_tier(
 }
 
 fn rate_limit_signal_from_error(error: &AppError) -> Option<RateLimitSignal> {
-    RateLimitSignal::from_error(error)
+    RateLimitSignal::from_error(error).or_else(|| {
+        // An indexer that publishes no apiCurrent/apiMax announces an exhausted
+        // account only as a newznab error document, on HTTP 200, with no
+        // Retry-After. Without this the wall is invisible and the indexer keeps
+        // being asked for the rest of the day.
+        RateLimitSignal::from_newznab_quota_message(&error.to_string())
+    })
 }
 
 fn indexer_rss_feedback_summary(
@@ -2363,7 +2396,12 @@ impl MultiIndexerSearchClient {
     ) -> AppResult<(Arc<dyn IndexerClient>, Option<String>, std::time::Duration)> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let (proxy_config, proxy_cache_key) =
-            if let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() {
+            if config.is_prowlarr_nab_proxy() || provider == "prowlarr" {
+                // Prowlarr owns challenge handling for its management parent and
+                // synchronized children. Old persisted solver assignments must
+                // not regain effect at runtime while startup cleanup catches up.
+                (None, None)
+            } else if let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() {
                 let proxy_config = proxy_configs_by_id
                     .get(proxy_config_id)
                     .cloned()
@@ -2693,6 +2731,7 @@ impl MultiIndexerSearchClient {
                     rate_limit_seconds,
                     category: _,
                     per_indexer_categories: _,
+                    prowlarr_nab_proxy: _,
                     mode,
                     operation,
                     tagged_aliases: _,
@@ -3241,6 +3280,8 @@ impl IndexerClient for MultiIndexerSearchClient {
             operation,
             season,
             episode,
+            // A single-query call carries no subject-level numbering context.
+            IndexerSearchNumberingContext::default(),
             absolute_episode,
             tagged_aliases,
             learning_context,
@@ -3263,6 +3304,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
+        numbering_context: IndexerSearchNumberingContext,
         absolute_episode: Option<u32>,
         tagged_aliases: Vec<scryer_domain::TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
@@ -3442,6 +3484,11 @@ impl IndexerClient for MultiIndexerSearchClient {
         let mut proxy_configs_by_id: HashMap<String, Option<scryer_domain::IndexerProxyConfig>> =
             HashMap::new();
         for (config, _) in &enabled {
+            if config.is_prowlarr_nab_proxy()
+                || config.provider_type.trim().eq_ignore_ascii_case("prowlarr")
+            {
+                continue;
+            }
             let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() else {
                 continue;
             };
@@ -4080,7 +4127,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         }
                                         warn!(indexer = indexer_name.as_str(), error = %err, "RSS feed fetch failed");
                                         stats_tracker.record_query(&indexer_id, &indexer_name, false);
-                                        if rate_limit_signal_from_error(&err).is_none()
+                                        if rate_limit_signal_from_error(&err)
+                                            .is_none_or(|signal| signal.warrants_system_backoff())
                                             && !scryer_application::challenge_solver::is_solver_service_error_message(
                                                 &err.to_string(),
                                             )
@@ -4329,12 +4377,14 @@ impl IndexerClient for MultiIndexerSearchClient {
                 HashMap::new()
             };
             let rss_category_request = request_categories.clone();
+            let prowlarr_nab_proxy = Self::is_prowlarr_nab_proxy(config);
             let indexer_id = config.id.clone();
             let indexer_name = config.name.clone();
             let facet = facet.clone();
             let search_query = query.clone();
             let category_for_indexer = category.clone();
             let tagged_aliases_for_indexer = tagged_aliases.clone();
+            let numbering_context_for_indexer = numbering_context.clone();
             let stats_tracker = self.stats_tracker.clone();
             let search_learning = self.search_learning.clone();
             let learning_context = learning_context.clone();
@@ -4384,6 +4434,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         rate_limit_seconds,
                         category: category_for_indexer.clone(),
                         per_indexer_categories: rss_category_request.clone(),
+                        prowlarr_nab_proxy,
                         mode,
                         operation,
                         tagged_aliases: tagged_aliases_for_indexer.clone(),
@@ -4541,6 +4592,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     query: &search_query,
                                     season,
                                     episode,
+                                    numbering_context: &numbering_context_for_indexer,
                                     tagged_aliases: &tagged_aliases_for_indexer,
                                     title_guard_mode: outcome.title_guard_mode,
                                     strategy_label: &outcome.label,
@@ -4718,6 +4770,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             rate_limit_seconds,
                             category: category_for_indexer,
                             per_indexer_categories: rss_category_request,
+                            prowlarr_nab_proxy,
                             mode,
                             operation,
                             tagged_aliases: tagged_aliases_for_indexer.clone(),
@@ -4854,6 +4907,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         query: &search_query,
                                         season,
                                         episode,
+                                        numbering_context: &numbering_context_for_indexer,
                                         tagged_aliases: &tagged_aliases_for_indexer,
                                         title_guard_mode: outcome.title_guard_mode,
                                         strategy_label: &outcome.label,
@@ -5824,6 +5878,90 @@ fn parsed_title_candidates(parsed: &scryer_application::ParsedReleaseMetadata) -
     normalized
 }
 
+/// The search guard is normally limited to the dispatched official/community
+/// pairs. Its only narrower exception is a release that explicitly names one
+/// unambiguous cour and whose complete, bounded episode list maps through that
+/// cour to the requested official episode. Translation and coverage still make
+/// the authoritative decision after this preliminary filter.
+fn exact_cour_mapping_covers_requested_episode(
+    parsed: &scryer_application::ParsedReleaseMetadata,
+    context: &FilterStrategyContext<'_>,
+) -> bool {
+    let Some(anime) = context.numbering_context.anime.as_ref() else {
+        return false;
+    };
+    let Some(parsed_episode) = parsed.episode.as_ref() else {
+        return false;
+    };
+    if parsed_episode.episode_numbers.is_empty() {
+        return false;
+    }
+
+    let variants = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+    let scryer_application::ExactCourTitleMatch::Unique(cour) =
+        scryer_application::exact_cour_title_match(
+            &anime.canonical_title,
+            &anime.bridge,
+            &variants,
+        )
+    else {
+        return false;
+    };
+    let Ok(cour_index) = u32::try_from(cour.index) else {
+        return false;
+    };
+    if cour_index == 0
+        || parsed_episode
+            .season
+            .into_iter()
+            .chain(parsed_episode.season_numbers.iter().copied())
+            .any(|season| season != 1 && season != cour_index)
+    {
+        return false;
+    }
+    let (Ok(season), Ok(episode)) = (
+        i32::try_from(anime.official_season),
+        i32::try_from(anime.official_episode),
+    ) else {
+        return false;
+    };
+    let requested = (season, episode);
+    let mapped = parsed_episode
+        .episode_numbers
+        .iter()
+        .map(|episode| {
+            let episode = i32::try_from(*episode).ok()?;
+            if episode <= 0 || cour.episode_count.is_some_and(|count| episode > count) {
+                return None;
+            }
+            let mut ranges = cour.ranges.iter().filter(|range| {
+                episode >= range.community_episode_start
+                    && range.community_episode_end.is_none_or(|end| episode <= end)
+            });
+            let range = ranges.next()?;
+            if ranges.next().is_some()
+                || range.community_episode_start <= 0
+                || range.tvdb_season <= 0
+                || range.tvdb_episode_start <= 0
+            {
+                return None;
+            }
+            let mapped = range
+                .tvdb_episode_start
+                .checked_add(episode.checked_sub(range.community_episode_start)?)?;
+            if range.tvdb_episode_end.is_some_and(|end| mapped > end) {
+                return None;
+            }
+            Some((range.tvdb_season, mapped))
+        })
+        .collect::<Option<Vec<_>>>();
+    mapped.is_some_and(|mapped| mapped.contains(&requested))
+}
+
 fn filter_strategy_results(
     results: &mut Vec<IndexerSearchResult>,
     context: &FilterStrategyContext<'_>,
@@ -5885,7 +6023,7 @@ fn filter_strategy_results(
                     .iter()
                     .any(|expected| expected == release_title)
             });
-            if !title_ok {
+            if !title_ok && !exact_cour_mapping_covers_requested_episode(parsed, context) {
                 tracing::debug!(
                     strategy = context.strategy_label,
                     query = %context.query,
@@ -5897,34 +6035,74 @@ fn filter_strategy_results(
             }
         }
 
-        if let Some(expected_s) = context.season
-            && let Some(ref res_ep) = parsed.episode
-            && let Some(rs) = res_ep.season
-            && rs != expected_s
-        {
-            tracing::debug!(
-                strategy = context.strategy_label,
-                query = %context.query,
-                expected_season = expected_s,
-                got_season = rs,
-                "title guard: season mismatch"
-            );
-            return false;
-        }
+        // A result's numbering is only wrong when it contradicts *every*
+        // numbering the wanted episode goes by. With a single numbering — which
+        // is everything except anime whose community layout disagrees with
+        // TVDB's — that is exactly the two scalar tests below, unchanged.
+        let pairs = &context.numbering_context.admissible_episode_numberings;
+        if pairs.is_empty() {
+            if let Some(expected_s) = context.season
+                && let Some(ref res_ep) = parsed.episode
+                && let Some(rs) = res_ep.season
+                && rs != expected_s
+                && !exact_cour_mapping_covers_requested_episode(parsed, context)
+            {
+                tracing::debug!(
+                    strategy = context.strategy_label,
+                    query = %context.query,
+                    expected_season = expected_s,
+                    got_season = rs,
+                    "title guard: season mismatch"
+                );
+                return false;
+            }
 
-        if let Some(expected_e) = context.episode
-            && let Some(ref res_ep) = parsed.episode
-            && !res_ep.episode_numbers.is_empty()
-            && !res_ep.episode_numbers.contains(&expected_e)
-        {
-            tracing::debug!(
-                strategy = context.strategy_label,
-                query = %context.query,
-                expected_episode = expected_e,
-                got_episodes = ?res_ep.episode_numbers,
-                "title guard: episode mismatch"
-            );
-            return false;
+            if let Some(expected_e) = context.episode
+                && let Some(ref res_ep) = parsed.episode
+                && !res_ep.episode_numbers.is_empty()
+                && !res_ep.episode_numbers.contains(&expected_e)
+                && !exact_cour_mapping_covers_requested_episode(parsed, context)
+            {
+                tracing::debug!(
+                    strategy = context.strategy_label,
+                    query = %context.query,
+                    expected_episode = expected_e,
+                    got_episodes = ?res_ep.episode_numbers,
+                    "title guard: episode mismatch"
+                );
+                return false;
+            }
+        } else if let Some(ref res_ep) = parsed.episode {
+            let admissible = match (res_ep.season, res_ep.episode_numbers.is_empty()) {
+                // Labelled with both: they have to come from the same
+                // numbering, or together they mean a different episode.
+                (Some(rs), false) => pairs.iter().any(|(season, episode)| {
+                    *season == rs && res_ep.episode_numbers.contains(episode)
+                }),
+                (Some(rs), true) => pairs.iter().any(|(season, _)| *season == rs),
+                // An episode number with no season beside it says nothing
+                // about which numbering it belongs to, so reading it in
+                // either would admit an official episode 17 as though it
+                // were the community's. Held to the dispatched episode,
+                // exactly as before the alternatives existed.
+                (None, false) => context
+                    .episode
+                    .is_none_or(|expected| res_ep.episode_numbers.contains(&expected)),
+                // Absolute numbering carries neither; translation and coverage
+                // decide those, as they always have.
+                (None, true) => true,
+            };
+            if !admissible && !exact_cour_mapping_covers_requested_episode(parsed, context) {
+                tracing::debug!(
+                    strategy = context.strategy_label,
+                    query = %context.query,
+                    admissible = ?pairs,
+                    got_season = ?res_ep.season,
+                    got_episodes = ?res_ep.episode_numbers,
+                    "title guard: numbering matches no wanted-episode form"
+                );
+                return false;
+            }
         }
 
         true
@@ -6094,6 +6272,89 @@ mod tests {
             title_guard_mode_for_strategy(&text_strategy),
             TitleGuardMode::ExactTitleMatch
         );
+    }
+
+    fn generic_query_strategy_request(
+        prowlarr_nab_proxy: bool,
+        generic_query_only: bool,
+    ) -> IndexerSearchStrategyRequest {
+        let context = StrategyTierContext {
+            client: Arc::new(MockIndexerClient {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            search_limit: Arc::new(Semaphore::new(1)),
+            rate_limiter: IndexerRateLimiter::new(),
+            indexer_id: "indexer-1".into(),
+            search_timeout: std::time::Duration::from_secs(5),
+            rate_limit_seconds: None,
+            category: Some("movie".to_string()),
+            per_indexer_categories: Some(vec!["2040".to_string()]),
+            prowlarr_nab_proxy,
+            mode: SearchMode::Auto,
+            operation: IndexerErrorOperation::AutomaticSearch,
+            tagged_aliases: Vec::new(),
+            cancel_token: CancellationToken::new(),
+            deadline_at: None,
+        };
+        let strategy = SearchStrategy {
+            request_query: "Amber Circuit 2026".to_string(),
+            request_facet: "movie".to_string(),
+            ids: HashMap::new(),
+            season: None,
+            episode: None,
+            absolute_episode: None,
+            generic_query_only,
+            omit_request_facet: false,
+            label: "freetext".to_string(),
+        };
+
+        let mut prepared = prepare_search_strategies(&context, vec![strategy]);
+        assert_eq!(prepared.len(), 1);
+        prepared.remove(0).request
+    }
+
+    #[test]
+    fn prowlarr_proxy_keeps_routed_categories_on_a_generic_query_strategy() {
+        // Prowlarr accepts every nab function, rewrites a text-only faceted
+        // search back to `t=search` before it reaches the tracker, and filters
+        // the response by the requested categories itself. Dropping `cat=` here
+        // silently discarded the operator's routing selection.
+        let request = generic_query_strategy_request(true, true);
+
+        assert_eq!(
+            request.newznab_categories,
+            Some(vec!["2040".to_string()]),
+            "a Prowlarr-proxied indexer keeps its routed categories"
+        );
+        // The rest of the structured context still goes, which is what makes
+        // this a generic query in the first place.
+        assert_eq!(request.facet, None);
+        assert_eq!(request.category, None);
+    }
+
+    #[test]
+    fn direct_nab_still_drops_routed_categories_on_a_generic_query_strategy() {
+        // A direct nab provider reads the request shape off the category
+        // prefixes, so handing it `2040` with no facet would turn `t=search`
+        // into `t=movie` — the function this indexer's caps ruled out.
+        let request = generic_query_strategy_request(false, true);
+
+        assert_eq!(request.newznab_categories, None);
+        assert_eq!(request.facet, None);
+    }
+
+    #[test]
+    fn facet_scoped_strategies_keep_routed_categories_on_either_transport() {
+        for prowlarr_nab_proxy in [true, false] {
+            let request = generic_query_strategy_request(prowlarr_nab_proxy, false);
+
+            assert_eq!(
+                request.newznab_categories,
+                Some(vec!["2040".to_string()]),
+                "transport must not change a facet-scoped strategy"
+            );
+            assert_eq!(request.facet, Some("movie".to_string()));
+        }
     }
 
     struct MockIndexerConfigRepository {
@@ -7316,6 +7577,7 @@ mod tests {
                 rate_limit_seconds: None,
                 category: None,
                 per_indexer_categories: None,
+                prowlarr_nab_proxy: false,
                 mode: SearchMode::Auto,
                 operation: IndexerErrorOperation::AutomaticSearch,
                 tagged_aliases: Vec::new(),
@@ -8745,7 +9007,11 @@ mod tests {
         assert!(recorded[0].ids.is_empty());
         assert_eq!(recorded[0].query, "12 Lanterns of Winter");
         assert_eq!(recorded[0].facet, None);
-        assert!(recorded[0].categories.is_empty());
+        // The facet-scoped function is given up; the routed categories are not.
+        // Prowlarr resolves the nab function itself and filters the response by
+        // the categories it was asked for, so `cat=` still means something here
+        // even with no facet and no caps snapshot.
+        assert_eq!(recorded[0].categories, vec!["2000".to_string()]);
         assert_eq!(recorded[0].season, None);
         assert_eq!(recorded[0].episode, None);
         assert_eq!(recorded[0].absolute_episode, None);
@@ -8859,7 +9125,9 @@ mod tests {
         assert_eq!(recorded[0].query, "12 Lanterns of Winter");
         assert_eq!(recorded[0].category, None);
         assert_eq!(recorded[0].facet, None);
-        assert!(recorded[0].categories.is_empty());
+        // Dropping the caller's routed categories here silently discarded the
+        // operator's per-indexer selection for no protocol reason.
+        assert_eq!(recorded[0].categories, vec!["2000".to_string()]);
     }
 
     #[tokio::test]
@@ -9003,7 +9271,8 @@ mod tests {
         assert!(recorded[0].ids.is_empty());
         assert_eq!(recorded[0].category, None);
         assert_eq!(recorded[0].facet, None);
-        assert!(recorded[0].categories.is_empty());
+        // Structured context goes, routed categories stay.
+        assert_eq!(recorded[0].categories, vec!["5070".to_string()]);
         assert_eq!(recorded[0].season, None);
         assert_eq!(recorded[0].episode, None);
         assert_eq!(recorded[0].absolute_episode, None);
@@ -9225,9 +9494,88 @@ mod tests {
         assert!(recorded[1].ids.is_empty());
         assert_eq!(recorded[1].query, "Storm Signal");
         assert_eq!(recorded[1].facet, None);
-        assert!(recorded[1].categories.is_empty());
+        // Same rule as the RSS bare-query form above: only the facet-scoped
+        // function is given up, and the sweep keeps sweeping what it was routed.
+        assert_eq!(recorded[1].categories, recorded[0].categories);
         assert_eq!(recorded[1].season, None);
         assert_eq!(recorded[1].episode, None);
+    }
+
+    #[tokio::test]
+    async fn direct_nab_basic_query_fallback_still_drops_routed_categories() {
+        // Twin of the Prowlarr case above, on the transport that cannot take
+        // them. A direct nab provider reads the request shape off the category
+        // prefixes, so a `5000` with no facet would turn `t=search` into the
+        // `tvsearch` this snapshot just said has no `q`, and a first-page error
+        // there is fatal.
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.caps_snapshot_json = Some(
+            serde_json::to_string(&prowlarr_caps_snapshot(
+                &["q", "imdbid"],
+                &["season", "ep", "tvdbid"],
+            ))
+            .expect("serialize direct caps snapshot"),
+        );
+
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(|call| {
+                if call.ids.is_empty() {
+                    response_with_titles(&["Storm.Signal.S01E02.2026"])
+                } else {
+                    Ok(IndexerSearchResponse {
+                        completion: IndexerSearchCompletion::Complete,
+                        indexer_outcomes: Vec::new(),
+                        results: vec![],
+                        api_current: None,
+                        api_max: None,
+                        grab_current: None,
+                        grab_max: None,
+                    })
+                }
+            }),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![config],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: movie_caps(),
+            }),
+        );
+
+        let _response = multi
+            .search(
+                "Storm Signal".to_string(),
+                HashMap::from([("tvdb_id".to_string(), "424242".to_string())]),
+                Some("series".to_string()),
+                Some("series".to_string()),
+                None,
+                Some(vec!["5000".to_string()]),
+                None,
+                SearchMode::Interactive,
+                Some(1),
+                Some(2),
+                None,
+                vec![],
+            )
+            .await
+            .expect("search should succeed");
+
+        let recorded = calls.lock().expect("calls").clone();
+        let freetext = recorded
+            .iter()
+            .find(|call| call.ids.is_empty())
+            .expect("the freetext sweep should have fired");
+        assert_eq!(freetext.facet, None);
+        assert!(
+            freetext.categories.is_empty(),
+            "direct nab must not receive routed categories without a facet: {recorded:?}"
+        );
     }
 
     #[tokio::test]
@@ -10214,6 +10562,74 @@ mod tests {
         assert!(
             backoff_state(&client, "idx-1").await.is_some(),
             "plain provider failures must still escalate operational backoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn newznab_quota_wall_still_creates_operational_backoff() {
+        let stats = Arc::new(RecordingIndexerStatsTracker::default());
+        let (client, _calls) =
+            scripted_search_client_with_stats(anime_caps(), stats.clone(), |_| {
+                Err(AppError::Repository(
+                    "Newznab error 500: Request limit reached".into(),
+                ))
+            });
+
+        let _ = client
+            .search(
+                "Blade Summit S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await;
+
+        assert!(
+            backoff_state(&client, "idx-1").await.is_some(),
+            "a spent allotment carries no Retry-After, so only the escalating ladder can size \
+             the wait; suppressing it leaves the flat fallback cooldown re-asking the account"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limits_that_name_their_own_delay_still_avoid_operational_backoff() {
+        let stats = Arc::new(RecordingIndexerStatsTracker::default());
+        let (client, _calls) =
+            scripted_search_client_with_stats(anime_caps(), stats.clone(), |_| {
+                Err(AppError::Repository(
+                    "HTTP 429: rate limited; retry_after_seconds=900".into(),
+                ))
+            });
+
+        let _ = client
+            .search(
+                "Blade Summit S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await;
+
+        assert!(
+            backoff_state(&client, "idx-1").await.is_none(),
+            "a 429 expires on the indexer's own schedule, so it must keep staying out of \
+             operational backoff rather than disabling the indexer over a transient limit"
         );
     }
 
@@ -11564,5 +11980,313 @@ mod tests {
         assert_eq!(strategies[0].season, Some(2));
         assert_eq!(strategies[0].episode, Some(5));
         assert_eq!(strategies[0].absolute_episode, None);
+    }
+
+    fn numbering_guard_context<'a>(
+        query: &'a str,
+        numbering_context: &'a IndexerSearchNumberingContext,
+    ) -> FilterStrategyContext<'a> {
+        FilterStrategyContext {
+            query,
+            season: Some(1),
+            episode: Some(53),
+            numbering_context,
+            tagged_aliases: &[],
+            // The numbering tests are what this exercises; the title guard has
+            // its own coverage.
+            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            strategy_label: "freetext",
+            is_rss_request: false,
+        }
+    }
+
+    /// A result carrying exactly the numbering under test, so the guard's rule
+    /// is what the assertion reads rather than the parser's reading of a title.
+    fn numbered_result(
+        title: &str,
+        season: Option<u32>,
+        episode_numbers: &[u32],
+    ) -> IndexerSearchResult {
+        let mut result = search_result(title);
+        let mut parsed = scryer_application::parse_release_metadata(title);
+        parsed.episode = Some(scryer_application::ParsedEpisodeMetadata {
+            season,
+            episode_numbers: episode_numbers.to_vec(),
+            ..Default::default()
+        });
+        result.parsed_release_metadata = Some(parsed);
+        result
+    }
+
+    fn surviving_titles(titles: &[&str], context: &FilterStrategyContext<'_>) -> Vec<String> {
+        let mut results: Vec<IndexerSearchResult> =
+            titles.iter().map(|title| search_result(title)).collect();
+        filter_strategy_results(&mut results, context);
+        results.into_iter().map(|result| result.title).collect()
+    }
+
+    /// A four-cour anime: TVDB S01E53 is the community's S04E17. Both forms
+    /// denote the wanted episode, so both survive the guard, while a numbering
+    /// that means a different episode in either layout does not.
+    #[test]
+    fn numbering_guard_keeps_every_admissible_form_of_the_wanted_episode() {
+        let admissible = [(1u32, 53u32), (4u32, 17u32)];
+        let numbering_context = IndexerSearchNumberingContext {
+            admissible_episode_numberings: admissible.to_vec(),
+            anime: None,
+        };
+        let context = numbering_guard_context("Lantern Verge S04E17", &numbering_context);
+
+        let kept = surviving_titles(
+            &[
+                "Lantern Verge S04E17 1080p WEB-DL",
+                "Lantern Verge S01E53 1080p WEB-DL",
+                "Lantern Verge S04E16 1080p WEB-DL",
+                "Lantern Verge S03E17 1080p WEB-DL",
+                "Lantern Verge - 53 [1080p]",
+                "Lantern Verge - 17 [1080p]",
+            ],
+            &context,
+        );
+
+        assert_eq!(
+            kept,
+            vec![
+                "Lantern Verge S04E17 1080p WEB-DL".to_string(),
+                "Lantern Verge S01E53 1080p WEB-DL".to_string(),
+                "Lantern Verge - 53 [1080p]".to_string(),
+                "Lantern Verge - 17 [1080p]".to_string(),
+            ]
+        );
+    }
+
+    /// A release labelled with an episode but no season beside it: the shape
+    /// says nothing about which numbering it is written in, so the wanted
+    /// episode's community form must not let an official episode 17 through.
+    #[test]
+    fn numbering_guard_holds_a_season_less_episode_to_the_dispatched_number() {
+        let admissible = [(1u32, 53u32), (4u32, 17u32)];
+        let numbering_context = IndexerSearchNumberingContext {
+            admissible_episode_numberings: admissible.to_vec(),
+            anime: None,
+        };
+        let context = numbering_guard_context("Lantern Verge S04E17", &numbering_context);
+        let mut results = vec![
+            numbered_result("Lantern Verge dispatched", None, &[53]),
+            numbered_result("Lantern Verge official seventeen", None, &[17]),
+        ];
+
+        filter_strategy_results(&mut results, &context);
+
+        let kept: Vec<String> = results.into_iter().map(|result| result.title).collect();
+        assert_eq!(kept, vec!["Lantern Verge dispatched".to_string()]);
+    }
+
+    /// With no alternative numbering — every non-anime search, and anime whose
+    /// community layout agrees with TVDB's — the guard tests the dispatched
+    /// pair exactly as it always has.
+    #[test]
+    fn numbering_guard_without_alternatives_tests_the_dispatched_pair() {
+        let numbering_context = IndexerSearchNumberingContext::default();
+        let context = numbering_guard_context("Lantern Verge S01E53", &numbering_context);
+
+        let kept = surviving_titles(
+            &[
+                "Lantern Verge S01E53 1080p WEB-DL",
+                "Lantern Verge S04E17 1080p WEB-DL",
+                "Lantern Verge S01E52 1080p WEB-DL",
+            ],
+            &context,
+        );
+
+        assert_eq!(kept, vec!["Lantern Verge S01E53 1080p WEB-DL".to_string()]);
+    }
+
+    fn lantern_verge_cour_context() -> IndexerSearchNumberingContext {
+        let cour_titles = [
+            "Lantern Verge",
+            "Lantern Verge: Ember Circuit",
+            "Lantern Verge: Glass Meridian",
+            "Lantern Verge: Final Chorus",
+        ];
+        let cour_lengths = [14_i32, 12, 10, 24];
+        let mut official_start = 1_i32;
+        let seasons = cour_titles
+            .into_iter()
+            .zip(cour_lengths)
+            .enumerate()
+            .map(|(offset, (title, length))| {
+                let index = i32::try_from(offset + 1).expect("small fixture index");
+                let season = scryer_domain::AnimeCommunitySeason {
+                    index,
+                    titles: vec![title.to_string()],
+                    ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                        community_episode_start: 1,
+                        community_episode_end: Some(length),
+                        tvdb_season: 1,
+                        tvdb_episode_start: official_start,
+                        tvdb_episode_end: Some(official_start + length - 1),
+                    }],
+                    absolute_start: Some(official_start),
+                    episode_count: Some(length),
+                    ..Default::default()
+                };
+                official_start += length;
+                season
+            })
+            .collect();
+        let bridge = scryer_domain::AnimeNumberingBridge {
+            generated_on: "2026-09-07".to_string(),
+            corroborating_order: None,
+            seasons,
+        };
+
+        IndexerSearchNumberingContext {
+            admissible_episode_numberings: vec![(1, 34), (3, 8)],
+            anime: Some(scryer_application::AnimeSearchNumberingContext {
+                canonical_title: "Lantern Verge".to_string(),
+                bridge,
+                official_season: 1,
+                official_episode: 34,
+            }),
+        }
+    }
+
+    #[test]
+    fn exact_cour_title_admits_only_the_bounded_community_mapping() {
+        let numbering_context = lantern_verge_cour_context();
+        for (title_guard_mode, query) in [
+            (TitleGuardMode::SkipTitleMatch, "Lantern Verge"),
+            (
+                TitleGuardMode::ExactTitleMatch,
+                "Lantern Verge Glass Meridian",
+            ),
+        ] {
+            let mut results = [
+                "Lantern Verge Glass Meridian S01E08 1080p WEB-DL",
+                "Lantern Verge Glass Meridian - 08 1080p WEB-DL",
+                "Lantern Verge S01E08 1080p WEB-DL",
+                "Lantern Verge - 08 1080p WEB-DL",
+                "Lantern Verge Ember Circuit S01E08 1080p WEB-DL",
+                "Lantern Verge Glass Meridian S01E11 1080p WEB-DL",
+            ]
+            .into_iter()
+            .map(search_result)
+            .collect::<Vec<_>>();
+            assert!(
+                results
+                    .iter()
+                    .all(|result| result.parsed_release_metadata.is_none())
+            );
+
+            filter_strategy_results(
+                &mut results,
+                &FilterStrategyContext {
+                    query,
+                    season: Some(1),
+                    episode: Some(34),
+                    numbering_context: &numbering_context,
+                    tagged_aliases: &[],
+                    title_guard_mode,
+                    strategy_label: "freetext",
+                    is_rss_request: false,
+                },
+            );
+
+            let mut expected = vec![
+                "Lantern Verge Glass Meridian S01E08 1080p WEB-DL".to_string(),
+                "Lantern Verge Glass Meridian - 08 1080p WEB-DL".to_string(),
+            ];
+            if title_guard_mode == TitleGuardMode::SkipTitleMatch {
+                // Bare absolute numbers remain deferred to application coverage;
+                // they are distinct from seasonless episode-number lists.
+                expected.push("Lantern Verge - 08 1080p WEB-DL".to_string());
+            }
+            assert_eq!(
+                results
+                    .into_iter()
+                    .map(|result| result.title)
+                    .collect::<Vec<_>>(),
+                expected,
+                "{title_guard_mode:?} must use parser-produced metadata and exact cour evidence"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_cour_guard_admits_seasonless_lists_and_matching_numbering_layouts() {
+        let mut numbering_context = lantern_verge_cour_context();
+        let mut context = numbering_guard_context("Lantern Verge", &numbering_context);
+        context.season = Some(1);
+        context.episode = Some(34);
+        let mut results = vec![
+            numbered_result("Lantern Verge Glass Meridian", None, &[8]),
+            numbered_result("Lantern Verge", None, &[8]),
+        ];
+        filter_strategy_results(&mut results, &context);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Lantern Verge Glass Meridian");
+
+        numbering_context.admissible_episode_numberings.clear();
+        let anime = numbering_context.anime.as_mut().unwrap();
+        anime.official_season = 3;
+        anime.official_episode = 8;
+        let range = &mut anime.bridge.seasons[2].ranges[0];
+        range.tvdb_season = 3;
+        range.tvdb_episode_start = 1;
+        range.tvdb_episode_end = Some(10);
+        let mut context = numbering_guard_context("Lantern Verge", &numbering_context);
+        context.season = Some(3);
+        context.episode = Some(8);
+        let mut results = vec![search_result("Lantern Verge Glass Meridian S01E08 1080p")];
+        filter_strategy_results(&mut results, &context);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn exact_cour_guard_never_maps_through_another_entry_with_the_same_index() {
+        let mut numbering_context = lantern_verge_cour_context();
+        numbering_context.admissible_episode_numberings = vec![(1, 22), (3, 8)];
+        let anime = numbering_context.anime.as_mut().unwrap();
+        anime.official_episode = 22;
+        anime.bridge.seasons[1].index = 3;
+        let parsed =
+            scryer_application::parse_release_metadata("Lantern Verge Glass Meridian S01E08 1080p");
+        let context = numbering_guard_context("Lantern Verge", &numbering_context);
+        assert!(!exact_cour_mapping_covers_requested_episode(
+            &parsed, &context
+        ));
+    }
+
+    #[test]
+    fn duplicate_cour_aliases_cannot_admit_a_numbered_release() {
+        let mut numbering_context = lantern_verge_cour_context();
+        numbering_context
+            .anime
+            .as_mut()
+            .expect("fixture anime context")
+            .bridge
+            .seasons[3]
+            .titles
+            .push("Lantern Verge: Glass Meridian".to_string());
+        let mut results = vec![search_result(
+            "Lantern Verge Glass Meridian S01E08 1080p WEB-DL",
+        )];
+
+        filter_strategy_results(
+            &mut results,
+            &FilterStrategyContext {
+                query: "Lantern Verge",
+                season: Some(1),
+                episode: Some(34),
+                numbering_context: &numbering_context,
+                tagged_aliases: &[],
+                title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                strategy_label: "freetext",
+                is_rss_request: false,
+            },
+        );
+
+        assert!(results.is_empty());
     }
 }

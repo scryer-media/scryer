@@ -11,10 +11,11 @@ use reqwest::StatusCode;
 use scryer_application::{
     AppError, AppResult, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse,
     ExternalPluginWasm, IndexerClient, IndexerErrorOperation, IndexerErrorRepository,
-    IndexerManagementClient, IndexerPluginProvider, IndexerRoutingPlan, IndexerSearchResponse,
-    IndexerSyncPlan, IndexerValidationResult, ManagedIndexerChildPlan, ManagedIndexerRoutingScope,
-    NewIndexerError, NullIndexerErrorRepository, RateLimitCooldownAction, RuntimePluginLoad,
-    SearchMode, classify_indexer_http_response,
+    IndexerManagementClient, IndexerPluginProvider, IndexerRequestResult, IndexerRequestTally,
+    IndexerRoutingPlan, IndexerSearchResponse, IndexerStatsTracker, IndexerSyncPlan,
+    IndexerValidationResult, ManagedIndexerChildPlan, ManagedIndexerRoutingScope, NewIndexerError,
+    NullIndexerErrorRepository, NullIndexerStatsTracker, RateLimitCooldownAction,
+    RuntimePluginLoad, SearchMode, classify_indexer_http_response,
     external_import::{EXTERNAL_IMPORT_HOST_RPS_LANE, EXTERNAL_IMPORT_HOST_RPS_PROFILE},
     indexer_error_history_is_persistable, indexer_response_content_type, unknown_indexer_error,
 };
@@ -367,6 +368,7 @@ impl RoutingScope {
 pub struct NativeProwlarrIndexerProvider {
     delegate: Arc<dyn IndexerPluginProvider>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
 impl NativeProwlarrIndexerProvider {
@@ -381,7 +383,17 @@ impl NativeProwlarrIndexerProvider {
         Self {
             delegate,
             indexer_errors,
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
         }
+    }
+
+    /// Attach the tracker that counts requests to Prowlarr's own API.
+    pub fn with_indexer_stats_tracker(
+        mut self,
+        indexer_stats: Arc<dyn IndexerStatsTracker>,
+    ) -> Self {
+        self.indexer_stats = indexer_stats;
+        self
     }
 }
 
@@ -392,6 +404,8 @@ pub struct ProwlarrManagementClient {
     outbound_http: OutboundHttpClient,
     api_state: Arc<RwLock<Option<ResolvedProwlarrApi>>>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
+    accounting: Option<scryer_application::IndexerAccountingContext>,
 }
 
 #[derive(Clone)]
@@ -440,10 +454,24 @@ impl ProwlarrErrorCapture {
         &self,
         operation: IndexerErrorOperation,
         response: reqwest::Response,
+        tally: Option<&IndexerRequestTally>,
     ) {
         match captured_response(response).await {
-            Ok(response) => self.record(operation, response).await,
-            Err(error) => warn!(error = %error, "failed to read Prowlarr rate-limit response"),
+            Ok(response) => {
+                // A 429 that the transport will retry is still one request the
+                // indexer served, and this observer is the only place it is
+                // visible before the retry replaces it.
+                if let Some(tally) = tally {
+                    tally.note_response(&response);
+                }
+                self.record(operation, response).await
+            }
+            Err(error) => {
+                if let Some(tally) = tally {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+                warn!(error = %error, "failed to read Prowlarr rate-limit response")
+            }
         }
     }
 }
@@ -534,6 +562,18 @@ impl ProwlarrManagementClient {
         config: &IndexerConfig,
         indexer_errors: Arc<dyn IndexerErrorRepository>,
     ) -> Self {
+        Self::new_with_indexer_error_repository_and_stats(
+            config,
+            indexer_errors,
+            Arc::new(NullIndexerStatsTracker),
+        )
+    }
+
+    pub fn new_with_indexer_error_repository_and_stats(
+        config: &IndexerConfig,
+        indexer_errors: Arc<dyn IndexerErrorRepository>,
+        indexer_stats: Arc<dyn IndexerStatsTracker>,
+    ) -> Self {
         let http_client = indexer_reqwest_client();
         Self {
             parent_config_id: config.id.clone(),
@@ -542,7 +582,32 @@ impl ProwlarrManagementClient {
             outbound_http: OutboundHttpClient::new(http_client, RateLimitRegistry::new()),
             api_state: Arc::new(RwLock::new(None)),
             indexer_errors,
+            indexer_stats,
+            accounting: scryer_application::IndexerAccountingContext::for_config(config),
         }
+    }
+
+    fn with_accounting(
+        mut self,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Self {
+        self.accounting = accounting.cloned();
+        self
+    }
+
+    fn tally(&self, operation: IndexerErrorOperation) -> IndexerRequestTally {
+        IndexerRequestTally::new(
+            self.accounting
+                .as_ref()
+                .map(|context| context.indexer_id.clone())
+                .unwrap_or_else(|| scryer_application::CONNECTION_TEST_INDEXER_ID.to_string()),
+            self.accounting
+                .as_ref()
+                .map(|context| context.indexer_name.clone())
+                .unwrap_or_else(|| self.parent_indexer_name.clone()),
+            operation,
+            Arc::clone(&self.indexer_stats),
+        )
     }
 
     fn config(&self) -> AppResult<&ProwlarrConfig> {
@@ -620,9 +685,11 @@ impl ProwlarrManagementClient {
         let api_key = config.api_key.clone();
         let url = api_url(&base_url, path);
         let error_capture = self.error_capture();
+        let tally = Arc::new(self.tally(operation));
+        let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
-            .send_with_rate_limit_observer(
+            .send_with_rate_limit_and_dispatch_observer(
                 self.request_policy(path),
                 || {
                     self.outbound_http
@@ -634,15 +701,40 @@ impl ProwlarrManagementClient {
                 },
                 move |response| {
                     let error_capture = error_capture.clone();
+                    let observer_tally = Arc::clone(&observer_tally);
                     async move {
                         error_capture
-                            .observe_rate_limited_response(operation, response)
+                            .observe_rate_limited_response(
+                                operation,
+                                response,
+                                Some(observer_tally.as_ref()),
+                            )
                             .await;
                     }
                 },
+                |actual_url| {
+                    let same_origin = reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin());
+                    let admitted = if same_origin {
+                        tally.try_note_sent(actual_url.as_str())
+                    } else {
+                        tally.try_note_auxiliary_sent_call("external_redirect")
+                    };
+                    admitted
+                        .then_some(())
+                        .ok_or(OutboundHttpError::DispatchRejected)
+                },
             )
             .await
+            .inspect_err(|error| {
+                if matches!(error, OutboundHttpError::Transport { .. }) {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+            })
             .map_err(|error| match error {
+                OutboundHttpError::DispatchRejected => {
+                    ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
+                }
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => {
@@ -662,9 +754,14 @@ impl ProwlarrManagementClient {
             })?;
 
         let retry_after_seconds = retry_after_seconds(response.headers());
-        let captured = captured_response(response)
-            .await
-            .map_err(captured_response_error)?;
+        let captured = match captured_response(response).await {
+            Ok(captured) => captured,
+            Err(error) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+                return Err(captured_response_error(error));
+            }
+        };
+        tally.note_response(&captured);
         let status = StatusCode::from_u16(captured.status).expect("reqwest status is valid");
 
         if status.is_success() {
@@ -705,9 +802,13 @@ impl ProwlarrManagementClient {
         let request_path = format!("/{indexer_id}/api?t=caps");
         let child_key = indexer_id.to_string();
         let error_capture = self.error_capture();
+        // This is an observed call made during parent management. We cannot
+        // infer how many requests Prowlarr makes internally from this response.
+        let tally = Arc::new(self.tally(IndexerErrorOperation::CapsRefresh));
+        let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
-            .send_with_rate_limit_observer(
+            .send_with_rate_limit_and_dispatch_observer(
                 self.child_request_policy(&request_path, &child_key),
                 || {
                     self.outbound_http
@@ -718,18 +819,40 @@ impl ProwlarrManagementClient {
                 },
                 move |response| {
                     let error_capture = error_capture.clone();
+                    let observer_tally = Arc::clone(&observer_tally);
                     async move {
                         error_capture
                             .observe_rate_limited_response(
                                 IndexerErrorOperation::CapsRefresh,
                                 response,
+                                Some(observer_tally.as_ref()),
                             )
                             .await;
                     }
                 },
+                |actual_url| {
+                    let same_origin = reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin());
+                    let admitted = if same_origin {
+                        tally.try_note_sent(actual_url.as_str())
+                    } else {
+                        tally.try_note_auxiliary_sent_call("external_redirect")
+                    };
+                    admitted
+                        .then_some(())
+                        .ok_or(OutboundHttpError::DispatchRejected)
+                },
             )
             .await
+            .inspect_err(|error| {
+                if matches!(error, OutboundHttpError::Transport { .. }) {
+                    tally.note_result(IndexerRequestResult::NoResponse);
+                }
+            })
             .map_err(|error| match error {
+                OutboundHttpError::DispatchRejected => {
+                    ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
+                }
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => {
@@ -749,9 +872,14 @@ impl ProwlarrManagementClient {
             })?;
 
         let retry_after_seconds = retry_after_seconds(response.headers());
-        let captured = captured_response(response)
-            .await
-            .map_err(captured_response_error)?;
+        let captured = match captured_response(response).await {
+            Ok(captured) => captured,
+            Err(error) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+                return Err(captured_response_error(error));
+            }
+        };
+        tally.note_response(&captured);
         let status = StatusCode::from_u16(captured.status).expect("reqwest status is valid");
 
         if status.is_success() {
@@ -1001,15 +1129,42 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
         &self,
         config: &IndexerConfig,
     ) -> Option<Arc<dyn IndexerManagementClient>> {
+        self.management_client_for_provider_with_accounting(
+            config,
+            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
+        )
+    }
+
+    fn client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerClient>> {
+        if is_prowlarr_provider(&config.provider_type) {
+            return Some(Arc::new(ProwlarrSearchStub));
+        }
+        self.delegate
+            .client_for_provider_with_accounting(config, proxy_config, accounting)
+    }
+
+    fn management_client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerManagementClient>> {
         if is_prowlarr_provider(&config.provider_type) {
             return Some(Arc::new(
-                ProwlarrManagementClient::new_with_indexer_error_repository(
+                ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
                     config,
                     Arc::clone(&self.indexer_errors),
-                ),
+                    Arc::clone(&self.indexer_stats),
+                )
+                .with_accounting(accounting),
             ));
         }
-        self.delegate.management_client_for_provider(config)
+        self.delegate
+            .management_client_for_provider_with_accounting(config, accounting)
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -1685,8 +1840,10 @@ mod tests {
     use chrono::Utc;
     use scryer_domain::IndexerConfig;
     use serde_json::json;
+    use std::sync::Mutex;
+    use std::time::Instant;
     use wiremock::matchers::{method, path, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     #[derive(Default)]
     struct ProxyRecordingProvider {
@@ -1696,6 +1853,32 @@ mod tests {
     #[derive(Default)]
     struct RecordingIndexerErrorRepository {
         errors: tokio::sync::Mutex<Vec<NewIndexerError>>,
+    }
+
+    /// Counts what the dashboard would show: one per request actually sent.
+    #[derive(Default)]
+    struct CountingIndexerStatsTracker {
+        sent: std::sync::atomic::AtomicU32,
+    }
+
+    impl IndexerStatsTracker for CountingIndexerStatsTracker {
+        fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+        fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+        fn record_api_request_sent(&self, _indexer_id: &str, _indexer_name: &str) {
+            self.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
+            Vec::new()
+        }
     }
 
     #[async_trait]
@@ -2455,9 +2638,11 @@ mod tests {
             .await;
 
         let repository = Arc::new(RecordingIndexerErrorRepository::default());
-        let client = ProwlarrManagementClient::new_with_indexer_error_repository(
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
             &test_indexer_config(&server.uri()),
             repository.clone(),
+            stats.clone(),
         );
 
         let status = client
@@ -2466,6 +2651,11 @@ mod tests {
             .expect("second attempt succeeds");
         assert_eq!(status.app_name, "Prowlarr");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            stats.sent.load(Ordering::Relaxed),
+            2,
+            "the retried 429 was a request Prowlarr served and must be counted"
+        );
 
         let errors = repository.errors.lock().await;
         assert_eq!(errors.len(), 1);
@@ -2763,6 +2953,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observed_management_calls_include_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(path(SYSTEM_STATUS_PATH))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "/redirected-status"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/redirected-status"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"appName":"Prowlarr", "version":"2.0.0"})),
+            )
+            .mount(&server)
+            .await;
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+            &test_indexer_config(&server.uri()),
+            Arc::new(RecordingIndexerErrorRepository::default()),
+            stats.clone(),
+        );
+        client.fetch_system_status().await.unwrap();
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(stats.sent.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_management_cooldown_does_not_count_a_send() {
+        let server = MockServer::start().await;
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let mut config = test_indexer_config(&server.uri());
+        config.id = format!("cooldown-{}", server.address().port());
+        let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+            &config,
+            Arc::new(RecordingIndexerErrorRepository::default()),
+            stats.clone(),
+        );
+        let destination = DestinationKey::from(indexer_rate_limit_domain_key(&config.id, None));
+        client
+            .outbound_http
+            .registry()
+            .record_destination_cooldown(
+                &destination,
+                Duration::from_secs(30),
+                scryer_outbound_http::RetryAfterSource::Seconds,
+            )
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), client.fetch_system_status())
+                .await
+                .is_err()
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert_eq!(stats.sent.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn saved_management_probe_accounts_to_saved_identity_only() {
+        let server = MockServer::start().await;
+        Mock::given(path(SYSTEM_STATUS_PATH))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"appName":"Prowlarr", "version":"2.0.0"})),
+            )
+            .mount(&server)
+            .await;
+        let stats = Arc::new(crate::indexers::stats::InMemoryIndexerStatsTracker::default());
+        let mut config = test_indexer_config(&server.uri());
+        config.id = scryer_application::CONNECTION_TEST_INDEXER_ID.to_string();
+        let accounting = scryer_application::IndexerAccountingContext {
+            indexer_id: "saved-parent".into(),
+            indexer_name: "Saved Prowlarr".into(),
+        };
+        for identity in [None, Some(&accounting)] {
+            let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+                &config,
+                Arc::new(RecordingIndexerErrorRepository::default()),
+                stats.clone(),
+            )
+            .with_accounting(identity);
+            client.fetch_system_status().await.unwrap();
+        }
+        let rows = stats.all_stats();
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].indexer_id, "saved-parent");
+        assert_eq!(rows[0].api_requests_today, 1);
+    }
+
+    /// A caps responder that records the window each fetch is held open for.
+    ///
+    /// wiremock arms a response's delay the moment this returns, so a fetch is
+    /// outstanding from here until `now + delay` — exactly the span the server
+    /// keeps that connection open.
+    struct CapsProbe {
+        body: &'static str,
+        delay: Duration,
+        windows: Arc<Mutex<Vec<(Instant, Instant)>>>,
+    }
+
+    impl Respond for CapsProbe {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            let opened = Instant::now();
+            self.windows
+                .lock()
+                .expect("caps windows")
+                .push((opened, opened + self.delay));
+            ResponseTemplate::new(200)
+                .set_body_string(self.body)
+                .set_delay(self.delay)
+        }
+    }
+
+    /// The most caps fetches that were ever open at the same instant.
+    ///
+    /// Overlap always peaks as some window opens, so counting the live windows at
+    /// each opening is exact rather than a sample.
+    fn peak_in_flight(windows: &[(Instant, Instant)]) -> usize {
+        windows
+            .iter()
+            .map(|(opened, _)| {
+                windows
+                    .iter()
+                    .filter(|(other_opened, other_closed)| {
+                        other_opened <= opened && opened < other_closed
+                    })
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
     async fn enrichment_sync_plan_fetches_caps_concurrently_and_preserves_child_order() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -2837,32 +3160,39 @@ mod tests {
     <search available="yes" supportedParams="q" />
   </searching>
 </caps>"#;
-        for (indexer_id, delay_ms) in [(10, 1200), (7, 300), (42, 600), (3, 450)] {
+        let caps_windows = Arc::new(Mutex::new(Vec::new()));
+        // The delays differ so the fetches finish in a different order than they
+        // were issued in, which is what gives the ordering assertion below its
+        // teeth. They are all long enough that every fetch is still open while
+        // the rest are being issued, however loaded the machine is.
+        for (indexer_id, delay_ms) in [(10, 1400), (7, 1000), (42, 1300), (3, 1100)] {
             Mock::given(method("GET"))
                 .and(path(format!("/{indexer_id}/api")))
                 .and(query_param("t", "caps"))
                 .and(query_param("apikey", "secret"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_string(caps_body)
-                        .set_delay(std::time::Duration::from_millis(delay_ms)),
-                )
+                .respond_with(CapsProbe {
+                    body: caps_body,
+                    delay: Duration::from_millis(delay_ms),
+                    windows: Arc::clone(&caps_windows),
+                })
                 .mount(&server)
                 .await;
         }
 
         let client = ProwlarrManagementClient::new(&test_indexer_config(&server.uri()));
-        let started = std::time::Instant::now();
         let plan = client
             .enrichment_sync_plan("parent")
             .await
             .expect("enrichment plan")
             .expect("supported enrichment plan");
-        let elapsed = started.elapsed();
 
-        assert!(
-            elapsed < std::time::Duration::from_millis(2000),
-            "caps fetch should be concurrent; elapsed {elapsed:?}"
+        // Concurrency is what this asserts, so measure concurrency: how long the
+        // whole plan took is a proxy that a loaded machine can push past any
+        // budget while the fetches were perfectly concurrent all along.
+        let peak = peak_in_flight(&caps_windows.lock().expect("caps windows"));
+        assert_eq!(
+            peak, 4,
+            "every caps fetch should be in flight at once, not issued one at a time"
         );
         let child_ids = plan
             .children

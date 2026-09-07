@@ -97,7 +97,10 @@ export function useIndexerRouting({
         ]),
       ) as IndexerRoutingSettingsByIndexer;
 
-      setIndexers(indexerList);
+      // Preserve picker state when an invalidation returns identical records.
+      setIndexers((previous) =>
+        JSON.stringify(previous) === JSON.stringify(indexerList) ? previous : indexerList,
+      );
 
       const scopeDefaults = getDefaultIndexerRouting(activeQualityScopeId);
       const scopeRouting: IndexerRoutingSettingsByIndexer = {};
@@ -180,7 +183,6 @@ export function useIndexerRouting({
         ...previous,
         [scopeId]: true,
       }));
-
       try {
         const payload = buildIndexerRoutingPayload(
           scopeId,
@@ -265,14 +267,20 @@ export function useIndexerRouting({
         }));
       }
     },
-    [buildIndexerRoutingPayload, client, indexers, setGlobalStatus, t],
+    [
+      buildIndexerRoutingPayload,
+      client,
+      indexers,
+      setGlobalStatus,
+      t,
+    ],
   );
 
-  const refreshIndexerRouting = React.useCallback(async () => {
-    setIndexerRoutingLoading(true);
+  const refreshIndexerRouting = React.useCallback(async (background = false) => {
+    if (!background) setIndexerRoutingLoading(true);
     try {
       const { data, error } = await client
-        .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId })
+        .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId }, { requestPolicy: "network-only" })
         .toPromise();
       if (error) throw error;
       hydrateIndexerRouting(data.indexers || [], data.indexerRouting || []);
@@ -281,7 +289,7 @@ export function useIndexerRouting({
         error instanceof Error ? error.message : t("status.failedToLoad"),
       );
     } finally {
-      setIndexerRoutingLoading(false);
+      if (!background) setIndexerRoutingLoading(false);
     }
   }, [activeQualityScopeId, client, hydrateIndexerRouting, setGlobalStatus, t]);
 
@@ -392,9 +400,11 @@ export function useIndexerRouting({
   useSettingsSubscription(
     React.useCallback(
       (keys: string[]) => {
-        if (keys.includes(INDEXER_ROUTING_SETTINGS_KEY)) {
-          void refreshIndexerRouting();
+        if (!keys.includes(INDEXER_ROUTING_SETTINGS_KEY)) {
+          return;
         }
+        // Events carry no mutation identity, so every routing change invalidates.
+        void refreshIndexerRouting(true);
       },
       [refreshIndexerRouting],
     ),

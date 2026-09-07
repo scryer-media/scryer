@@ -3332,6 +3332,21 @@ pub struct IndexerQueryStats {
     /// when the process restarts.
     pub grabs_last_24h: u32,
     pub last_query_at: Option<String>,
+    /// Every HTTP request Scryer has sent to this indexer in the current quota
+    /// window, counted at the send site.
+    ///
+    /// Unlike `queries_last_24h`, which counts search *runs* in an in-memory
+    /// rolling window, this counts individual API calls — pagination, retries,
+    /// RSS sweeps, caps refreshes and failures included — and is persisted, so
+    /// it survives a restart and can be compared against the indexer's own
+    /// quota page.
+    pub api_requests_today: u32,
+    /// When the current `api_requests_today` window opened, or `None` when the
+    /// counter has never been persisted for this indexer.
+    pub api_requests_window_started_at: Option<String>,
+    /// UTC timestamp when corrected Scryer-owned request observation began.
+    /// Counts on that first UTC day are intentionally partial.
+    pub api_requests_observed_since: Option<String>,
     pub api_current: Option<u32>,
     pub api_max: Option<u32>,
     pub grab_current: Option<u32>,

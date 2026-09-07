@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsRulesSection } from "@/components/views/settings/settings-rules-section";
+import type { ArrCustomFormatDraft } from "@/components/views/settings/arr-custom-format-import-dialog";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -39,6 +40,7 @@ type PendingRuleEditorAction =
         appliedFacets?: string[];
       };
     }
+  | { type: "import"; draft: ArrCustomFormatDraft }
   | null;
 
 export function SettingsRulesContainer() {
@@ -58,6 +60,8 @@ export function SettingsRulesContainer() {
   }));
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<RuleValidationResult | null>(null);
+  const [translationDiagnostics, setTranslationDiagnostics] = useState<string[]>([]);
+  const [focusImportedEditor, setFocusImportedEditor] = useState(false);
 
   const closeRuleSetEditor = useCallback(() => {
     setIsEditorOpen(false);
@@ -65,6 +69,8 @@ export function SettingsRulesContainer() {
     setRuleSetDraft(() => ({ ...RULE_SET_INITIAL_DRAFT }));
     setRuleSetDraftBaseline(() => ({ ...RULE_SET_INITIAL_DRAFT }));
     setValidationResult(null);
+    setTranslationDiagnostics([]);
+    setFocusImportedEditor(false);
   }, []);
 
   const isRuleDraftDirty =
@@ -76,6 +82,8 @@ export function SettingsRulesContainer() {
     setRuleSetDraft(nextDraft);
     setRuleSetDraftBaseline(nextDraft);
     setValidationResult(null);
+    setTranslationDiagnostics([]);
+    setFocusImportedEditor(false);
     setIsEditorOpen(true);
   }, []);
 
@@ -93,6 +101,8 @@ export function SettingsRulesContainer() {
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
       setValidationResult(null);
+      setTranslationDiagnostics([]);
+      setFocusImportedEditor(false);
       setIsEditorOpen(true);
       setGlobalStatus(t("status.editingRule", { name: record.name }));
     },
@@ -106,6 +116,8 @@ export function SettingsRulesContainer() {
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
       setValidationResult(null);
+      setTranslationDiagnostics([]);
+      setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
     [],
@@ -129,10 +141,29 @@ export function SettingsRulesContainer() {
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
       setValidationResult(null);
+      setTranslationDiagnostics([]);
+      setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
     [],
   );
+
+  const openImportedRuleEditor = useCallback((imported: ArrCustomFormatDraft) => {
+    const nextDraft = {
+      ...RULE_SET_INITIAL_DRAFT,
+      name: imported.name.trim() || t("settings.arrImportDraftName"),
+      description: imported.description,
+      regoSource: imported.regoSource,
+      appliedFacets: imported.appliedFacets,
+    };
+    setEditingRuleSetId(null);
+    setRuleSetDraft(nextDraft);
+    setRuleSetDraftBaseline(nextDraft);
+    setValidationResult(null);
+    setTranslationDiagnostics(imported.translationDiagnostics);
+    setFocusImportedEditor(true);
+    setIsEditorOpen(true);
+  }, [t]);
 
   const requestCreateRuleEditor = useCallback(() => {
     if (!isEditorOpen || !isRuleDraftDirty) {
@@ -187,6 +218,17 @@ export function SettingsRulesContainer() {
       setPendingEditorAction({ type: "template", template });
     },
     [isEditorOpen, isRuleDraftDirty, openTemplateRuleEditor],
+  );
+
+  const requestImportCustomFormats = useCallback(
+    (draft: ArrCustomFormatDraft) => {
+      if (!isEditorOpen || !isRuleDraftDirty) {
+        openImportedRuleEditor(draft);
+        return;
+      }
+      setPendingEditorAction({ type: "import", draft });
+    },
+    [isEditorOpen, isRuleDraftDirty, openImportedRuleEditor],
   );
 
   const refreshRuleSets = useCallback(async () => {
@@ -276,6 +318,8 @@ export function SettingsRulesContainer() {
       openEditRuleEditor(pendingEditorAction.record);
     } else if (pendingEditorAction.type === "template") {
       openTemplateRuleEditor(pendingEditorAction.template);
+    } else if (pendingEditorAction.type === "import") {
+      openImportedRuleEditor(pendingEditorAction.draft);
     } else {
       closeRuleSetEditor();
     }
@@ -285,6 +329,7 @@ export function SettingsRulesContainer() {
     openCreateRuleEditor,
     openCopyRuleEditor,
     openEditRuleEditor,
+    openImportedRuleEditor,
     openTemplateRuleEditor,
     pendingEditorAction,
   ]);
@@ -411,6 +456,10 @@ export function SettingsRulesContainer() {
         validating={validating}
         validationResult={validationResult}
         applyTemplate={requestApplyTemplate}
+        importCustomFormats={requestImportCustomFormats}
+        translationDiagnostics={translationDiagnostics}
+        focusEditor={focusImportedEditor}
+        onEditorFocused={() => setFocusImportedEditor(false)}
       />
       <ConfirmDialog
         open={pendingDeleteRuleSet !== null}
@@ -437,6 +486,8 @@ export function SettingsRulesContainer() {
               ? t("settings.ruleCopyAsCustom")
             : pendingEditorAction?.type === "template"
               ? t("settings.ruleApplyTemplate")
+              : pendingEditorAction?.type === "import"
+                ? t("settings.arrImportApply")
               : pendingEditorAction?.type === "edit"
                 ? t("label.edit")
                 : t("label.discard")

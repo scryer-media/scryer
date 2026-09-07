@@ -1,4 +1,5 @@
 import type { CombinedError } from "urql";
+import { DEFAULT_LANGUAGE, t } from "../i18n/index.ts";
 
 const GRAPHQL_PREFIX_PATTERNS: RegExp[] = [
   /^\[GraphQL\]\s*/i,
@@ -101,6 +102,9 @@ export function normalizeGraphQlErrorMessage(message: string): string {
   }
 
   normalized = normalized.trim();
+  if (/^(?:unauthorized:\s*)?invalid release candidate token:\s*ExpiredSignature$/i.test(normalized)) {
+    return t("status.searchResultsExpired", DEFAULT_LANGUAGE);
+  }
   if (REPOSITORY_PREFIX_PATTERN.test(normalized)) {
     return INTERNAL_ERROR_MESSAGE;
   }

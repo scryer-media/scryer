@@ -7439,6 +7439,18 @@ type IndexerQueryStatsPayload {
 	"""
 	lastQueryAt: DateTime
 	"""
+	Every HTTP request Scryer has sent to this indexer in the current quota window, counted at the send site: pagination, retries, RSS sweeps, caps refreshes and failures included. Persisted, so it survives a restart.
+	"""
+	apiRequestsToday: Int!
+	"""
+	UTC time the current api_requests_today window opened, or null when the counter has never been persisted.
+	"""
+	apiRequestsWindowStartedAt: DateTime
+	"""
+	UTC time corrected Scryer-owned API request observation began. The first UTC day is partial.
+	"""
+	apiRequestsObservedSince: DateTime
+	"""
 	Current API request count, or null when not reported.
 	"""
 	apiCurrent: Int

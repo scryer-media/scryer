@@ -1425,8 +1425,18 @@ jobs:
       - name: Exclude build dir from Windows Defender
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
-          Add-MpPreference -ExclusionPath $env:CARGO_TARGET_DIR
+          # Exclusions only improve build speed; some runner images lack an active Defender service.
+          try {
+            $defender = Get-Service -Name WinDefend -ErrorAction SilentlyContinue
+            if ($null -ne $defender -and $defender.Status -eq 'Running') {
+              Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction Stop
+              Add-MpPreference -ExclusionPath $env:CARGO_TARGET_DIR -ErrorAction Stop
+            } else {
+              Write-Host "Windows Defender is not running; skipping optional build exclusions."
+            }
+          } catch {
+            Write-Warning "Could not configure optional Windows Defender build exclusions: $($_.Exception.Message)"
+          }
 
       - name: Prime sccache server
         shell: pwsh

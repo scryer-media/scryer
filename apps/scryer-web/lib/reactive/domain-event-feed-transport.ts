@@ -132,6 +132,13 @@ export function startDomainEventFeedTransport(
     if (disposed) {
       return;
     }
+    // A reconnect before any event has established a cursor cannot replay the
+    // interval while the feed was unavailable. Refresh now and keep the
+    // interval active until a delivered event anchors subsequent catch-up.
+    if (consecutiveFailures > 0 && engine.afterSequence() === null) {
+      startFallback();
+      engine.runAll();
+    }
     unsubscribe = subscribe(
       {
         query,
@@ -140,13 +147,21 @@ export function startDomainEventFeedTransport(
       },
       {
         next(result) {
-          consecutiveFailures = 0;
-          stopFallback();
           const payload = (
             result as { data?: { domainEventFeed?: unknown } } | null
           )?.data?.domainEventFeed;
           if (payload) {
+            const establishesFirstCursor =
+              fallbackHandle !== null && engine.afterSequence() === null;
+            consecutiveFailures = 0;
+            stopFallback();
             engine.handleEvent(normalizeDomainEvent(payload));
+            // The immediate reconnect refresh can finish before the server
+            // snapshots its tail. Refresh once more after the first cursor so
+            // a change in that setup window cannot remain stale forever.
+            if (establishesFirstCursor) {
+              engine.runAll();
+            }
           }
         },
         error(error) {

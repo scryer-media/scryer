@@ -709,7 +709,6 @@ impl DownloadClient for SabnzbdDownloadClient {
             .unwrap_or(title.name.as_str());
 
         let staged = resolve_staged_nzb_for_request(
-            &self.outbound_http,
             &self.staged_nzb_store,
             &self.staged_nzb_pipeline_limit,
             request,
@@ -1524,6 +1523,7 @@ fn map_sabnzbd_outbound_error(operation: &str, error: OutboundHttpError) -> AppE
                 RateLimitCooldownAction::AlreadyRecorded,
             )
         }
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
         OutboundHttpError::Transport { source, .. } => AppError::Repository(format!(
             "{operation} failed: {}",
             redact_sab_secret_values(&source.to_string())
@@ -1552,6 +1552,9 @@ fn map_sabnzbd_addfile_send_error(
         scryer_outbound_http::OutboundRequestError::Http(OutboundHttpError::RateLimited(
             rate_limited,
         )) => map_sabnzbd_outbound_error(operation, OutboundHttpError::RateLimited(rate_limited)),
+        scryer_outbound_http::OutboundRequestError::Http(OutboundHttpError::DispatchRejected) => {
+            AppError::canceled("outbound dispatch is closed")
+        }
         scryer_outbound_http::OutboundRequestError::Http(OutboundHttpError::Transport {
             attempts,
             source,
@@ -2411,7 +2414,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/release.nzb"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"<nzb></nzb>".to_vec()))
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -2444,11 +2447,16 @@ mod tests {
         let client = SabnzbdDownloadClient::with_staged_nzb_store(
             server.uri(),
             "test-api-key".to_string(),
-            staged_nzb_store,
+            staged_nzb_store.clone(),
             Arc::new(Semaphore::new(1)),
         );
         let mut add_request = test_add_request(download_id);
-        add_request.source_hint = Some(format!("{}/release.nzb", server.uri()));
+        add_request.staged_nzb = Some(
+            staged_nzb_store
+                .stage_nzb_bytes_for_test(b"<nzb></nzb>")
+                .await
+                .expect("stage NZB fixture"),
+        );
         let result = client
             .submit_download(&add_request)
             .await

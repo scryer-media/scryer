@@ -1,3 +1,6 @@
+pub mod artifact_resolver;
+pub mod artifact_staging;
+pub mod artifact_transport;
 pub mod caps;
 pub mod config_store;
 pub mod db;

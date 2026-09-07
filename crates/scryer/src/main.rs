@@ -40,8 +40,8 @@ use axum::routing::{get, post};
 use scryer_application::{
     AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY, AppUseCase, ArchiveExtractorPluginProvider,
     AutoBackupRunOutcome, DownloadClientCategorySnapshotStore, DownloadClientPluginProvider,
-    DownloadQueuePollerOptions, FacetRegistry, IndexerPluginProvider, JobTriggerSource,
-    MovieFacetHandler, NotificationPluginProvider, PLUGIN_HTTP_CA_BUNDLE_PEM_KEY,
+    DownloadQueuePollerOptions, FacetRegistry, IndexerArtifactResolver, IndexerPluginProvider,
+    JobTriggerSource, MovieFacetHandler, NotificationPluginProvider, PLUGIN_HTTP_CA_BUNDLE_PEM_KEY,
     PluginHttpTrustConfigRuntime, PluginInstallationRepository, RUNTIME_PLUGIN_LOAD_CONCURRENCY,
     RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
     SystemInfoProvider, TitleImageKind, TitleImageRepository,
@@ -791,11 +791,13 @@ async fn run_application() {
 
     let addr: SocketAddr = bind.parse().expect("invalid bind address");
     let shutdown_token = CancellationToken::new();
+    let indexer_accounting_shutdown = IndexerAccountingShutdown::default();
     let startup_base_path = base_path.clone();
     let bootstrap_base_path = base_path.clone();
 
     // Spawn the full application bootstrap in the background.
     let bootstrap_shutdown = shutdown_token.clone();
+    let bootstrap_indexer_accounting_shutdown = indexer_accounting_shutdown.clone();
     let bootstrap_bind = bind.clone();
     let bootstrap_development_mode = development_mode;
     let runtime_handle = tokio::runtime::Handle::current();
@@ -813,6 +815,7 @@ async fn run_application() {
                     bootstrap_development_mode,
                     cors,
                     bootstrap_shutdown,
+                    bootstrap_indexer_accounting_shutdown,
                     log_ring_buffer,
                     metrics_handle,
                     data_dir,
@@ -891,6 +894,40 @@ async fn run_application() {
             }
         }
     }
+    drain_indexer_accounting_on_shutdown(&indexer_accounting_shutdown).await;
+}
+
+type IndexerAccountingShutdown = Arc<
+    std::sync::OnceLock<
+        Arc<scryer_infrastructure_acquisition::indexers::stats::InMemoryIndexerStatsTracker>,
+    >,
+>;
+
+async fn drain_indexer_accounting_on_shutdown(accounting: &IndexerAccountingShutdown) {
+    let Some(tracker) = accounting.get() else {
+        return;
+    };
+    // Background jobs may outlive the HTTP server. Close their dispatch gate
+    // before flushing so no new indexer request can enqueue a later count.
+    tracker.close_dispatch_gate();
+    let drain = async {
+        tracker.wait_for_admitted_dispatches().await;
+        loop {
+            match tracker.drain_pending_quota_updates().await {
+                Ok(()) => return,
+                Err(error) => {
+                    tracing::warn!(%error, "retrying final indexer request count flush");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(5), drain)
+        .await
+        .is_err()
+    {
+        tracing::error!("shutdown ended with unpersisted indexer request counts");
+    }
 }
 
 /// Runs the full application bootstrap: DB init, migrations, service construction, and router
@@ -906,6 +943,7 @@ async fn bootstrap_application(
     development_mode: bool,
     cors: CorsConfig,
     shutdown_token: CancellationToken,
+    indexer_accounting_shutdown: IndexerAccountingShutdown,
     log_ring_buffer: log_buffer::LogRingBuffer,
     metrics_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
     data_dir: PathBuf,
@@ -1167,6 +1205,15 @@ async fn bootstrap_application(
         .with_seed_goal_resolution(datastore.seeding_profiles()),
     );
     let indexer_stats = datastore.indexer_stats_tracker();
+    let _ = indexer_accounting_shutdown.set(indexer_stats.clone());
+    // Seed the API hit counters from the persisted rows before any indexer
+    // traffic starts. Without this the dashboard restarts at zero every time
+    // the process does, while the indexer's own counter keeps climbing.
+    indexer_stats.hydrate().await;
+    if shutdown_token.is_cancelled() {
+        indexer_stats.close_dispatch_gate();
+        return Err("application shutdown requested during indexer initialization".into());
+    }
     let indexer_learning = datastore.indexer_search_learning_repository();
     let indexer_errors = datastore.indexer_errors();
     let indexer_error_recorder =
@@ -1181,13 +1228,15 @@ async fn bootstrap_application(
             &indexer_runtime_plugins,
             &disabled_builtin_plugins,
         )
-        .with_indexer_error_recorder(indexer_error_recorder),
+        .with_indexer_error_recorder(indexer_error_recorder)
+        .with_indexer_stats_tracker(indexer_stats.clone()),
     ));
     let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
         NativeProwlarrIndexerProvider::new_with_indexer_error_repository(
             dynamic_provider,
             indexer_errors.clone(),
-        ),
+        )
+        .with_indexer_stats_tracker(indexer_stats.clone()),
     );
     let subtitle_plugin_provider: Arc<dyn SubtitlePluginProvider> =
         Arc::new(scryer_plugins::DynamicSubtitlePluginProvider::new(
@@ -1215,6 +1264,14 @@ async fn bootstrap_application(
     .with_upstream_scheduler(upstream_scheduler.clone());
 
     let indexer_client = Arc::new(indexer_client);
+    let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
+        scryer_infrastructure_acquisition::indexers::artifact_resolver::AcquisitionIndexerArtifactResolver::new(
+            datastore.indexer_configs(),
+            datastore.indexer_proxy_configs(),
+            staged_nzb_store.clone(),
+            staged_nzb_pipeline_limit.clone(),
+        ).with_indexer_stats_tracker(indexer_stats.clone()),
+    );
     let title_images_for_route: Arc<dyn TitleImageRepository> = datastore.title_images();
     let image_proxy_runtime = Arc::new(ImageProxyRuntime::new(
         datastore.image_proxy(),
@@ -1345,10 +1402,12 @@ async fn bootstrap_application(
         )))
         .with_staged_nzb_store(staged_nzb_store)
         .with_staged_nzb_pipeline_limit(staged_nzb_pipeline_limit)
-        .with_indexer_stats(indexer_stats)
+        .with_indexer_stats(indexer_stats.clone())
+        .with_indexer_artifact_resolver(Some(indexer_artifact_resolver))
         .with_upstream_scheduler(upstream_scheduler.clone())
         .with_indexer_caps_refresher(Arc::new(
             DirectNabCapsSnapshotRefresher::new()
+                .with_indexer_stats_tracker(indexer_stats)
                 .with_upstream_scheduler(upstream_scheduler.clone()),
         ))
         .with_plugin_http_trust_runtime(plugin_http_runtime)
@@ -3274,6 +3333,47 @@ mod tests {
     use scryer_infrastructure_runtime::DatastoreCustomizationStore;
     use tempfile::tempdir;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn shutdown_accounting_waits_for_admitted_dispatch_and_closes_gate() {
+        use scryer_application::IndexerStatsTracker;
+        use scryer_infrastructure_acquisition::indexers::stats::InMemoryIndexerStatsTracker;
+
+        let tracker = Arc::new(InMemoryIndexerStatsTracker::new(None));
+        let gate = tracker
+            .dispatch_gate()
+            .expect("persistent tracker has a gate");
+        let admission = gate.admit().expect("dispatch can start before shutdown");
+        let accounting = super::IndexerAccountingShutdown::default();
+        assert!(accounting.set(tracker.clone()).is_ok());
+        let task = tokio::spawn(async move {
+            super::drain_indexer_accounting_on_shutdown(&accounting).await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(probe) = gate.admit() {
+                drop(probe);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("shutdown must close dispatch admission");
+        assert!(
+            !task.is_finished(),
+            "shutdown must await the admitted callback"
+        );
+
+        tracker.record_api_request_sent("shutdown-indexer", "Shutdown indexer");
+        drop(admission);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("shutdown must finish after the callback")
+            .expect("shutdown task must not panic");
+        assert!(
+            gate.admit().is_none(),
+            "shutdown must never reopen dispatch"
+        );
+    }
 
     #[tokio::test]
     async fn shutdown_flush_waiter_flushes_scheduler_after_cancellation() {

@@ -134,6 +134,50 @@ fn is_separator(character: char) -> bool {
     )
 }
 
+/// Levenshtein distance between two strings, or `None` once it is certain the
+/// distance exceeds `max_distance`.
+///
+/// Rows are abandoned as soon as their cheapest cell passes the bound, so a
+/// comparison against an unrelated string costs a fraction of the full matrix.
+/// The bound is the caller's to choose: what counts as "near enough" differs
+/// sharply between an episode title and a season title, so no tolerance is
+/// baked in here.
+pub(crate) fn bounded_levenshtein_distance(
+    left: &str,
+    right: &str,
+    max_distance: usize,
+) -> Option<usize> {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.len().abs_diff(right.len()) > max_distance {
+        return None;
+    }
+
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (left_index, left_char) in left.iter().enumerate() {
+        let mut current = Vec::with_capacity(right.len() + 1);
+        current.push(left_index + 1);
+        let mut row_min = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            let cost = usize::from(left_char != right_char);
+            let distance = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + cost);
+            row_min = row_min.min(distance);
+            current.push(distance);
+        }
+        if row_min > max_distance {
+            return None;
+        }
+        previous = current;
+    }
+
+    previous
+        .last()
+        .copied()
+        .filter(|distance| *distance <= max_distance)
+}
+
 fn low_signal_tokens(profile: TitleMatchProfile) -> &'static [&'static str] {
     match profile {
         TitleMatchProfile::Movie => MOVIE_LOW_SIGNAL_TOKENS,
@@ -212,5 +256,19 @@ mod tests {
             ),
             "circuit breakers crash grid 2"
         );
+    }
+    #[test]
+    fn bounded_distance_reports_the_distance_only_inside_the_bound() {
+        assert_eq!(
+            bounded_levenshtein_distance("lantern", "lantern", 0),
+            Some(0)
+        );
+        assert_eq!(
+            bounded_levenshtein_distance("lantern", "lanterm", 1),
+            Some(1)
+        );
+        assert_eq!(bounded_levenshtein_distance("lantern", "lanterm", 0), None);
+        // Abandoned on the length check alone, before any row is built.
+        assert_eq!(bounded_levenshtein_distance("lantern", "verge", 1), None);
     }
 }

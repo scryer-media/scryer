@@ -40,6 +40,7 @@ mod image_proxy;
 mod import;
 mod indexer_category;
 mod indexer_errors;
+mod indexer_requests;
 pub use indexer_category::{
     CATEGORY_MISMATCH_CODE, IndexerCategoryFamily, NZB_HEAD_PROBE_BYTES, enforce_nzb_category_gate,
     indexer_category_contradicts_facet, indexer_category_family, nzb_head_category,
@@ -71,7 +72,11 @@ pub mod persisted_records;
 mod plugins;
 mod polling_worker;
 mod ports;
-pub use ports::{CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord, TitleOptionsPatch};
+pub use acquisition::anime_numbering::{ExactCourTitleMatch, exact_cour_title_match};
+pub use ports::{
+    AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
+    IndexerSearchNumberingContext, TitleOptionsPatch,
+};
 mod quality;
 mod rate_limit_signal;
 mod rules;
@@ -279,22 +284,23 @@ pub use contracts::{
     DownloadClientBindingRecord, DownloadClientConfigUpdate, DownloadClientMarkImportedRequest,
     DownloadClientStatus, DownloadOrigin, DownloadRecord, DownloadSubmission,
     DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity, DownloadSubmissionPurpose,
-    EpisodeUpdate, ImportArtifact, IndexerConfigSyncResult, IndexerConfigUpdate,
-    IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
-    IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
-    IndexerProxyConfigUpdate, IndexerProxyTestResult, IndexerRoutingEntry, IndexerRoutingPlan,
-    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
-    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    EpisodeUpdate, ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
+    IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
+    IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
+    IndexerDownloadClientProviderCompatibility, IndexerProxyConfigUpdate, IndexerProxyTestResult,
+    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
+    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
+    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
     MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewIndexerProxyConfig,
     NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
-    QueueDownloadOutcome, QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection,
-    ReleaseDecisionsQuery, ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate,
-    StagedNzbRef, StorageRootUsage, SubmissionConflictPolicy, SubmissionScope,
-    SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
-    SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
-    TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage, WantedSearchOutcome,
-    indexer_search_eligibility,
+    PreparedIndexerArtifact, QueueDownloadOutcome, QueuedDownloadResult, QueuedManualImport,
+    QueuedReleaseSelection, ReleaseDecisionsQuery, ResolvedDownloadArtifact, SearchMode,
+    SeedingProfileUpdate, StagedNzbRef, StorageRootUsage, SubmissionConflictPolicy,
+    SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
+    SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
+    SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
+    WantedSearchOutcome, indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{
@@ -403,10 +409,14 @@ pub(crate) use helpers::{filesystem_space, filesystem_space_raw};
 pub use image_proxy::image_proxy_source_token;
 pub use indexer_errors::{
     CONNECTION_TEST_INDEXER_ID, ClassifiedIndexerError, IndexerErrorRecorder,
-    IndexerErrorRepository, NullIndexerErrorRecorder, UNKNOWN_INDEXER_ERROR_MESSAGE,
-    classify_indexer_http_response, classify_newznab_error_message,
+    IndexerErrorRepository, NullIndexerErrorRecorder, PREVIEW_MANAGED_SYNC_INDEXER_ID,
+    UNKNOWN_INDEXER_ERROR_MESSAGE, classify_indexer_http_response, classify_newznab_error_message,
     indexer_error_history_is_persistable, indexer_response_content_type,
     redact_indexer_response_headers, unknown_indexer_error,
+};
+pub use indexer_requests::{
+    CALL_OTHER, CALL_SOLVER, INDEXER_API_REQUESTS_METRIC, IndexerRequestResult,
+    IndexerRequestTally, newznab_call_label,
 };
 pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
@@ -475,8 +485,9 @@ pub use ports::{
     ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage, ImageProxyKind,
     ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
     ImportFileExecutionContext, ImportFilePermissions, ImportFileTransferProgress,
-    ImportFileTransferProgressSender, ImportRepository, IndexerCapsSnapshotRefresher,
-    IndexerClient, IndexerConfigRepository, IndexerManagementClient, IndexerPluginProvider,
+    ImportFileTransferProgressSender, ImportRepository, IndexerAccountingContext,
+    IndexerArtifactResolver, IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository,
+    IndexerDispatchGate, IndexerManagementClient, IndexerPluginProvider,
     IndexerProxyConfigRepository, IndexerSearchCandidateWrite, IndexerSearchLearningContext,
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
@@ -733,6 +744,11 @@ pub enum AppError {
         retry_after: Option<std::time::Duration>,
         rate_limit_cooldown: RateLimitCooldownAction,
     },
+
+    /// A quota document observed by the host, independent of a plugin's
+    /// redacted public error. No provider reset time is inferred from the code.
+    #[error("Newznab error {code}: {message}")]
+    NewznabQuotaExceeded { code: u16, message: String },
 
     #[error("{0}")]
     MfaStepUpRequired(String),

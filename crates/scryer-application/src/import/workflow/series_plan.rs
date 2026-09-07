@@ -28,7 +28,18 @@ impl EpisodePackImportPlan {
 
 struct VerifiedEpisodePack {
     declared_seasons: Option<HashSet<u32>>,
+    /// A community cour translated onto its exact catalog members. This is
+    /// deliberately stronger than a declared-season check: the raw release
+    /// may say `S01 Complete` while the acquired cour belongs to a later
+    /// official season.
+    exact_episode_ids: Option<HashSet<String>>,
     is_extras_release: bool,
+}
+
+enum EpisodePackVerification {
+    NotPack,
+    Verified(VerifiedEpisodePack),
+    Unresolved,
 }
 
 impl VerifiedEpisodePack {
@@ -40,9 +51,18 @@ impl VerifiedEpisodePack {
     /// the season or set the grab was scoped to.
     fn vouches_for(&self, episode: &scryer_domain::Episode) -> bool {
         episode.episode_type == scryer_domain::EpisodeType::Standard
-            && self.declared_seasons.as_ref().is_none_or(|declared| {
-                catalog_episode_season(episode).is_some_and(|season| declared.contains(&season))
-            })
+            && self
+                .exact_episode_ids
+                .as_ref()
+                .map_or_else(
+                    || {
+                        self.declared_seasons.as_ref().is_none_or(|declared| {
+                            catalog_episode_season(episode)
+                                .is_some_and(|season| declared.contains(&season))
+                        })
+                    },
+                    |episode_ids| episode_ids.contains(&episode.id),
+                )
     }
 }
 
@@ -67,9 +87,12 @@ enum PlannedMemberDraft {
 fn verified_episode_pack(
     release_evidence: &ReleaseEvidence,
     title: &scryer_domain::Title,
-) -> Option<VerifiedEpisodePack> {
+    catalog_episodes: &[scryer_domain::Episode],
+    anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    acquired_episode_ids: Option<&HashSet<String>>,
+) -> EpisodePackVerification {
     let ReleaseEvidence::ScryerSubmission { scope, .. } = release_evidence else {
-        return None;
+        return EpisodePackVerification::NotPack;
     };
     let pack_scope = match scope {
         SubmissionScope::Collection { .. } => true,
@@ -77,20 +100,73 @@ fn verified_episode_pack(
         _ => false,
     };
     if !pack_scope {
-        return None;
+        return EpisodePackVerification::NotPack;
     }
 
-    let release_title = release_evidence.release_title(None)?;
-    let parsed =
+    let Some(release_title) = release_evidence.release_title(None) else {
+        return EpisodePackVerification::NotPack;
+    };
+    let mut parsed =
         normalize_release_title_signal(parse_import_release_for_title(&release_title, title));
-    let episode = parsed.episode.as_ref()?;
+    if parsed
+        .parse_hints
+        .iter()
+        .any(|hint| hint == "identity:unresolved_pack_scope")
+    {
+        return EpisodePackVerification::Unresolved;
+    }
+    let Some(episode) = parsed.episode.as_ref() else {
+        return EpisodePackVerification::NotPack;
+    };
     let is_pack = episode.full_season
         || episode.is_series_pack
         || episode.is_multi_season
         || episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack;
-    if !is_pack {
-        return None;
+    let has_episode_bounds = episode.episode_numbers.len() > 1
+        || episode.absolute_episode_numbers.len() > 1;
+    if !is_pack && !has_episode_bounds {
+        return EpisodePackVerification::NotPack;
     }
+
+    let numbering = crate::anime_numbering::translate_release_numbering(
+        anime_numbering_bridge,
+        title,
+        catalog_episodes,
+        &mut parsed,
+        None,
+    );
+    let exact_episode_ids = match numbering {
+        crate::anime_numbering::NumberingResolution::Resolved(candidate) => {
+            let mut episode_ids: HashSet<_> = candidate.episode_ids.into_iter().collect();
+            episode_ids.retain(|episode_id| match scope {
+                SubmissionScope::EpisodeSet { episode_ids } => episode_ids.contains(episode_id),
+                SubmissionScope::Collection { collection_id } => catalog_episodes.iter().any(|episode| {
+                    episode.id == *episode_id
+                        && episode.collection_id.as_deref() == Some(collection_id.as_str())
+                }),
+                _ => false,
+            });
+            if let Some(acquired) = acquired_episode_ids {
+                episode_ids.retain(|episode_id| acquired.contains(episode_id));
+            }
+            if episode_ids.is_empty() {
+                return EpisodePackVerification::Unresolved;
+            }
+            Some(episode_ids)
+        }
+        crate::anime_numbering::NumberingResolution::Ambiguous(_)
+        | crate::anime_numbering::NumberingResolution::UnresolvedPack => {
+            return EpisodePackVerification::Unresolved;
+        }
+        crate::anime_numbering::NumberingResolution::Unchanged if has_episode_bounds => {
+            return EpisodePackVerification::NotPack;
+        }
+        crate::anime_numbering::NumberingResolution::Unchanged => None,
+    };
+
+    let Some(episode) = parsed.episode.as_ref() else {
+        return EpisodePackVerification::Unresolved;
+    };
 
     let declared_seasons = if !episode.season_numbers.is_empty() {
         Some(episode.season_numbers.iter().copied().collect())
@@ -98,8 +174,9 @@ fn verified_episode_pack(
         episode.season.map(|season| HashSet::from([season]))
     };
 
-    Some(VerifiedEpisodePack {
+    EpisodePackVerification::Verified(VerifiedEpisodePack {
         declared_seasons,
+        exact_episode_ids,
         is_extras_release: episode.is_season_extra,
     })
 }
@@ -112,9 +189,6 @@ async fn build_episode_pack_import_plan(
     video_files: &[PathBuf],
     expected_episode_ids: Option<&HashSet<String>>,
 ) -> AppResult<Option<EpisodePackImportPlan>> {
-    let Some(pack) = verified_episode_pack(release_evidence, title) else {
-        return Ok(None);
-    };
     let catalog_episodes = app
         .services
         .catalog
@@ -134,6 +208,31 @@ async fn build_episode_pack_import_plan(
             .unwrap_or_default()
     } else {
         None
+    };
+    let pack = match verified_episode_pack(
+        release_evidence,
+        title,
+        &catalog_episodes,
+        anime_numbering_bridge.as_ref(),
+        expected_episode_ids,
+    ) {
+        EpisodePackVerification::NotPack => return Ok(None),
+        EpisodePackVerification::Verified(pack) => pack,
+        EpisodePackVerification::Unresolved => {
+            let mut plan = EpisodePackImportPlan::default();
+            for source_path in video_files {
+                plan.members.insert(
+                    source_path.clone(),
+                    PlannedEpisodeMemberDisposition::Hold {
+                        episodes: Vec::new(),
+                        reason_code: "unresolved_pack_scope",
+                        message: "Automatic import could not prove this pack's exact catalog scope. Open Manual Import and assign the intended episodes."
+                            .to_string(),
+                    },
+                );
+            }
+            return Ok(Some(plan));
+        }
     };
 
     let mut drafts = Vec::with_capacity(video_files.len());
@@ -223,6 +322,7 @@ fn reconcile_unresolved_pack_member_from_expected_scope(
     ) {
         ScopedPackMemberReconciliation::Unresolved => {
             reconcile_pack_member_from_absolute_numbering(
+                title,
                 pack,
                 source_path,
                 catalog,
@@ -242,6 +342,7 @@ fn reconcile_unresolved_pack_member_from_expected_scope(
 /// season-1 episode and the pack declares the season the absolute lands in.
 /// Without that cross-check the remap would be a guess.
 fn reconcile_pack_member_from_absolute_numbering(
+    title: &scryer_domain::Title,
     pack: &VerifiedEpisodePack,
     source_path: &Path,
     catalog: &[scryer_domain::Episode],
@@ -250,7 +351,7 @@ fn reconcile_pack_member_from_absolute_numbering(
     if pack.is_extras_release {
         return ScopedPackMemberReconciliation::Unresolved;
     }
-    let parsed = parsed_release_from_file_stem(source_path);
+    let parsed = parsed_pack_member_identity_for_catalog(title, source_path, catalog);
     let Some(identity) = parsed.episode.as_ref() else {
         return ScopedPackMemberReconciliation::Unresolved;
     };
@@ -343,7 +444,7 @@ fn reconcile_pack_member_from_scene_numbering(
         return ScopedPackMemberReconciliation::Unresolved;
     }
 
-    let parsed = parsed_release_from_file_stem(source_path);
+    let parsed = parsed_pack_member_identity_for_catalog(title, source_path, catalog);
     let Some(identity) = parsed.episode.as_ref() else {
         return ScopedPackMemberReconciliation::Unresolved;
     };
@@ -471,12 +572,20 @@ fn plan_episode_pack_member(
             (translated, season)
         }
         Ok(None) => (identity, folder_season),
-        Err(summary) => {
+        Err(resolution) => {
+            let ambiguous = resolution.is_ambiguous();
+            let summary = resolution
+                .ambiguity_summary()
+                .unwrap_or_else(|| "unresolved pack scope".to_string());
             return PlannedMemberDraft::Hold {
                 episodes: Vec::new(),
-                reason_code: "anime_numbering_ambiguous",
+                reason_code: if ambiguous {
+                    "anime_numbering_ambiguous"
+                } else {
+                    "unresolved_pack_scope"
+                },
                 message: format!(
-                    "Automatic import found several equally-good readings of this pack member's anime numbering ({summary}). Open Manual Import and assign the correct episode."
+                    "Automatic import could not safely resolve this pack member's anime numbering ({summary}). Open Manual Import and assign the correct episode."
                 ),
             };
         }
@@ -494,15 +603,15 @@ fn plan_episode_pack_member(
 ///
 /// `Ok(None)` means nothing changed — a non-anime title, a title with no
 /// bridge, or a member whose literal numbering was right all along — and the
-/// caller keeps today's behaviour exactly. `Err` carries the human-readable
-/// readings of a member nobody can place, which becomes a hold.
+/// caller keeps today's behaviour exactly. Unresolved or ambiguous numbering
+/// becomes a hold.
 fn translate_pack_member_numbering(
     title: &scryer_domain::Title,
     catalog: &[scryer_domain::Episode],
     anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
     parsed_stem: &crate::ParsedReleaseMetadata,
     identity: &crate::ParsedEpisodeMetadata,
-) -> Result<Option<crate::ParsedEpisodeMetadata>, String> {
+) -> Result<Option<crate::ParsedEpisodeMetadata>, crate::anime_numbering::NumberingResolution> {
     let Some(bridge) = anime_numbering_bridge else {
         return Ok(None);
     };
@@ -526,9 +635,8 @@ fn translate_pack_member_numbering(
     match resolution {
         crate::anime_numbering::NumberingResolution::Resolved(_) => Ok(Some(translated)),
         crate::anime_numbering::NumberingResolution::Unchanged => Ok(None),
-        crate::anime_numbering::NumberingResolution::Ambiguous(_) => Err(resolution
-            .ambiguity_summary()
-            .unwrap_or_else(|| "several readings".to_string())),
+        crate::anime_numbering::NumberingResolution::Ambiguous(_)
+        | crate::anime_numbering::NumberingResolution::UnresolvedPack => Err(resolution),
     }
 }
 
@@ -628,6 +736,22 @@ fn plan_parsed_pack_identity(
         message: "Automatic import found a bare episode number without a usable season folder. Open Manual Import and assign the correct episode."
             .to_string(),
     }
+}
+
+/// A pack member's own parse for reconciliation: the title's canonical context
+/// first — so a member named in a shape only a series/anime target can read
+/// resolves the same way here as it does in the manual preview — then today's
+/// context-free stem parse, so nothing that reconciles now stops reconciling.
+fn parsed_pack_member_identity_for_catalog(
+    title: &scryer_domain::Title,
+    source_path: &Path,
+    catalog: &[scryer_domain::Episode],
+) -> crate::ParsedReleaseMetadata {
+    let parsed = parsed_pack_member_for_catalog(title, source_path, catalog);
+    if parsed.episode.is_some() {
+        return parsed;
+    }
+    parsed_release_from_file_stem(source_path)
 }
 
 fn parsed_pack_member_for_catalog(
@@ -976,11 +1100,12 @@ fn finalize_pack_member_disposition(
 ) -> PlannedEpisodeMemberDisposition {
     match draft {
         PlannedMemberDraft::Resolved(episodes) => {
-            let standard_outside_declared = episodes.iter().any(|episode| {
-                episode.episode_type == scryer_domain::EpisodeType::Standard
+            let outside_declared = episodes.iter().any(|episode| {
+                (pack.exact_episode_ids.is_some()
+                    || episode.episode_type == scryer_domain::EpisodeType::Standard)
                     && !pack.vouches_for(episode)
             });
-            if standard_outside_declared {
+            if outside_declared {
                 return PlannedEpisodeMemberDisposition::Hold {
                     episodes,
                     reason_code: "episode_outside_declared_pack_seasons",
@@ -1394,12 +1519,85 @@ mod series_plan_tests {
     fn declared_season_pack(season: Option<u32>) -> VerifiedEpisodePack {
         VerifiedEpisodePack {
             declared_seasons: season.map(|season| HashSet::from([season])),
+            exact_episode_ids: None,
             is_extras_release: false,
         }
     }
 
+    #[test]
+    fn translated_cour_pack_verification_intersects_the_acquired_scope() {
+        let title = anime_pack_title();
+        let bridge = anime_pack_bridge();
+        let catalog: Vec<_> = (1..=60)
+            .map(|number| catalog_episode(&format!("ep-{number}"), number, number))
+            .collect();
+        let evidence = ReleaseEvidence::ScryerSubmission {
+            title_id: title.id.clone(),
+            facet: "anime".to_string(),
+            source_title: Some("Lantern Verge S03 Complete 1080p WEB-DL-FIXTUREGRP".to_string()),
+            observed_release_name: None,
+            release_size_bytes: None,
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            scope: SubmissionScope::EpisodeSet {
+                episode_ids: (28..=35).map(|number| format!("ep-{number}")).collect(),
+            },
+        };
+        let EpisodePackVerification::Verified(pack) = verified_episode_pack(
+            &evidence, &title, &catalog, Some(&bridge), None,
+        ) else { panic!("closed cour should verify"); };
+        for episode in &catalog {
+            let number: u32 = episode.episode_number.as_ref().unwrap().parse().unwrap();
+            assert_eq!(pack.vouches_for(episode), (28..=35).contains(&number));
+        }
+        assert!(matches!(verified_episode_pack(
+            &evidence, &title, &catalog, Some(&bridge), Some(&HashSet::new()),
+        ), EpisodePackVerification::Unresolved));
+        let mut special = catalog_episode("special-1", 1, 1);
+        special.episode_type = scryer_domain::EpisodeType::Special;
+        assert!(matches!(finalize_pack_member_disposition(
+            PlannedMemberDraft::Resolved(vec![special]), &pack,
+        ), PlannedEpisodeMemberDisposition::Hold { .. }));
+    }
+
+    #[test]
+    fn translated_pack_vouches_only_for_its_exact_catalog_members() {
+        let in_scope = catalog_episode_in_season("ep-27", 3, 27, 27);
+        let adjacent = catalog_episode_in_season("ep-26", 3, 26, 26);
+        let pack = VerifiedEpisodePack {
+            declared_seasons: Some(HashSet::from([3])),
+            exact_episode_ids: Some(HashSet::from([in_scope.id.clone()])),
+            is_extras_release: false,
+        };
+
+        assert!(pack.vouches_for(&in_scope));
+        assert!(!pack.vouches_for(&adjacent));
+        assert!(matches!(
+            finalize_pack_member_disposition(
+                PlannedMemberDraft::Resolved(vec![adjacent]),
+                &pack,
+            ),
+            PlannedEpisodeMemberDisposition::Hold {
+                reason_code: "episode_outside_declared_pack_seasons",
+                ..
+            }
+        ));
+    }
+
     fn pack_member(file_name: &str) -> PathBuf {
         Path::new("/downloads/Quiet Meridian Season 13").join(file_name)
+    }
+
+    /// The series these absolute-lane fixtures belong to. Members are read
+    /// with its context first, so the lane needs it.
+    fn scene_pack_title() -> scryer_domain::Title {
+        scryer_domain::Title {
+            name: "Quiet Meridian".to_string(),
+            facet: scryer_domain::MediaFacet::Series,
+            library_id: scryer_domain::default_library_id_for_facet(
+                &scryer_domain::MediaFacet::Series,
+            ),
+            ..anime_pack_title()
+        }
     }
 
     fn reconciled_absolute_member(
@@ -1409,6 +1607,7 @@ mod series_plan_tests {
         expected_episode_ids: Option<&HashSet<String>>,
     ) -> ScopedPackMemberReconciliation {
         reconcile_pack_member_from_absolute_numbering(
+            &scene_pack_title(),
             pack,
             &pack_member(file_name),
             catalog,

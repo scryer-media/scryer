@@ -30,8 +30,9 @@ use super::acquisition::{
 use super::*;
 use crate::acquisition_search_queries::{
     anidb_id_from_external_ids, build_movie_search_queries, build_search_queries,
-    imdb_id_from_title, mal_id_from_external_ids, movie_text_search_query,
-    tmdb_id_from_external_ids, tvdb_id_from_external_ids,
+    community_numbering_context, community_numbering_queries, imdb_id_from_title,
+    mal_id_from_external_ids, movie_text_search_query, tmdb_id_from_external_ids,
+    tvdb_id_from_external_ids,
 };
 use crate::delay_profile::DelayProfile;
 use crate::quality::release_parser::ParseDisposition;
@@ -150,6 +151,7 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     pub(crate) runtime_minutes: Option<i32>,
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
+    pub(crate) numbering_context: crate::IndexerSearchNumberingContext,
     pub(crate) absolute_episode: Option<u32>,
     pub(crate) subject_kind: ReleaseSearchSubjectKind,
     pub(crate) last_search_at: Option<String>,
@@ -820,9 +822,8 @@ fn contextual_release_matches_title_evidence(
     // Pass 2 — the target-biased parse confirms the anchor and supplies the
     // projection the acquisition pipeline actually consumes.
     let contextual = crate::analyze_release_for_target(&parsed.raw_title, &evidence.parse_context);
-    if contextual.is_unparseable() {
-        return None;
-    }
+    // Unresolved episode coverage does not invalidate an independently anchored
+    // title. Numbering and unresolved-pack checks govern automatic acquisition.
     let best_candidate = contextual.best_candidate()?;
 
     let year_corroborated = year_corroborated
@@ -1523,6 +1524,21 @@ pub(crate) fn evaluate_auto_candidate(
         return ReleaseAutoDecisionCode::SubtitlesOnly;
     }
 
+    // A title match identifies the show, not the contents of an unresolved pack.
+    // Keep the ordinary unnamed-special fallback separate from pack claims.
+    if candidate
+        .parsed_release_metadata
+        .as_ref()
+        .is_some_and(|parsed| {
+            parsed
+                .parse_hints
+                .iter()
+                .any(|hint| hint == "identity:unresolved_pack_scope")
+        })
+    {
+        return ReleaseAutoDecisionCode::ParseUnparseable;
+    }
+
     let parse_state = candidate_parse_state(candidate);
     let title_match = candidate_title_match(candidate, &context.subject.title_evidence);
     let matches_title = title_match.is_some();
@@ -2218,6 +2234,7 @@ impl AppUseCase {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
@@ -2314,6 +2331,7 @@ impl AppUseCase {
 
         let category = self.release_search_category_for_facet(&title.facet);
 
+        let mut numbering_context = crate::IndexerSearchNumberingContext::default();
         let mut queries = vec![format!(
             "{} S{:0>2}E{:0>2}",
             title.name.trim(),
@@ -2326,6 +2344,34 @@ impl AppUseCase {
                 queries.insert(0, format!("{} {:0>3}", title.name.trim(), absolute));
             }
             queries.push(title.name.trim().to_string());
+
+            // An interactive search asks for the same release names the
+            // automatic lane does. Release groups number many anime per cour
+            // rather than per TVDB season, so without these forms a manual
+            // search for an episode of a long official season never mentions
+            // the season and episode numbers the groups actually post under,
+            // and the results it does return are whatever the bare title
+            // matched.
+            let anime_numbering_bridge = self
+                .services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .unwrap_or_default();
+            queries.extend(community_numbering_queries(
+                title,
+                episode_record.as_ref(),
+                season_num as i32,
+                episode_num as i32,
+                anime_numbering_bridge.as_ref(),
+            ));
+            numbering_context = community_numbering_context(
+                title,
+                season_num as i32,
+                episode_num as i32,
+                anime_numbering_bridge.as_ref(),
+            );
         }
         let mut seen = HashSet::new();
         queries.retain(|query| !query.trim().is_empty() && seen.insert(query.to_ascii_lowercase()));
@@ -2353,6 +2399,7 @@ impl AppUseCase {
                 .or(title.runtime_minutes),
             season: Some(season_num),
             episode: Some(episode_num),
+            numbering_context,
             absolute_episode,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
@@ -2420,6 +2467,7 @@ impl AppUseCase {
             runtime_minutes,
             season: Some(season_num),
             episode: None,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Season,
             last_search_at: item.last_search_at.clone(),
@@ -2495,6 +2543,7 @@ impl AppUseCase {
                 runtime_minutes: search_title.runtime_minutes,
                 season: None,
                 episode: None,
+                numbering_context: crate::IndexerSearchNumberingContext::default(),
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
@@ -2567,6 +2616,7 @@ impl AppUseCase {
                 .or(search_title.runtime_minutes),
             season: query_result.season,
             episode: query_result.episode,
+            numbering_context: query_result.numbering_context,
             absolute_episode,
             subject_kind: match item.media_type.as_str() {
                 "episode" => ReleaseSearchSubjectKind::Episode,
@@ -2810,6 +2860,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -2974,6 +3025,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -3052,6 +3104,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -3148,6 +3201,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season,
             episode,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: None,
@@ -3700,6 +3754,82 @@ mod tests {
             unmonitored_episode_ids: &HashSet::new(),
         };
         evaluate_auto_candidate(candidate, &context)
+    }
+
+    #[test]
+    fn numbered_episode_completion_title_is_not_rejected_as_an_unresolved_pack() {
+        let title = make_title();
+        let subject = numbering_scoped_subject(&title, Some(1), Some(1));
+        let mut candidate = make_candidate(
+            &format!("{}.S01E01.The.Complete.Series.1080p.WEB-DL", title.name),
+            None,
+        );
+        candidate.parsed_release_metadata = Some(
+            crate::analyze_release_for_target(
+                &candidate.title,
+                &subject.title_evidence.parse_context,
+            )
+            .best_candidate()
+            .expect("numbered episode")
+            .projected
+            .clone(),
+        );
+        // The fixture has no quality admission decision. It must reach that
+        // gate instead of rejecting a supported identity because of its title.
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::QualityBlocked,
+        );
+        assert!(!candidate_numbering_contradicts_subject(
+            &candidate, &subject
+        ));
+    }
+
+    #[test]
+    fn unresolved_pack_scope_cannot_use_a_matching_title_fallback() {
+        let title = make_title();
+        let subject = numbering_scoped_subject(&title, None, None);
+        let mut candidate = make_candidate(&format!("{}.1080p.WEB-DL", title.name), None);
+        let parsed = candidate
+            .parsed_release_metadata
+            .as_mut()
+            .expect("parsed metadata");
+        parsed.episode = None;
+        parsed.disposition = ParseDisposition::Unparseable;
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::QualityBlocked
+        );
+        candidate
+            .parsed_release_metadata
+            .as_mut()
+            .unwrap()
+            .parse_hints
+            .push("identity:unresolved_pack_scope".into());
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::ParseUnparseable
+        );
+    }
+
+    #[test]
+    fn unnamed_special_without_a_pack_claim_keeps_its_title_fallback() {
+        let title = make_title();
+        let subject = numbering_scoped_subject(&title, Some(0), None);
+        let mut candidate = make_candidate(&format!("{}.1080p.WEB-DL", title.name), None);
+        let parsed = candidate
+            .parsed_release_metadata
+            .as_mut()
+            .expect("parsed metadata");
+        parsed.episode = None;
+        parsed.disposition = ParseDisposition::Unparseable;
+        assert!(!candidate_numbering_contradicts_subject(
+            &candidate, &subject
+        ));
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::QualityBlocked
+        );
     }
 
     #[test]
@@ -4359,6 +4489,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            numbering_context: crate::IndexerSearchNumberingContext::default(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -4451,6 +4582,7 @@ mod tests {
                 runtime_minutes: title.runtime_minutes,
                 season: None,
                 episode: None,
+                numbering_context: crate::IndexerSearchNumberingContext::default(),
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: None,

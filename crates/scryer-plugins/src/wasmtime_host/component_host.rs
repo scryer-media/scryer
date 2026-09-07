@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use scryer_application::{
-    CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, challenge_solver as solver,
+    CALL_SOLVER, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerRequestResult,
+    IndexerRequestTally, challenge_solver as solver, classify_indexer_http_response,
 };
 use tokio::sync::mpsc;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
@@ -18,8 +19,8 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::plugin_http_host::{
-    IndexerErrorCaptureContext, IndexerProxyPolicy, PluginHttpHost, enforce_allowed_hosts,
-    shared_plugin_http_runtime,
+    IndexerErrorCaptureContext, IndexerProxyPolicy, IndexerRequestAccountingContext,
+    PluginHttpHost, enforce_allowed_hosts, shared_plugin_http_runtime,
 };
 use crate::wasmtime_host::sandbox::HostLimits;
 
@@ -90,6 +91,7 @@ struct ComponentHostInner {
     state: Mutex<ComponentState>,
     active: AtomicUsize,
     cancellation: Mutex<tokio_util::sync::CancellationToken>,
+    indexer_request_accounting: Mutex<Option<IndexerRequestAccountingContext>>,
     indexer_error_capture: Mutex<Option<ComponentIndexerErrorCapture>>,
     strategy_events: Mutex<StrategyEventState>,
 }
@@ -187,6 +189,7 @@ impl ComponentHost {
                 state: Mutex::new(ComponentState::default()),
                 active: AtomicUsize::new(0),
                 cancellation: Mutex::new(tokio_util::sync::CancellationToken::new()),
+                indexer_request_accounting: Mutex::new(None),
                 indexer_error_capture: Mutex::new(None),
                 strategy_events: Mutex::new(StrategyEventState::default()),
             }),
@@ -427,12 +430,42 @@ impl ComponentHost {
         if !request.body.is_empty() {
             builder = builder.body(request.body.clone());
         }
+        let tally = self.request_tally();
         let cancellation = self.cancellation();
         let response = tokio::select! {
-            _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
-            result = builder.send() => result.map_err(component_transport_error)?,
+            biased;
+            _ = cancellation.cancelled() => {
+                if let Some(tally) = tally.as_ref() {
+                    tally.note_result(IndexerRequestResult::Cancelled);
+                }
+                return Err(TransportError::Cancelled);
+            }
+            result = async {
+                let request = builder.build().map_err(component_transport_error)?;
+                if let Some(tally) = tally.as_ref()
+                    && !tally.try_note_sent(request.url().as_str())
+                {
+                    return Err(TransportError::Cancelled);
+                }
+                client.execute(request).await.map_err(component_transport_error)
+            } => match result {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(tally) = tally.as_ref() {
+                        tally.note_result(IndexerRequestResult::NoResponse);
+                    }
+                    return Err(error);
+                }
+            },
         };
-        self.read_response(response).await
+        let result = self.read_response(response).await;
+        if let Some(tally) = tally.as_ref() {
+            match &result {
+                Ok(result) => tally.note_response(&result.captured_response),
+                Err(_) => tally.note_result(IndexerRequestResult::NoResponse),
+            }
+        }
+        result
     }
 
     async fn solve_proxy_request(
@@ -461,36 +494,65 @@ impl ComponentHost {
                 TransportError::Transport
             })?;
         let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
+        // The solve payload is `request.get` against `request.url`, so the
+        // solver fetches the indexer with the user's API key in the query
+        // string. It respects the same shutdown gate and counts as one indexer
+        // request, because the indexer's quota pays for the solver's replay.
+        let solve_tally = self.request_tally();
         let cancellation = self.cancellation();
         let response = tokio::select! {
-            _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
-            result = proxy_client
-                .post(&endpoint)
-                .timeout(solver_timeout)
-                .json(&solver::solver_solve_request(
-                    provider,
-                    &request.url,
-                    policy.config.request_timeout_seconds,
-                ))
-                .send() => match result {
+            biased;
+            _ = cancellation.cancelled() => {
+                if let Some(tally) = solve_tally.as_ref() {
+                    tally.note_result(IndexerRequestResult::Cancelled);
+                }
+                return Err(TransportError::Cancelled);
+            }
+            result = async {
+                if let Some(tally) = solve_tally.as_ref()
+                    && !tally.try_note_sent_call(CALL_SOLVER)
+                {
+                    return Err(TransportError::Cancelled);
+                }
+                proxy_client
+                    .post(&endpoint)
+                    .timeout(solver_timeout)
+                    .json(&solver::solver_solve_request(
+                        provider,
+                        &request.url,
+                        policy.config.request_timeout_seconds,
+                    ))
+                    .send()
+                    .await
+                    .map_err(component_transport_error)
+            } => match result {
                     Ok(response) => response,
                     Err(error) => {
-                        let kind = if error.is_timeout() {
-                            solver::SolverErrorKind::Timeout
-                        } else {
-                            solver::SolverErrorKind::Unreachable
-                        };
+                    if let Some(tally) = solve_tally.as_ref() {
+                        tally.note_result(IndexerRequestResult::NoResponse);
+                    }
+                    if matches!(error, TransportError::Cancelled) {
+                        return Err(error);
+                    }
+                    let kind = if matches!(error, TransportError::Timeout) {
+                        solver::SolverErrorKind::Timeout
+                    } else {
+                        solver::SolverErrorKind::Unreachable
+                    };
                         solver::SolverHealthLedger::shared().record_failure(
                             &policy.config.id,
                             solver::solver_error_message(provider, kind),
                         );
-                        return Err(component_transport_error(error));
+                        return Err(error);
                     }
                 },
         };
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
             || response.status().is_server_error()
         {
+            if let Some(tally) = solve_tally.as_ref() {
+                tally.note_result(IndexerRequestResult::HttpStatus(response.status().as_u16()));
+            }
             solver::SolverHealthLedger::shared().record_failure(
                 &policy.config.id,
                 solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable),
@@ -511,6 +573,15 @@ impl ComponentHost {
         solver::SolverHealthLedger::shared().record_success(&policy.config.id);
 
         let status = solution.status.unwrap_or(200);
+        // The solver reports the indexer's own status, which is a truer
+        // `result` than the status of the solve call that carried it.
+        if let Some(tally) = solve_tally.as_ref() {
+            tally.note_result(if (200..300).contains(&status) {
+                IndexerRequestResult::Success
+            } else {
+                IndexerRequestResult::HttpStatus(status)
+            });
+        }
         let headers = solver::safe_solution_response_headers(solution.headers.as_ref());
         let body = solution.response.clone().unwrap_or_default().into_bytes();
         if body.len() > self.inner.max_response_bytes {
@@ -621,6 +692,15 @@ impl ComponentHost {
         }
     }
 
+    pub(crate) fn set_indexer_request_accounting(
+        &self,
+        context: Option<IndexerRequestAccountingContext>,
+    ) {
+        if let Ok(mut accounting) = self.inner.indexer_request_accounting.lock() {
+            *accounting = context;
+        }
+    }
+
     pub(crate) fn finish_indexer_error_capture(&self, operation_failed: bool) {
         let capture = match self.inner.indexer_error_capture.lock() {
             Ok(mut capture) => capture.take(),
@@ -641,6 +721,37 @@ impl ComponentHost {
         if operation_failed && (200..300).contains(&response.status) {
             PluginHttpHost::record_captured_response(&capture.context, response);
         }
+    }
+
+    /// Prefer the immutable accounting identity over error-response capture.
+    fn request_tally(&self) -> Option<IndexerRequestTally> {
+        if let Some(context) = self.inner.indexer_request_accounting.lock().ok()?.as_ref() {
+            return Some(context.tally());
+        }
+        self.inner
+            .indexer_error_capture
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|capture| capture.context.tally())
+    }
+
+    /// Preserve a typed Newznab quota error across a component's generic public
+    /// plugin error. The component ABI may intentionally redact its message,
+    /// but the host captured the bounded response it received.
+    pub(crate) fn captured_newznab_quota_error(&self) -> Option<scryer_application::AppError> {
+        let capture = self.inner.indexer_error_capture.lock().ok()?;
+        let response = capture.as_ref()?.final_response.as_ref()?;
+        let classified = classify_indexer_http_response(response)?;
+        matches!(
+            classified.classification,
+            scryer_application::IndexerErrorClassification::NewznabRequestLimitReached
+                | scryer_application::IndexerErrorClassification::NewznabDownloadLimitReached
+        )
+        .then(|| scryer_application::AppError::NewznabQuotaExceeded {
+            code: classified.provider_error_code.unwrap_or_default(),
+            message: classified.message.to_string(),
+        })
     }
 
     fn capture_indexer_response(&self, response: CapturedIndexerHttpResponse) {

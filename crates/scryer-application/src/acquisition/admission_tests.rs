@@ -1246,6 +1246,34 @@ fn a_pack_fully_covered_by_queued_equal_or_better_releases_is_refused() {
     ));
 }
 
+/// A pack's recorded claim remains a duplicate guard even if score
+/// re-derivation makes the feed candidate look better. The single-scope gate
+/// checks release identity before its score ladder; AnyMember must do the same
+/// before treating the still-queued members as missing.
+#[test]
+fn a_per_member_pack_does_not_regrab_its_own_higher_rescored_release() {
+    let release = "Show.S01.1080p.WEB-DL-GRP";
+    let mut queued_pack = queued(release, Some(1), 0, 900);
+    queued_pack.covers = vec!["ep-01".to_string(), "ep-02".to_string()];
+    let subject = AdmissionSubject::new(episodes(&["ep-01", "ep-02"]), [])
+        .per_member()
+        .with_queued(vec![queued_pack]);
+
+    let verdict = evaluate_admission(
+        &subject,
+        CandidateFacts::new(Some(1), 0, 9_000).with_release_title(release),
+        &grab_policy_with_queue(200),
+    );
+
+    assert!(
+        matches!(
+            verdict.rejection().map(|rejection| &rejection.reason),
+            Some(AdmissionRejectionReason::QueuedSameRelease { queued_title }) if queued_title == release
+        ),
+        "a rescored copy of a grabbed pack must still be rejected: {verdict:?}"
+    );
+}
+
 #[test]
 fn a_queued_single_episode_does_not_refuse_a_pack_that_fills_other_missing_members() {
     let mut queued_episode = queued("Show.S01E01.1080p.WEB-DL-GRP", Some(1), 0, 900);

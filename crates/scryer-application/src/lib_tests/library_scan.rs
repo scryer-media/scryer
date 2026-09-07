@@ -5632,8 +5632,24 @@ async fn ignore_pending_import_moves_item_out_of_pending_counts() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let library_scanner = Arc::new(MutableLibraryScanner::default());
     let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
-    let (app, user) =
-        bootstrap_with_scan_unmatched_tracking(settings, library_scanner, unmatched_items.clone());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        library_scanner,
+        unmatched_items.clone(),
+        Arc::new(HydratingMovieSearchGateway {
+            search_item: MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Existing Movie".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".to_string()],
+            },
+            movie: make_movie_metadata(123456, "Existing Movie"),
+        }),
+    );
 
     unmatched_items
         .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
@@ -7605,12 +7621,18 @@ async fn resolve_pending_import_rejects_existing_title_in_same_library() {
         .resolve_pending_import(
             &user,
             "movie-resolve-existing-failure-1",
-            pending_import_title_request(
-                MediaFacet::Movie,
-                "Existing Movie",
-                Some("123456"),
-                Some(2020),
-            ),
+            NewTitle {
+                name: "Existing Movie".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                external_ids: vec![ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "123456".to_string(),
+                }],
+                root_folder_id: None,
+                year: Some(2020),
+                ..NewTitle::default()
+            },
             false,
         )
         .await
@@ -7640,6 +7662,9 @@ async fn resolve_pending_import_rejects_existing_title_in_same_library() {
 async fn resolve_pending_import_attaches_movie_to_existing_title_in_same_library() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let movie_path = tempdir.path().join("Missing.Movie.2020.mkv");
+    tokio::fs::write(&movie_path, b"movie")
+        .await
+        .expect("create pending movie");
 
     let settings = Arc::new(StoredSettingsRepo::default());
     settings
@@ -7650,10 +7675,35 @@ async fn resolve_pending_import_attaches_movie_to_existing_title_in_same_library
         )
         .await;
     let library_scanner = Arc::new(MutableLibraryScanner::default());
-    library_scanner.set_library_files(vec![]).await;
+    library_scanner
+        .set_library_files(vec![LibraryFile {
+            path: movie_path.to_string_lossy().to_string(),
+            display_name: "Missing.Movie.2020".to_string(),
+            nfo_path: None,
+            size_bytes: Some(5),
+            source_signature_scheme: None,
+            source_signature_value: None,
+        }])
+        .await;
     let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
-    let (app, user) =
-        bootstrap_with_scan_unmatched_tracking(settings, library_scanner, unmatched_items.clone());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        library_scanner,
+        unmatched_items.clone(),
+        Arc::new(HydratingMovieSearchGateway {
+            search_item: MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Existing Movie".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".to_string()],
+            },
+            movie: make_movie_metadata(123456, "Existing Movie"),
+        }),
+    );
     app.reconcile_default_library_roots()
         .await
         .expect("reconcile legacy movie root");
@@ -7716,11 +7766,51 @@ async fn resolve_pending_import_attaches_movie_to_existing_title_in_same_library
 
     assert!(!result.created);
     assert_eq!(result.title.id, existing_title.id);
-    assert!(result.library_scan.is_none());
-    // A movie pending import ends in exactly the state the create path leaves
-    // it in: the row is consumed and the file is imported by the title's next
-    // scan.
+    assert_eq!(result.title.folder_path, None);
+    assert_eq!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&existing_title.id)
+            .await
+            .expect("reload attached movie title")
+            .expect("attached movie title")
+            .folder_path,
+        None
+    );
+    assert!(
+        result
+            .library_scan
+            .as_ref()
+            .is_some_and(|summary| summary.imported > 0 || summary.matched > 0)
+    );
+    // The pending row is consumed only after its file is durably associated.
     assert!(unmatched_items.items().await.is_empty());
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&existing_title.id)
+        .await
+        .expect("load attached movie media");
+    assert!(
+        media_files
+            .iter()
+            .any(|file| file.file_path == movie_path.to_string_lossy())
+    );
+    app.scan_title_library(&user, &existing_title.id)
+        .await
+        .expect("rescan attached movie");
+    assert!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&existing_title.id)
+            .await
+            .expect("load rescanned movie media")
+            .iter()
+            .any(|file| file.file_path == movie_path.to_string_lossy())
+    );
     assert_eq!(
         app.list_titles_unpaged(&user, Some(MediaFacet::Movie), None, None)
             .await
@@ -7793,6 +7883,228 @@ async fn resolve_pending_import_attaches_series_to_existing_title_in_same_librar
         Some(existing_title.id.as_str())
     );
     assert_eq!(items[0].status, PendingImportStatus::Pending);
+}
+
+#[tokio::test]
+async fn resolve_pending_movie_attach_keeps_item_when_title_owns_another_folder() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let movie_path = tempdir.path().join("Missing.Movie.2020.mkv");
+    tokio::fs::write(&movie_path, b"movie").await.unwrap();
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    app.reconcile_default_library_roots().await.unwrap();
+    let title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Existing Movie".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                external_ids: vec![ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "123456".to_string(),
+                }],
+                root_folder_id: None,
+                year: Some(2020),
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .unwrap()
+        .title;
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, "/other/movie")
+        .await
+        .unwrap();
+    let item = build_test_unmatched_item(
+        "movie-ownership-conflict-1",
+        MediaFacet::Movie,
+        tempdir.path().to_string_lossy().as_ref(),
+        movie_path.to_string_lossy().as_ref(),
+        "Unknown Movie",
+        "Existing Movie",
+        Some(2020),
+    );
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .unwrap();
+    let error = app
+        .resolve_pending_import(
+            &user,
+            &item.id,
+            pending_import_title_request(
+                MediaFacet::Movie,
+                "Existing Movie",
+                Some("123456"),
+                Some(2020),
+            ),
+            true,
+        )
+        .await
+        .expect_err("other folder must not be attached");
+    assert!(error.to_string().contains("already owns another folder"));
+    assert_eq!(unmatched_items.items().await.len(), 1);
+}
+
+#[tokio::test]
+async fn resolve_pending_movie_directory_retries_until_every_file_is_attached() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let directory = tempdir.path().join("Existing Movie (2020)");
+    tokio::fs::create_dir(&directory).await.unwrap();
+    let first = directory.join("Existing.Movie.2020.1080p.mkv");
+    let second = directory.join("Existing.Movie.2020.2160p.mkv");
+    tokio::fs::write(&first, b"first").await.unwrap();
+    let scanner = Arc::new(MutableLibraryScanner::default());
+    scanner
+        .set_library_files(vec![
+            LibraryFile {
+                path: first.to_string_lossy().to_string(),
+                display_name: "first".into(),
+                nfo_path: None,
+                size_bytes: Some(5),
+                source_signature_scheme: None,
+                source_signature_value: None,
+            },
+            LibraryFile {
+                path: second.to_string_lossy().to_string(),
+                display_name: "second".into(),
+                nfo_path: None,
+                size_bytes: Some(6),
+                source_signature_scheme: None,
+                source_signature_value: None,
+            },
+        ])
+        .await;
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        scanner,
+        unmatched_items.clone(),
+        Arc::new(HydratingMovieSearchGateway {
+            search_item: MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Existing Movie".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".to_string()],
+            },
+            movie: make_movie_metadata(123456, "Existing Movie"),
+        }),
+    );
+    app.reconcile_default_library_roots().await.unwrap();
+    let title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Existing Movie".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                external_ids: vec![ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "123456".to_string(),
+                }],
+                root_folder_id: None,
+                year: Some(2020),
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .unwrap()
+        .title;
+    let item = build_test_unmatched_item(
+        "movie-directory-retry-1",
+        MediaFacet::Movie,
+        tempdir.path().to_string_lossy().as_ref(),
+        directory.to_string_lossy().as_ref(),
+        "Existing Movie",
+        "Existing Movie",
+        Some(2020),
+    );
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .unwrap();
+    let request = pending_import_title_request(
+        MediaFacet::Movie,
+        "Existing Movie",
+        Some("123456"),
+        Some(2020),
+    );
+    assert!(
+        app.resolve_pending_import(&user, &item.id, request.clone(), true)
+            .await
+            .is_err()
+    );
+    let first_items = unmatched_items.items().await;
+    assert!(first_items.iter().any(|pending| pending.id == item.id));
+    assert!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|file| file.file_path == first.to_string_lossy())
+    );
+    tokio::fs::write(&second, b"second").await.unwrap();
+    let result = app
+        .resolve_pending_import(&user, &item.id, request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        result.title.folder_path.as_deref(),
+        Some(directory.to_string_lossy().as_ref())
+    );
+    let remaining_items = unmatched_items.items().await;
+    assert!(remaining_items.iter().all(|pending| pending.id != item.id));
+    assert!(remaining_items.iter().any(|pending| {
+        pending.item_path == second.to_string_lossy()
+            && pending.status == PendingImportStatus::Ignored
+            && pending.reason_code
+                == crate::library_scan_unmatched::LIBRARY_SCAN_SKIPPED_FILE_METADATA_UNREADABLE
+    }));
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap();
+    assert_eq!(media_files.len(), 2);
+    let paths = media_files
+        .into_iter()
+        .map(|file| file.file_path)
+        .collect::<HashSet<_>>();
+    assert_eq!(paths.len(), 2);
+    assert!(paths.contains(&first.to_string_lossy().to_string()));
+    assert!(paths.contains(&second.to_string_lossy().to_string()));
 }
 
 #[tokio::test]

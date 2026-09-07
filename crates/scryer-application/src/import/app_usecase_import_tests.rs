@@ -3060,6 +3060,10 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     std::fs::copy(&video_fixture, &named_sample).expect("copy sample video fixture");
     let tiny_extra = dir.path().join("Manual.Movie.2024.Making.Of.mkv");
     std::fs::copy(&video_fixture, &tiny_extra).expect("copy extra video fixture");
+    // `EP04` in a movie's own name is installment shorthand, not an episode
+    // label: a movie preview must never turn it into an episode suggestion.
+    let installment = dir.path().join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
+    std::fs::copy(&video_fixture, &installment).expect("copy installment video fixture");
     let mut completed = test_completed_download("Manual.Movie.2024.1080p.WEB-DL", dir.path());
     completed.release_name = Some("Manual.Movie.2024.1080p.WEB-DL".to_string());
     let evidence = observation_evidence(&completed);
@@ -3093,8 +3097,16 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
         vec![
             "Manual.Movie.2024.1080p.WEB-DL.mkv",
             "Manual.Movie.2024.Making.Of.mkv",
+            "Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv",
         ],
         "movie previews drop sample-named files but never size-filter (a small movie stays importable)"
+    );
+    assert!(
+        movie_preview
+            .files
+            .iter()
+            .all(|file| file.suggested_episode_id.is_none()),
+        "a movie preview suggests no episode for any file, fused label or not"
     );
 
     let series_preview = preview_manual_import(&app, dir.path(), &series_title, &evidence, &[])
@@ -3112,6 +3124,7 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
             "Manual.Movie.2024.1080p.WEB-DL-sample.mkv",
             "Manual.Movie.2024.1080p.WEB-DL.mkv",
             "Manual.Movie.2024.Making.Of.mkv",
+            "Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv",
         ],
         "series previews keep every video for explicit mapping"
     );

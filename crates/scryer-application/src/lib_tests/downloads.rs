@@ -401,6 +401,310 @@ async fn authoritative_absence_fails_and_ends_an_incomplete_binding_before_reobs
     assert_ne!(reobserved_download_id, first_download_id);
 }
 
+/// A process restart has no in-memory tracker entry, but an authoritative
+/// client absence still fails the download. The failure must also reopen the
+/// grabbed scope: otherwise its durable grab claim blocks every later search.
+#[tokio::test]
+async fn authoritative_absence_after_restart_reopens_the_grabbed_scope() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, _user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scope_states.clone())
+    });
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity = ClientJobLocator::new(Some("client-1"), "nzbget", "restart-lost-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-restart-lost".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "series".to_string(),
+            download_client_id: Some("client-1".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "restart-lost-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Restart.Lost.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Episode {
+                episode_id: "episode-restart-lost".to_string(),
+            },
+        })
+        .await
+        .expect("seed download submission");
+    let failed_scope = AcquisitionScopeState {
+            id: "scope-restart-lost".to_string(),
+            title_id: "title-restart-lost".to_string(),
+            title_name: Some("Restart Lost".to_string()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some("episode-restart-lost".to_string()),
+            collection_id: Some("season-restart-lost".to_string()),
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Grabbed,
+            grabbed_release: Some(
+                r#"{"title":"Restart.Lost.2026.1080p.WEB-DL","score":900,"grabbed_at":"2026-09-07T00:00:00Z"}"#.to_string(),
+            ),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: "2026-09-07T00:00:00Z".to_string(),
+            updated_at: "2026-09-07T00:00:00Z".to_string(),
+        };
+    // The failed row can be beyond a paged query's first results after a
+    // restart, so recovery must inspect every grabbed scope for this title.
+    for index in 0..26 {
+        let mut decoy = failed_scope.clone();
+        decoy.id = format!("scope-restart-decoy-{index}");
+        decoy.episode_id = Some(format!("episode-restart-decoy-{index}"));
+        decoy.grabbed_release = Some(format!(
+            r#"{{"title":"Restart.Decoy.{index}.2026.1080p.WEB-DL","score":900,"grabbed_at":"2026-09-07T00:00:00Z"}}"#
+        ));
+        scope_states
+            .upsert_acquisition_scope_state(&decoy)
+            .await
+            .expect("seed unrelated grabbed scope");
+    }
+    scope_states
+        .upsert_acquisition_scope_state(&failed_scope)
+        .await
+        .expect("seed grabbed scope");
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+
+    assert!(registry.ended.lock().await.contains(&download_id));
+    assert_eq!(
+        download_submissions
+            .get_tracked_state(&source_identity)
+            .await
+            .expect("failed state should load"),
+        Some(TrackedDownloadState::Failed.as_str().to_string())
+    );
+    let scope = scope_states
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|scope| scope.id == "scope-restart-lost")
+        .expect("seeded scope remains")
+        .clone();
+    assert!(
+        crate::quality::canonical_context::grabbed_release_record(&scope).is_none(),
+        "a failed submission left the scope's durable grab claim active: {scope:?}"
+    );
+    assert_eq!(scope.status, AcquisitionScopeStatus::Wanted);
+    assert!(scope.grabbed_release.is_none());
+}
+
+#[tokio::test]
+async fn authoritative_absence_after_restart_preserves_a_newer_scope_claim() {
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (base_app, _user) = bootstrap_with_cleanup_tracking(
+        Arc::new(StubDownloadClient::default()),
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scope_states.clone())
+    });
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity = ClientJobLocator::new(Some("client-1"), "nzbget", "restart-old-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-restart-replacement".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "series".to_string(),
+            download_client_id: Some("client-1".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "restart-old-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Restart.Old.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Episode {
+                episode_id: "episode-restart-replacement".to_string(),
+            },
+        })
+        .await
+        .expect("seed old download submission");
+    scope_states
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: "scope-restart-replacement".to_string(),
+            title_id: "title-restart-replacement".to_string(),
+            title_name: Some("Restart Replacement".to_string()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some("episode-restart-replacement".to_string()),
+            collection_id: Some("season-restart-replacement".to_string()),
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Grabbed,
+            grabbed_release: Some(
+                r#"{"title":"Restart.New.2026.1080p.WEB-DL","score":950,"grabbed_at":"2026-09-07T00:01:00Z"}"#.to_string(),
+            ),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: "2026-09-07T00:00:00Z".to_string(),
+            updated_at: "2026-09-07T00:01:00Z".to_string(),
+        })
+        .await
+        .expect("seed newer grabbed scope");
+
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut crate::tracked_downloads::TrackedDownloadService::new(),
+        &source_identity,
+    )
+    .await;
+
+    assert!(registry.ended.lock().await.contains(&download_id));
+    assert_eq!(
+        download_submissions
+            .get_tracked_state(&source_identity)
+            .await
+            .expect("failed state should load"),
+        Some(TrackedDownloadState::Failed.as_str().to_string())
+    );
+    let scope = scope_states
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|scope| scope.id == "scope-restart-replacement")
+        .expect("replacement scope remains")
+        .clone();
+    assert_eq!(scope.status, AcquisitionScopeStatus::Grabbed);
+    assert_eq!(
+        crate::quality::canonical_context::grabbed_release_record(&scope)
+            .expect("newer grab claim remains")
+            .title,
+        "Restart.New.2026.1080p.WEB-DL"
+    );
+}
+
+#[tokio::test]
+async fn queued_grab_claims_merge_same_release_episode_coverage() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, _user) =
+        bootstrap_with_cleanup_tracking(download_client, download_submissions, pending_releases);
+    let scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services.with_acquisition_scope_states(scope_states.clone())
+    });
+    let title = make_due_hydration_title("title-grab-claims", MediaFacet::Series, 1);
+    let context = app
+        .resolve_canonical_scoring_context(&title, &crate::builtin_default_quality_profile())
+        .await;
+    let membership = app
+        .scope_membership_for(
+            &title,
+            &SubmissionScope::EpisodeSet {
+                episode_ids: vec!["episode-1".to_string(), "episode-2".to_string()],
+            },
+        )
+        .await;
+    let release = "Claimed.Show.S01.1080p.WEB-DL-GRP";
+
+    for (id, episode_id) in [
+        ("scope-claim-1", "episode-1"),
+        ("scope-claim-2", "episode-2"),
+    ] {
+        scope_states
+            .upsert_acquisition_scope_state(&AcquisitionScopeState {
+                id: id.to_string(),
+                title_id: title.id.clone(),
+                title_name: Some(title.name.clone()),
+                title_slug: None,
+                title_facet: None,
+                library_id: None,
+                library_name: None,
+                library_slug: None,
+                episode_id: Some(episode_id.to_string()),
+                collection_id: Some("season-1".to_string()),
+                series_movie_link_id: None,
+                season_number: Some("1".to_string()),
+                episode_number: None,
+                media_type: "episode".to_string(),
+                last_search_at: None,
+                status: AcquisitionScopeStatus::Grabbed,
+                grabbed_release: Some(format!(
+                    r#"{{"title":"{release}","score":900,"grabbed_at":"2026-09-07T00:00:00Z"}}"#
+                )),
+                landed_bar: None,
+                latest_release_decision: None,
+                mismatch_recovery_eligible: false,
+                created_at: "2026-09-07T00:00:00Z".to_string(),
+                updated_at: "2026-09-07T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("seed grabbed episode scope");
+    }
+
+    let queued = app
+        .queued_releases_with_grabbed_claims(
+            Vec::new(),
+            &title,
+            &membership.view(),
+            &context,
+            &[],
+            &[],
+        )
+        .await;
+
+    assert_eq!(queued.len(), 1, "one release should have one queue entry");
+    assert_eq!(
+        queued[0].covers,
+        vec!["episode-1".to_string(), "episode-2".to_string()],
+        "deduplicating same-release claims must retain every claimed episode"
+    );
+}
+
 #[tokio::test]
 async fn authoritative_absence_ends_a_terminal_binding_without_replacing_its_state() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -5359,6 +5663,9 @@ struct FailClosedPackFixtureOptions {
     /// (needed by upgrades, which recycle the old file under a configured
     /// root) — before the title is created, so the title's root id matches.
     series_root_at_library_dir: bool,
+    anime_root_at_library_dir: bool,
+    facet: MediaFacet,
+    title_name: String,
 }
 
 impl Default for FailClosedPackFixtureOptions {
@@ -5366,6 +5673,9 @@ impl Default for FailClosedPackFixtureOptions {
         Self {
             file_importer: Arc::new(CopyingFileImporter),
             series_root_at_library_dir: false,
+            anime_root_at_library_dir: false,
+            facet: MediaFacet::Series,
+            title_name: "Fail Closed Pack".to_string(),
         }
     }
 }
@@ -5399,14 +5709,22 @@ async fn build_fail_closed_pack_fixture(
         .expect("seed import actor");
 
     let library_dir = tempfile::tempdir().expect("library tempdir");
-    if options.series_root_at_library_dir {
+    if options.series_root_at_library_dir || options.anime_root_at_library_dir {
         let current_paths = app.get_library_paths(&user).await.expect("library paths");
         app.update_library_paths(
             &user,
             UpdateLibraryPaths {
-                movie_path: current_paths.movie_path.clone(),
-                series_path: library_dir.path().to_string_lossy().into_owned(),
-                anime_path: Some(current_paths.anime_path.clone()),
+                movie_path: current_paths.movie_path,
+                series_path: if options.series_root_at_library_dir {
+                    library_dir.path().to_string_lossy().into_owned()
+                } else {
+                    current_paths.series_path
+                },
+                anime_path: Some(if options.anime_root_at_library_dir {
+                    library_dir.path().to_string_lossy().into_owned()
+                } else {
+                    current_paths.anime_path
+                }),
             },
         )
         .await
@@ -5417,8 +5735,8 @@ async fn build_fail_closed_pack_fixture(
         .add_title(
             &user,
             NewTitle {
-                name: "Fail Closed Pack".to_string(),
-                facet: MediaFacet::Series,
+                name: options.title_name.clone(),
+                facet: options.facet.clone(),
                 monitored: true,
                 tags: vec![],
                 external_ids: vec![],
@@ -6068,6 +6386,7 @@ async fn manual_import_upgrade_reports_transfer_progress_on_its_record() {
     ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
         file_importer: Arc::new(ProgressReportingFileImporter),
         series_root_at_library_dir: true,
+        ..Default::default()
     })
     .await;
 
@@ -7415,6 +7734,132 @@ async fn automatic_import_applies_single_episode_release_to_its_sole_obfuscated_
     assert_eq!(
         artifacts[0].episode_id.as_deref(),
         Some(episode.id.as_str())
+    );
+    assert!(source_file.exists());
+}
+
+#[tokio::test]
+async fn automatic_single_file_import_uses_its_filename_title_evidence_for_anime_numbering() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: first_episode,
+            library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        anime_root_at_library_dir: true,
+        facet: MediaFacet::Anime,
+        title_name: "Rantan Kyoukai Monogatari Honzuki no Gekokujou".to_string(),
+        ..Default::default()
+    })
+    .await;
+    let mut official_41 = None;
+    for number in 2..=60 {
+        let mut episode = first_episode.clone();
+        episode.id = scryer_domain::Id::new().0;
+        episode.episode_number = Some(number.to_string());
+        episode.absolute_number = Some(number.to_string());
+        episode.episode_label = Some(format!("S01E{number:02}"));
+        episode.title = Some(format!("Official episode {number}"));
+        app.services
+            .catalog
+            .shows
+            .create_episode(episode.clone())
+            .await
+            .expect("create official anime episode");
+        if number == 41 {
+            official_41 = Some(episode);
+        }
+    }
+    let official_41 = official_41.expect("official episode 41");
+    let bridge = scryer_domain::AnimeNumberingBridge {
+        generated_on: "2026-08-30".to_string(),
+        corroborating_order: None,
+        seasons: vec![
+            (1, 1, 14, "Rantan Kyoukai Monogatari Hajimari no Akatsuki"),
+            (2, 15, 12, "Rantan Kyoukai Monogatari Madoromi no Kaze"),
+            (3, 27, 10, "Rantan Kyoukai Monogatari Shirogane no Hane"),
+            (
+                4,
+                37,
+                24,
+                "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta",
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(index, official_start, length, name)| scryer_domain::AnimeCommunitySeason {
+                index,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: vec![name.to_string()],
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 1,
+                    community_episode_end: Some(length),
+                    tvdb_season: 1,
+                    tvdb_episode_start: official_start,
+                    tvdb_episode_end: Some(official_start + length - 1),
+                }],
+                absolute_start: Some(official_start),
+                episode_count: Some(length),
+            },
+        )
+        .collect(),
+    };
+    app.services
+        .catalog
+        .shows
+        .replace_anime_numbering_bridge(&title.id, Some(&bridge))
+        .await
+        .expect("store anime numbering bridge");
+
+    // The grabbed release names the first cour. Its title must not redirect a
+    // file whose own parser evidence names the fourth cour and omits a season.
+    let release_title = "Rantan Kyokai Monogatari Hajimari no Akatsuki 1080p WEB-DL-GRP";
+    let item_id = "cour-four-filename-evidence";
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(
+        source_dir.path(),
+        "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05.mkv",
+    );
+    let mut completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    completed.category = Some("anime".to_string());
+    completed.parameters = vec![
+        ("*scryer_title_id".to_string(), title.id.clone()),
+        ("*scryer_facet".to_string(), "anime".to_string()),
+    ];
+
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("community-numbered anime import should run")
+    };
+
+    assert_eq!(result.decision, scryer_domain::ImportDecision::Imported);
+    assert_eq!(result.episode_ids, vec![official_41.id.clone()]);
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list imported anime file");
+    assert_eq!(media_files.len(), 1, "{media_files:?}");
+    assert_eq!(
+        media_files[0].episode_id.as_deref(),
+        Some(official_41.id.as_str())
+    );
+    let library_files = library_video_file_names(library_dir.path());
+    assert!(
+        library_files.iter().any(|name| name.contains("S01E41")),
+        "official numbering must drive the destination: {library_files:?}"
     );
     assert!(source_file.exists());
 }
@@ -12278,4 +12723,385 @@ async fn manual_import_preview_suggests_members_outside_the_grabbed_season_of_a_
     expected.insert(None);
     assert_eq!(suggested, expected);
     drop(layout.source_root);
+}
+
+/// A verified season pack whose members carry a fused episode label
+/// (`..._Ep01_...`) suggests one catalog episode per member. Before the file
+/// stem was parsed with the title's own context the label read as no episode
+/// at all and every member offered "Skip (unassigned)".
+#[tokio::test]
+async fn manual_import_preview_suggests_fused_label_members_of_a_verified_season_pack() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let collection_id = episode.collection_id.clone();
+    let mut catalog = vec![episode.clone()];
+    for episode_number in 2..=5u32 {
+        catalog.push(
+            app.create_episode(
+                &user,
+                title.id.clone(),
+                collection_id.clone(),
+                "standard".into(),
+                Some(episode_number.to_string()),
+                Some("1".into()),
+                Some(format!("S01E{episode_number:02}")),
+                Some(format!("Episode {episode_number}")),
+                None,
+                Some(1_500),
+                false,
+                false,
+            )
+            .await
+            .expect("create pack member episode"),
+        );
+    }
+
+    let release_title = "Fail.Closed.Pack.S01.1080p.WEB-DL.x264";
+    let item_id = "manual-preview-fused-label-pack";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Collection {
+            collection_id: collection_id.clone().expect("season collection"),
+        },
+    )
+    .await;
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    for episode_number in 1..=5u32 {
+        write_pack_video(
+            source_dir.path(),
+            &format!("Fail_Closed_Pack_Ep{episode_number:02}_Dubbed_(1A2B3C4D).mkv"),
+        );
+    }
+    // No catalog episode 9: the member is offered unassigned rather than
+    // pinned to something it does not name.
+    write_pack_video(
+        source_dir.path(),
+        "Fail_Closed_Pack_Ep09_Dubbed_(1A2B3C4D).mkv",
+    );
+
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    let release_evidence =
+        crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .expect("resolve durable release evidence");
+
+    let suggested_episode_ids =
+        crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+            &app,
+            source_dir.path(),
+            &title,
+            &release_evidence,
+            &catalog,
+        )
+        .await
+        .expect("preview manual import");
+
+    let suggested = suggested_episode_ids
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let mut expected = catalog
+        .iter()
+        .map(|episode| Some(episode.id.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    expected.insert(None);
+    assert_eq!(suggested, expected);
+}
+
+#[tokio::test]
+async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title_episode() {
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "TITLEA-TITLEB".into(),
+                facet: MediaFacet::Anime,
+                monitored: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let episode =
+        create_pack_episode_in_season(&app, &user, &title.id, 1, 3, Some(3), "standard").await;
+    let movie_title = "Titlea-Titleb: Titlec Titled Titlee Titlef - Case.3 Titleg Titleh Titlei Titlej Titlek ____";
+    let link = app
+        .services
+        .catalog
+        .shows
+        .upsert_series_movie_link(test_series_movie_link(
+            &title.id,
+            movie_title,
+            Some(2019),
+            None,
+            Some("case-three"),
+        ))
+        .await
+        .unwrap();
+    let filename = "Titlea-Titleb.Titlec.Titled.Titlee.Titlef.Case.3.Titleg.Titleh.Titlei.Titlej.Titlek.2019.720p.WEB-DL.AV1.AAC2.0-Groupa.mkv";
+    for (name, expected) in [
+        (filename.to_string(), (None, Some(link.id.clone()))),
+        (
+            "Titlea-Titleb.S01E03.720p.WEB-DL.mkv".into(),
+            (Some(episode.id.clone()), None),
+        ),
+        (
+            format!("Titlea-Titleb.S01E03.{filename}"),
+            (Some(episode.id.clone()), None),
+        ),
+    ] {
+        let source_dir = tempfile::tempdir().unwrap();
+        write_pack_video(source_dir.path(), &name);
+        let completed = series_pack_completed_download(
+            "foreign-movie",
+            &title.id,
+            "Titlea-Titleb.Titlec.Case3.Foreign.Weaver",
+            source_dir.path(),
+        );
+        let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .unwrap();
+        let suggestions =
+            crate::import::workflow::preview_manual_import_suggested_targets_for_tests(
+                &app,
+                source_dir.path(),
+                &title,
+                &evidence,
+                std::slice::from_ref(&episode),
+            )
+            .await
+            .unwrap();
+        assert_eq!(suggestions, vec![expected], "{name}");
+    }
+
+    use crate::library::filename_parser::{
+        SeriesMovieFilenameMatch, match_series_movie_filename as matcher,
+    };
+    assert!(matches!(
+        matcher(std::slice::from_ref(&link), filename, Some(2020)),
+        SeriesMovieFilenameMatch::NoMatch
+    ));
+    assert!(matches!(
+        matcher(
+            std::slice::from_ref(&link),
+            "Titlea-Titleb.Case.3.2019.mkv",
+            Some(2019)
+        ),
+        SeriesMovieFilenameMatch::NoMatch
+    ));
+    let mut duplicate_input = test_series_movie_link(
+        &title.id,
+        movie_title,
+        Some(2019),
+        None,
+        Some("duplicate-case-three"),
+    );
+    duplicate_input.movie.id = "duplicate-movie".into();
+    app.services
+        .catalog
+        .shows
+        .upsert_series_movie_link(duplicate_input)
+        .await
+        .unwrap();
+    let source_dir = tempfile::tempdir().unwrap();
+    write_pack_video(source_dir.path(), filename);
+    let completed = series_pack_completed_download(
+        "foreign-ambiguous-movie",
+        &title.id,
+        filename,
+        source_dir.path(),
+    );
+    let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+        &app, &completed, None,
+    )
+    .await
+    .unwrap();
+    let suggestions = crate::import::workflow::preview_manual_import_suggested_targets_for_tests(
+        &app,
+        source_dir.path(),
+        &title,
+        &evidence,
+        std::slice::from_ref(&episode),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        suggestions,
+        vec![(None, None)],
+        "ambiguous movie titles must not fall back to episode 3"
+    );
+    use crate::library::filename_parser::{
+        LibraryFilenameFallbackPolicy, LibraryFilenameParseInput, LibraryFilenameParseMode,
+        parse_library_filename,
+    };
+    let links = app
+        .services
+        .catalog
+        .shows
+        .list_series_movie_links_for_title(&title.id)
+        .await
+        .unwrap();
+    let parsed = parse_library_filename(&LibraryFilenameParseInput {
+        path: &source_dir.path().join(filename),
+        display_name: None,
+        library_root: None,
+        title: Some(&title),
+        facet: Some(&title.facet),
+        collections: &[],
+        series_movie_links: &links,
+        episodes: std::slice::from_ref(&episode),
+        existing_record: None,
+        mode: LibraryFilenameParseMode::TitleScan,
+        fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+        anime_numbering_bridge: None,
+    });
+    assert_eq!(parsed.unmatched_reason(), Some("series_movie_ambiguous"));
+}
+
+/// A fused-label file that now names an episode outside the grab is left
+/// unassigned. The single-grab "largest file" fallback only covers files with
+/// no episode of their own, so reading the label must not pre-select the
+/// grabbed episode under a number the file plainly contradicts.
+#[tokio::test]
+async fn manual_import_preview_fused_label_outside_single_episode_grab_is_not_suggested() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let scoped_episode =
+        create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+
+    let release_title = "Fail.Closed.Pack.S01E02.1080p.WEB-DL.x264";
+    let item_id = "manual-preview-fused-label-outside-grab";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Episode {
+            episode_id: scoped_episode.id.clone(),
+        },
+    )
+    .await;
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(
+        source_dir.path(),
+        "Fail_Closed_Pack_Ep05_Dubbed_(1A2B3C4D).mkv",
+    );
+
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    let release_evidence =
+        crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .expect("resolve durable release evidence");
+
+    let suggested_episode_ids =
+        crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+            &app,
+            source_dir.path(),
+            &title,
+            &release_evidence,
+            std::slice::from_ref(&scoped_episode),
+        )
+        .await
+        .expect("preview manual import");
+
+    assert_eq!(suggested_episode_ids, vec![None]);
+}
+
+/// A pack member carrying a fused episode label (`_Ep09_`) reads as an
+/// inferred season 1 that no catalog episode answers, exactly like the bare
+/// `E###` shape. The pack's declared season plus the catalog's absolute
+/// numbering are what identify it — and the label only reads as an episode at
+/// all because the member is parsed with the title's own context.
+#[tokio::test]
+async fn alternate_numbered_verified_pack_member_reconciles_from_fused_label() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir,
+            import_artifacts,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let scoped_episode =
+        create_absolute_numbered_pack_episode(&app, &user, &title.id, &episode, 2, 1, 9).await;
+    let release_title = "Fail.Closed.Pack.S02.1080p.WEB-DL.x264";
+    let item_id = "fused-label-verified-pack-member";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Collection {
+            collection_id: scoped_episode
+                .collection_id
+                .clone()
+                .expect("season two collection"),
+        },
+    )
+    .await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_pack_video(
+        source_dir.path(),
+        "Fail_Closed_Pack_Ep09_Dubbed_(1A2B3C4D).mkv",
+    );
+    let completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("fused-label pack member should import")
+    };
+
+    assert_eq!(result.decision, scryer_domain::ImportDecision::Imported);
+    assert_eq!(result.episode_ids, vec![scoped_episode.id.clone()]);
+    let artifacts = import_artifacts
+        .artifacts_for_file("fail_closed_pack_ep09_dubbed_(1a2b3c4d).mkv")
+        .await;
+    assert_eq!(artifacts.len(), 1, "{artifacts:?}");
+    assert_eq!(artifacts[0].result, "imported", "{artifacts:?}");
+    assert_eq!(
+        artifacts[0].episode_id.as_deref(),
+        Some(scoped_episode.id.as_str())
+    );
+    assert!(
+        library_video_file_names(library_dir.path())
+            .iter()
+            .any(|file_name| file_name.contains("S02E01")),
+        "catalog numbering must drive the destination"
+    );
 }

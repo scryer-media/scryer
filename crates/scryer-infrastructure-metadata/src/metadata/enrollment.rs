@@ -650,6 +650,9 @@ where
 
 fn map_enrollment_outbound_error(operation: &str, error: OutboundHttpError) -> EnrollmentError {
     match error {
+        OutboundHttpError::DispatchRejected => {
+            EnrollmentError::Other(format!("{operation} cancelled before dispatch"))
+        }
         OutboundHttpError::RateLimited(rate_limited) => EnrollmentError::RateLimited(RateLimited {
             retry_after: rate_limited.retry_after,
             message: match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {

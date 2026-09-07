@@ -172,6 +172,15 @@ impl CommandHost {
         }
     }
 
+    pub(crate) fn set_indexer_request_accounting(
+        &self,
+        context: Option<crate::plugin_http_host::IndexerRequestAccountingContext>,
+    ) {
+        if let Some(services) = self.services.as_ref() {
+            services.http.set_indexer_request_accounting(context);
+        }
+    }
+
     pub(crate) fn finish_indexer_error_capture(&self, operation_failed: bool) {
         if let Some(services) = self.services.as_ref() {
             services.http.finish_indexer_error_capture(operation_failed);
