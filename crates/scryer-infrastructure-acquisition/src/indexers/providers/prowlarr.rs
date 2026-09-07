@@ -1778,8 +1778,10 @@ mod tests {
     use chrono::Utc;
     use scryer_domain::IndexerConfig;
     use serde_json::json;
+    use std::sync::Mutex;
+    use std::time::Instant;
     use wiremock::matchers::{method, path, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     #[derive(Default)]
     struct ProxyRecordingProvider {
@@ -2888,6 +2890,49 @@ mod tests {
         );
     }
 
+    /// A caps responder that records the window each fetch is held open for.
+    ///
+    /// wiremock arms a response's delay the moment this returns, so a fetch is
+    /// outstanding from here until `now + delay` — exactly the span the server
+    /// keeps that connection open.
+    struct CapsProbe {
+        body: &'static str,
+        delay: Duration,
+        windows: Arc<Mutex<Vec<(Instant, Instant)>>>,
+    }
+
+    impl Respond for CapsProbe {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            let opened = Instant::now();
+            self.windows
+                .lock()
+                .expect("caps windows")
+                .push((opened, opened + self.delay));
+            ResponseTemplate::new(200)
+                .set_body_string(self.body)
+                .set_delay(self.delay)
+        }
+    }
+
+    /// The most caps fetches that were ever open at the same instant.
+    ///
+    /// Overlap always peaks as some window opens, so counting the live windows at
+    /// each opening is exact rather than a sample.
+    fn peak_in_flight(windows: &[(Instant, Instant)]) -> usize {
+        windows
+            .iter()
+            .map(|(opened, _)| {
+                windows
+                    .iter()
+                    .filter(|(other_opened, other_closed)| {
+                        other_opened <= opened && opened < other_closed
+                    })
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     #[tokio::test]
     async fn enrichment_sync_plan_fetches_caps_concurrently_and_preserves_child_order() {
         let server = MockServer::start().await;
@@ -2963,32 +3008,39 @@ mod tests {
     <search available="yes" supportedParams="q" />
   </searching>
 </caps>"#;
-        for (indexer_id, delay_ms) in [(10, 1200), (7, 300), (42, 600), (3, 450)] {
+        let caps_windows = Arc::new(Mutex::new(Vec::new()));
+        // The delays differ so the fetches finish in a different order than they
+        // were issued in, which is what gives the ordering assertion below its
+        // teeth. They are all long enough that every fetch is still open while
+        // the rest are being issued, however loaded the machine is.
+        for (indexer_id, delay_ms) in [(10, 1400), (7, 1000), (42, 1300), (3, 1100)] {
             Mock::given(method("GET"))
                 .and(path(format!("/{indexer_id}/api")))
                 .and(query_param("t", "caps"))
                 .and(query_param("apikey", "secret"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_string(caps_body)
-                        .set_delay(std::time::Duration::from_millis(delay_ms)),
-                )
+                .respond_with(CapsProbe {
+                    body: caps_body,
+                    delay: Duration::from_millis(delay_ms),
+                    windows: Arc::clone(&caps_windows),
+                })
                 .mount(&server)
                 .await;
         }
 
         let client = ProwlarrManagementClient::new(&test_indexer_config(&server.uri()));
-        let started = std::time::Instant::now();
         let plan = client
             .enrichment_sync_plan("parent")
             .await
             .expect("enrichment plan")
             .expect("supported enrichment plan");
-        let elapsed = started.elapsed();
 
-        assert!(
-            elapsed < std::time::Duration::from_millis(2000),
-            "caps fetch should be concurrent; elapsed {elapsed:?}"
+        // Concurrency is what this asserts, so measure concurrency: how long the
+        // whole plan took is a proxy that a loaded machine can push past any
+        // budget while the fetches were perfectly concurrent all along.
+        let peak = peak_in_flight(&caps_windows.lock().expect("caps windows"));
+        assert_eq!(
+            peak, 4,
+            "every caps fetch should be in flight at once, not issued one at a time"
         );
         let child_ids = plan
             .children
