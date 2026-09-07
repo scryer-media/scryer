@@ -1673,6 +1673,14 @@ const en: LocaleDictionary = {
   "settings.arrImportReviewFailed": "Unable to review these custom formats.",
   "settings.arrImportScore": "Score",
   "settings.arrImportScoreRequired": "Enter an integer score for {{name}} before translating.",
+  "settings.arrImportSuggestedScore": "Suggested score: {{score}}.",
+  "settings.arrImportUseSuggestion": "Use suggestion",
+  "settings.arrImportScoreReasonExported": "Uses the score included in the export.",
+  "settings.arrImportScoreReasonDefault": "Uses the export's default score; other profile choices are available below.",
+  "settings.arrImportScoreReasonPreference": "The format name expresses a preference.",
+  "settings.arrImportScoreReasonPenalty": "The format name identifies something undesirable.",
+  "settings.arrImportScoreReasonExtras": "The format appears to identify extras or samples.",
+  "settings.arrImportScoreSuggestionHelp": "Suggestions are editable starting points. Matching formats add their scores together; name-based suggestions never hard-block a release.",
   "settings.arrImportAmbiguousScore":
     "This format has more than one suggested score. Choose the score you want to apply.",
   "settings.arrImportBlockScoreHelp":

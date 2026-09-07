@@ -25,6 +25,7 @@ import {
   collectFormatScores,
   defaultScore,
   isCurrentTranslationRequest,
+  recommendScore,
   sourceFacets,
 } from "@/lib/utils/arr-custom-format-import-state";
 
@@ -266,6 +267,7 @@ export default function ArrCustomFormatImportDialog({
                 {formats.map((format, index) => {
                   const id = formatId(format, index);
                   const suggested = candidateScores(format);
+                  const recommendation = recommendScore(format, inspection.diagnostics);
                   return (
                     <div key={id} className="rounded border border-border p-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -287,12 +289,29 @@ export default function ArrCustomFormatImportDialog({
                           />
                         </label>
                       </div>
+                      {recommendation ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <p>
+                            {t("settings.arrImportSuggestedScore", { score: recommendation.value > 0 ? `+${recommendation.value}` : recommendation.value })}
+                            {" "}{t(recommendation.reasonKey)}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="h-7 px-2 text-xs"
+                            disabled={translating || scores[id] === String(recommendation.value)}
+                            onClick={() => setScores((previous) => ({ ...previous, [id]: String(recommendation.value) }))}
+                          >
+                            {t("settings.arrImportUseSuggestion")}
+                          </Button>
+                        </div>
+                      ) : null}
                       {suggested.length > 1 ? (
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
                           <span className="text-xs text-muted-foreground">
                             {t("settings.arrImportAmbiguousScore")}
                           </span>
-                          {Object.entries(format.suggestedScores).map(([label, value]) => (
+                          {Object.entries(format.suggestedScores).filter(([, value]) => suggested.includes(value)).map(([label, value]) => (
                             <Button
                               key={label}
                               type="button"
@@ -311,6 +330,7 @@ export default function ArrCustomFormatImportDialog({
                 })}
               </div>
               <p className="text-xs text-muted-foreground">{t("settings.arrImportBlockScoreHelp")}</p>
+              <p className="text-xs text-muted-foreground">{t("settings.arrImportScoreSuggestionHelp")}</p>
             </div>
           ) : null}
         </div>
