@@ -5798,25 +5798,6 @@ pub struct AnimeSearchNumberingContext {
 
 #[async_trait]
 pub trait IndexerClient: Send + Sync {
-    async fn resolve_download(
-        &self,
-        _download_url: &str,
-    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
-        Ok(None)
-    }
-
-    async fn resolve_download_with_cancellation(
-        &self,
-        download_url: &str,
-        cancellation: &tokio_util::sync::CancellationToken,
-    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
-        tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(AppError::canceled("indexer grab canceled")),
-            result = self.resolve_download(download_url) => result,
-        }
-    }
-
     async fn finalize_search_session(
         &self,
         _search_session_id: &str,
@@ -6826,8 +6807,7 @@ impl DownloadClientListing {
 
 #[async_trait]
 pub trait IndexerArtifactResolver: Send + Sync {
-    /// Resolves an artifact using the indexer's authenticated grab action, or
-    /// its ordinary transport when that action is explicitly unsupported.
+    /// Resolves an artifact through host-owned indexer HTTP and solver handling.
     async fn resolve_artifact(
         &self,
         request: &IndexerArtifactResolutionRequest,

@@ -9,9 +9,9 @@ has been changed or validated by the 0.19.13 tests.
 
 Indexer artifact resolution belongs before download-client submission. The
 resolver must also be callable without a selected download client or a catalog
-title. Reuse NEXT's optional `IndexerClient::resolve_download` contract for
-authenticated plugin grab actions. Only an explicit unsupported result permits
-generic artifact fetching; authentication and transport failures remain errors.
+title. Use host-owned artifact HTTP with the assigned solver, request accounting,
+and authenticated download URL supplied by search. Artifact resolution must not
+invoke a plugin action or depend on a new plugin contract.
 
 When integrating into NEXT:
 
@@ -60,18 +60,18 @@ counts are not reset again. Keep provider-reported quota state independent.
 
 Port shared accounting and structured quota classification to NEXT's component
 host. Do not restore the legacy runtime removed there. Preserve per-operation
-capture ownership, plugin grab accounting, explicit retry deadlines, and
+capture ownership, host artifact accounting, explicit retry deadlines, and
 shutdown dispatch closure followed by an awaited persistence drain. Adapt the
 existing metric collectors without adding a second increment for each request.
 
 ## Required integration verification
 
-- Real component concurrent searches and grab actions: exact dispatch totals,
+- Real component concurrent searches and host artifact requests: exact dispatch totals,
   independent error capture, and Newznab 500/501 signals reaching health.
 - Prowlarr parent/child search, caps, management, and artifact calls through
   inherited transports; no solver calls; no direct fallback on tunnel failure.
 - Unlinked grabs and browser downloads through the resolver, including
-  authenticated plugins, unsupported fallback, redirects, and magnets.
+  authenticated download URLs, solver sessions, redirects, and magnets.
 - One artifact fetch across client failover, with both indexer and
   download-client proxy assignments configured and independently observed.
 - SQLite/PostgreSQL startup-marker preservation, daily counts, retrying flushes,

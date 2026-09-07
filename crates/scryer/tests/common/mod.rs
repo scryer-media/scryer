@@ -834,7 +834,6 @@ impl TestContext {
         );
         let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
             AcquisitionIndexerArtifactResolver::new(
-                plugin_provider.clone(),
                 indexer_config_store.clone(),
                 indexer_proxy_config_store,
                 staged_nzb_store.clone(),

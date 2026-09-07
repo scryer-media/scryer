@@ -3,9 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_application::{
     AppResult, IndexerArtifactLease, IndexerArtifactResolutionRequest, IndexerArtifactResolver,
-    IndexerConfigRepository, IndexerPluginProvider, IndexerProxyConfigRepository,
-    IndexerStatsTracker, PreparedIndexerArtifact, ResolvedDownloadArtifact, StagedNzbStore,
-    extract_magnet_info_hash, is_valid_magnet_uri,
+    IndexerConfigRepository, IndexerProxyConfigRepository, IndexerStatsTracker,
+    PreparedIndexerArtifact, ResolvedDownloadArtifact, StagedNzbStore, extract_magnet_info_hash,
+    is_valid_magnet_uri,
 };
 use tokio::sync::Semaphore;
 
@@ -18,33 +18,25 @@ use crate::indexers::artifact_transport::{
 };
 
 /// Resolves artifacts at the indexer boundary before a download client is
-/// chosen.  Component-owned grab actions are attempted first so provider
-/// credentials and authenticated download endpoints stay with their owner.
+/// chosen. The host owns artifact HTTP, solver handling, and staging.
 pub struct AcquisitionIndexerArtifactResolver {
-    plugin_provider: Arc<dyn IndexerPluginProvider>,
     artifact_transport: IndexerArtifactTransport,
-    indexer_configs: Arc<dyn IndexerConfigRepository>,
-    indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
     staged_nzb_store: Arc<dyn StagedNzbStore>,
     staged_nzb_pipeline_limit: Arc<Semaphore>,
 }
 
 impl AcquisitionIndexerArtifactResolver {
     pub fn new(
-        plugin_provider: Arc<dyn IndexerPluginProvider>,
         indexer_configs: Arc<dyn IndexerConfigRepository>,
         indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
         staged_nzb_store: Arc<dyn StagedNzbStore>,
         staged_nzb_pipeline_limit: Arc<Semaphore>,
     ) -> Self {
         Self {
-            plugin_provider,
             artifact_transport: IndexerArtifactTransport::new(
                 Arc::clone(&indexer_configs),
                 Arc::clone(&indexer_proxy_configs),
             ),
-            indexer_configs,
-            indexer_proxy_configs,
             staged_nzb_store,
             staged_nzb_pipeline_limit,
         }
@@ -127,108 +119,30 @@ impl IndexerArtifactResolver for AcquisitionIndexerArtifactResolver {
             ));
         }
 
-        let artifact = match request
+        let indexer_id = request
             .indexer_id
             .as_deref()
             .map(str::trim)
-            .filter(|id| !id.is_empty())
+            .filter(|id| !id.is_empty());
+        let artifact = match self
+            .artifact_transport
+            .fetch_response_with_cancellation(indexer_id, source, &request.cancellation)
+            .await?
         {
-            Some(indexer_id) => {
-                let config = self
-                    .indexer_configs
-                    .get_by_id(indexer_id)
-                    .await?
-                    .ok_or_else(|| {
-                        scryer_application::AppError::DownloadSubmitUnavailable(
-                            "The indexer for this download artifact is no longer available.".into(),
-                        )
-                    })?;
-                let proxy = if config.is_prowlarr_nab_proxy()
-                    || config.provider_type.trim().eq_ignore_ascii_case("prowlarr")
-                {
-                    None
-                } else if let Some(proxy_id) = config.indexer_proxy_config_id.as_deref() {
-                    let proxy = self
-                        .indexer_proxy_configs
-                        .get_by_id(proxy_id)
-                        .await?
-                        .ok_or_else(|| {
-                            scryer_application::AppError::DownloadSubmitUnavailable(
-                                "The assigned indexer solver is no longer available.".into(),
-                            )
-                        })?;
-                    if !proxy.is_enabled {
-                        return Err(scryer_application::AppError::DownloadSubmitUnavailable(
-                            "The assigned indexer solver is disabled.".into(),
-                        ));
-                    }
-                    Some(proxy)
-                } else {
-                    None
-                };
-                let client = self
-                    .plugin_provider
-                    .client_for_provider_with_accounting(
-                        &config,
-                        proxy.as_ref(),
-                        scryer_application::IndexerAccountingContext::for_config(&config).as_ref(),
-                    )
-                    .ok_or_else(|| {
-                        scryer_application::AppError::DownloadSubmitUnavailable(
-                            "The configured indexer cannot resolve this download artifact.".into(),
-                        )
-                    })?;
-                match client
-                    .resolve_download_with_cancellation(source, &request.cancellation)
-                    .await?
-                {
-                    Some(artifact) => artifact,
-                    None => match self
-                        .artifact_transport
-                        .fetch_response_with_cancellation(
-                            Some(indexer_id),
-                            source,
-                            &request.cancellation,
-                        )
-                        .await?
-                    {
-                        Some(ArtifactFetchResponse::Resolved(artifact)) => artifact,
-                        Some(ArtifactFetchResponse::Http(response)) => {
-                            return self.prepare_http_artifact(response, source, request).await;
-                        }
-                        None => {
-                            self.artifact_transport
-                                .resolve_with_cancellation(
-                                    Some(indexer_id),
-                                    source,
-                                    request.info_hash_hint.clone(),
-                                    &request.cancellation,
-                                )
-                                .await?
-                        }
-                    },
-                }
+            Some(ArtifactFetchResponse::Resolved(artifact)) => artifact,
+            Some(ArtifactFetchResponse::Http(response)) => {
+                return self.prepare_http_artifact(response, source, request).await;
             }
-            None => match self
-                .artifact_transport
-                .fetch_response_with_cancellation(None, source, &request.cancellation)
-                .await?
-            {
-                Some(ArtifactFetchResponse::Resolved(artifact)) => artifact,
-                Some(ArtifactFetchResponse::Http(response)) => {
-                    return self.prepare_http_artifact(response, source, request).await;
-                }
-                None => {
-                    self.artifact_transport
-                        .resolve_with_cancellation(
-                            None,
-                            source,
-                            request.info_hash_hint.clone(),
-                            &request.cancellation,
-                        )
-                        .await?
-                }
-            },
+            None => {
+                self.artifact_transport
+                    .resolve_with_cancellation(
+                        indexer_id,
+                        source,
+                        request.info_hash_hint.clone(),
+                        &request.cancellation,
+                    )
+                    .await?
+            }
         };
         match artifact {
             ResolvedDownloadArtifact::Nzb { bytes, .. } => {

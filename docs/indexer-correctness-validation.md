@@ -33,10 +33,10 @@ covered in [the NEXT integration note](indexer-correctness-next-integration.md).
 
 ## Fixes and preserved behavior
 
-The indexer resolver owns authenticated plugin grab actions, optional generic
-HTTP fallback, solver assignment, redirect handling, artifact classification,
-and NZB staging. Only an explicitly unsupported plugin grab permits fallback;
-real authentication or transport failures do not silently become another grab.
+The indexer resolver owns artifact HTTP, solver assignment, redirect handling,
+artifact classification, and NZB staging. It fetches the download URL supplied
+by search without invoking a plugin action. The release follow-up removed the
+plugin grab contract and its fallback decoder so shipped plugins need no update.
 
 The download router consumes staged NZBs, supplied bytes, torrents, or magnets.
 It no longer fetches indexer URLs or selects challenge solvers. The staging lease

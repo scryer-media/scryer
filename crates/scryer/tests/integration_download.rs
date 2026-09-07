@@ -39,25 +39,6 @@ use scryer_infrastructure_acquisition::indexers::{
 };
 use scryer_plugins::WasmDownloadClientPluginProvider;
 
-struct DirectArtifactPluginProvider;
-
-impl scryer_application::IndexerPluginProvider for DirectArtifactPluginProvider {
-    fn client_for_provider(
-        &self,
-        _config: &scryer_domain::IndexerConfig,
-    ) -> Option<Arc<dyn scryer_application::IndexerClient>> {
-        None
-    }
-
-    fn available_provider_types(&self) -> Vec<String> {
-        vec![]
-    }
-
-    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-        vec![]
-    }
-}
-
 fn new_nzbget_client(
     uri: &str,
 ) -> scryer_infrastructure_acquisition::downloads::clients::NzbgetDownloadClient {
@@ -95,19 +76,26 @@ async fn new_staged_nzb_store() -> Arc<FileSystemStagedNzbStore> {
 }
 
 #[tokio::test]
-async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates() {
-    use scryer_application::{IndexerPluginProvider, ResolvedDownloadArtifact};
+async fn nab_artifacts_are_fetched_by_host_without_plugin_clients() {
+    assert_host_nab_artifacts(false).await;
+}
+
+#[tokio::test]
+async fn nab_artifacts_use_assigned_solver_and_host_session_without_plugin_clients() {
+    assert_host_nab_artifacts(true).await;
+}
+
+async fn assert_host_nab_artifacts(use_solver: bool) {
+    use scryer_application::{IndexerProxyConfigRepository, ResolvedDownloadArtifact};
+    use scryer_infrastructure_acquisition::indexers::proxy_config_store::IndexerProxyConfigStore;
 
     let ctx = TestContext::new().await;
-    let provider = Arc::new(
-        scryer_plugins::WasmIndexerPluginProvider::empty()
-            .with_builtin_asset(scryer_plugins::builtins::NEWZNAB)
-            .with_builtin_asset(scryer_plugins::builtins::TORZNAB),
-    );
     let configs: Arc<dyn IndexerConfigRepository> = Arc::new(IndexerConfigStore::new(
         ctx.db.datastore(),
         ctx.db.encryption_key_state(),
     ));
+    let solver_server = MockServer::start().await;
+    let proxies = Arc::new(IndexerProxyConfigStore::new(ctx.db.datastore()));
     let staged_dir = tempfile::tempdir().expect("staged artifacts directory");
     let store = Arc::new(
         FileSystemStagedNzbStore::new(staged_dir.path())
@@ -115,14 +103,37 @@ async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates()
             .unwrap(),
     );
     let resolver = AcquisitionIndexerArtifactResolver::new(
-        provider.clone(),
         configs.clone(),
-        Arc::new(NullIndexerProxyConfigRepository),
+        proxies.clone(),
         store,
         Arc::new(Semaphore::new(4)),
     );
     for provider_type in ["newznab", "torznab"] {
         let server = MockServer::start().await;
+        // Solved sessions are shared per solver assignment and host.
+        let proxy_id = if use_solver {
+            let now = chrono::Utc::now();
+            let proxy = proxies
+                .create(scryer_domain::IndexerProxyConfig {
+                    id: scryer_domain::Id::new().0,
+                    name: "fixture solver".into(),
+                    provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
+                    protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                    base_url: solver_server.uri(),
+                    request_timeout_seconds: 5,
+                    is_enabled: true,
+                    last_health_status: None,
+                    last_error_message: None,
+                    last_error_at: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .await
+                .expect("persist solver config");
+            Some(proxy.id)
+        } else {
+            None
+        };
         let now = chrono::Utc::now();
         let config = configs
             .create(scryer_domain::IndexerConfig {
@@ -137,7 +148,7 @@ async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates()
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                indexer_proxy_config_id: proxy_id.clone(),
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -153,13 +164,53 @@ async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates()
             })
             .await
             .expect("persist indexer config");
-        let source_url = format!("{}/api?t=get&id=fixture&apikey=fixture-key", server.uri());
+        let source_url = format!(
+            "{}/api?t=get&id={provider_type}&apikey=fixture-key",
+            server.uri()
+        );
         let body = if provider_type == "newznab" {
             load_fixture("nzbgeek/nzb_content.xml").into_bytes()
         } else {
             b"d4:infod4:name4:test6:lengthi1eee".to_vec()
         };
+        if use_solver {
+            Mock::given(method("POST"))
+                .and(path("/v1"))
+                .and(wiremock::matchers::body_json(json!({
+                    "cmd": "request.get",
+                    "url": source_url,
+                    "maxTimeout": 5
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "status": "ok",
+                    "solution": {
+                        "status": 403,
+                        "cookies": [{ "name": "clearance", "value": "fixture" }],
+                        "userAgent": "fixture-solver-agent"
+                    }
+                })))
+                .expect(1)
+                .mount(&solver_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api"))
+                .respond_with(ResponseTemplate::new(403).set_body_string("Cloudflare challenge"))
+                .with_priority(10)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
         Mock::given(method("GET"))
+            .and(move |request: &wiremock::Request| {
+                !use_solver
+                    || (request.headers.get("cookie").and_then(|v| v.to_str().ok())
+                        == Some("clearance=fixture")
+                        && request
+                            .headers
+                            .get("user-agent")
+                            .and_then(|v| v.to_str().ok())
+                            == Some("fixture-solver-agent"))
+            })
             .and(path("/api"))
             .and(query_param("t", "get"))
             .and(query_param("apikey", "fixture-key"))
@@ -167,21 +218,6 @@ async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates()
             .expect(1)
             .mount(&server)
             .await;
-
-        let client = provider
-            .client_for_provider(&config)
-            .expect("shipped plugin client");
-        assert!(
-            client
-                .resolve_download(&source_url)
-                .await
-                .expect("legacy empty action reply must permit host fallback")
-                .is_none()
-        );
-        assert!(
-            server.received_requests().await.unwrap().is_empty(),
-            "unsupported plugin action must not attempt HTTP"
-        );
 
         let artifact = resolver
             .resolve_artifact(&IndexerArtifactResolutionRequest {
@@ -198,7 +234,7 @@ async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates()
                 cancellation: tokio_util::sync::CancellationToken::new(),
             })
             .await
-            .expect("host resolves artifact with the shipped plugin");
+            .expect("host resolves artifact without a plugin client");
         match artifact {
             PreparedIndexerArtifact::StagedNzb(_) => assert_eq!(provider_type, "newznab"),
             PreparedIndexerArtifact::Resolved(ResolvedDownloadArtifact::TorrentFile {
@@ -214,10 +250,14 @@ async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates()
         }
         assert_eq!(
             server.received_requests().await.unwrap().len(),
-            1,
-            "the host must fetch the artifact exactly once"
+            if use_solver { 2 } else { 1 },
+            "the host fetches directly, retrying only after the solver supplies a session"
         );
     }
+    assert_eq!(
+        solver_server.received_requests().await.unwrap().len(),
+        if use_solver { 2 } else { 0 }
+    );
 }
 
 async fn resolve_direct_nzb_request(
@@ -233,7 +273,6 @@ async fn resolve_direct_nzb_request(
         ctx.db.encryption_key_state(),
     ));
     let resolver = AcquisitionIndexerArtifactResolver::new(
-        Arc::new(DirectArtifactPluginProvider),
         indexer_configs,
         Arc::new(NullIndexerProxyConfigRepository),
         store,

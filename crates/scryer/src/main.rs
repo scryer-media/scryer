@@ -1266,7 +1266,6 @@ async fn bootstrap_application(
     let indexer_client = Arc::new(indexer_client);
     let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
         scryer_infrastructure_acquisition::indexers::artifact_resolver::AcquisitionIndexerArtifactResolver::new(
-            plugin_provider.clone(),
             datastore.indexer_configs(),
             datastore.indexer_proxy_configs(),
             staged_nzb_store.clone(),
