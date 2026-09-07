@@ -1513,6 +1513,29 @@ async fn fail_authoritatively_absent_download(
             "failed to record canonical tracked state for unavailable download"
         );
     }
+
+    // A restart has no in-memory `TrackedDownload` to hand to the regular
+    // failure handler. The durable submission still identifies the automatic
+    // grab, though, so run the same blocklist-and-reopen path after persisting
+    // its terminal marker. The handler resolves only the scope that still
+    // claims this release, leaving a newer replacement grab untouched.
+    crate::acquisition_workflow::process_download_failure_for_download(
+        app,
+        Some(&download_id),
+        crate::acquisition_workflow::DownloadFailureContext {
+            wanted_item: None,
+            title_id: None,
+            client_id: source_identity.client_id.clone().unwrap_or_default(),
+            client_type: source_identity.client_type.clone(),
+            client_name: None,
+            client_item_id: source_identity.item_id.clone(),
+            release_title: source_identity.item_id.clone(),
+            reason: REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string(),
+            remove_from_client_if_configured: false,
+            skip_reacquire: false,
+        },
+    )
+    .await;
 }
 
 fn tracked_download_snapshot_projection_key(

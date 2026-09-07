@@ -145,10 +145,12 @@ export function hasAnyAppPermission(
   return permissions.some((permission) => hasAppPermission(user, permission));
 }
 
+const ADMIN_LIBRARY_PERMISSIONS = Object.values(LIBRARY_PERMISSIONS);
+
 /**
- * Administrators (holders of MANAGE_PERMISSIONS) hold every library permission
- * on every library, including libraries created after their explicit grants
- * were seeded. Mirrors the backend's `load_user_authorization` fallback.
+ * Administrators (holders of MANAGE_PERMISSIONS) receive full permissions as
+ * the fallback for libraries without an explicit grant. Explicit grants win,
+ * matching the backend's `UserAuthorization::library_permissions` lookup.
  */
 function isLibraryAdministrator(user: PermissionUser | null | undefined): boolean {
   return hasAppPermission(user, APP_PERMISSIONS.managePermissions);
@@ -162,27 +164,27 @@ export function hasLibraryPermission(
   if (!user || !libraryId) {
     return false;
   }
-  if (isLibraryAdministrator(user)) {
-    return true;
+  const explicitGrant = user.libraryPermissions.find((grant) => grant.libraryId === libraryId);
+  if (explicitGrant) {
+    return libraryPermissionMatches(explicitGrant.permissions, permission);
   }
-  return user.libraryPermissions.some((grant) => {
-    if (grant.libraryId !== libraryId) {
-      return false;
-    }
-    return libraryPermissionMatches(grant.permissions, permission);
-  });
+  return (
+    isLibraryAdministrator(user) &&
+    libraryPermissionMatches(ADMIN_LIBRARY_PERMISSIONS, permission)
+  );
 }
 
 export function hasAnyLibraryPermission(
   user: PermissionUser | null | undefined,
   permission: LibraryPermission,
 ): boolean {
-  if (isLibraryAdministrator(user)) {
-    return true;
-  }
-  return user?.libraryPermissions.some((grant) =>
-    libraryPermissionMatches(grant.permissions, permission),
-  ) === true;
+  return (
+    (isLibraryAdministrator(user) &&
+      libraryPermissionMatches(ADMIN_LIBRARY_PERMISSIONS, permission)) ||
+    user?.libraryPermissions.some((grant) =>
+      libraryPermissionMatches(grant.permissions, permission),
+    ) === true
+  );
 }
 
 export function libraryPermissionsWithRequestShadowing(values: string[]): string[] {

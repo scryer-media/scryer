@@ -90,7 +90,7 @@ test("normalizeJwtPermissionClaims discards malformed and unknown claims", () =>
   });
 });
 
-test("administrators hold every library permission on every library", () => {
+test("administrator fallback yields to explicit library grants", () => {
   const admin = normalizeJwtPermissionClaims(
     ["managePermissions"],
     [{ libraryId: "library-primary", permissions: ["view"] }],
@@ -102,11 +102,29 @@ test("administrators hold every library permission on every library", () => {
   );
   assert.equal(
     hasLibraryPermission(admin, "library-primary", LIBRARY_PERMISSIONS.manageLibrary),
-    true,
+    false,
   );
   assert.equal(hasAnyLibraryPermission(admin, LIBRARY_PERMISSIONS.resolveImports), true);
+  assert.equal(hasAnyLibraryPermission(admin, LIBRARY_PERMISSIONS.request), false);
   assert.equal(hasLibraryPermission(admin, null, LIBRARY_PERMISSIONS.view), false);
   assert.equal(hasLibraryPermission(null, "library-primary", LIBRARY_PERMISSIONS.view), false);
+});
+
+test("administrator request grants remain strictly requestable", () => {
+  const admin = normalizeJwtPermissionClaims(
+    ["managePermissions"],
+    [{ libraryId: "library-requestable", permissions: ["request"] }],
+  );
+
+  assert.equal(
+    hasLibraryPermission(admin, "library-created-later", LIBRARY_PERMISSIONS.request),
+    false,
+  );
+  assert.equal(
+    hasLibraryPermission(admin, "library-requestable", LIBRARY_PERMISSIONS.request),
+    true,
+  );
+  assert.equal(hasAnyLibraryPermission(admin, LIBRARY_PERMISSIONS.request), true);
 });
 
 test("non-administrators only hold explicitly granted library permissions", () => {

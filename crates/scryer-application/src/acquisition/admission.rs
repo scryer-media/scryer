@@ -719,6 +719,24 @@ fn evaluate_any_member(
         };
     }
 
+    if policy.applies_to_queue
+        && let Some(queued) = subject.queued.iter().find(|queued| {
+            candidate.release_key.is_some() && candidate.release_key == queued.release_key
+        })
+    {
+        return AdmissionVerdict::Reject(AdmissionRejection {
+            reason: AdmissionRejectionReason::QueuedSameRelease {
+                queued_title: queued.title.clone(),
+            },
+            message: format!(
+                "{} is already grabbed for this scope; the same release is not fetched twice",
+                queued.title
+            ),
+            incumbent_file_id: String::new(),
+            incumbent_file_path: String::new(),
+        });
+    }
+
     let (members, incumbent_covered_members, queued_covered_members) = match &subject.scope {
         AdmissionScope::Episodes(ids) => {
             let members: HashSet<&str> = ids.iter().map(String::as_str).collect();

@@ -401,6 +401,310 @@ async fn authoritative_absence_fails_and_ends_an_incomplete_binding_before_reobs
     assert_ne!(reobserved_download_id, first_download_id);
 }
 
+/// A process restart has no in-memory tracker entry, but an authoritative
+/// client absence still fails the download. The failure must also reopen the
+/// grabbed scope: otherwise its durable grab claim blocks every later search.
+#[tokio::test]
+async fn authoritative_absence_after_restart_reopens_the_grabbed_scope() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, _user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scope_states.clone())
+    });
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity = ClientJobLocator::new(Some("client-1"), "nzbget", "restart-lost-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-restart-lost".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "series".to_string(),
+            download_client_id: Some("client-1".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "restart-lost-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Restart.Lost.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Episode {
+                episode_id: "episode-restart-lost".to_string(),
+            },
+        })
+        .await
+        .expect("seed download submission");
+    let failed_scope = AcquisitionScopeState {
+            id: "scope-restart-lost".to_string(),
+            title_id: "title-restart-lost".to_string(),
+            title_name: Some("Restart Lost".to_string()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some("episode-restart-lost".to_string()),
+            collection_id: Some("season-restart-lost".to_string()),
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Grabbed,
+            grabbed_release: Some(
+                r#"{"title":"Restart.Lost.2026.1080p.WEB-DL","score":900,"grabbed_at":"2026-09-07T00:00:00Z"}"#.to_string(),
+            ),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: "2026-09-07T00:00:00Z".to_string(),
+            updated_at: "2026-09-07T00:00:00Z".to_string(),
+        };
+    // The failed row can be beyond a paged query's first results after a
+    // restart, so recovery must inspect every grabbed scope for this title.
+    for index in 0..26 {
+        let mut decoy = failed_scope.clone();
+        decoy.id = format!("scope-restart-decoy-{index}");
+        decoy.episode_id = Some(format!("episode-restart-decoy-{index}"));
+        decoy.grabbed_release = Some(format!(
+            r#"{{"title":"Restart.Decoy.{index}.2026.1080p.WEB-DL","score":900,"grabbed_at":"2026-09-07T00:00:00Z"}}"#
+        ));
+        scope_states
+            .upsert_acquisition_scope_state(&decoy)
+            .await
+            .expect("seed unrelated grabbed scope");
+    }
+    scope_states
+        .upsert_acquisition_scope_state(&failed_scope)
+        .await
+        .expect("seed grabbed scope");
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+
+    assert!(registry.ended.lock().await.contains(&download_id));
+    assert_eq!(
+        download_submissions
+            .get_tracked_state(&source_identity)
+            .await
+            .expect("failed state should load"),
+        Some(TrackedDownloadState::Failed.as_str().to_string())
+    );
+    let scope = scope_states
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|scope| scope.id == "scope-restart-lost")
+        .expect("seeded scope remains")
+        .clone();
+    assert!(
+        crate::quality::canonical_context::grabbed_release_record(&scope).is_none(),
+        "a failed submission left the scope's durable grab claim active: {scope:?}"
+    );
+    assert_eq!(scope.status, AcquisitionScopeStatus::Wanted);
+    assert!(scope.grabbed_release.is_none());
+}
+
+#[tokio::test]
+async fn authoritative_absence_after_restart_preserves_a_newer_scope_claim() {
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (base_app, _user) = bootstrap_with_cleanup_tracking(
+        Arc::new(StubDownloadClient::default()),
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scope_states.clone())
+    });
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity = ClientJobLocator::new(Some("client-1"), "nzbget", "restart-old-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-restart-replacement".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "series".to_string(),
+            download_client_id: Some("client-1".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "restart-old-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Restart.Old.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Episode {
+                episode_id: "episode-restart-replacement".to_string(),
+            },
+        })
+        .await
+        .expect("seed old download submission");
+    scope_states
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: "scope-restart-replacement".to_string(),
+            title_id: "title-restart-replacement".to_string(),
+            title_name: Some("Restart Replacement".to_string()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some("episode-restart-replacement".to_string()),
+            collection_id: Some("season-restart-replacement".to_string()),
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Grabbed,
+            grabbed_release: Some(
+                r#"{"title":"Restart.New.2026.1080p.WEB-DL","score":950,"grabbed_at":"2026-09-07T00:01:00Z"}"#.to_string(),
+            ),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: "2026-09-07T00:00:00Z".to_string(),
+            updated_at: "2026-09-07T00:01:00Z".to_string(),
+        })
+        .await
+        .expect("seed newer grabbed scope");
+
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut crate::tracked_downloads::TrackedDownloadService::new(),
+        &source_identity,
+    )
+    .await;
+
+    assert!(registry.ended.lock().await.contains(&download_id));
+    assert_eq!(
+        download_submissions
+            .get_tracked_state(&source_identity)
+            .await
+            .expect("failed state should load"),
+        Some(TrackedDownloadState::Failed.as_str().to_string())
+    );
+    let scope = scope_states
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|scope| scope.id == "scope-restart-replacement")
+        .expect("replacement scope remains")
+        .clone();
+    assert_eq!(scope.status, AcquisitionScopeStatus::Grabbed);
+    assert_eq!(
+        crate::quality::canonical_context::grabbed_release_record(&scope)
+            .expect("newer grab claim remains")
+            .title,
+        "Restart.New.2026.1080p.WEB-DL"
+    );
+}
+
+#[tokio::test]
+async fn queued_grab_claims_merge_same_release_episode_coverage() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, _user) =
+        bootstrap_with_cleanup_tracking(download_client, download_submissions, pending_releases);
+    let scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services.with_acquisition_scope_states(scope_states.clone())
+    });
+    let title = make_due_hydration_title("title-grab-claims", MediaFacet::Series, 1);
+    let context = app
+        .resolve_canonical_scoring_context(&title, &crate::builtin_default_quality_profile())
+        .await;
+    let membership = app
+        .scope_membership_for(
+            &title,
+            &SubmissionScope::EpisodeSet {
+                episode_ids: vec!["episode-1".to_string(), "episode-2".to_string()],
+            },
+        )
+        .await;
+    let release = "Claimed.Show.S01.1080p.WEB-DL-GRP";
+
+    for (id, episode_id) in [
+        ("scope-claim-1", "episode-1"),
+        ("scope-claim-2", "episode-2"),
+    ] {
+        scope_states
+            .upsert_acquisition_scope_state(&AcquisitionScopeState {
+                id: id.to_string(),
+                title_id: title.id.clone(),
+                title_name: Some(title.name.clone()),
+                title_slug: None,
+                title_facet: None,
+                library_id: None,
+                library_name: None,
+                library_slug: None,
+                episode_id: Some(episode_id.to_string()),
+                collection_id: Some("season-1".to_string()),
+                series_movie_link_id: None,
+                season_number: Some("1".to_string()),
+                episode_number: None,
+                media_type: "episode".to_string(),
+                last_search_at: None,
+                status: AcquisitionScopeStatus::Grabbed,
+                grabbed_release: Some(format!(
+                    r#"{{"title":"{release}","score":900,"grabbed_at":"2026-09-07T00:00:00Z"}}"#
+                )),
+                landed_bar: None,
+                latest_release_decision: None,
+                mismatch_recovery_eligible: false,
+                created_at: "2026-09-07T00:00:00Z".to_string(),
+                updated_at: "2026-09-07T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("seed grabbed episode scope");
+    }
+
+    let queued = app
+        .queued_releases_with_grabbed_claims(
+            Vec::new(),
+            &title,
+            &membership.view(),
+            &context,
+            &[],
+            &[],
+        )
+        .await;
+
+    assert_eq!(queued.len(), 1, "one release should have one queue entry");
+    assert_eq!(
+        queued[0].covers,
+        vec!["episode-1".to_string(), "episode-2".to_string()],
+        "deduplicating same-release claims must retain every claimed episode"
+    );
+}
+
 #[tokio::test]
 async fn authoritative_absence_ends_a_terminal_binding_without_replacing_its_state() {
     let download_client = Arc::new(StubDownloadClient::default());

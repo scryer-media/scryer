@@ -972,13 +972,21 @@ async fn resolve_failed_pack_episode_wanted_items(
         .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
         .await?;
 
+    let failed_release = normalize_release_name(submission.source_title.as_deref());
     Ok(wanted_items
         .into_iter()
         .filter(|item| {
-            matches!(
-                item.status,
-                AcquisitionScopeStatus::Wanted | AcquisitionScopeStatus::Grabbed
-            ) && item.media_type == "episode"
+            (item.status == AcquisitionScopeStatus::Wanted
+                || (item.status == AcquisitionScopeStatus::Grabbed
+                    && failed_release.as_ref().is_some_and(|failed_release| {
+                        extract_grabbed_release_title(item.grabbed_release.as_deref())
+                            .and_then(|grabbed_release| {
+                                normalize_release_name(Some(grabbed_release.as_str()))
+                            })
+                            .as_ref()
+                            == Some(failed_release)
+                    })))
+                && item.media_type == "episode"
                 && item
                     .episode_id
                     .as_ref()
@@ -1132,7 +1140,7 @@ pub(crate) async fn process_download_failure_for_download(
         None if failed_pack_items.is_none() && failed_submission.is_some() => {
             resolve_failure_wanted_item(
                 app,
-                resolved_title_id.as_deref(),
+                failed_submission.as_ref().expect("checked above"),
                 release_title_for_matching,
             )
             .await
@@ -1364,10 +1372,10 @@ pub(crate) async fn process_download_failure_for_download(
 }
 async fn resolve_failure_wanted_item(
     app: &AppUseCase,
-    title_id: Option<&str>,
+    submission: &DownloadSubmission,
     release_title: &str,
 ) -> Option<AcquisitionScopeState> {
-    let title_id = title_id?.trim();
+    let title_id = submission.title_id.trim();
     if title_id.is_empty() {
         return None;
     }
@@ -1376,22 +1384,30 @@ async fn resolve_failure_wanted_item(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-            statuses: vec!["grabbed".into()],
-            title_id: Some(title_id.to_string()),
-            limit: 25,
-            ..AcquisitionScopeStatesQuery::default()
-        })
+        .list_acquisition_scope_states_for_title_ids(&[title_id.to_string()])
         .await
-        .ok()?;
+        .ok()?
+        .into_iter()
+        .filter(|item| item.status == AcquisitionScopeStatus::Grabbed)
+        .collect::<Vec<_>>();
 
-    if grabbed_items.len() == 1 {
-        return grabbed_items.into_iter().next();
-    }
-
+    let failed_release = normalize_release_name(Some(release_title))?;
     grabbed_items.into_iter().find(|item| {
-        extract_grabbed_release_title(item.grabbed_release.as_deref())
-            .is_some_and(|title| title.eq_ignore_ascii_case(release_title))
+        let release_matches = extract_grabbed_release_title(item.grabbed_release.as_deref())
+            .and_then(|grabbed_release| normalize_release_name(Some(grabbed_release.as_str())))
+            .as_ref()
+            == Some(&failed_release);
+        let scope_matches = match &submission.scope {
+            SubmissionScope::Title => item.episode_id.is_none() && item.series_movie_link_id.is_none(),
+            SubmissionScope::Episode { episode_id } => item.episode_id.as_deref() == Some(episode_id),
+            SubmissionScope::SeriesMovie {
+                series_movie_link_id,
+            } => item.series_movie_link_id.as_deref() == Some(series_movie_link_id),
+            SubmissionScope::Collection { .. }
+            | SubmissionScope::EpisodeSet { .. }
+            | SubmissionScope::Orphan => false,
+        };
+        release_matches && scope_matches
     })
 }
 
