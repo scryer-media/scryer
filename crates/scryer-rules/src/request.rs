@@ -530,6 +530,14 @@ impl PolicyFamily for RequestFamily {
         validation::request_fact_references(&policy.rego_source, policy_path)
     }
 
+    fn referenced_facts_from_module(
+        _policy: &Self::Policy,
+        _policy_path: &str,
+        module: &regorus::unstable::Module,
+    ) -> Result<BTreeSet<String>, String> {
+        validation::request_fact_references_from_module(module)
+    }
+
     fn hold_rule_name() -> Option<&'static str> {
         Some(HOLD_RULE_NAME)
     }
@@ -830,6 +838,43 @@ mod tests {
             "approve if {\n  input.facts.certification_rank <= 2\n}\n",
         )]);
         assert_eq!(only_decision(&result).vote, RequestVote::Approve);
+    }
+
+    #[test]
+    fn evaluator_reuse_tracks_changed_votes_and_tags() {
+        let engine = RequestRulesEngine::build(&[policy(
+            "classification",
+            "approve if {\n  input.facts.certification_rank <= 2\n}\n\
+             deny if {\n  input.facts.certification_rank >= 3\n}\n\
+             tags contains \"family\" if {\n  input.facts.certification_rank <= 2\n}\n",
+        )])
+        .expect("policy should compile");
+        let mut evaluator = engine.evaluator();
+
+        let mut input = synthetic_request_input();
+        input.facts.certification_rank = Observation::known(1);
+        let approved = evaluator.evaluate(&input).unwrap();
+        assert_eq!(approved.records[0].decision.vote, RequestVote::Approve);
+        assert_eq!(
+            approved.records[0].decision.tags,
+            vec!["family".to_string()]
+        );
+
+        input.facts.certification_rank = Observation::known(3);
+        let denied = evaluator.evaluate(&input).unwrap();
+        assert_eq!(denied.records[0].decision.vote, RequestVote::Deny);
+        assert!(denied.records[0].decision.tags.is_empty());
+
+        input.facts.certification_rank = Observation::known(1);
+        let approved_again = evaluator.evaluate(&input).unwrap();
+        assert_eq!(
+            approved_again.records[0].decision.vote,
+            RequestVote::Approve
+        );
+        assert_eq!(
+            approved_again.records[0].decision.tags,
+            vec!["family".to_string()]
+        );
     }
 
     #[test]

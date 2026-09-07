@@ -382,15 +382,6 @@ fn parse_module(rego_source: &str, policy_path: &str) -> Result<Module, String> 
     parser.parse().map_err(|e| e.to_string())
 }
 
-fn collect_unknown_input_path_errors(
-    rego_source: &str,
-    policy_path: &str,
-    ctx: InputPathContext,
-) -> Result<Vec<String>, String> {
-    let module = parse_module(rego_source, policy_path)?;
-    Ok(module_input_path_errors(&module, ctx))
-}
-
 fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<String> {
     let mut errors = BTreeSet::new();
     walk_module_input_paths(module, ctx, |path| {
@@ -464,6 +455,12 @@ pub(crate) fn maintenance_fact_references(
     fact_references(rego_source, policy_path, InputPathContext::maintenance())
 }
 
+pub(crate) fn maintenance_fact_references_from_module(
+    module: &Module,
+) -> Result<BTreeSet<String>, String> {
+    module_fact_references(module, InputPathContext::maintenance())
+}
+
 /// The same work for any family whose facts arrive in observation envelopes.
 fn fact_references(
     rego_source: &str,
@@ -471,10 +468,17 @@ fn fact_references(
     ctx: InputPathContext,
 ) -> Result<BTreeSet<String>, String> {
     let module = parse_module(rego_source, policy_path)?;
-    if let Some(error) = input_import_error(&module, ctx.family) {
+    module_fact_references(&module, ctx)
+}
+
+fn module_fact_references(
+    module: &Module,
+    ctx: InputPathContext,
+) -> Result<BTreeSet<String>, String> {
+    if let Some(error) = input_import_error(module, ctx.family) {
         return Err(error);
     }
-    module_referenced_facts(&module, ctx)
+    module_referenced_facts(module, ctx)
 }
 
 /// The `input.facts.<name>` facts a maintenance matcher reads, for callers
@@ -504,6 +508,12 @@ pub(crate) fn request_fact_references(
     policy_path: &str,
 ) -> Result<BTreeSet<String>, String> {
     fact_references(rego_source, policy_path, InputPathContext::request())
+}
+
+pub(crate) fn request_fact_references_from_module(
+    module: &Module,
+) -> Result<BTreeSet<String>, String> {
+    module_fact_references(module, InputPathContext::request())
 }
 
 /// The `input.facts.<name>` facts a request rule reads, for callers outside this
@@ -928,6 +938,7 @@ pub fn validate_user_rule_with_limits(
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
+    let policy_module_index = engine.get_modules().len() - 1;
     if let Err(e) = engine.add_policy(
         score_entry_wrapper_policy_path(rule_set_id),
         score_entry_wrapper_source(rule_set_id),
@@ -935,9 +946,10 @@ pub fn validate_user_rule_with_limits(
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
 
-    let input_path_errors =
-        collect_unknown_input_path_errors(rego_source, &policy_path, InputPathContext::release())
-            .map_err(RulesError::Compilation)?;
+    let input_path_errors = module_input_path_errors(
+        &engine.get_modules()[policy_module_index],
+        InputPathContext::release(),
+    );
     if !input_path_errors.is_empty() {
         return Ok(ValidationResult {
             valid: false,
@@ -1072,6 +1084,7 @@ pub fn validate_maintenance_rule(
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
+    let policy_module_index = engine.get_modules().len() - 1;
     if let Err(e) = engine.add_policy(
         maintenance::decision_wrapper_policy_path(rule_set_id),
         maintenance::decision_wrapper_source(rule_set_id),
@@ -1079,13 +1092,13 @@ pub fn validate_maintenance_rule(
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
 
-    let module = parse_module(rego_source, &policy_path).map_err(RulesError::Compilation)?;
+    let module = &engine.get_modules()[policy_module_index];
 
-    if let Some(error) = input_import_error(&module, "maintenance") {
+    if let Some(error) = input_import_error(module, "maintenance") {
         return Ok(ValidationResult::invalid(error));
     }
 
-    let input_path_errors = module_input_path_errors(&module, InputPathContext::maintenance());
+    let input_path_errors = module_input_path_errors(module, InputPathContext::maintenance());
     if !input_path_errors.is_empty() {
         return Ok(ValidationResult {
             valid: false,
@@ -1093,7 +1106,7 @@ pub fn validate_maintenance_rule(
         });
     }
 
-    if !module_defines_rule(&module, "match") {
+    if !module_defines_rule(module, "match") {
         return Ok(ValidationResult::invalid(
             "maintenance rule must define a boolean 'match' rule, for example: match if { ... }",
         ));
@@ -1152,6 +1165,7 @@ pub fn validate_request_rule(
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
+    let policy_module_index = engine.get_modules().len() - 1;
     if let Err(e) = engine.add_policy(
         request::decision_wrapper_policy_path(rule_set_id),
         request::decision_wrapper_source(rule_set_id),
@@ -1159,13 +1173,13 @@ pub fn validate_request_rule(
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
 
-    let module = parse_module(rego_source, &policy_path).map_err(RulesError::Compilation)?;
+    let module = &engine.get_modules()[policy_module_index];
 
-    if let Some(error) = input_import_error(&module, "request") {
+    if let Some(error) = input_import_error(module, "request") {
         return Ok(ValidationResult::invalid(error));
     }
 
-    let input_path_errors = module_input_path_errors(&module, InputPathContext::request());
+    let input_path_errors = module_input_path_errors(module, InputPathContext::request());
     if !input_path_errors.is_empty() {
         return Ok(ValidationResult {
             valid: false,
@@ -1175,7 +1189,7 @@ pub fn validate_request_rule(
 
     if !REQUEST_VOTE_HEADS
         .iter()
-        .any(|head| module_defines_rule(&module, head))
+        .any(|head| module_defines_rule(module, head))
     {
         return Ok(ValidationResult::invalid(
             "request rule can never vote: define at least one of 'approve', 'deny', 'manual', \
@@ -1442,6 +1456,109 @@ mod tests {
             .expect("template evaluation should succeed")
     }
 
+    fn padded_rule_source(rule_set_id: &str, comment_count: usize, comment_width: usize) -> String {
+        assert!(comment_width > 0);
+        let comment = format!("#{}\n", "x".repeat(comment_width - 1));
+        format!(
+            "package scryer.rules.user.{rule_set_id}\n\
+             import rego.v1\n\
+             {}\
+             score_entry[\"bonus\"] := 100\n",
+            comment.repeat(comment_count),
+        )
+    }
+
+    fn test_policy(rule_set_id: &str, rego_source: &str) -> crate::UserPolicy {
+        crate::UserPolicy {
+            id: rule_set_id.to_string(),
+            name: "Test Rule".to_string(),
+            rego_source: rego_source.to_string(),
+            origin: crate::PolicyOrigin::User,
+            applied_facets: Vec::new(),
+        }
+    }
+
+    fn assert_validation_and_runtime_reject(rule_set_id: &str, source: &str) {
+        let edit_validation = validate_user_rule(source, rule_set_id).unwrap();
+        assert!(
+            !edit_validation.valid,
+            "editor validation unexpectedly accepted the source"
+        );
+
+        let wrapper_validation = validate_runtime_wrapper(source, rule_set_id).unwrap();
+        assert!(
+            !wrapper_validation.valid,
+            "runtime-wrapper validation unexpectedly accepted the source"
+        );
+
+        assert!(
+            crate::UserRulesEngine::build(&[test_policy(rule_set_id, source)]).is_err(),
+            "runtime unexpectedly accepted the source"
+        );
+    }
+
+    #[test]
+    fn release_policy_limits_accept_sources_above_regorus_defaults() {
+        let limits = RuntimeLimits::release_defaults();
+        let rule_set_id = "large_policy";
+        let source = padded_rule_source(rule_set_id, 20_001, 60);
+        assert!(source.len() > 1024 * 1024);
+        assert!(source.len() < limits.max_policy_bytes.get());
+        assert!(20_001 < limits.max_policy_lines.get());
+
+        let edit_validation = validate_user_rule(&source, rule_set_id).unwrap();
+        assert!(
+            edit_validation.valid,
+            "errors: {:?}",
+            edit_validation.errors
+        );
+
+        let wrapper_validation = validate_runtime_wrapper(&source, rule_set_id).unwrap();
+        assert!(
+            wrapper_validation.valid,
+            "errors: {:?}",
+            wrapper_validation.errors
+        );
+
+        assert!(crate::UserRulesEngine::build(&[test_policy(rule_set_id, &source)]).is_ok());
+    }
+
+    #[test]
+    fn release_policy_limits_reject_sources_over_line_limit_everywhere() {
+        let limits = RuntimeLimits::release_defaults();
+        let rule_set_id = "too_many_lines";
+        let source = padded_rule_source(rule_set_id, limits.max_policy_lines.get(), 2);
+
+        assert_validation_and_runtime_reject(rule_set_id, &source);
+    }
+
+    #[test]
+    fn release_policy_limits_reject_sources_over_file_size_everywhere() {
+        let limits = RuntimeLimits::release_defaults();
+        let rule_set_id = "too_many_bytes";
+        let comment_width = limits.max_policy_col.get() as usize;
+        let comment_count = limits.max_policy_bytes.get() / (comment_width + 1) + 1;
+        let source = padded_rule_source(rule_set_id, comment_count, comment_width);
+        assert!(source.len() > limits.max_policy_bytes.get());
+
+        assert_validation_and_runtime_reject(rule_set_id, &source);
+    }
+
+    #[test]
+    fn release_policy_limits_preserve_default_column_limit_everywhere() {
+        let limits = RuntimeLimits::release_defaults();
+        let rule_set_id = "wide_line";
+        let source = format!(
+            "package scryer.rules.user.{rule_set_id}\n\
+             import rego.v1\n\
+             {}score_entry[\"bonus\"] := 100\n",
+            " ".repeat(limits.max_policy_col.get() as usize),
+        );
+
+        assert_eq!(limits.max_policy_col.get(), 1024);
+        assert_validation_and_runtime_reject(rule_set_id, &source);
+    }
+
     #[test]
     fn valid_rule_passes_validation() {
         let source = r#"
@@ -1534,6 +1651,30 @@ mod tests {
             .err()
             .map(|error| error.to_string())
             .unwrap_or_else(|| panic!("engine build should have refused {id}"))
+    }
+
+    #[test]
+    fn maintenance_source_and_loaded_module_fact_hooks_agree() {
+        for (id, body) in [
+            ("known_fact", "match if {\n  input.facts.monitored\n}\n"),
+            (
+                "dynamic_fact",
+                "match if {\n  some fact\n  input.facts[fact]\n}\n",
+            ),
+        ] {
+            let policy = maintenance_policy(id, body);
+            let path = maintenance::user_policy_path(id);
+            let module = parse_module(&policy.rego_source, &path).expect("source should parse");
+
+            let source_result =
+                <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts(
+                    &policy, &path,
+                );
+            let module_result = <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts_from_module(
+                &policy, &path, &module,
+            );
+            assert_eq!(source_result, module_result, "{id}");
+        }
     }
 
     /// Both gates refuse a source, with the same explanation.
@@ -2175,6 +2316,33 @@ mod tests {
             .err()
             .map(|error| error.to_string())
             .unwrap_or_else(|| panic!("engine build should have refused {id}"))
+    }
+
+    #[test]
+    fn request_source_and_loaded_module_fact_hooks_agree() {
+        for (id, body) in [
+            (
+                "known_fact",
+                "approve if {\n  input.facts.certification_rank <= 2\n}\n",
+            ),
+            (
+                "dynamic_fact",
+                "approve if {\n  some fact\n  input.facts[fact]\n}\n",
+            ),
+        ] {
+            let policy = request_policy(id, body);
+            let path = request::user_policy_path(id);
+            let module = parse_module(&policy.rego_source, &path).expect("source should parse");
+
+            let source_result =
+                <request::RequestFamily as crate::policy::PolicyFamily>::referenced_facts(
+                    &policy, &path,
+                );
+            let module_result = <request::RequestFamily as crate::policy::PolicyFamily>::referenced_facts_from_module(
+                &policy, &path, &module,
+            );
+            assert_eq!(source_result, module_result, "{id}");
+        }
     }
 
     fn assert_request_rejected_everywhere(id: &str, body: &str, expected: &str) {

@@ -106,6 +106,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
             engine
                 .add_policy(policy_path.clone(), policy.rego_source().to_string())
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            let policy_module_index = engine.get_modules().len() - 1;
             engine
                 .add_policy(
                     F::wrapper_policy_path(policy.id()),
@@ -116,8 +117,12 @@ impl<F: PolicyFamily> PolicyEngine<F> {
             // A policy whose fact dependencies cannot be read off its source
             // must not load at all: the host could not then tell whether it is
             // deciding on evidence Scryer actually has.
-            let referenced_facts = F::referenced_facts(policy, &policy_path)
-                .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            let referenced_facts = F::referenced_facts_from_module(
+                policy,
+                &policy_path,
+                &engine.get_modules()[policy_module_index],
+            )
+            .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
 
             rules.push(RuleHandle {
                 id: policy.id().to_string(),

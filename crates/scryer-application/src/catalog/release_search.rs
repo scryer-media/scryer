@@ -29,6 +29,10 @@ struct PreparedReleaseScoringInputs {
     primary_episode_ids: Option<Option<HashSet<String>>>,
     indexer_priority_by_name: HashMap<String, i64>,
     now: chrono::DateTime<chrono::Utc>,
+    /// One mutable evaluator bound to this prepared scoring snapshot. Search
+    /// page processing is sequential, so it can safely reuse Regorus's input
+    /// buffers for every candidate without crossing task boundaries.
+    rule_evaluation_batch: crate::canonical_scoring::RuleEvaluationBatch,
 }
 
 pub(crate) struct ScoredSearchOutcome {
@@ -919,6 +923,10 @@ impl AppUseCase {
             let canonical_context = self
                 .resolve_canonical_scoring_context(&scored_title, quality_profile)
                 .await;
+            let rule_evaluation_batch = crate::canonical_scoring::RuleEvaluationBatch::from_context(
+                &canonical_context
+                    .view(crate::quality_profile::CoverageSizeBasis::default(), false),
+            );
             let catalog_episodes = self
                 .services
                 .catalog
@@ -959,6 +967,7 @@ impl AppUseCase {
                 primary_episode_ids: None,
                 indexer_priority_by_name,
                 now: chrono::Utc::now(),
+                rule_evaluation_batch,
             });
         }
         let prepared = prepared
@@ -1134,12 +1143,17 @@ impl AppUseCase {
             // pack penalty, the listing-metadata rule inputs — is gone from the
             // number; what survives of it orders the results, in
             // `acquisition::scoring`, and never crosses a comparison.
-            let scored_release = crate::canonical_scoring::score_release(
+            let scoring_context = prepared
+                .canonical_context
+                .view(candidate_size_basis, false)
+                .without_rules();
+            let scored_release = crate::canonical_scoring::score_release_in_batch(
                 &crate::canonical_scoring::ReleaseEvidence::announced(
                     scored_release_metadata.clone(),
                     result.size_bytes,
                 ),
-                &prepared.canonical_context.view(candidate_size_basis, false),
+                &scoring_context,
+                &mut prepared.rule_evaluation_batch,
             );
             let decision = scored_release.announced_decision;
 
