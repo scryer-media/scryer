@@ -45,6 +45,7 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { releaseQueueScopeInput } from "@/lib/utils/release-queue-scope";
 
 type WantedContainerProps = {
@@ -671,7 +672,10 @@ export const WantedContainer = memo(function WantedContainer({
       try {
         await searchAndQueueCutoffItem(item, { allowReplaceConfirmation: true });
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")));
+        setGlobalStatus(
+          autoSearchOutcomeMessage(error, t, cutoffItemLabel(item)) ??
+            userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
+        );
       } finally {
         setCutoffAutoSearchingId(null);
       }

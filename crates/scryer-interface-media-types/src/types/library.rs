@@ -442,6 +442,11 @@ pub struct ResolvePendingImportInput {
     pub pending_import_id: ID,
     /// Title metadata to associate with the item.
     pub title: AddTitleInput,
+    /// Attach the item to a title that already carries this identity in the
+    /// same library and facet instead of rejecting the request. Defaults to
+    /// false, which keeps the "title already exists in this library" error.
+    #[graphql(default = false)]
+    pub attach_to_existing_title: bool,
 }
 
 #[derive(SimpleObject, Clone)]

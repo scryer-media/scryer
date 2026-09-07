@@ -91,6 +91,7 @@ fn from_metadata_search_item(
         language: item.language,
         runtime_minutes: item.runtime_minutes,
         sort_title: item.sort_title,
+        existing_title_id: None,
     }
 }
 
@@ -2133,7 +2134,11 @@ impl ActivityQueries {
             .map_err(to_gql_error)?;
         Ok(results
             .into_iter()
-            .map(|item| from_metadata_search_item(&app, item))
+            .map(|candidate| {
+                let mut payload = from_metadata_search_item(&app, candidate.item);
+                payload.existing_title_id = candidate.existing_title_id.map(ID::from);
+                payload
+            })
             .collect())
     }
 

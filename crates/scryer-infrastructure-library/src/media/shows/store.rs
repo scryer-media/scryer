@@ -6,8 +6,8 @@ use scryer_application::{
     TitleExternalIdLookup,
 };
 use scryer_domain::{
-    CalendarEpisode, Collection, CollectionType, Episode, EpisodeType, Id, MovieEntity,
-    SeriesMovieLink,
+    AnimeCommunitySeason, AnimeNumberingBridge, CalendarEpisode, Collection, CollectionType,
+    Episode, EpisodeType, Id, MovieEntity, SeriesMovieLink,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -334,6 +334,34 @@ impl ShowRepository for ShowStore {
 
     async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>> {
         list_episodes_for_title_query(self.read_target(), title_id).await
+    }
+
+    async fn get_anime_numbering_bridge(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<AnimeNumberingBridge>> {
+        get_anime_numbering_bridge_query(self.read_target(), title_id).await
+    }
+
+    async fn replace_anime_numbering_bridge(
+        &self,
+        title_id: &str,
+        bridge: Option<&AnimeNumberingBridge>,
+    ) -> AppResult<()> {
+        let title_id = title_id.to_string();
+        let bridge = bridge.cloned();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_anime_numbering_bridge",
+            move |tx| {
+                let title_id = title_id.clone();
+                let bridge = bridge.clone();
+                Box::pin(async move {
+                    replace_anime_numbering_bridge_tx(tx, &title_id, bridge.as_ref()).await
+                })
+            },
+        )
+        .await
     }
 
     async fn list_episode_external_ids(
@@ -1426,6 +1454,79 @@ async fn delete_collection_tx(tx: &mut SqlTx<'_>, collection_id: &str) -> AppRes
     if rows == 0 {
         return Err(AppError::NotFound(format!("collection {collection_id}")));
     }
+    Ok(())
+}
+
+async fn get_anime_numbering_bridge_query(
+    target: SqlTarget<'_>,
+    title_id: &str,
+) -> AppResult<Option<AnimeNumberingBridge>> {
+    let row = SqlRuntime::fetch_optional(
+        SqlExec::Target(target),
+        "SELECT generated_on, corroborating_order, seasons_json \
+         FROM title_anime_numbering_bridges WHERE title_id = {}",
+        &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let seasons_json = row.text("seasons_json")?;
+    // A row whose payload no longer parses is treated as absent rather than as
+    // an error: the bridge is a cache, and refusing to search a title because a
+    // stored blob went stale would be worse than searching it in TVDB numbering.
+    let seasons = match serde_json::from_str::<Vec<AnimeCommunitySeason>>(&seasons_json) {
+        Ok(seasons) => seasons,
+        Err(error) => {
+            tracing::warn!(
+                title_id,
+                error = %error,
+                "stored anime numbering bridge is unreadable; ignoring it"
+            );
+            return Ok(None);
+        }
+    };
+    if seasons.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(AnimeNumberingBridge {
+        generated_on: row.text("generated_on")?,
+        corroborating_order: row
+            .opt_text("corroborating_order")?
+            .filter(|value| !value.trim().is_empty()),
+        seasons,
+    }))
+}
+
+async fn replace_anime_numbering_bridge_tx(
+    tx: &mut SqlTx<'_>,
+    title_id: &str,
+    bridge: Option<&AnimeNumberingBridge>,
+) -> AppResult<()> {
+    tx.execute(
+        "DELETE FROM title_anime_numbering_bridges WHERE title_id = {}",
+        &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?;
+    let Some(bridge) = bridge.filter(|bridge| !bridge.is_empty()) else {
+        return Ok(());
+    };
+    let seasons_json = serde_json::to_string(&bridge.seasons).map_err(|error| {
+        AppError::Repository(format!("serialize anime numbering bridge seasons: {error}"))
+    })?;
+    tx.execute(
+        "INSERT INTO title_anime_numbering_bridges \
+         (title_id, generated_on, corroborating_order, seasons_json, updated_at) \
+         VALUES ({}, {}, {}, {}, {})",
+        &[
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(bridge.generated_on.clone()),
+            SqlArg::OptText(bridge.corroborating_order.clone()),
+            SqlArg::Text(seasons_json),
+            SqlArg::Timestamp(Utc::now()),
+        ],
+    )
+    .await?;
     Ok(())
 }
 

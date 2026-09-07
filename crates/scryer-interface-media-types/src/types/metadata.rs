@@ -67,6 +67,10 @@ pub struct MetadataSearchItemPayload {
     pub runtime_minutes: Option<i32>,
     /// Normalized sort title, or null when unavailable.
     pub sort_title: Option<String>,
+    /// Id of the title that already carries this identity in the pending
+    /// import's library and facet, or null. Only the pending-import title
+    /// search populates it; every other metadata-search surface returns null.
+    pub existing_title_id: Option<ID>,
 }
 
 #[derive(SimpleObject, Clone)]

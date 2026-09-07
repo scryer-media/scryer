@@ -16,7 +16,7 @@ use scryer_domain::{ExternalId, MediaFacet, MonitorSelection, Title, title_catal
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use sqlx::{QueryBuilder, Row, Sqlite, postgres::PgRow};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::media::canonical_tags::{
@@ -1044,6 +1044,66 @@ impl TitleRepository for TitleStore {
         let mut existing = BTreeSet::new();
         for row in rows {
             existing.insert(row.text("external_id")?);
+        }
+        Ok(existing)
+    }
+
+    async fn map_existing_external_ids_to_title_ids_in_library_and_facet(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        source: &str,
+        values: &[String],
+    ) -> AppResult<BTreeMap<String, String>> {
+        let library_id = library_id.trim();
+        let source = source.trim().to_ascii_lowercase();
+        if library_id.is_empty() || source.is_empty() || values.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let requested = values
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if requested.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let requested_values = std::iter::repeat_n("({})", requested.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "WITH requested(external_id) AS (
+                 VALUES {requested_values}
+             )
+             SELECT requested.external_id AS external_id,
+                    title_external_ids.title_id AS title_id
+               FROM requested
+               JOIN title_external_ids
+                 ON title_external_ids.library_id = {{}}
+                AND title_external_ids.facet = {{}}
+                AND title_external_ids.source = {{}}
+                AND title_external_ids.external_id = requested.external_id
+              ORDER BY requested.external_id, title_external_ids.title_id"
+        );
+        let mut args = Vec::with_capacity(requested.len() + 3);
+        for value in requested {
+            args.push(SqlArg::Text(value));
+        }
+        args.push(SqlArg::Text(library_id.to_string()));
+        args.push(SqlArg::Text(facet.as_str().to_string()));
+        args.push(SqlArg::Text(source));
+
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        let mut existing = BTreeMap::new();
+        for row in rows {
+            existing
+                .entry(row.text("external_id")?)
+                .or_insert(row.text("title_id")?);
         }
         Ok(existing)
     }

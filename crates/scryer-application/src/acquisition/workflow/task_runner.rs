@@ -2335,7 +2335,10 @@ async fn process_single_target(
             episode.as_ref(),
         )
         .await;
-    let search_season = subject.season;
+    // Season-pack shaping only, so season 0 is excluded: the specials season is
+    // not a pack an indexer publishes, and `{title} S00` is not a query worth
+    // spending. The subject keeps its `Some(0)` for the acceptance veto.
+    let search_season = subject.season.filter(|season| *season > 0);
 
     // Exhausting saved results is a recovery action, not a new search. Preserve
     // that contract before either the title or episode lane spends an indexer

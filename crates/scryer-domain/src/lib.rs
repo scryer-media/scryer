@@ -813,6 +813,113 @@ pub struct TaggedAlias {
     pub language: String,
 }
 
+/// How the community (AniDB/AniList/MAL, and therefore release groups) numbers
+/// an anime series, expressed against the TVDB official order the catalog uses.
+///
+/// TVDB frequently carries one long season where the community carries a season
+/// per cour, so a release named `S04E20` means community season 4 episode 20,
+/// which is a different (season, episode) in the catalog. This is the mapping
+/// table that lets the two be translated into one another; SMG builds it from
+/// the AniBridge dataset and Scryer stores it verbatim per title.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnimeNumberingBridge {
+    /// AniBridge dataset `generated_on` the bridge was built from.
+    pub generated_on: String,
+    /// TVDB alternate-order `season_type` whose season boundaries coincide with
+    /// the bridge (`"dvd"`, `"alternate"`, …); `None` when nothing corroborates it.
+    pub corroborating_order: Option<String>,
+    pub seasons: Vec<AnimeCommunitySeason>,
+}
+
+impl AnimeNumberingBridge {
+    /// A bridge with no seasons carries no numbering to translate through, so
+    /// every consumer treats it as absent.
+    pub fn is_empty(&self) -> bool {
+        self.seasons.is_empty()
+    }
+
+    pub fn season(&self, index: i32) -> Option<&AnimeCommunitySeason> {
+        self.seasons.iter().find(|season| season.index == index)
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnimeCommunitySeason {
+    /// 1-based community season number in air order.
+    pub index: i32,
+    pub anidb_id: Option<i64>,
+    pub anilist_id: Option<i64>,
+    pub mal_id: Option<i64>,
+    /// Deduplicated titles for this community entry, most canonical first.
+    pub titles: Vec<String>,
+    pub ranges: Vec<AnimeCommunitySeasonRange>,
+    /// TVDB `absolute_number` of community episode 1; `None` when unknown.
+    pub absolute_start: Option<i32>,
+    /// Closed episode count; `None` when the source range is open-ended.
+    pub episode_count: Option<i32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnimeCommunitySeasonRange {
+    pub community_episode_start: i32,
+    /// `None` = open-ended.
+    pub community_episode_end: Option<i32>,
+    pub tvdb_season: i32,
+    pub tvdb_episode_start: i32,
+    /// `None` = open-ended.
+    pub tvdb_episode_end: Option<i32>,
+}
+
+impl AnimeCommunitySeason {
+    /// The TVDB (season, episode) a community episode number lands on, or
+    /// `None` when no range of this season covers it.
+    pub fn tvdb_for_community_episode(&self, community_episode: i32) -> Option<(i32, i32)> {
+        for range in &self.ranges {
+            if community_episode < range.community_episode_start {
+                continue;
+            }
+            if let Some(end) = range.community_episode_end
+                && community_episode > end
+            {
+                continue;
+            }
+            let offset = community_episode - range.community_episode_start;
+            let tvdb_episode = range.tvdb_episode_start + offset;
+            if let Some(end) = range.tvdb_episode_end
+                && tvdb_episode > end
+            {
+                continue;
+            }
+            return Some((range.tvdb_season, tvdb_episode));
+        }
+        None
+    }
+
+    /// The inverse: the community episode number a TVDB (season, episode) maps
+    /// back to, or `None` when this season does not cover it.
+    pub fn community_for_tvdb_episode(&self, tvdb_season: i32, tvdb_episode: i32) -> Option<i32> {
+        for range in &self.ranges {
+            if range.tvdb_season != tvdb_season || tvdb_episode < range.tvdb_episode_start {
+                continue;
+            }
+            if let Some(end) = range.tvdb_episode_end
+                && tvdb_episode > end
+            {
+                continue;
+            }
+            let offset = tvdb_episode - range.tvdb_episode_start;
+            let community_episode = range.community_episode_start + offset;
+            if let Some(end) = range.community_episode_end
+                && community_episode > end
+            {
+                continue;
+            }
+            return Some(community_episode);
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Title {
     pub id: String,

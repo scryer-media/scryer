@@ -15,6 +15,9 @@ pub struct HydrationResult {
     pub episodes: Vec<EpisodeMetadata>,
     pub anime_mappings: Vec<AnimeMapping>,
     pub anime_movies: Vec<AnimeMovie>,
+    /// Community season layout for an anime series; `None` for every other
+    /// facet and for anime SMG has no bridge for.
+    pub anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
     pub movie_metadata: std::collections::HashMap<i64, MovieMetadata>,
     pub more_like_this: Vec<DiscoveryTitle>,
 }
@@ -189,6 +192,7 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         episodes: vec![],
         anime_mappings: vec![],
         anime_movies: vec![],
+        anime_numbering_bridge: None,
         movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
     }
@@ -255,6 +259,7 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         episodes: series.episodes,
         anime_mappings: series.anime_mappings,
         anime_movies: series.anime_movies,
+        anime_numbering_bridge: series.anime_numbering_bridge,
         movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
     }
@@ -353,6 +358,7 @@ mod tests {
             episodes: vec![],
             anime_mappings,
             anime_movies: vec![],
+            anime_numbering_bridge: None,
             ratings: Default::default(),
             credits: Vec::new(),
         }

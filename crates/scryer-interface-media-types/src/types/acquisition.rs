@@ -309,6 +309,16 @@ pub struct ProviderConfigValueInput {
     pub clear_secret: Option<bool>,
 }
 
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+/// One category the indexer advertises in its caps document, used to offer
+/// indexer-specific routing categories that the standard newznab tree lacks.
+pub struct IndexerCapsCategoryPayload {
+    /// Category id exactly as the indexer expects it in the `cat` parameter.
+    pub code: String,
+    /// Human-readable name from the caps document, or null when it has none.
+    pub label: Option<String>,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Indexer configuration, health, capability, routing, and masked secret metadata.
 pub struct IndexerConfigPayload {
@@ -366,6 +376,9 @@ pub struct IndexerConfigPayload {
     pub last_query_at: Option<DateTime<Utc>>,
     /// Provider configuration fields with secret values masked.
     pub config: Vec<ProviderConfigValuePayload>,
+    /// Categories from the most recent caps snapshot, sorted by code. Empty
+    /// until the first successful caps refresh.
+    pub caps_categories: Vec<IndexerCapsCategoryPayload>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.

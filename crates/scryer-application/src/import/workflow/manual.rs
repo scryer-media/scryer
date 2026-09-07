@@ -1073,6 +1073,20 @@ async fn preview_manual_import(
         _ => None,
     };
 
+    // Loaded once for the whole preview: community (per-cour) anime numbering
+    // for this title, when SMG published one. `None` for every non-anime title
+    // and for anime whose community numbering matches the catalog's.
+    let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
+        app.services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(title_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        None
+    };
+
     // For each file, parse and attempt auto-match
     let mut previews = Vec::new();
     for candidate in &video_files {
@@ -1085,7 +1099,28 @@ async fn preview_manual_import(
 
         // File parsing is only for user-facing episode suggestions. It must
         // not become release/quality evidence for the later import.
-        let parsed = parsed_release_from_file_stem(path);
+        let mut parsed = parsed_release_from_file_stem(path);
+        // Translate community anime numbering into the catalog's own before the
+        // suggestion lookups, so a file named in per-cour numbering points at
+        // the episode the user actually has. Inert without a bridge.
+        let numbering = crate::anime_numbering::translate_release_numbering(
+            anime_numbering_bridge.as_ref(),
+            title,
+            available_episodes,
+            &mut parsed,
+            file_reference_date(path),
+        );
+        // Several readings fit equally well: suggest nothing rather than the
+        // wrong episode, and let the user pick.
+        let numbering_ambiguous = numbering.is_ambiguous();
+        if let Some(summary) = numbering.ambiguity_summary() {
+            tracing::debug!(
+                title_id = %title_id,
+                file = %path.display(),
+                readings = %summary,
+                "manual import: anime numbering is ambiguous; leaving the episode unselected"
+            );
+        }
         // The quality shown is the one the import will score: the release
         // evidence parsed with the title's canonical context, never the file
         // name.
@@ -1104,7 +1139,8 @@ async fn preview_manual_import(
                 .season
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "1".to_string());
-            if let Some(ep_num) = ep_meta.episode_numbers.first() {
+            if let Some(ep_num) = ep_meta.episode_numbers.first().filter(|_| !numbering_ambiguous)
+            {
                 let ep_str = ep_num.to_string();
                 if let Ok(Some(episode)) = app
                     .services
@@ -1139,6 +1175,7 @@ async fn preview_manual_import(
 
             // Anime absolute fallback
             if suggested_episode_id.is_none()
+                && !numbering_ambiguous
                 && let Some(abs) = ep_meta.absolute_episode
             {
                 let abs_str = abs.to_string();
@@ -2187,27 +2224,20 @@ async fn execute_manual_series_movie_import(
     let ext = scryer_domain::canonical_video_extension(source)
         .unwrap_or("mkv")
         .to_string();
-    let linked_episode = if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
-        app.services
-            .catalog
-            .shows
-            .get_episode_by_id(linked_episode_id)
-            .await?
-    } else {
-        None
-    };
+    let linked_episode = resolve_series_movie_linked_episode(app, title, &link).await?;
+    // The resolved episode, not `link.linked_episode_id`, is this import's episode
+    // everywhere below, so a film the fallback identified is mapped and owned by
+    // the special exactly as a real link would be.
+    let linked_episode_id = linked_episode.as_ref().map(|episode| episode.id.clone());
     let season_episode = linked_episode
         .as_ref()
-        .and_then(|episode| {
-            let season = episode.season_number.as_deref()?.parse::<i32>().ok()?;
-            let episode_number = episode.episode_number.as_deref()?.parse::<i32>().ok()?;
-            Some(format!("S{season:02}E{episode_number:02}"))
-        })
-        .unwrap_or_else(|| "S00E00".to_string());
+        .and_then(series_movie_season_episode_token);
     let rendered_filename = if rename_enabled {
-        sanitize_filesystem_component(&format!(
-            "{} - {} - {}.{}",
-            title.name, season_episode, link.movie.title, ext
+        sanitize_filesystem_component(&series_movie_import_filename(
+            &title.name,
+            season_episode.as_deref(),
+            &link.movie.title,
+            &ext,
         ))
     } else {
         preserved_import_filename(source)
@@ -2247,7 +2277,7 @@ async fn execute_manual_series_movie_import(
     .await?;
     let destination_ownership = ImportDestinationOwnership::series_movie(
         series_movie_link_id,
-        link.linked_episode_id.as_deref(),
+        linked_episode_id.as_deref(),
     );
     let file_result = match import_file_with_record_progress(
         app,
@@ -2320,7 +2350,7 @@ async fn execute_manual_series_movie_import(
         }
     };
 
-    if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
+    if let Some(linked_episode_id) = linked_episode_id.as_deref() {
         app.services
             .library
             .media_files
@@ -2393,7 +2423,7 @@ async fn execute_manual_series_movie_import(
         let nfo_path = dest_path.with_extension("nfo");
         let nfo_content = crate::nfo::render_series_movie_episode_nfo(
             &link.movie,
-            &season_episode,
+            season_episode.as_deref().unwrap_or_default(),
             link.after_season,
         );
         if let Err(error) = tokio::fs::write(&nfo_path, nfo_content.as_bytes()).await {

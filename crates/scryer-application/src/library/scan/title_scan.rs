@@ -2140,6 +2140,19 @@ impl AppUseCase {
             .list_episodes_for_title(&title.id)
             .await
             .unwrap_or_default();
+        // Community (per-cour) anime numbering for this title, read once per
+        // scan. `None` for every non-anime title, so the scan of a non-anime
+        // library issues no extra query at all.
+        let anime_numbering_bridge = if title.facet == scryer_domain::MediaFacet::Anime {
+            self.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .unwrap_or_default()
+        } else {
+            None
+        };
         db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
         debug!(
             title_id = %title.id,
@@ -2287,6 +2300,7 @@ impl AppUseCase {
                         episode_id: existing.episode_id.as_deref(),
                         snapshot_matches: existing_snapshot_matches,
                     }),
+                    anime_numbering_bridge: anime_numbering_bridge.as_ref(),
                     mode: LibraryFilenameParseMode::TitleScan,
                     fallback_policy: if existing.is_none() {
                         LibraryFilenameFallbackPolicy::NeedReleaseMetadata
@@ -2885,6 +2899,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
         });

@@ -1127,6 +1127,47 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Store (or clear) the community season layout SMG reported for an anime
+    /// title.
+    ///
+    /// Anime only, and unconditional within that: the bridge is a snapshot of an
+    /// upstream dataset, so every hydration replaces it wholesale rather than
+    /// merging — a season that AniBridge dropped must disappear here too. A
+    /// non-anime title never gets a row, which is what keeps every other facet
+    /// on exactly today's numbering behaviour.
+    async fn replace_anime_numbering_bridge_after_hydration(
+        &self,
+        title: &Title,
+        bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    ) {
+        if title.facet != scryer_domain::MediaFacet::Anime {
+            return;
+        }
+        if let Err(error) = self
+            .services
+            .catalog
+            .shows
+            .replace_anime_numbering_bridge(&title.id, bridge)
+            .await
+        {
+            warn!(
+                title_id = %title.id,
+                error = %error,
+                "failed to persist anime numbering bridge"
+            );
+            return;
+        }
+        if let Some(bridge) = bridge {
+            debug!(
+                title_id = %title.id,
+                generated_on = %bridge.generated_on,
+                community_seasons = bridge.seasons.len(),
+                corroborating_order = bridge.corroborating_order.as_deref().unwrap_or("none"),
+                "stored anime numbering bridge"
+            );
+        }
+    }
+
     /// Apply a [`HydrationResult`] to a title: persist metadata, create
     /// seasons/episodes, and enrich with anime mapping data.
     async fn apply_hydration_result(
@@ -1212,6 +1253,12 @@ impl AppUseCase {
             )
             .await;
         }
+
+        self.replace_anime_numbering_bridge_after_hydration(
+            &title,
+            result.anime_numbering_bridge.as_ref(),
+        )
+        .await;
 
         info!(
             hydration_source = source.as_str(),

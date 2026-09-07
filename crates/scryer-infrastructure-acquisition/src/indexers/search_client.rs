@@ -3361,7 +3361,9 @@ impl IndexerClient for MultiIndexerSearchClient {
         }
 
         if enabled.is_empty() {
-            info!(mode = ?mode, "no enabled indexer configs found");
+            // Expected whenever every indexer is backed off or mode-disabled;
+            // the per-indexer skip reasons above already carry the detail.
+            debug!(mode = ?mode, "no enabled indexer configs found");
             return Ok(IndexerSearchResponse {
                 results: vec![],
 
@@ -3653,7 +3655,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         }
 
         if scheduler_candidates.is_empty() {
-            info!(mode = ?mode, "no scheduler-eligible indexer configs found");
+            debug!(mode = ?mode, "no scheduler-eligible indexer configs found");
             return Ok(IndexerSearchResponse {
                 results: vec![],
 

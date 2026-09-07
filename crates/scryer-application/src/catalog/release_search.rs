@@ -22,6 +22,10 @@ struct PreparedReleaseScoringInputs {
     canonical_context: crate::quality::canonical_context::ResolvedScoringContext,
     catalog_episodes: Vec<Episode>,
     catalog_collections: Vec<Collection>,
+    /// The title's community numbering layout, loaded once per scoring batch.
+    /// `None` for every non-anime title and for anime SMG has no bridge for,
+    /// which is what keeps their numbering handling byte-for-byte as it was.
+    anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
     primary_episode_ids: Option<Option<HashSet<String>>>,
     indexer_priority_by_name: HashMap<String, i64>,
     now: chrono::DateTime<chrono::Utc>,
@@ -883,6 +887,16 @@ impl AppUseCase {
                 .list_collections_for_title(title_id)
                 .await
                 .unwrap_or_default();
+            let anime_numbering_bridge = if scored_title.facet == MediaFacet::Anime {
+                self.services
+                    .catalog
+                    .shows
+                    .get_anime_numbering_bridge(title_id)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                None
+            };
             let indexer_priority_by_name =
                 self.build_indexer_priority_by_name(indexer_routing).await;
             *prepared = Some(PreparedReleaseScoringInputs {
@@ -895,6 +909,7 @@ impl AppUseCase {
                 canonical_context,
                 catalog_episodes,
                 catalog_collections,
+                anime_numbering_bridge,
                 primary_episode_ids: None,
                 indexer_priority_by_name,
                 now: chrono::Utc::now(),
@@ -941,13 +956,39 @@ impl AppUseCase {
 
             let parsed_release_metadata =
                 parse_release_metadata_for_target(&result.title, parse_context);
-            let scored_release_metadata =
+            let mut scored_release_metadata =
                 crate::quality::canonical_context::announced_metadata_for_title(
                     &prepared.title,
                     &parsed_release_metadata,
                     prepared.canonical_context.required_audio_languages(),
                     result.indexer_languages.as_deref(),
                 );
+
+            // Anime released in community (per-cour) numbering is rewritten
+            // into the catalog's TVDB numbering before anything reads it, so
+            // coverage, the numbering veto and the rank all see one numbering.
+            // A release nobody can place is refused outright rather than
+            // grabbed on a coin toss.
+            let numbering = crate::anime_numbering::translate_release_numbering(
+                prepared.anime_numbering_bridge.as_ref(),
+                &prepared.title,
+                &prepared.catalog_episodes,
+                &mut scored_release_metadata,
+                result
+                    .published_at
+                    .as_deref()
+                    .and_then(crate::quality_profile::parse_published_at)
+                    .map(|published| published.date_naive()),
+            );
+            let numbering_ambiguous = numbering.is_ambiguous();
+            if let Some(summary) = numbering.ambiguity_summary() {
+                tracing::info!(
+                    title_id,
+                    release = result.title.as_str(),
+                    readings = summary.as_str(),
+                    "release numbering has several equally-good readings; not auto-grabbing"
+                );
+            }
 
             let is_series_pack = scored_release_metadata
                 .episode
@@ -1075,6 +1116,7 @@ impl AppUseCase {
                     head: crate::acquisition::scoring::RankHead {
                         blocked: !decision.allowed
                             || pack_below_missing_threshold
+                            || numbering_ambiguous
                             || !protocol_enabled,
                         tier_index: decision.tier_index.unwrap_or(usize::MAX),
                         negated_revision: -(i32::from(scored_release_metadata.is_proper_upload)
@@ -1131,7 +1173,12 @@ impl AppUseCase {
                 },
                 ..result
             };
-            if pack_below_missing_threshold {
+            if numbering_ambiguous {
+                crate::acquisition_release_search::annotate_auto_decision(
+                    &mut scored_result,
+                    crate::acquisition_release_search::ReleaseAutoDecisionCode::AnimeNumberingAmbiguous,
+                );
+            } else if pack_below_missing_threshold {
                 crate::acquisition_release_search::annotate_auto_decision(
                     &mut scored_result,
                     crate::acquisition_release_search::ReleaseAutoDecisionCode::PackBelowMissingThreshold,
@@ -1674,7 +1721,11 @@ impl AppUseCase {
             caller_label,
             mode,
             runtime_minutes: subject.runtime_minutes,
-            season: subject.season,
+            // The subject carries season 0 so the acceptance layer can veto a
+            // season-1 release for a special; `&season=0` is not a query an
+            // indexer answers, so it is dropped here and the search runs on the
+            // title/absolute queries the specials lane already builds.
+            season: subject.season.filter(|season| *season > 0),
             episode: subject.episode,
             absolute_episode: subject.absolute_episode,
             tagged_aliases: &tagged_aliases,

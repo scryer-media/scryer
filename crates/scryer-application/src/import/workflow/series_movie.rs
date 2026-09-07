@@ -1999,15 +1999,11 @@ async fn import_series_movie_download(
         .unwrap_or("mkv")
         .to_string();
 
-    let linked_episode = if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
-        app.services
-            .catalog
-            .shows
-            .get_episode_by_id(linked_episode_id)
-            .await?
-    } else {
-        None
-    };
+    let linked_episode = resolve_series_movie_linked_episode(app, title, &link).await?;
+    // The resolved episode, not `link.linked_episode_id`, is this import's episode
+    // everywhere below: when the fallback identified the special, the file must be
+    // mapped, owned and promoted against it exactly as a real link would be.
+    let linked_episode_id = linked_episode.as_ref().map(|episode| episode.id.clone());
     let linked_episode_ids = linked_episode
         .as_ref()
         .map(|episode| vec![episode.id.clone()])
@@ -2015,16 +2011,13 @@ async fn import_series_movie_download(
     let linked_episode_artifacts = linked_episode.iter().cloned().collect::<Vec<_>>();
     let season_episode = linked_episode
         .as_ref()
-        .and_then(|episode| {
-            let season = episode.season_number.as_deref()?.parse::<i32>().ok()?;
-            let episode_number = episode.episode_number.as_deref()?.parse::<i32>().ok()?;
-            Some(format!("S{season:02}E{episode_number:02}"))
-        })
-        .unwrap_or_else(|| "S00E00".to_string());
+        .and_then(series_movie_season_episode_token);
     let rendered_filename = if rename_enabled {
-        sanitize_filesystem_component(&format!(
-            "{} - {} - {}.{}",
-            title.name, season_episode, movie.title, ext
+        sanitize_filesystem_component(&series_movie_import_filename(
+            &title.name,
+            season_episode.as_deref(),
+            &movie.title,
+            &ext,
         ))
     } else {
         preserved_import_filename(&source_video)
@@ -2091,7 +2084,7 @@ async fn import_series_movie_download(
             Some(&dest_path),
             Some(SeriesMovieAdditionalImportContext {
                 series_movie_link_id,
-                linked_episode_id: link.linked_episode_id.as_deref(),
+                linked_episode_id: linked_episode_id.as_deref(),
                 linked_episode_artifacts: &linked_episode_artifacts,
             }),
             &series_movie_files,
@@ -2389,7 +2382,7 @@ async fn import_series_movie_download(
                         new_score = outcome.new_score,
                         "series movie file upgraded"
                     );
-                    if let Some(linked_episode_id) = link.linked_episode_id.as_deref()
+                    if let Some(linked_episode_id) = linked_episode_id.as_deref()
                         && let Err(error) = app
                             .services
                             .library
@@ -2513,7 +2506,7 @@ async fn import_series_movie_download(
     // Import file (hardlink or copy)
     let destination_ownership = ImportDestinationOwnership::series_movie(
         series_movie_link_id,
-        link.linked_episode_id.as_deref(),
+        linked_episode_id.as_deref(),
     );
     let file_result = import_file_with_record_progress(
         app,
@@ -2630,7 +2623,7 @@ async fn import_series_movie_download(
             .await?;
 
     if let Some(file_id) = imported_media_file_id.as_deref()
-        && let Some(linked_episode_id) = link.linked_episode_id.as_deref()
+        && let Some(linked_episode_id) = linked_episode_id.as_deref()
         && let Err(err) = app
             .services
             .library
@@ -2654,7 +2647,11 @@ async fn import_series_movie_download(
     if nfo_enabled {
         let nfo_path = dest_path.with_extension("nfo");
         let nfo_content =
-            crate::nfo::render_series_movie_episode_nfo(movie, &season_episode, link.after_season);
+        crate::nfo::render_series_movie_episode_nfo(
+            movie,
+            season_episode.as_deref().unwrap_or_default(),
+            link.after_season,
+        );
         if let Err(err) = tokio::fs::write(&nfo_path, nfo_content.as_bytes()).await {
             tracing::warn!(
                 error = %err,
@@ -2736,6 +2733,131 @@ async fn import_series_movie_download(
 
     Ok(result)
 }
+/// Resolves the episode a series-movie import should be filed under.
+///
+/// The metadata link carries `linked_episode_id` whenever the gateway mapped the
+/// film onto one of the series' TVDB specials. When it does not — the AniBridge
+/// mapping only exists on source keys the projection dropped, or the show has no
+/// special for this film at all — fall back to the series' own season-0 episodes
+/// and accept a single unambiguous match. Anything less certain resolves to
+/// `None`, and the caller then files the film with no episode token instead of
+/// inventing one.
+pub(crate) async fn resolve_series_movie_linked_episode(
+    app: &AppUseCase,
+    title: &Title,
+    link: &scryer_domain::SeriesMovieLink,
+) -> AppResult<Option<scryer_domain::Episode>> {
+    if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
+        return app
+            .services
+            .catalog
+            .shows
+            .get_episode_by_id(linked_episode_id)
+            .await;
+    }
+    let episodes = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await?;
+    Ok(match_series_movie_special_episode(&link.movie, &episodes).cloned())
+}
+
+/// Picks the one season-0 episode that unambiguously stands for `movie`.
+///
+/// The film's name is tried first, as an exact match on the canonical lookup key
+/// so case, punctuation and unicode form do not matter; the release date is the
+/// fallback signal. Either rule only answers when it selects exactly one special
+/// — two candidates mean the film is not identifiable and the import must not
+/// guess which episode it satisfies.
+pub(crate) fn match_series_movie_special_episode<'a>(
+    movie: &scryer_domain::MovieEntity,
+    episodes: &'a [scryer_domain::Episode],
+) -> Option<&'a scryer_domain::Episode> {
+    let specials = episodes
+        .iter()
+        .filter(|episode| series_movie_episode_season(episode) == Some(0))
+        .collect::<Vec<_>>();
+
+    let movie_key = crate::title_matching::canonical_lookup_key(&movie.title);
+    if !movie_key.is_empty() {
+        let by_name = specials
+            .iter()
+            .copied()
+            .filter(|episode| {
+                episode
+                    .title
+                    .as_deref()
+                    .map(crate::title_matching::canonical_lookup_key)
+                    .is_some_and(|key| key == movie_key)
+            })
+            .collect::<Vec<_>>();
+        if by_name.len() == 1 {
+            return by_name.first().copied();
+        }
+        if !by_name.is_empty() {
+            return None;
+        }
+    }
+
+    let release_day = series_movie_calendar_day(movie.digital_release_date.as_deref())?;
+    let by_date = specials
+        .iter()
+        .copied()
+        .filter(|episode| {
+            series_movie_calendar_day(episode.air_date.as_deref())
+                .is_some_and(|day| day == release_day)
+        })
+        .collect::<Vec<_>>();
+    if by_date.len() == 1 {
+        return by_date.first().copied();
+    }
+    None
+}
+
+fn series_movie_episode_season(episode: &scryer_domain::Episode) -> Option<i32> {
+    episode.season_number.as_deref()?.trim().parse::<i32>().ok()
+}
+
+/// `S{season:02}E{episode:02}` for an episode whose season and episode numbers
+/// are both known.
+pub(crate) fn series_movie_season_episode_token(episode: &scryer_domain::Episode) -> Option<String> {
+    let season = series_movie_episode_season(episode)?;
+    let episode_number = episode.episode_number.as_deref()?.trim().parse::<i32>().ok()?;
+    Some(format!("S{season:02}E{episode_number:02}"))
+}
+
+/// Reduces a stored date to its calendar day so a plain `YYYY-MM-DD` and a full
+/// timestamp compare equal.
+fn series_movie_calendar_day(value: Option<&str>) -> Option<String> {
+    let day = value?.trim().get(..10)?;
+    day.chars()
+        .enumerate()
+        .all(|(index, ch)| match index {
+            4 | 7 => ch == '-',
+            _ => ch.is_ascii_digit(),
+        })
+        .then(|| day.to_string())
+}
+
+/// Renders the destination filename for a series-movie import.
+///
+/// The episode token is omitted entirely when the film could not be resolved to a
+/// special: a fabricated `S00E00` names an episode that does not exist, and every
+/// scanner that reads the name then treats the film as the show's zeroth special.
+pub(crate) fn series_movie_import_filename(
+    series_name: &str,
+    season_episode: Option<&str>,
+    movie_title: &str,
+    extension: &str,
+) -> String {
+    match season_episode.filter(|token| !token.is_empty()) {
+        Some(token) => format!("{series_name} - {token} - {movie_title}.{extension}"),
+        None => format!("{series_name} - {movie_title}.{extension}"),
+    }
+}
+
 async fn mark_wanted_completed_for_series_movie_link(
     app: &AppUseCase,
     title_id: &str,

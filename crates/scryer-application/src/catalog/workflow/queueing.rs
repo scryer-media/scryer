@@ -1180,13 +1180,32 @@ fn summarize_auto_eligibility_reasons(
             .as_deref()
             .unwrap_or("automatic eligibility was not evaluated")
             .to_string();
+        // A quality veto is only actionable when the operator can see WHICH
+        // rule fired ("required audio language" versus "resolution not in
+        // profile"), so quality-blocked candidates group by their block codes
+        // rather than collapsing into one anonymous bucket.
+        let block_codes = if code == "quality_blocked" {
+            candidate
+                .quality_profile_decision
+                .as_ref()
+                .map(|decision| {
+                    let mut codes = decision.block_codes.clone();
+                    codes.sort();
+                    codes.dedup();
+                    codes
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         reasons
-            .entry(code.clone())
+            .entry((code.clone(), block_codes.clone()))
             .and_modify(|reason: &mut crate::AutoEligibilityReason| reason.count += 1)
             .or_insert(crate::AutoEligibilityReason {
                 code,
                 summary,
                 count: 1,
+                block_codes,
             });
     }
 
@@ -1208,6 +1227,97 @@ fn normalize_release_attempt_value(value: Option<&str>) -> Option<String> {
 }
 
 /// Grab-time persistence of the indexer release title for the manual queue
+#[cfg(test)]
+mod auto_eligibility_reason_tests {
+    use super::summarize_auto_eligibility_reasons;
+    use crate::{IndexerSearchResult, QualityProfileDecision};
+
+    fn rejected(code: &str, summary: &str, block_codes: &[&str]) -> IndexerSearchResult {
+        IndexerSearchResult {
+            indexer_id: None,
+            source: "indexer-a".to_string(),
+            title: "Silver.Horizon.2024.1080p.WEB-DL".to_string(),
+            link: None,
+            download_url: None,
+            source_kind: None,
+            size_bytes: None,
+            published_at: None,
+            thumbs_up: None,
+            thumbs_down: None,
+            indexer_languages: None,
+            indexer_subtitles: None,
+            indexer_grabs: None,
+            password_hint: None,
+            parsed_release_metadata: None,
+            quality_profile_decision: Some(QualityProfileDecision {
+                release_score: 0,
+                scoring_log: Vec::new(),
+                allowed: block_codes.is_empty(),
+                block_codes: block_codes.iter().map(|code| code.to_string()).collect(),
+                preference_score: 0,
+                tier_index: None,
+            }),
+            extra: Default::default(),
+            response_attributes: Default::default(),
+            guid: None,
+            info_url: None,
+            provenance: None,
+            candidate_token: None,
+            queue_scope: None,
+            coverage_scope: None,
+            auto_eligible: Some(false),
+            auto_decision_code: Some(code.to_string()),
+            auto_decision_summary: Some(summary.to_string()),
+        }
+    }
+
+    /// The operator needs to see WHICH rule vetoed the releases, so
+    /// quality-blocked candidates group by their sorted block codes instead of
+    /// collapsing into one anonymous bucket; every other code stays a single
+    /// entry with no block codes.
+    #[test]
+    fn quality_blocked_candidates_group_by_block_codes() {
+        let quality = "quality profile blocked this release";
+        let reasons = summarize_auto_eligibility_reasons(&[
+            rejected("quality_blocked", quality, &["managed_required_audio_missing"]),
+            rejected(
+                "quality_blocked",
+                quality,
+                &["resolution_not_allowed", "managed_required_audio_missing"],
+            ),
+            rejected("quality_blocked", quality, &["managed_required_audio_missing"]),
+            rejected("title_mismatch", "release title does not match the target title", &[]),
+        ]);
+
+        assert_eq!(
+            reasons,
+            vec![
+                crate::AutoEligibilityReason {
+                    code: "quality_blocked".to_string(),
+                    summary: quality.to_string(),
+                    count: 2,
+                    block_codes: vec!["managed_required_audio_missing".to_string()],
+                },
+                crate::AutoEligibilityReason {
+                    code: "quality_blocked".to_string(),
+                    summary: quality.to_string(),
+                    count: 1,
+                    block_codes: vec![
+                        "managed_required_audio_missing".to_string(),
+                        "resolution_not_allowed".to_string(),
+                    ],
+                },
+                crate::AutoEligibilityReason {
+                    code: "title_mismatch".to_string(),
+                    summary: "release title does not match the target title".to_string(),
+                    count: 1,
+                    block_codes: Vec::new(),
+                },
+            ]
+        );
+    }
+}
+
 /// path (`queue_manual_release_for_title`), which every interactive/API grab
 /// funnels through. The best-release, RSS, pending-release, and auto-search
 /// paths already assert their persisted `source_title` in `lib_tests`.

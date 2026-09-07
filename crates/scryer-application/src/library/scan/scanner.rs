@@ -603,6 +603,10 @@ pub struct SeriesMetadata {
     pub episodes: Vec<EpisodeMetadata>,
     pub anime_mappings: Vec<AnimeMapping>,
     pub anime_movies: Vec<AnimeMovie>,
+    /// Community (AniDB/AniList/MAL) season layout for this series, when SMG
+    /// could build one. `None` for non-anime, for an SMG that predates the
+    /// field, and for anime whose community numbering matches TVDB's.
+    pub anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
 }

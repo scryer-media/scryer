@@ -269,7 +269,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "http",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "lru",
  "mime",
  "multer",
@@ -336,7 +336,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e3ef112905abea9dea592fc868a6873b10ebd3f983e83308f995d6284e9ba41"
 dependencies = [
  "bytes",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "serde",
  "serde_json",
 ]
@@ -1379,9 +1379,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
@@ -1389,27 +1389,27 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
 dependencies = [
  "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-queue"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803d13fb3b09d88be9f4dbc29062c66b19bf7170867ceb746d2a8689bf6c7a26"
+checksum = "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae"
 dependencies = [
  "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.22"
+version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crunchy"
@@ -1652,9 +1652,9 @@ dependencies = [
 
 [[package]]
 name = "der"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a69dedd701da44b0536442edf09c81a64b0ab97a7a4a5e3d1971f00027cbc63d"
+checksum = "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"
 dependencies = [
  "const-oid 0.10.2",
  "der_derive 0.8.0",
@@ -2420,7 +2420,7 @@ checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
 dependencies = [
  "fnv",
  "hashbrown 0.16.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "stable_deref_trait",
 ]
 
@@ -2499,7 +2499,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "slab",
  "tokio",
  "tokio-util",
@@ -3034,9 +3034,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.14.1"
+version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
@@ -3098,9 +3098,9 @@ checksum = "2f0fb0570afe1fed943c5c3d4102d5358592d8625fda6a0007fdbe65a92fba96"
 
 [[package]]
 name = "ipnet"
-version = "2.12.1"
+version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
+checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "is-docker"
@@ -3283,9 +3283,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.104"
+version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e0c1080212aad755ea003d18543e8768dd432c48819efd73a7bf1e39b7a5a3a"
+checksum = "ce57d20d1ea864ce2ac172ab472d409214f4fd359f0b2a2775abdf522e2af99e"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -3638,7 +3638,7 @@ checksum = "1db0d8f1fc9e62caebd0319e11eaec5822b0186c171568f0480b46a0137f9108"
 dependencies = [
  "base64 0.22.1",
  "evmap",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "metrics",
  "metrics-util",
  "quanta",
@@ -4025,7 +4025,7 @@ checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
 dependencies = [
  "crc32fast",
  "hashbrown 0.17.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "memchr",
 ]
 
@@ -4257,7 +4257,7 @@ dependencies = [
  "data-encoding",
  "getrandom 0.2.17",
  "hmac 0.12.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "rand 0.8.8",
  "serde",
  "serde_json",
@@ -4345,9 +4345,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pest"
-version = "2.9.0"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a07a60cc7a4d00c91f95c685609d1d2f79050e6804b70ebedd7650f0b839bcf"
+checksum = "6d45aeb61b4bf818e12d4205f2466f8c4748f85f4fce0146d1c03d69d753f0ad"
 dependencies = [
  "memchr",
  "ucd-trie",
@@ -4361,7 +4361,7 @@ checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
 ]
 
 [[package]]
@@ -5138,7 +5138,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cc4dc91481b1d4001ba7f2e81f7faf674142e0ac36d37d79e5f02764d06571e"
 dependencies = [
  "anyhow",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "lazy_static",
  "msvc_spectre_libs",
  "num-bigint 0.5.1",
@@ -5497,7 +5497,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
@@ -5558,7 +5558,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "argon2",
  "async-trait",
@@ -5617,7 +5617,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "blake3",
  "chrono",
@@ -5633,7 +5633,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-acquisition"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -5672,7 +5672,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-configuration"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5690,7 +5690,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-crypto"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -5700,7 +5700,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-datastore"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5737,7 +5737,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-identity"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5761,7 +5761,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5794,7 +5794,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library-search"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "scryer-application",
  "scryer-domain",
@@ -5805,7 +5805,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-metadata"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-notifications"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5849,7 +5849,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-runtime"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5885,7 +5885,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-sql"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "blake3",
  "chrono",
@@ -5900,7 +5900,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-workflow"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5922,7 +5922,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5947,7 +5947,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-acquisition"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5959,7 +5959,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-core"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -5970,7 +5970,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-import"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5988,7 +5988,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6004,7 +6004,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media-types"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6014,7 +6014,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-metadata"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -6025,7 +6025,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-query"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "base64 0.22.1",
@@ -6042,7 +6042,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-security"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-settings"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6067,7 +6067,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-subscription"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6081,7 +6081,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-system"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6094,14 +6094,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-launcher"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scryer-logging"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "chrono",
  "serde",
@@ -6112,7 +6112,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "bytes",
  "isolang",
@@ -6130,7 +6130,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "axum",
  "serde",
@@ -6142,7 +6142,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-outbound-http"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "chrono",
  "governor",
@@ -6168,7 +6168,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -6207,7 +6207,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "aho-corasick",
  "chrono",
@@ -6221,7 +6221,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-rules"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "regorus",
  "serde",
@@ -6232,11 +6232,11 @@ dependencies = [
 
 [[package]]
 name = "scryer-runtime-info"
-version = "0.19.11"
+version = "0.19.12"
 
 [[package]]
 name = "scryer-webauthn"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -6435,7 +6435,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "itoa",
  "memchr",
  "serde",
@@ -6517,7 +6517,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "jiff",
  "schemars 0.9.0",
  "schemars 1.2.2",
@@ -6847,7 +6847,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d9efca8738c78ee9484207732f728b1ef517bbb1833d6fc0879ca898a522f6f"
 dependencies = [
  "base64ct",
- "der 0.8.1",
+ "der 0.8.2",
 ]
 
 [[package]]
@@ -6883,7 +6883,7 @@ dependencies = [
  "futures-util",
  "hashbrown 0.16.1",
  "hashlink",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "log",
  "memchr",
  "percent-encoding",
@@ -7402,7 +7402,7 @@ version = "0.9.12+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
 dependencies = [
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "serde_core",
  "serde_spanned",
  "toml_datetime 0.7.5+spec-1.1.0",
@@ -7417,7 +7417,7 @@ version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12c0ba9680044b4ce98d391a62094047eada0d64860b80166c39f4a6b5640785"
 dependencies = [
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "serde_core",
  "serde_spanned",
  "toml_datetime 1.1.1+spec-1.1.0",
@@ -7450,7 +7450,7 @@ version = "0.25.13+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
 dependencies = [
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "toml_writer",
@@ -7889,9 +7889,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.127"
+version = "0.2.128"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b70935747edd64d89de3efa29d73789b806c15798f8e7dca4d8ac356b50ce70"
+checksum = "aecb87a33d3b0c5e3b7aa46336eaf486cffafbd281b195e4c8b80d50df2351bf"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -7902,9 +7902,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.77"
+version = "0.4.78"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b7777d5cc23d0e91404e53ce2d5e8ec7acae3026b16233dba62cd3246457950"
+checksum = "6ef4c5d3d2cdf5c54f4231181768f5510842e350db025faf1f7163b1030ed928"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -7912,9 +7912,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.127"
+version = "0.2.128"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77775f8f3f7217702089053b94958f8f54061a3f663417df76e19cbdcca29bc1"
+checksum = "a690d511e3c1a8b3a55e33511e3c2c00c78415cd23650f32b808627f5696b9ed"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -7922,22 +7922,22 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.127"
+version = "0.2.128"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e11d33f857dc2fb11b8bc75aee111aa9cbeb12cd9f25efd3d4c2a3dd4e235284"
+checksum = "411e4887f0071ef2d2164a9d5fdf2d20efbef78fccd3a78b0c10a1dc5295e48a"
 dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.5",
  "wasm-bindgen-shared",
 ]
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.127"
+version = "0.2.128"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef64dbcc55df09c7e5a46182d181c2cfa3e925f3da937ea764728b4bbb9dcbf"
+checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
 dependencies = [
  "unicode-ident",
 ]
@@ -7969,7 +7969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b01df5f3b4ca7881e843f3bc0fb8a3905d79c68692250dcb8e33e698705ccdb6"
 dependencies = [
  "anyhow",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "wasm-encoder 0.254.0",
  "wasmparser 0.254.0",
 ]
@@ -7995,7 +7995,7 @@ checksum = "d5769a29f799fbab136aaf65b4fe5384cd7d93fe6fc9ba0dcb6c8382a1f16e27"
 dependencies = [
  "bitflags 2.13.1",
  "hashbrown 0.17.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "semver",
  "serde",
 ]
@@ -8007,7 +8007,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9a61719f93a87b16d325921e251800c4833f8fab50fa21c7de73aed50086313"
 dependencies = [
  "bitflags 2.13.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "semver",
 ]
 
@@ -8077,7 +8077,7 @@ dependencies = [
  "cranelift-entity",
  "gimli",
  "hashbrown 0.17.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "log",
  "object",
  "postcard",
@@ -8240,7 +8240,7 @@ dependencies = [
  "anyhow",
  "bitflags 2.13.1",
  "heck",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "wit-component",
  "wit-parser",
 ]
@@ -8315,9 +8315,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.104"
+version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c435338968042f4f59a557f690a253676d47ce13ceb55d70100e7facf6620a30"
+checksum = "9fbddc4a036f00ec4f18c83445bd3115cb306a91da554919a099d9222fe4a7f8"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -8780,7 +8780,7 @@ checksum = "b0e65bb94c369b3c4741ce3d1d2704b1fec93db7c540df0e521a097e7ceeb5be"
 dependencies = [
  "anyhow",
  "bitflags 2.13.1",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "log",
  "serde",
  "serde_derive",
@@ -8800,7 +8800,7 @@ dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
  "id-arena",
- "indexmap 2.14.1",
+ "indexmap 2.14.2",
  "log",
  "semver",
  "serde",
@@ -8855,7 +8855,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
  "const-oid 0.10.2",
- "der 0.8.1",
+ "der 0.8.2",
  "spki 0.8.0",
  "tls_codec",
 ]
@@ -8947,7 +8947,7 @@ dependencies = [
 
 [[package]]
 name = "xtask-trash-guides"
-version = "0.19.11"
+version = "0.19.12"
 dependencies = [
  "anyhow",
  "chrono",

@@ -556,11 +556,50 @@ pub fn from_quality_profile_settings(
     }
 }
 
+/// Categories from the stored caps snapshot, sorted by code so the picker can
+/// render them deterministically. A missing or unparseable snapshot yields an
+/// empty list rather than an error: caps are best-effort metadata.
+pub fn indexer_caps_categories(
+    caps_snapshot_json: Option<&str>,
+) -> Vec<IndexerCapsCategoryPayload> {
+    let Some(snapshot_json) = caps_snapshot_json else {
+        return Vec::new();
+    };
+    let Ok(snapshot) = serde_json::from_str::<scryer_domain::IndexerCapsSnapshot>(snapshot_json)
+    else {
+        return Vec::new();
+    };
+    let mut categories = snapshot
+        .categories
+        .categories
+        .into_iter()
+        .filter(|category| !category.value.trim().is_empty())
+        .map(|category| IndexerCapsCategoryPayload {
+            code: category.value.trim().to_string(),
+            label: category
+                .label
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty()),
+        })
+        .collect::<Vec<_>>();
+    categories.sort_by(
+        |left, right| match (left.code.parse::<i64>(), right.code.parse::<i64>()) {
+            (Ok(left_id), Ok(right_id)) => left_id.cmp(&right_id),
+            (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+            (Err(_), Err(_)) => left.code.cmp(&right.code),
+        },
+    );
+    categories.dedup_by(|left, right| left.code == right.code);
+    categories
+}
+
 pub fn from_indexer_config_with_fields(
     config: IndexerConfig,
     config_fields: &[ConfigFieldDef],
 ) -> IndexerConfigPayload {
     let is_managed = config.managed_parent_config_id.is_some();
+    let caps_categories = indexer_caps_categories(config.caps_snapshot_json.as_deref());
     let managed_parent_config_id = config.managed_parent_config_id.clone();
     let supports_managed_children_sync = config.provider_type.eq_ignore_ascii_case("prowlarr");
     // Computed before `config` is picked apart below. Goals only: the dropdown
@@ -605,6 +644,7 @@ pub fn from_indexer_config_with_fields(
         last_error_at: config.last_error_at,
         last_query_at: None,
         config: provider_config_values_from_json_with_fields(config_json.as_deref(), config_fields),
+        caps_categories,
         created_at: config.created_at,
         updated_at: config.updated_at,
     }
@@ -894,6 +934,57 @@ pub(super) fn stored_secret_keys_from_config_json(
 #[cfg(test)]
 mod option_tests {
     use super::*;
+
+    #[test]
+    fn indexer_caps_categories_flatten_and_sort_snapshot_categories() {
+        let snapshot = serde_json::json!({
+            "server_title": "Example Indexer",
+            "categories": {
+                "value_kinds": ["numeric"],
+                "provider_category_metadata": true,
+                "categories": [
+                    { "value": "5000", "label": "TV", "value_kind": "numeric" },
+                    { "value": "100020", "label": " Movies-DE ", "value_kind": "numeric" },
+                    { "value": "2000", "label": "Movies", "value_kind": "numeric" },
+                    { "value": "2040", "value_kind": "numeric" },
+                    { "value": "2040", "label": "duplicate", "value_kind": "numeric" },
+                    { "value": "  ", "label": "blank", "value_kind": "numeric" }
+                ]
+            }
+        })
+        .to_string();
+
+        let categories = indexer_caps_categories(Some(&snapshot));
+
+        assert_eq!(
+            categories,
+            vec![
+                IndexerCapsCategoryPayload {
+                    code: "2000".to_string(),
+                    label: Some("Movies".to_string()),
+                },
+                IndexerCapsCategoryPayload {
+                    code: "2040".to_string(),
+                    label: None,
+                },
+                IndexerCapsCategoryPayload {
+                    code: "5000".to_string(),
+                    label: Some("TV".to_string()),
+                },
+                IndexerCapsCategoryPayload {
+                    code: "100020".to_string(),
+                    label: Some("Movies-DE".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn indexer_caps_categories_tolerate_missing_or_invalid_snapshots() {
+        assert!(indexer_caps_categories(None).is_empty());
+        assert!(indexer_caps_categories(Some("not json")).is_empty());
+        assert!(indexer_caps_categories(Some("{}")).is_empty());
+    }
 
     #[test]
     fn config_option_payload_preserves_preset_overrides() {

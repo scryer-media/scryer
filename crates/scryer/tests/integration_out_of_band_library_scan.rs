@@ -791,6 +791,7 @@ async fn resolve_pending_import_creates_title_and_clears_movie_row_without_scann
             &actor,
             &pending_id,
             pending_import_title_request(MediaFacet::Movie, "Fresh Match", "987654"),
+            false,
         )
         .await
         .expect("resolve pending import");
@@ -908,6 +909,7 @@ async fn resolve_pending_import_rejects_stale_movie_row_already_bound_to_title()
             &actor,
             &pending_id,
             pending_import_title_request(MediaFacet::Movie, "Emberline", "123456"),
+            false,
         )
         .await
         .expect_err("stale pending import should be rejected when title already exists");
@@ -995,6 +997,7 @@ async fn resolving_existing_title_pending_import_does_not_clear_existing_title_f
             &actor,
             &pending_id,
             pending_import_title_request(MediaFacet::Series, "Existing Folder Show", "123456"),
+            false,
         )
         .await
         .expect_err("existing title should not resolve through match");

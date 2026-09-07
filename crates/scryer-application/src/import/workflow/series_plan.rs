@@ -121,6 +121,20 @@ async fn build_episode_pack_import_plan(
         .shows
         .list_episodes_for_title(&title.id)
         .await?;
+    // Members of an anime pack are frequently named in the community's per-cour
+    // numbering while the catalog follows TVDB's official order. Loaded once for
+    // the whole pack; `None` for every non-anime title and for anime SMG has no
+    // bridge for, which leaves pack planning byte-for-byte as it was.
+    let anime_numbering_bridge = if title.facet == scryer_domain::MediaFacet::Anime {
+        app.services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(&title.id)
+            .await
+            .unwrap_or_default()
+    } else {
+        None
+    };
 
     let mut drafts = Vec::with_capacity(video_files.len());
     for source_path in video_files {
@@ -132,7 +146,13 @@ async fn build_episode_pack_import_plan(
                     .to_string(),
             }
         } else {
-            plan_episode_pack_member(title, source_root, source_path, &catalog_episodes)
+            plan_episode_pack_member(
+                title,
+                source_root,
+                source_path,
+                &catalog_episodes,
+                anime_numbering_bridge.as_ref(),
+            )
         };
         let draft = if matches!(
             &draft,
@@ -370,6 +390,7 @@ fn plan_episode_pack_member(
     source_root: &Path,
     source_path: &Path,
     catalog: &[scryer_domain::Episode],
+    anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
 ) -> PlannedMemberDraft {
     let parsed_stem = parsed_pack_member_for_catalog(title, source_path, catalog);
     if has_disc_layout_ancestor(source_root, source_path) {
@@ -431,12 +452,84 @@ fn plan_episode_pack_member(
         };
     };
 
+    // Translate community (per-cour) anime numbering into the catalog's own
+    // before the member is resolved. This happens after the season-folder
+    // conflict check on purpose: the folder and the file name are both in
+    // community numbering, so they agree with each other, and it is the pair of
+    // them that has to be translated. Once translated, the season the member
+    // lands in is the one the translation validated against the catalog, so the
+    // original folder season is no longer the thing to compare against.
+    let (identity, folder_season) = match translate_pack_member_numbering(
+        title,
+        catalog,
+        anime_numbering_bridge,
+        &parsed_stem,
+        &identity,
+    ) {
+        Ok(Some(translated)) => {
+            let season = translated.season;
+            (translated, season)
+        }
+        Ok(None) => (identity, folder_season),
+        Err(summary) => {
+            return PlannedMemberDraft::Hold {
+                episodes: Vec::new(),
+                reason_code: "anime_numbering_ambiguous",
+                message: format!(
+                    "Automatic import found several equally-good readings of this pack member's anime numbering ({summary}). Open Manual Import and assign the correct episode."
+                ),
+            };
+        }
+    };
+
     plan_parsed_pack_identity(
         title.facet == scryer_domain::MediaFacet::Anime,
         &identity,
         folder_season,
         catalog,
     )
+}
+
+/// Rewrite one pack member's parsed identity into the catalog's numbering.
+///
+/// `Ok(None)` means nothing changed — a non-anime title, a title with no
+/// bridge, or a member whose literal numbering was right all along — and the
+/// caller keeps today's behaviour exactly. `Err` carries the human-readable
+/// readings of a member nobody can place, which becomes a hold.
+fn translate_pack_member_numbering(
+    title: &scryer_domain::Title,
+    catalog: &[scryer_domain::Episode],
+    anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    parsed_stem: &crate::ParsedReleaseMetadata,
+    identity: &crate::ParsedEpisodeMetadata,
+) -> Result<Option<crate::ParsedEpisodeMetadata>, String> {
+    let Some(bridge) = anime_numbering_bridge else {
+        return Ok(None);
+    };
+    if title.facet != scryer_domain::MediaFacet::Anime {
+        return Ok(None);
+    }
+    let variants = if parsed_stem.normalized_title_variants.is_empty() {
+        vec![parsed_stem.normalized_title.clone()]
+    } else {
+        parsed_stem.normalized_title_variants.clone()
+    };
+    let mut translated = identity.clone();
+    let resolution = crate::anime_numbering::translate_parsed_episode_numbering(
+        bridge,
+        title,
+        catalog,
+        &mut translated,
+        &variants,
+        None,
+    );
+    match resolution {
+        crate::anime_numbering::NumberingResolution::Resolved(_) => Ok(Some(translated)),
+        crate::anime_numbering::NumberingResolution::Unchanged => Ok(None),
+        crate::anime_numbering::NumberingResolution::Ambiguous(_) => Err(resolution
+            .ambiguity_summary()
+            .unwrap_or_else(|| "several readings".to_string())),
+    }
 }
 
 fn plan_parsed_pack_identity(
@@ -1173,6 +1266,115 @@ mod series_plan_tests {
         assert!(matches!(
             plan_parsed_pack_identity(false, &part_two, None, &catalog),
             PlannedMemberDraft::Resolved(ref episodes) if episodes[0].id == "ep-2"
+        ));
+    }
+
+    // ── community-numbered anime pack members ─────────────────────────────
+    //
+    // Synthetic four-cour layout: TVDB carries one official season of 60
+    // episodes, the community four seasons of 14 / 12 / 10 / 24. Every name is
+    // invented.
+
+    fn anime_pack_title() -> scryer_domain::Title {
+        scryer_domain::Title {
+            id: "title-1".to_string(),
+            name: "Lantern Verge".to_string(),
+            facet: scryer_domain::MediaFacet::Anime,
+            library_id: scryer_domain::default_library_id_for_facet(
+                &scryer_domain::MediaFacet::Anime,
+            ),
+            root_folder_id: scryer_domain::root_folder_id_for_path("/data/test"),
+            monitored: true,
+            tags: Vec::new(),
+            canonical_tags: Vec::new(),
+            external_ids: Vec::new(),
+            created_by: None,
+            created_at: Utc::now(),
+            year: Some(2025),
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: Vec::new(),
+            tagged_aliases: Vec::new(),
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            folder_path: None,
+        }
+    }
+
+    fn anime_pack_bridge() -> scryer_domain::AnimeNumberingBridge {
+        let mut seasons = Vec::new();
+        let mut tvdb_start = 1;
+        for (offset, length) in [14, 12, 10, 24].iter().enumerate() {
+            let index = i32::try_from(offset).expect("small index") + 1;
+            seasons.push(scryer_domain::AnimeCommunitySeason {
+                index,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: vec![format!("Lantern Verge Cour {index}")],
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 1,
+                    community_episode_end: Some(*length),
+                    tvdb_season: 1,
+                    tvdb_episode_start: tvdb_start,
+                    tvdb_episode_end: Some(tvdb_start + length - 1),
+                }],
+                absolute_start: Some(tvdb_start),
+                episode_count: Some(*length),
+            });
+            tvdb_start += length;
+        }
+        scryer_domain::AnimeNumberingBridge {
+            generated_on: "2026-08-30".to_string(),
+            corroborating_order: None,
+            seasons,
+        }
+    }
+
+    /// A pack of a later cour arrives named and foldered in community
+    /// numbering. Both the file name and its season folder say season 4, so
+    /// they agree with each other and disagree with the catalog; the member has
+    /// to land on the official episode the bridge points at, not be held.
+    #[test]
+    fn a_community_numbered_anime_pack_member_lands_on_the_official_episode() {
+        let title = anime_pack_title();
+        let catalog: Vec<_> = (1..=60u32)
+            .map(|number| catalog_episode(&format!("ep-{number}"), number, number))
+            .collect();
+        let bridge = anime_pack_bridge();
+        let root = Path::new("/downloads/Lantern Verge S04 1080p WEB-DL-FIXTUREGRP");
+        let member = root
+            .join("Season 04")
+            .join("Lantern Verge - S04E20 - 1080p WEB-DL-FIXTUREGRP.mkv");
+
+        // Community S04E20 is official S01E56 (cour 4 starts at official 37).
+        assert!(matches!(
+            plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge)),
+            PlannedMemberDraft::Resolved(ref episodes)
+                if episodes.len() == 1 && episodes[0].id == "ep-56"
+        ));
+
+        // Without a bridge the member is unresolvable, exactly as today.
+        assert!(!matches!(
+            plan_episode_pack_member(&title, root, &member, &catalog, None),
+            PlannedMemberDraft::Resolved(_)
         ));
     }
 

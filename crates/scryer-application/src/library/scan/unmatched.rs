@@ -8,6 +8,7 @@ use crate::library_scan_metadata::{
     METADATA_TYPE_MOVIE, METADATA_TYPE_SERIES, MetadataSearchResults,
     PreparedMovieLibraryScanCandidate, PreparedSeriesLibraryScanCandidate,
     build_library_scan_unmatched_search_attempts, library_scan_unmatched_reason_code,
+    movie_candidate_year_hint_variants,
 };
 use crate::{
     AppResult, AppUseCase, LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt,
@@ -128,7 +129,7 @@ fn build_movie_unmatched_scan_record(
     let search_attempts = build_library_scan_unmatched_search_attempts(
         METADATA_TYPE_MOVIE,
         &candidate.search_candidates,
-        candidate.year_hint,
+        &movie_candidate_year_hint_variants(candidate),
         candidate.identity_hint.as_ref(),
         batch_search_results,
     );
@@ -199,7 +200,7 @@ pub(crate) fn build_series_unmatched_scan_item(
     let search_attempts = build_library_scan_unmatched_search_attempts(
         METADATA_TYPE_SERIES,
         &candidate.search_candidates,
-        candidate.year_hint,
+        &[candidate.year_hint],
         candidate.identity_hint.as_ref(),
         batch_search_results,
     );

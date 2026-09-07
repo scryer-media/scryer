@@ -2218,7 +2218,7 @@ fn link_import_admission(
 /// and the `.expect` panicked the import task.
 #[test]
 fn a_linked_incumbent_at_another_path_still_resolves_for_the_upgrade_branch() {
-    let dest_path = "/data/TV/Quiet Orbit/Season 00/Quiet Orbit - S00E00 - The Film.mkv";
+    let dest_path = "/data/TV/Quiet Orbit/Season 00/Quiet Orbit - S00E02 - The Film.mkv";
     let existing_files = vec![linked_media_file(
         "file-1",
         "/data/TV/Quiet Orbit/Season 00/preserved.original.name.mp4",

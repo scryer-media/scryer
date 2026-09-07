@@ -12,6 +12,7 @@ pub mod hook_ids;
 pub mod known_bad;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
+pub mod post_processing_output;
 pub mod rule_set_runtime_wrapper;
 pub mod title_catalog_sort_keys;
 pub mod title_folder_ownership;
@@ -789,6 +790,9 @@ async fn run_rust_hook(
             blake3_identities::backfill_blake3_identities_sqlite(tx).await
         }
         "compact_event_storage" => event_storage::compact_event_storage_sqlite(tx).await,
+        "compress_post_processing_output" => {
+            post_processing_output::compress_post_processing_output_sqlite(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

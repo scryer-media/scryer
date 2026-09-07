@@ -100,6 +100,26 @@ query GetSeries($id: String!, $includeEpisodes: Boolean!, $language: String!) {
           episode_end
         }
       }
+      anime_numbering_bridge {
+        generated_on
+        corroborating_order
+        seasons {
+          index
+          anidb_id
+          anilist_id
+          mal_id
+          titles
+          ranges {
+            community_episode_start
+            community_episode_end
+            tvdb_season
+            tvdb_episode_start
+            tvdb_episode_end
+          }
+          absolute_start
+          episode_count
+        }
+      }
       anime_movies {
         movie_tvdb_id
         movie_tmdb_id

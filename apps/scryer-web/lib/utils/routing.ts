@@ -680,3 +680,17 @@ export function parseLanguageFromParam(value: string | null): LocaleCode | null 
   const normalized = normalizeLocale(value);
   return isLocaleSupported(normalized) ? normalized : null;
 }
+
+/**
+ * Navigation state the header's "Enable login" entry attaches when it sends
+ * the user to Security, so the page opens the enable flow on arrival.
+ */
+export const ENABLE_FORM_LOGIN_LOCATION_STATE = { enableFormLogin: true } as const;
+
+export function readEnableFormLoginIntent(state: unknown): boolean {
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    (state as { enableFormLogin?: unknown }).enableFormLogin === true
+  );
+}

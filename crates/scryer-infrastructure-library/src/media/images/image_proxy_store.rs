@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, ImageProxyCacheEntryRecord, ImageProxyRegistration, ImageProxyRepository,
-    ImageProxySourceRecord, image_proxy_source_token,
+    AppError, AppResult, ImageProxyCacheEntryRecord, ImageProxyCacheUsage, ImageProxyRegistration,
+    ImageProxyRepository, ImageProxySourceRecord, image_proxy_source_token,
 };
 
 use crate::storage::sql::runtime::{SqlArg, SqlRuntime, StoreDatastore};
@@ -264,6 +264,41 @@ impl ImageProxyRepository for ImageProxyStore {
         .collect()
     }
 
+    async fn list_image_proxy_cache_entries_lru_oldest(
+        &self,
+        limit: u32,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT token, variant, content_type, byte_size, upstream_etag, upstream_last_modified, fetched_at, last_accessed_at
+               FROM image_proxy_cache_entries
+              ORDER BY last_accessed_at ASC
+              LIMIT {}",
+            &[SqlArg::I64(i64::from(limit))],
+        )
+        .await?
+        .into_iter()
+        .map(cache_entry_from_row)
+        .collect()
+    }
+
+    async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COALESCE(SUM(byte_size), 0) AS total_bytes, COUNT(*) AS entry_count
+               FROM image_proxy_cache_entries",
+            &[],
+        )
+        .await?;
+        let Some(row) = row else {
+            return Ok(ImageProxyCacheUsage::default());
+        };
+        Ok(ImageProxyCacheUsage {
+            total_bytes: row.i64("total_bytes")?.max(0) as u64,
+            entry_count: row.i64("entry_count")?.max(0) as u64,
+        })
+    }
+
     async fn clear_image_proxy_cache_entries(&self) -> AppResult<()> {
         SqlRuntime::execute_write(
             &self.datastore,
@@ -295,6 +330,40 @@ impl ImageProxyRepository for ImageProxyStore {
             memory
                 .insertion_order
                 .retain(|token| retained.contains(token));
+        }
+        Ok(removed)
+    }
+
+    async fn prune_orphaned_discovery_image_proxy_sources(&self) -> AppResult<u64> {
+        let removed = SqlRuntime::execute_write(
+            &self.datastore,
+            "prune_orphaned_discovery_image_proxy_sources",
+            "DELETE FROM image_proxy_sources
+              WHERE owner_type = 'discovery'
+                AND owner_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM discovery_items i WHERE i.id = image_proxy_sources.owner_id
+                )",
+            Vec::new(),
+        )
+        .await?;
+        if removed > 0 {
+            // The in-memory registry has no view of discovery_items; drop the
+            // discovery slice so it cannot resurrect a pruned row on the next
+            // touch and re-learns whatever is still live from the database.
+            if let Ok(mut memory) = self.memory.lock() {
+                memory
+                    .records
+                    .retain(|_, record| record.owner_type.as_deref() != Some("discovery"));
+                let retained = memory
+                    .records
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
+                memory
+                    .insertion_order
+                    .retain(|token| retained.contains(token));
+            }
         }
         Ok(removed)
     }
@@ -707,6 +776,160 @@ mod tests {
         let memory = store.memory.lock().expect("memory registry lock");
         assert_eq!(memory.records.len(), MEMORY_SOURCE_LIMIT);
         assert!(!memory.records.contains_key(&format!("{:064x}", 0)));
+    }
+
+    #[tokio::test]
+    async fn orphaned_discovery_sources_are_swept_and_budget_reads_are_scalar() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("sqlite image proxy test pool");
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .expect("enable foreign keys");
+        sqlx::query("CREATE TABLE discovery_items (id TEXT PRIMARY KEY NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create discovery items table");
+        sqlx::query(
+            "CREATE TABLE image_proxy_sources (
+                token TEXT PRIMARY KEY,
+                upstream_url TEXT,
+                owner_type TEXT,
+                owner_id TEXT,
+                image_kind TEXT NOT NULL,
+                fallback_class TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create image proxy sources table");
+        sqlx::query(
+            "CREATE TABLE image_proxy_cache_entries (
+                token TEXT NOT NULL REFERENCES image_proxy_sources(token) ON DELETE CASCADE,
+                variant TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                byte_size INTEGER NOT NULL,
+                upstream_etag TEXT,
+                upstream_last_modified TEXT,
+                fetched_at TEXT NOT NULL,
+                last_accessed_at TEXT NOT NULL,
+                PRIMARY KEY (token, variant)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create image proxy cache entries table");
+        sqlx::query("INSERT INTO discovery_items (id) VALUES ('live-item')")
+            .execute(&pool)
+            .await
+            .expect("seed live discovery item");
+        let datastore = StoreDatastore::Sqlite {
+            pool,
+            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let store = ImageProxyStore::new(datastore.clone());
+
+        let now = Utc::now();
+        let source = |token: &str, owner_type: &str, owner_id: &str| ImageProxySourceRecord {
+            token: token.to_string(),
+            upstream_url: Some(format!("https://image.tmdb.org/t/p/w500/{token}.jpg")),
+            owner_type: Some(owner_type.to_string()),
+            owner_id: Some(owner_id.to_string()),
+            image_kind: "poster".to_string(),
+            fallback_class: "portrait".to_string(),
+            last_seen_at: now,
+        };
+        let live = source(&"a".repeat(64), "discovery", "live-item");
+        let orphan = source(&"b".repeat(64), "discovery", "gone-item");
+        let title = source(&"c".repeat(64), "title", "gone-item");
+        for record in [&live, &orphan, &title] {
+            store.remember(record.clone());
+            store.queue_source(record.clone());
+        }
+        store
+            .flush_image_proxy_sources()
+            .await
+            .expect("persist sources");
+        for (record, age_minutes, byte_size) in
+            [(&live, 1, 100), (&orphan, 3, 250), (&title, 2, 75)]
+        {
+            store
+                .upsert_image_proxy_cache_entry(&ImageProxyCacheEntryRecord {
+                    token: record.token.clone(),
+                    variant: "w250".to_string(),
+                    content_type: "image/jpeg".to_string(),
+                    byte_size,
+                    upstream_etag: None,
+                    upstream_last_modified: None,
+                    fetched_at: now,
+                    last_accessed_at: now - chrono::Duration::minutes(age_minutes),
+                })
+                .await
+                .expect("persist cache entry");
+        }
+
+        let usage = store
+            .image_proxy_cache_usage()
+            .await
+            .expect("read cache usage");
+        assert_eq!(usage.total_bytes, 425);
+        assert_eq!(usage.entry_count, 3);
+        let oldest = store
+            .list_image_proxy_cache_entries_lru_oldest(2)
+            .await
+            .expect("list oldest entries")
+            .into_iter()
+            .map(|entry| entry.token)
+            .collect::<Vec<_>>();
+        assert_eq!(oldest, vec![orphan.token.clone(), title.token.clone()]);
+
+        // Only the discovery-owned source whose item vanished is swept; a
+        // title-owned source with the same owner id is untouched, and the
+        // orphan's cache entry follows through the cascade.
+        assert_eq!(
+            store
+                .prune_orphaned_discovery_image_proxy_sources()
+                .await
+                .expect("sweep orphaned discovery sources"),
+            1
+        );
+        assert!(
+            fetch_source(&datastore, &orphan.token)
+                .await
+                .expect("load swept source")
+                .is_none()
+        );
+        assert!(
+            fetch_source(&datastore, &live.token)
+                .await
+                .expect("load live source")
+                .is_some()
+        );
+        assert!(
+            fetch_source(&datastore, &title.token)
+                .await
+                .expect("load title source")
+                .is_some()
+        );
+        assert!(store.memory_source(&orphan.token).is_none());
+        assert!(store.memory_source(&title.token).is_some());
+        let usage = store
+            .image_proxy_cache_usage()
+            .await
+            .expect("read cache usage after sweep");
+        assert_eq!(usage.total_bytes, 175);
+        assert_eq!(usage.entry_count, 2);
+        assert_eq!(
+            store
+                .prune_orphaned_discovery_image_proxy_sources()
+                .await
+                .expect("second sweep is a no-op"),
+            0
+        );
     }
 
     #[test]

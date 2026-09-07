@@ -6,13 +6,14 @@
 
 use std::fmt;
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat, TimeZone};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -250,6 +251,31 @@ impl Visit for ContextFieldVisitor {
     }
 }
 
+/// Renders a log timestamp as RFC 3339 in the zone of `now`.
+///
+/// Scryer emits log timestamps in the host's local zone so that operators who
+/// set `TZ` (for example through Docker) see wall-clock times that match their
+/// other services. The offset is always written explicitly (`Z` for UTC,
+/// otherwise `+HH:MM`/`-HH:MM`) so the string stays machine-parseable.
+fn render_timestamp<Tz>(now: DateTime<Tz>, precision: SecondsFormat) -> String
+where
+    Tz: TimeZone,
+    Tz::Offset: fmt::Display,
+{
+    now.to_rfc3339_opts(precision, true)
+}
+
+/// Timer for text-format `tracing_subscriber` layers that prints the host's
+/// local wall-clock time (honouring `TZ`) instead of the UTC default.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LocalTimer;
+
+impl FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut Writer<'_>) -> fmt::Result {
+        w.write_str(&render_timestamp(Local::now(), SecondsFormat::Micros))
+    }
+}
+
 /// Formats newline-delimited JSON events with a stable root `context` object.
 #[derive(Default)]
 pub struct JsonContextFormatter;
@@ -272,7 +298,7 @@ where
         let mut root = Map::new();
         root.insert(
             "timestamp".to_owned(),
-            Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
+            Value::String(render_timestamp(Local::now(), SecondsFormat::Millis)),
         );
         root.insert(
             "level".to_owned(),
@@ -615,5 +641,57 @@ mod tests {
             String::from_utf8(output.0.lock().expect("lock output").clone()).expect("utf8 output");
         let event: Value = serde_json::from_str(raw.trim()).expect("valid JSON event");
         assert_eq!(event["context"]["request"]["id"], "request-1");
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+    use chrono::{FixedOffset, Utc};
+
+    #[test]
+    fn render_timestamp_writes_explicit_offset_for_non_utc_zones() {
+        let zone = FixedOffset::east_opt(2 * 3600).expect("offset");
+        let now = zone
+            .with_ymd_and_hms(2026, 9, 6, 15, 30, 11)
+            .single()
+            .expect("timestamp");
+
+        assert_eq!(
+            render_timestamp(now, SecondsFormat::Millis),
+            "2026-09-06T15:30:11.000+02:00"
+        );
+        assert_eq!(
+            render_timestamp(now, SecondsFormat::Micros),
+            "2026-09-06T15:30:11.000000+02:00"
+        );
+    }
+
+    #[test]
+    fn render_timestamp_keeps_z_suffix_for_utc() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 9, 6, 13, 30, 11)
+            .single()
+            .expect("timestamp");
+
+        assert_eq!(
+            render_timestamp(now, SecondsFormat::Millis),
+            "2026-09-06T13:30:11.000Z"
+        );
+    }
+
+    #[test]
+    fn local_timer_writes_rfc3339_with_offset() {
+        let mut buffer = String::new();
+        let mut writer = Writer::new(&mut buffer);
+        LocalTimer.format_time(&mut writer).expect("format time");
+
+        let parsed = DateTime::parse_from_rfc3339(&buffer).expect("rfc3339 timestamp");
+        let now = Utc::now();
+        assert!((now - parsed.with_timezone(&Utc)).num_seconds().abs() < 60);
+        assert_eq!(
+            parsed.offset().local_minus_utc(),
+            Local::now().offset().local_minus_utc()
+        );
     }
 }

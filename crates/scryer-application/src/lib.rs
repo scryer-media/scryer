@@ -87,6 +87,7 @@ pub mod upstream_scheduler;
 
 pub(crate) use acquisition::acquisition as acquisition_workflow;
 pub(crate) use acquisition::admission;
+pub(crate) use acquisition::anime_numbering;
 pub(crate) use acquisition::coverage as acquisition_coverage;
 pub(crate) use acquisition::decision_helpers as acquisition_decision_helpers;
 pub(crate) use acquisition::delay_profile;
@@ -471,8 +472,8 @@ pub use ports::{
     ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
     ExternalImportSetupSecretOverrideDraft, ExternalPluginWasm, FileImporter,
     HousekeepingMediaFileRootRow, HousekeepingRepository, IdentityTrackedStateTarget,
-    ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyKind, ImageProxyRegistration,
-    ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
+    ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage, ImageProxyKind,
+    ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
     ImportFileExecutionContext, ImportFilePermissions, ImportFileTransferProgress,
     ImportFileTransferProgressSender, ImportRepository, IndexerCapsSnapshotRefresher,
     IndexerClient, IndexerConfigRepository, IndexerManagementClient, IndexerPluginProvider,
@@ -603,13 +604,14 @@ pub use types::{
     OAuthRefreshGrantRecord, OAuthRefreshRotation, OAuthRefreshRotationOutcome,
     OAuthRefreshTokenRecord, PasskeySummary, PendingImportBindingFilePreview,
     PendingImportBindingPreview, PendingImportConnection, PendingImportCounts, PendingImportItem,
-    PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus, PendingRelease,
-    PendingReleaseObservation, PendingReleaseRole, PendingReleaseStatus, PendingReleaseStatusCount,
-    PendingTitleHydration, PrimaryCollectionSummary, RecycleBinBatchJobAccepted,
-    RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
-    RecycleRestorePreviewItem, RecycledItem, ReleaseDecision, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature, ResolvePendingImportResult,
-    RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
+    PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus,
+    PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation, PendingReleaseRole,
+    PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
+    PrimaryCollectionSummary, RecycleBinBatchJobAccepted, RecycleBinSettings,
+    RecycleRestoreConflictPolicy, RecycleRestorePreview, RecycleRestorePreviewItem, RecycledItem,
+    ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord,
+    ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
+    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
     TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogFilterCounts,
     TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,
@@ -654,6 +656,10 @@ pub struct AutoEligibilityReason {
     pub code: String,
     pub summary: String,
     pub count: usize,
+    /// Rule codes that vetoed the release when `code` is `quality_blocked`
+    /// (for example `managed_required_audio_missing`). Empty for every other
+    /// decision code, so the generic summary is the whole story there.
+    pub block_codes: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

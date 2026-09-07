@@ -308,6 +308,43 @@ impl TitleRepository for MockTitleRepo {
         Ok(existing)
     }
 
+    async fn map_existing_external_ids_to_title_ids_in_library_and_facet(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        source: &str,
+        values: &[String],
+    ) -> AppResult<std::collections::BTreeMap<String, String>> {
+        self.external_id_batch_lookup_calls
+            .fetch_add(1, Ordering::SeqCst);
+
+        let requested = values
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>();
+        if requested.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        let list = self.store.lock().await;
+        let mut existing = std::collections::BTreeMap::new();
+        for title in list
+            .iter()
+            .filter(|title| title.library_id == library_id.trim() && title.facet == facet)
+        {
+            for external_id in &title.external_ids {
+                let value = external_id.value.trim();
+                if external_id.source.eq_ignore_ascii_case(source) && requested.contains(value) {
+                    existing
+                        .entry(value.to_string())
+                        .or_insert_with(|| title.id.clone());
+                }
+            }
+        }
+        Ok(existing)
+    }
+
     async fn list_for_matching(
         &self,
         facet: Option<MediaFacet>,

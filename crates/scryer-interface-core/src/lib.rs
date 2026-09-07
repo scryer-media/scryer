@@ -417,6 +417,7 @@ pub fn to_gql_error(err: AppError) -> Error {
                                 "code": reason.code,
                                 "summary": reason.summary,
                                 "count": reason.count as i64,
+                                "blockCodes": reason.block_codes,
                             })
                         })
                         .collect::<Vec<_>>(),
@@ -1011,11 +1012,20 @@ mod tests {
     fn no_auto_eligible_release_graphql_error_includes_reason_counts() {
         let error = to_gql_error(AppError::NoAutoEligibleRelease {
             candidate_count: 3,
-            reasons: vec![scryer_application::AutoEligibilityReason {
-                code: "title_mismatch".to_string(),
-                summary: "release title does not match the target title".to_string(),
-                count: 2,
-            }],
+            reasons: vec![
+                scryer_application::AutoEligibilityReason {
+                    code: "title_mismatch".to_string(),
+                    summary: "release title does not match the target title".to_string(),
+                    count: 2,
+                    block_codes: Vec::new(),
+                },
+                scryer_application::AutoEligibilityReason {
+                    code: "quality_blocked".to_string(),
+                    summary: "quality profile blocked this release".to_string(),
+                    count: 1,
+                    block_codes: vec!["managed_required_audio_missing".to_string()],
+                },
+            ],
         });
 
         assert_eq!(error.message, "validation: no auto-eligible release found");
@@ -1033,7 +1043,7 @@ mod tests {
                 .get("autoDecisionReasons")
                 .expect("reason counts extension is present")
                 .to_string(),
-            "[{code: \"title_mismatch\", summary: \"release title does not match the target title\", count: 2}]"
+            "[{code: \"title_mismatch\", summary: \"release title does not match the target title\", count: 2, blockCodes: []}, {code: \"quality_blocked\", summary: \"quality profile blocked this release\", count: 1, blockCodes: [\"managed_required_audio_missing\"]}]"
         );
     }
 

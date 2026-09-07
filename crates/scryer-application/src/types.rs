@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::acquisition::seed_goals::ReleaseSeedMinimums;
 use crate::library_scan::LibraryScanSummary;
+use crate::library_scan::RichMetadataSearchItem;
 use crate::quality_profile::QualityProfileDecision;
 use crate::release_parser::{ParsedReleaseMetadata, VideoCodec};
 use crate::{AppResult, SubmissionScope};
@@ -1045,6 +1046,16 @@ pub struct PendingImportBindingPreview {
     pub title: scryer_domain::Title,
     pub file: PendingImportBindingFilePreview,
     pub available_episodes: Vec<scryer_domain::Episode>,
+}
+
+/// One metadata candidate offered for a pending import, plus the id of the
+/// title in the same library and facet that already carries that candidate's
+/// identity (when there is one). Only the pending-import search populates the
+/// annotation; every other metadata-search surface leaves it `None`.
+#[derive(Clone, Debug)]
+pub struct PendingImportTitleSearchItem {
+    pub item: RichMetadataSearchItem,
+    pub existing_title_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]

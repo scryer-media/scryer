@@ -21,7 +21,10 @@ use scryer_application::{
     SmgScryerUpdateNotice, TitleArtworkUrls, TitleCredit, TitleExternalRating, TitleRatingSummary,
     TitleRecommendationsInput, TitleResolution,
 };
-use scryer_domain::{CanonicalMediaTag, ExternalId};
+use scryer_domain::{
+    AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
+    ExternalId,
+};
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
     smg_reqwest_client,
@@ -2496,6 +2499,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
                 signal_summary: movie.signal_summary,
             })
             .collect(),
+        anime_numbering_bridge: anime_numbering_bridge_from_gateway(s.anime_numbering_bridge),
         ratings: rating_summary_from_gateway(s.rating, s.rating_sources, s.external_ratings),
         credits: credits_from_gateway(s.credits),
     }
@@ -5350,6 +5354,90 @@ struct SeriesItem {
     anime_mappings: Vec<AnimeMappingItem>,
     #[serde(default)]
     anime_movies: Vec<AnimeMovieItem>,
+    /// Absent on an SMG that predates the numbering bridge, and explicitly null
+    /// for a series with no qualifying community numbering.
+    #[serde(default)]
+    anime_numbering_bridge: Option<AnimeNumberingBridgeItem>,
+}
+
+#[derive(Deserialize)]
+struct AnimeNumberingBridgeItem {
+    #[serde(default)]
+    generated_on: String,
+    #[serde(default)]
+    corroborating_order: Option<String>,
+    #[serde(default)]
+    seasons: Vec<AnimeCommunitySeasonItem>,
+}
+
+#[derive(Deserialize)]
+struct AnimeCommunitySeasonItem {
+    index: i32,
+    #[serde(default)]
+    anidb_id: Option<i64>,
+    #[serde(default)]
+    anilist_id: Option<i64>,
+    #[serde(default)]
+    mal_id: Option<i64>,
+    #[serde(default)]
+    titles: Vec<String>,
+    #[serde(default)]
+    ranges: Vec<AnimeCommunitySeasonRangeItem>,
+    #[serde(default)]
+    absolute_start: Option<i32>,
+    #[serde(default)]
+    episode_count: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct AnimeCommunitySeasonRangeItem {
+    community_episode_start: i32,
+    #[serde(default)]
+    community_episode_end: Option<i32>,
+    tvdb_season: i32,
+    tvdb_episode_start: i32,
+    #[serde(default)]
+    tvdb_episode_end: Option<i32>,
+}
+
+/// The gateway payload as the domain reads it. A bridge with no seasons carries
+/// nothing to translate through, so it collapses to `None` rather than an empty
+/// shell every consumer would have to re-check.
+fn anime_numbering_bridge_from_gateway(
+    item: Option<AnimeNumberingBridgeItem>,
+) -> Option<AnimeNumberingBridge> {
+    let item = item?;
+    let bridge = AnimeNumberingBridge {
+        generated_on: item.generated_on,
+        corroborating_order: item
+            .corroborating_order
+            .filter(|value| !value.trim().is_empty()),
+        seasons: item
+            .seasons
+            .into_iter()
+            .map(|season| AnimeCommunitySeason {
+                index: season.index,
+                anidb_id: season.anidb_id,
+                anilist_id: season.anilist_id,
+                mal_id: season.mal_id,
+                titles: season.titles,
+                ranges: season
+                    .ranges
+                    .into_iter()
+                    .map(|range| AnimeCommunitySeasonRange {
+                        community_episode_start: range.community_episode_start,
+                        community_episode_end: range.community_episode_end,
+                        tvdb_season: range.tvdb_season,
+                        tvdb_episode_start: range.tvdb_episode_start,
+                        tvdb_episode_end: range.tvdb_episode_end,
+                    })
+                    .collect(),
+                absolute_start: season.absolute_start,
+                episode_count: season.episode_count,
+            })
+            .collect(),
+    };
+    (!bridge.is_empty()).then_some(bridge)
 }
 
 #[derive(Deserialize)]
@@ -5837,6 +5925,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     signal_summary: movie.signal_summary,
                 })
                 .collect(),
+            anime_numbering_bridge: anime_numbering_bridge_from_gateway(s.anime_numbering_bridge),
             ratings: rating_summary_from_gateway(s.rating, s.rating_sources, s.external_ratings),
             credits: credits_from_gateway(s.credits),
         })
