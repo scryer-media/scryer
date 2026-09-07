@@ -1289,6 +1289,7 @@ impl AppUseCase {
             parse_context,
             season,
             episode,
+            admissible_episode_numberings,
             absolute_episode,
             tagged_aliases,
             search_subject_kind,
@@ -1462,6 +1463,7 @@ impl AppUseCase {
                     indexer_error_operation,
                     season,
                     episode,
+                    admissible_episode_numberings,
                     absolute_episode,
                     tagged_aliases,
                     learning_context,
@@ -1773,6 +1775,7 @@ impl AppUseCase {
             // title/absolute queries the specials lane already builds.
             season: subject.season.filter(|season| *season > 0),
             episode: subject.episode,
+            admissible_episode_numberings: subject.admissible_episode_numberings.clone(),
             absolute_episode: subject.absolute_episode,
             tagged_aliases: &tagged_aliases,
             search_subject_kind: subject.subject_kind,
@@ -2217,6 +2220,11 @@ pub(crate) struct ReleaseSearchRequest<'a> {
     pub(crate) runtime_minutes: Option<i32>,
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
+    /// Every `(season, episode)` numbering that denotes the wanted episode, for
+    /// an anime whose community layout disagrees with TVDB's. The indexer-side
+    /// guard accepts a result matching any of them instead of `season`/`episode`
+    /// alone; empty everywhere else, and the guard's behaviour is unchanged.
+    pub(crate) admissible_episode_numberings: Vec<(u32, u32)>,
     pub(crate) absolute_episode: Option<u32>,
     pub(crate) tagged_aliases: &'a [TaggedAlias],
     pub(crate) search_subject_kind: ReleaseSearchSubjectKind,

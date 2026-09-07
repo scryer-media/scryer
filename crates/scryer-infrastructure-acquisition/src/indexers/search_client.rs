@@ -452,6 +452,9 @@ struct FilterStrategyContext<'a> {
     query: &'a str,
     season: Option<u32>,
     episode: Option<u32>,
+    /// Alternative `(season, episode)` numberings that denote the same wanted
+    /// episode as `season`/`episode`. Empty means there is only the one pair.
+    admissible_episode_numberings: &'a [(u32, u32)],
     tagged_aliases: &'a [scryer_domain::TaggedAlias],
     title_guard_mode: TitleGuardMode,
     strategy_label: &'a str,
@@ -3274,6 +3277,9 @@ impl IndexerClient for MultiIndexerSearchClient {
             operation,
             season,
             episode,
+            // A single-query call carries no subject-level numbering context;
+            // the batch entry point is where the alternatives arrive.
+            Vec::new(),
             absolute_episode,
             tagged_aliases,
             learning_context,
@@ -3296,6 +3302,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
+        admissible_episode_numberings: Vec<(u32, u32)>,
         absolute_episode: Option<u32>,
         tagged_aliases: Vec<scryer_domain::TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
@@ -4370,6 +4377,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let search_query = query.clone();
             let category_for_indexer = category.clone();
             let tagged_aliases_for_indexer = tagged_aliases.clone();
+            let admissible_numberings_for_indexer = admissible_episode_numberings.clone();
             let stats_tracker = self.stats_tracker.clone();
             let search_learning = self.search_learning.clone();
             let learning_context = learning_context.clone();
@@ -4577,6 +4585,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     query: &search_query,
                                     season,
                                     episode,
+                                    admissible_episode_numberings:
+                                        &admissible_numberings_for_indexer,
                                     tagged_aliases: &tagged_aliases_for_indexer,
                                     title_guard_mode: outcome.title_guard_mode,
                                     strategy_label: &outcome.label,
@@ -4891,6 +4901,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         query: &search_query,
                                         season,
                                         episode,
+                                        admissible_episode_numberings:
+                                            &admissible_numberings_for_indexer,
                                         tagged_aliases: &tagged_aliases_for_indexer,
                                         title_guard_mode: outcome.title_guard_mode,
                                         strategy_label: &outcome.label,
@@ -5934,34 +5946,72 @@ fn filter_strategy_results(
             }
         }
 
-        if let Some(expected_s) = context.season
-            && let Some(ref res_ep) = parsed.episode
-            && let Some(rs) = res_ep.season
-            && rs != expected_s
-        {
-            tracing::debug!(
-                strategy = context.strategy_label,
-                query = %context.query,
-                expected_season = expected_s,
-                got_season = rs,
-                "title guard: season mismatch"
-            );
-            return false;
-        }
+        // A result's numbering is only wrong when it contradicts *every*
+        // numbering the wanted episode goes by. With a single numbering — which
+        // is everything except anime whose community layout disagrees with
+        // TVDB's — that is exactly the two scalar tests below, unchanged.
+        if context.admissible_episode_numberings.is_empty() {
+            if let Some(expected_s) = context.season
+                && let Some(ref res_ep) = parsed.episode
+                && let Some(rs) = res_ep.season
+                && rs != expected_s
+            {
+                tracing::debug!(
+                    strategy = context.strategy_label,
+                    query = %context.query,
+                    expected_season = expected_s,
+                    got_season = rs,
+                    "title guard: season mismatch"
+                );
+                return false;
+            }
 
-        if let Some(expected_e) = context.episode
-            && let Some(ref res_ep) = parsed.episode
-            && !res_ep.episode_numbers.is_empty()
-            && !res_ep.episode_numbers.contains(&expected_e)
-        {
-            tracing::debug!(
-                strategy = context.strategy_label,
-                query = %context.query,
-                expected_episode = expected_e,
-                got_episodes = ?res_ep.episode_numbers,
-                "title guard: episode mismatch"
-            );
-            return false;
+            if let Some(expected_e) = context.episode
+                && let Some(ref res_ep) = parsed.episode
+                && !res_ep.episode_numbers.is_empty()
+                && !res_ep.episode_numbers.contains(&expected_e)
+            {
+                tracing::debug!(
+                    strategy = context.strategy_label,
+                    query = %context.query,
+                    expected_episode = expected_e,
+                    got_episodes = ?res_ep.episode_numbers,
+                    "title guard: episode mismatch"
+                );
+                return false;
+            }
+        } else if let Some(ref res_ep) = parsed.episode {
+            let pairs = context.admissible_episode_numberings;
+            let admissible = match (res_ep.season, res_ep.episode_numbers.is_empty()) {
+                // Labelled with both: they have to come from the same
+                // numbering, or together they mean a different episode.
+                (Some(rs), false) => pairs.iter().any(|(season, episode)| {
+                    *season == rs && res_ep.episode_numbers.contains(episode)
+                }),
+                (Some(rs), true) => pairs.iter().any(|(season, _)| *season == rs),
+                // An episode number with no season beside it says nothing
+                // about which numbering it belongs to, so reading it in
+                // either would admit an official episode 17 as though it
+                // were the community's. Held to the dispatched episode,
+                // exactly as before the alternatives existed.
+                (None, false) => context
+                    .episode
+                    .is_none_or(|expected| res_ep.episode_numbers.contains(&expected)),
+                // Absolute numbering carries neither; translation and coverage
+                // decide those, as they always have.
+                (None, true) => true,
+            };
+            if !admissible {
+                tracing::debug!(
+                    strategy = context.strategy_label,
+                    query = %context.query,
+                    admissible = ?pairs,
+                    got_season = ?res_ep.season,
+                    got_episodes = ?res_ep.episode_numbers,
+                    "title guard: numbering matches no wanted-episode form"
+                );
+                return false;
+            }
         }
 
         true
@@ -11839,5 +11889,116 @@ mod tests {
         assert_eq!(strategies[0].season, Some(2));
         assert_eq!(strategies[0].episode, Some(5));
         assert_eq!(strategies[0].absolute_episode, None);
+    }
+
+    fn numbering_guard_context<'a>(
+        query: &'a str,
+        admissible: &'a [(u32, u32)],
+    ) -> FilterStrategyContext<'a> {
+        FilterStrategyContext {
+            query,
+            season: Some(1),
+            episode: Some(53),
+            admissible_episode_numberings: admissible,
+            tagged_aliases: &[],
+            // The numbering tests are what this exercises; the title guard has
+            // its own coverage.
+            title_guard_mode: TitleGuardMode::SkipTitleMatch,
+            strategy_label: "freetext",
+            is_rss_request: false,
+        }
+    }
+
+    /// A result carrying exactly the numbering under test, so the guard's rule
+    /// is what the assertion reads rather than the parser's reading of a title.
+    fn numbered_result(
+        title: &str,
+        season: Option<u32>,
+        episode_numbers: &[u32],
+    ) -> IndexerSearchResult {
+        let mut result = search_result(title);
+        let mut parsed = scryer_application::parse_release_metadata(title);
+        parsed.episode = Some(scryer_application::ParsedEpisodeMetadata {
+            season,
+            episode_numbers: episode_numbers.to_vec(),
+            ..Default::default()
+        });
+        result.parsed_release_metadata = Some(parsed);
+        result
+    }
+
+    fn surviving_titles(titles: &[&str], context: &FilterStrategyContext<'_>) -> Vec<String> {
+        let mut results: Vec<IndexerSearchResult> =
+            titles.iter().map(|title| search_result(title)).collect();
+        filter_strategy_results(&mut results, context);
+        results.into_iter().map(|result| result.title).collect()
+    }
+
+    /// A four-cour anime: TVDB S01E53 is the community's S04E17. Both forms
+    /// denote the wanted episode, so both survive the guard, while a numbering
+    /// that means a different episode in either layout does not.
+    #[test]
+    fn numbering_guard_keeps_every_admissible_form_of_the_wanted_episode() {
+        let admissible = [(1u32, 53u32), (4u32, 17u32)];
+        let context = numbering_guard_context("Lantern Verge S04E17", &admissible);
+
+        let kept = surviving_titles(
+            &[
+                "Lantern Verge S04E17 1080p WEB-DL",
+                "Lantern Verge S01E53 1080p WEB-DL",
+                "Lantern Verge S04E16 1080p WEB-DL",
+                "Lantern Verge S03E17 1080p WEB-DL",
+                "Lantern Verge - 53 [1080p]",
+                "Lantern Verge - 17 [1080p]",
+            ],
+            &context,
+        );
+
+        assert_eq!(
+            kept,
+            vec![
+                "Lantern Verge S04E17 1080p WEB-DL".to_string(),
+                "Lantern Verge S01E53 1080p WEB-DL".to_string(),
+                "Lantern Verge - 53 [1080p]".to_string(),
+                "Lantern Verge - 17 [1080p]".to_string(),
+            ]
+        );
+    }
+
+    /// A release labelled with an episode but no season beside it: the shape
+    /// says nothing about which numbering it is written in, so the wanted
+    /// episode's community form must not let an official episode 17 through.
+    #[test]
+    fn numbering_guard_holds_a_season_less_episode_to_the_dispatched_number() {
+        let admissible = [(1u32, 53u32), (4u32, 17u32)];
+        let context = numbering_guard_context("Lantern Verge S04E17", &admissible);
+        let mut results = vec![
+            numbered_result("Lantern Verge dispatched", None, &[53]),
+            numbered_result("Lantern Verge official seventeen", None, &[17]),
+        ];
+
+        filter_strategy_results(&mut results, &context);
+
+        let kept: Vec<String> = results.into_iter().map(|result| result.title).collect();
+        assert_eq!(kept, vec!["Lantern Verge dispatched".to_string()]);
+    }
+
+    /// With no alternative numbering — every non-anime search, and anime whose
+    /// community layout agrees with TVDB's — the guard tests the dispatched
+    /// pair exactly as it always has.
+    #[test]
+    fn numbering_guard_without_alternatives_tests_the_dispatched_pair() {
+        let context = numbering_guard_context("Lantern Verge S01E53", &[]);
+
+        let kept = surviving_titles(
+            &[
+                "Lantern Verge S01E53 1080p WEB-DL",
+                "Lantern Verge S04E17 1080p WEB-DL",
+                "Lantern Verge S01E52 1080p WEB-DL",
+            ],
+            &context,
+        );
+
+        assert_eq!(kept, vec!["Lantern Verge S01E53 1080p WEB-DL".to_string()]);
     }
 }

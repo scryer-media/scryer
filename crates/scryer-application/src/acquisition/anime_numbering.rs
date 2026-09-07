@@ -348,25 +348,29 @@ fn anchored_community_season<'a>(input: &NumberingInput<'a>) -> Option<&'a Anime
         return None;
     }
 
+    // A cour catalogued under the series' own name is the franchise, not a
+    // season within it, and it is dropped before either rule sees it.
+    let cours = input
+        .bridge
+        .seasons
+        .iter()
+        .map(|season| {
+            let season_titles = season
+                .titles
+                .iter()
+                .map(|season_title| crate::app_usecase_rss::normalize_for_matching(season_title))
+                .filter(|season_title| !season_title.is_empty())
+                .collect::<Vec<_>>();
+            (season, season_titles)
+        })
+        .filter(|(_, season_titles)| !season_titles.contains(&canonical))
+        .collect::<Vec<_>>();
+
     let mut matched: Option<&AnimeCommunitySeason> = None;
-    for season in &input.bridge.seasons {
-        let season_titles = season
-            .titles
-            .iter()
-            .map(|season_title| crate::app_usecase_rss::normalize_for_matching(season_title))
-            .filter(|season_title| !season_title.is_empty())
-            .collect::<Vec<_>>();
-        // A cour catalogued under the series' own name is the franchise, not a
-        // season within it.
-        if season_titles
-            .iter()
-            .any(|season_title| *season_title == canonical)
-        {
-            continue;
-        }
+    for (season, season_titles) in &cours {
         if !season_titles
             .iter()
-            .any(|season_title| distinguishing.iter().any(|parsed| *parsed == season_title))
+            .any(|season_title| distinguishing.contains(&season_title))
         {
             continue;
         }
@@ -376,7 +380,190 @@ fn anchored_community_season<'a>(input: &NumberingInput<'a>) -> Option<&'a Anime
         }
         matched = Some(season);
     }
-    matched
+    if matched.is_some() {
+        return matched;
+    }
+
+    fuzzy_anchored_community_season(input, &distinguishing, &canonical, &cours)
+}
+
+/// A cour title has to be long enough that a few edits cannot carry it to a
+/// different cour. The romanised long forms this rule exists for run past 80
+/// characters; the short `… s4` forms that must never fuzz are 20-33.
+const FUZZY_ANCHOR_MIN_LENGTH: usize = 40;
+/// Roughly one edit of tolerance per this many characters. A group's
+/// romanisation of a long title differs from the metadata provider's by a
+/// handful of letters, not by a proportion of the title.
+const FUZZY_ANCHOR_LENGTH_PER_EDIT: usize = 20;
+/// Hard ceiling on that tolerance, whatever the length.
+const FUZZY_ANCHOR_MAX_DISTANCE: usize = 4;
+/// Every other cour has to be at least this much further away than the winner.
+/// Sibling cours of one series share their whole stem and differ only in the
+/// subtitle, so a near-tie means the release named neither of them.
+const FUZZY_ANCHOR_RUNNER_UP_MARGIN: usize = 8;
+
+/// The community season whose title the release *nearly* names, when no title
+/// matches exactly.
+///
+/// Groups romanise a long Japanese title their own way, so the name on the
+/// release and the name in the bridge can sit a few letters apart while
+/// denoting the same cour. `TitleAnchored` is the highest-precedence reading,
+/// though, so a wrong guess here overrides every other one — which is why this
+/// is fenced in rather than being a plain distance threshold:
+///
+/// - it runs only when exact anchoring found nothing;
+/// - only for a release that carries no season and no episode number of its
+///   own, since anything numbered needs no anchoring;
+/// - only between titles carrying the same numbers, however written — this is
+///   the rule the safety rests on, because sibling cours are routinely one
+///   edit apart (`… s3` vs `… s4`) and a bare series alias sits closer to a
+///   numbered cour than to the cour that actually aired;
+/// - only above a length floor, with a tolerance proportional to the length of
+///   the two names being compared;
+/// - only when every other cour is a clear margin further away;
+/// - and only when the series' own name is not that close as well.
+fn fuzzy_anchored_community_season<'a>(
+    input: &NumberingInput<'a>,
+    distinguishing: &[&String],
+    canonical: &str,
+    cours: &[(&'a AnimeCommunitySeason, Vec<String>)],
+) -> Option<&'a AnimeCommunitySeason> {
+    if input.parsed.season.is_some() || !input.parsed.episode_numbers.is_empty() {
+        return None;
+    }
+
+    // Every name's numbers are read against every cour, twice over. Settle
+    // them once instead of re-splitting the same strings inside the sweep.
+    let parsed_forms = numbered_forms(distinguishing.iter().map(|parsed| parsed.as_str()));
+    let series_forms = numbered_forms(std::iter::once(canonical));
+    let cour_forms = cours
+        .iter()
+        .map(|(season, season_titles)| {
+            (
+                *season,
+                numbered_forms(season_titles.iter().map(String::as_str)),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // The distance to the closest comparable name, where comparable means the
+    // two carry the same numbers and the longer of them clears the floor.
+    //
+    // `bound` overrides the tolerance a pair earns for its own length: the
+    // sweeps for a rival cour and for the series measure against the winner's
+    // distance plus the margin, not against a tolerance of their own.
+    let nearest = |forms: &[(&str, Vec<u32>)], bound: Option<usize>| -> Option<usize> {
+        let mut nearest: Option<usize> = None;
+        for (candidate, candidate_numbers) in forms {
+            for (parsed, parsed_numbers) in &parsed_forms {
+                if candidate_numbers != parsed_numbers {
+                    continue;
+                }
+                let length = parsed.chars().count().max(candidate.chars().count());
+                if length < FUZZY_ANCHOR_MIN_LENGTH {
+                    continue;
+                }
+                let tolerance = bound.unwrap_or_else(|| {
+                    (length / FUZZY_ANCHOR_LENGTH_PER_EDIT).min(FUZZY_ANCHOR_MAX_DISTANCE)
+                });
+                if let Some(distance) = crate::library::title_matching::bounded_levenshtein_distance(
+                    parsed, candidate, tolerance,
+                ) {
+                    nearest = Some(nearest.map_or(distance, |best| best.min(distance)));
+                }
+            }
+        }
+        nearest
+    };
+
+    let mut winner: Option<(&AnimeCommunitySeason, usize)> = None;
+    for (season, forms) in &cour_forms {
+        let Some(distance) = nearest(forms, None) else {
+            continue;
+        };
+        if winner.is_none_or(|(_, best)| distance < best) {
+            winner = Some((*season, distance));
+        }
+    }
+
+    let (season, distance) = winner?;
+    let margin = distance.saturating_add(FUZZY_ANCHOR_RUNNER_UP_MARGIN);
+    for (other, forms) in &cour_forms {
+        if std::ptr::eq(*other, season) {
+            continue;
+        }
+        if nearest(forms, Some(margin)).is_some() {
+            return None;
+        }
+    }
+    // The series' own name competes here too. Dropping a cour catalogued under
+    // exactly the series name happens before either rule runs, but that test is
+    // exact: one character of romanisation drift — a macron written out as the
+    // vowel it stands for — walks a franchise-named cour straight past it, and
+    // then every release of the show anchors there. A release whose name is as
+    // close to the bare franchise as it is to this cour names neither.
+    if nearest(&series_forms, Some(margin)).is_some() {
+        return None;
+    }
+    Some(season)
+}
+
+/// Each name paired with the numbers it carries, ready to compare.
+fn numbered_forms<'t>(titles: impl Iterator<Item = &'t str>) -> Vec<(&'t str, Vec<u32>)> {
+    titles
+        .map(|title| (title, season_number_tokens(title)))
+        .collect()
+}
+
+/// The numbers a title carries, however they are written: digit runs anywhere
+/// in a token (`s4`, `4th`, `season 2`), ordinal words, and roman numerals.
+///
+/// Two cour titles that disagree here name different cours no matter how few
+/// characters separate them, which is exactly the case fuzzy matching would
+/// otherwise get wrong.
+fn season_number_tokens(title: &str) -> Vec<u32> {
+    let mut numbers = Vec::new();
+    for token in title.split_whitespace() {
+        let mut digits = String::new();
+        let mut saw_digit = false;
+        for character in token.chars() {
+            if character.is_ascii_digit() {
+                digits.push(character);
+                saw_digit = true;
+            } else if !digits.is_empty() {
+                if let Ok(number) = digits.parse::<u32>() {
+                    numbers.push(number);
+                }
+                digits.clear();
+            }
+        }
+        if !digits.is_empty()
+            && let Ok(number) = digits.parse::<u32>()
+        {
+            numbers.push(number);
+        }
+        if !saw_digit && let Some(number) = written_number(token) {
+            numbers.push(number);
+        }
+    }
+    numbers.sort_unstable();
+    numbers
+}
+
+fn written_number(token: &str) -> Option<u32> {
+    match token {
+        "first" | "i" => Some(1),
+        "second" | "ii" => Some(2),
+        "third" | "iii" => Some(3),
+        "fourth" | "iv" => Some(4),
+        "fifth" | "v" => Some(5),
+        "sixth" | "vi" => Some(6),
+        "seventh" | "vii" => Some(7),
+        "eighth" | "viii" => Some(8),
+        "ninth" | "ix" => Some(9),
+        "tenth" | "x" => Some(10),
+        _ => None,
+    }
 }
 
 fn absolute_candidate(input: &NumberingInput<'_>) -> Option<NumberingCandidate> {
