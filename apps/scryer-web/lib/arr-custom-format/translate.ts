@@ -193,16 +193,21 @@ function lowerPositionalRegex(ast: Record<string, unknown>, input: Term, prefix:
     rules.push({
       head: { name, key: array(variable(`${name}_start`), variable(`${name}_end`)), value: bool(true), assign: true },
       body: [
+        // A fragment absent from the whole input cannot match any substring.
+        // Reject it before enumerating offsets and compiling per-slice regexes.
+        call(["regex", "match"], text(`(?i)${generated}`), input),
         { terms: [variable("assign"), variable(starts), callTerm(["numbers", "range"], number(0), callTerm(["count"], input))] },
         { terms: [variable("assign"), variable(`${name}_start`), referenceTerms(variable(starts), variable("_"))] },
         ...(width === undefined ? [
           { terms: [variable("assign"), variable(ends), callTerm(["numbers", "range"], variable(`${name}_start`), callTerm(["count"], input))] },
           { terms: [variable("assign"), variable(`${name}_end`), referenceTerms(variable(ends), variable("_"))] },
         ] : [
-          { terms: [variable("assign"), variable(`${name}_end`), callTerm(["plus"], variable(`${name}_start`), number(width))] },
+          // The deparser prints nested arithmetic calls literally. Use real
+          // aggregate builtins; Regorus has no named plus/minus functions.
+          { terms: [variable("assign"), variable(`${name}_end`), callTerm(["sum"], array(variable(`${name}_start`), number(width)))] },
           compare("lte", variable(`${name}_end`), callTerm(["count"], input)),
         ]),
-        { terms: [variable("assign"), variable(length), callTerm(["minus"], variable(`${name}_end`), variable(`${name}_start`))] },
+        { terms: [variable("assign"), variable(length), callTerm(["sum"], array(variable(`${name}_end`), callTerm(["product"], array(number(-1), variable(`${name}_start`)))))] },
         { terms: [variable("assign"), variable(slice), callTerm(["substring"], input, variable(`${name}_start`), variable(length))] },
         call(["regex", "match"], text(`(?i)\\A(?:${generated})\\z`), variable(slice)),
       ],

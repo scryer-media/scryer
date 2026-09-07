@@ -35,7 +35,11 @@ are disabled rather than approximated.
 The pinned corpus benchmark requires at least 97% of whole formats to translate;
 disabled entries stay in its denominator. The test-only AST interpreter checks
 emitted predicate behavior against independent regex examples. It is not an OPA
-or Rust validator. Runtime validation remains the editor's responsibility.
+or Rust validator. A separate [Rust integration test](../../../../crates/scryer-application/tests/arr_custom_format_corpus.rs)
+runs a checked-in snapshot of the TS output through the editor's actual Regorus
+validator and requires at least 97% complete translations to pass. See the
+[snapshot provenance](../../../../crates/scryer-application/tests/fixtures/README.arr-custom-formats.md).
+Runtime validation remains the editor's responsibility.
 
 Compatibility does not imply identical media parsing: Scryer release fields come
 from its own parser. In particular there is no separate Arr filename fallback,

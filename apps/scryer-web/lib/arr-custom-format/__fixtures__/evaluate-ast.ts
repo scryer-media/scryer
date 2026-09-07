@@ -90,8 +90,8 @@ export function evaluate(module: Module, input: unknown, ruleName: string): unkn
       let result: unknown;
       switch (name) {
         case "count": result = typeof args[0] === "string" ? [...args[0]].length : Array.isArray(args[0]) ? args[0].length : undefined; break;
-        case "minus": result = Number(args[0]) - Number(args[1]); break;
-        case "plus": result = Number(args[0]) + Number(args[1]); break;
+        case "sum": result = (args[0] as number[]).reduce((total, item) => total + item, 0); break;
+        case "product": result = (args[0] as number[]).reduce((total, item) => total * item, 1); break;
         case "numbers.range": {
           const start = Number(args[0]); const end = Number(args[1]);
           result = Array.from({ length: Math.abs(end - start) + 1 }, (_, i) => start + i * (start <= end ? 1 : -1)); break;
