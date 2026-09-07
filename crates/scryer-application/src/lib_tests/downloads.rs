@@ -5359,6 +5359,9 @@ struct FailClosedPackFixtureOptions {
     /// (needed by upgrades, which recycle the old file under a configured
     /// root) — before the title is created, so the title's root id matches.
     series_root_at_library_dir: bool,
+    anime_root_at_library_dir: bool,
+    facet: MediaFacet,
+    title_name: String,
 }
 
 impl Default for FailClosedPackFixtureOptions {
@@ -5366,6 +5369,9 @@ impl Default for FailClosedPackFixtureOptions {
         Self {
             file_importer: Arc::new(CopyingFileImporter),
             series_root_at_library_dir: false,
+            anime_root_at_library_dir: false,
+            facet: MediaFacet::Series,
+            title_name: "Fail Closed Pack".to_string(),
         }
     }
 }
@@ -5399,14 +5405,22 @@ async fn build_fail_closed_pack_fixture(
         .expect("seed import actor");
 
     let library_dir = tempfile::tempdir().expect("library tempdir");
-    if options.series_root_at_library_dir {
+    if options.series_root_at_library_dir || options.anime_root_at_library_dir {
         let current_paths = app.get_library_paths(&user).await.expect("library paths");
         app.update_library_paths(
             &user,
             UpdateLibraryPaths {
-                movie_path: current_paths.movie_path.clone(),
-                series_path: library_dir.path().to_string_lossy().into_owned(),
-                anime_path: Some(current_paths.anime_path.clone()),
+                movie_path: current_paths.movie_path,
+                series_path: if options.series_root_at_library_dir {
+                    library_dir.path().to_string_lossy().into_owned()
+                } else {
+                    current_paths.series_path
+                },
+                anime_path: Some(if options.anime_root_at_library_dir {
+                    library_dir.path().to_string_lossy().into_owned()
+                } else {
+                    current_paths.anime_path
+                }),
             },
         )
         .await
@@ -5417,8 +5431,8 @@ async fn build_fail_closed_pack_fixture(
         .add_title(
             &user,
             NewTitle {
-                name: "Fail Closed Pack".to_string(),
-                facet: MediaFacet::Series,
+                name: options.title_name.clone(),
+                facet: options.facet.clone(),
                 monitored: true,
                 tags: vec![],
                 external_ids: vec![],
@@ -6068,6 +6082,7 @@ async fn manual_import_upgrade_reports_transfer_progress_on_its_record() {
     ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
         file_importer: Arc::new(ProgressReportingFileImporter),
         series_root_at_library_dir: true,
+        ..Default::default()
     })
     .await;
 
@@ -7415,6 +7430,132 @@ async fn automatic_import_applies_single_episode_release_to_its_sole_obfuscated_
     assert_eq!(
         artifacts[0].episode_id.as_deref(),
         Some(episode.id.as_str())
+    );
+    assert!(source_file.exists());
+}
+
+#[tokio::test]
+async fn automatic_single_file_import_uses_its_filename_title_evidence_for_anime_numbering() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: first_episode,
+            library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        anime_root_at_library_dir: true,
+        facet: MediaFacet::Anime,
+        title_name: "Rantan Kyoukai Monogatari Honzuki no Gekokujou".to_string(),
+        ..Default::default()
+    })
+    .await;
+    let mut official_41 = None;
+    for number in 2..=60 {
+        let mut episode = first_episode.clone();
+        episode.id = scryer_domain::Id::new().0;
+        episode.episode_number = Some(number.to_string());
+        episode.absolute_number = Some(number.to_string());
+        episode.episode_label = Some(format!("S01E{number:02}"));
+        episode.title = Some(format!("Official episode {number}"));
+        app.services
+            .catalog
+            .shows
+            .create_episode(episode.clone())
+            .await
+            .expect("create official anime episode");
+        if number == 41 {
+            official_41 = Some(episode);
+        }
+    }
+    let official_41 = official_41.expect("official episode 41");
+    let bridge = scryer_domain::AnimeNumberingBridge {
+        generated_on: "2026-08-30".to_string(),
+        corroborating_order: None,
+        seasons: vec![
+            (1, 1, 14, "Rantan Kyoukai Monogatari Hajimari no Akatsuki"),
+            (2, 15, 12, "Rantan Kyoukai Monogatari Madoromi no Kaze"),
+            (3, 27, 10, "Rantan Kyoukai Monogatari Shirogane no Hane"),
+            (
+                4,
+                37,
+                24,
+                "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta",
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(index, official_start, length, name)| scryer_domain::AnimeCommunitySeason {
+                index,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: vec![name.to_string()],
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 1,
+                    community_episode_end: Some(length),
+                    tvdb_season: 1,
+                    tvdb_episode_start: official_start,
+                    tvdb_episode_end: Some(official_start + length - 1),
+                }],
+                absolute_start: Some(official_start),
+                episode_count: Some(length),
+            },
+        )
+        .collect(),
+    };
+    app.services
+        .catalog
+        .shows
+        .replace_anime_numbering_bridge(&title.id, Some(&bridge))
+        .await
+        .expect("store anime numbering bridge");
+
+    // The grabbed release names the first cour. Its title must not redirect a
+    // file whose own parser evidence names the fourth cour and omits a season.
+    let release_title = "Rantan Kyokai Monogatari Hajimari no Akatsuki 1080p WEB-DL-GRP";
+    let item_id = "cour-four-filename-evidence";
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(
+        source_dir.path(),
+        "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05.mkv",
+    );
+    let mut completed =
+        series_pack_completed_download(item_id, &title.id, release_title, source_dir.path());
+    completed.category = Some("anime".to_string());
+    completed.parameters = vec![
+        ("*scryer_title_id".to_string(), title.id.clone()),
+        ("*scryer_facet".to_string(), "anime".to_string()),
+    ];
+
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("community-numbered anime import should run")
+    };
+
+    assert_eq!(result.decision, scryer_domain::ImportDecision::Imported);
+    assert_eq!(result.episode_ids, vec![official_41.id.clone()]);
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list imported anime file");
+    assert_eq!(media_files.len(), 1, "{media_files:?}");
+    assert_eq!(
+        media_files[0].episode_id.as_deref(),
+        Some(official_41.id.as_str())
+    );
+    let library_files = library_video_file_names(library_dir.path());
+    assert!(
+        library_files.iter().any(|name| name.contains("S01E41")),
+        "official numbering must drive the destination: {library_files:?}"
     );
     assert!(source_file.exists());
 }

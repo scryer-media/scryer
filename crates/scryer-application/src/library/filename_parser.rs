@@ -1520,6 +1520,17 @@ mod tests {
     /// season; the community carries four cours of 14 / 12 / 10 / 24, so
     /// community S04E20 is official S01E56. Names are invented.
     fn anime_numbering_bridge_fixture() -> scryer_domain::AnimeNumberingBridge {
+        anime_numbering_bridge_fixture_with_titles(&[
+            "Lantern Verge Cour 1",
+            "Lantern Verge Cour 2",
+            "Lantern Verge Cour 3",
+            "Lantern Verge Cour 4",
+        ])
+    }
+
+    fn anime_numbering_bridge_fixture_with_titles(
+        titles: &[&str; 4],
+    ) -> scryer_domain::AnimeNumberingBridge {
         let mut seasons = Vec::new();
         let mut tvdb_start = 1;
         for (offset, length) in [14, 12, 10, 24].iter().enumerate() {
@@ -1529,7 +1540,7 @@ mod tests {
                 anidb_id: None,
                 anilist_id: None,
                 mal_id: None,
-                titles: vec![format!("Lantern Verge Cour {index}")],
+                titles: vec![titles[offset].to_string()],
                 ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
                     community_episode_start: 1,
                     community_episode_end: Some(*length),
@@ -1580,6 +1591,75 @@ mod tests {
                 .map(|episode| episode.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["ep-56"]
+        );
+    }
+
+    #[test]
+    fn title_scan_fuzzily_anchors_a_cour_title_without_inventing_a_season() {
+        let title = title(
+            "Rantan Kyoukai Monogatari Honzuki no Gekokujou",
+            MediaFacet::Anime,
+        );
+        let episodes: Vec<Episode> = (1..=60)
+            .map(|number| episode(&format!("ep-{number}"), "1", &number.to_string()))
+            .collect();
+        let bridge = anime_numbering_bridge_fixture_with_titles(&[
+            "Rantan Kyoukai Monogatari Hajimari no Akatsuki",
+            "Rantan Kyoukai Monogatari Madoromi no Kaze",
+            "Rantan Kyoukai Monogatari Shirogane no Hane",
+            "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta",
+        ]);
+        let input = LibraryFilenameParseInput {
+            path: Path::new(
+                "/library/Rantan Kyoukai Monogatari Honzuki no Gekokujou/Season 01/Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05.mkv",
+            ),
+            display_name: None,
+            library_root: Some(Path::new("/library")),
+            title: Some(&title),
+            facet: Some(&title.facet),
+            collections: &[],
+            series_movie_links: &[],
+            episodes: &episodes,
+            existing_record: None,
+            anime_numbering_bridge: Some(&bridge),
+            mode: LibraryFilenameParseMode::TitleScan,
+            fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+        };
+
+        let parsed_filename = crate::parse_release_metadata(
+            "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05",
+        );
+        assert_eq!(
+            parsed_filename.episode.as_ref().and_then(|episode| episode.season),
+            None,
+            "the parser must preserve the filename's missing season"
+        );
+        let parse = parse_library_filename(&input);
+
+        assert_eq!(
+            parse
+                .target_episodes()
+                .iter()
+                .map(|episode| episode.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ep-41"]
+        );
+
+        let explicitly_seasoned_input = LibraryFilenameParseInput {
+            path: Path::new(
+                "/library/Rantan Kyoukai Monogatari Honzuki no Gekokujou/Season 01/Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - S01E05.mkv",
+            ),
+            ..input
+        };
+        let explicit_parse = parse_library_filename(&explicitly_seasoned_input);
+        assert_eq!(
+            explicit_parse
+                .target_episodes()
+                .iter()
+                .map(|episode| episode.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ep-5"],
+            "an explicit official season must not be title-anchored to a cour"
         );
     }
 

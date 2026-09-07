@@ -1442,21 +1442,28 @@ async fn import_single_episode_file(
             || episode.air_date.is_some()
             || episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
     };
-    let file_episode = file_episode_identity_for_title(source_video, title);
-    let identity_episode = file_episode
+    let file_evidence = file_episode_evidence_for_title(source_video, title);
+    let identity_episode = file_evidence
         .as_ref()
-        .filter(|episode| episode_is_resolvable(episode))
+        .and_then(|evidence| {
+            evidence
+                .episode
+                .as_ref()
+                .filter(|episode| episode_is_resolvable(episode))
+                .map(|episode| (episode, evidence.normalized_title_variants.as_slice()))
+        })
         .or_else(|| {
             parsed
                 .episode
                 .as_ref()
                 .filter(|episode| episode_is_resolvable(episode))
+                .map(|episode| (episode, parsed.normalized_title_variants.as_slice()))
         });
     let (target_episodes, uses_catalog_identity) = if let Some(episodes) = planned_episodes {
         // The verified-pack preflight resolves member identity from catalog
         // episodes. Parsed metadata remains release evidence only.
         (episodes, true)
-    } else if let Some(ep_meta) = identity_episode {
+    } else if let Some((ep_meta, title_variants)) = identity_episode {
         // A file that positively identifies itself wins identity resolution.
         // The expected-scope gate below then holds it when that identity is not
         // part of the grabbed release. Acquisition is only an ambiguity
@@ -1468,7 +1475,7 @@ async fn import_single_episode_file(
             title,
             ep_meta,
             &season_str,
-            &parsed.normalized_title_variants,
+            title_variants,
             file_reference_date(source_video),
         )
         .await;
@@ -1519,7 +1526,11 @@ async fn import_single_episode_file(
         {
             (vec![episode], true)
         } else {
-            (resolved_episodes, false)
+            let translated = matches!(
+                numbering,
+                crate::anime_numbering::NumberingResolution::Resolved(_)
+            );
+            (resolved_episodes, translated)
         }
     } else if let Some(episode) =
         grabbed_episode_fallback(app, title, release_evidence, other_video_files).await?
@@ -1635,16 +1646,18 @@ async fn import_single_episode_file(
             .map(str::trim)
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(1);
-        let episode_number = resolved_episode
-            .and_then(|episode| episode.episode_number.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_default()
-            .to_string();
+        let episode_numbers = target_episodes
+            .iter()
+            .filter_map(|episode| episode.episode_number.as_deref()?.trim().parse::<u32>().ok())
+            .collect::<Vec<_>>();
+        let episode_number = episode_number_token_for_import(
+            &episode_numbers,
+            resolved_episode.and_then(|episode| episode.episode_number.as_deref()),
+        );
         let absolute_number = resolved_episode.and_then(|episode| episode.absolute_number.clone());
         (season, episode_number, absolute_number)
     } else {
-        let ep_meta = identity_episode.expect("the parse path resolved episode metadata");
+        let (ep_meta, _) = identity_episode.expect("the parse path resolved episode metadata");
         let season = ep_meta.season.unwrap_or(1);
         let episode_number = episode_number_token_for_import(
             &ep_meta.episode_numbers,
@@ -1659,7 +1672,7 @@ async fn import_single_episode_file(
     let post_processing_episode = if uses_catalog_identity {
         ep_num_str.parse::<u32>().ok()
     } else {
-        identity_episode.and_then(|episode| episode.episode_numbers.first().copied())
+        identity_episode.and_then(|(episode, _)| episode.episode_numbers.first().copied())
     };
     let episode_title = target_episodes.first().and_then(|ep| ep.title.as_deref());
     let import_purpose = release_evidence.purpose();
@@ -2211,9 +2224,6 @@ pub(crate) async fn resolve_target_episodes_with_numbering(
         .unwrap_or_default();
 
     let mut translated = ep_meta.clone();
-    if translated.season.is_none() {
-        translated.season = season_str.trim().parse::<u32>().ok();
-    }
     let resolution = crate::anime_numbering::translate_parsed_episode_numbering(
         &bridge,
         title,
@@ -2780,15 +2790,26 @@ fn file_reference_date(source_video: &Path) -> Option<chrono::NaiveDate> {
     Some(chrono::DateTime::<chrono::Utc>::from(modified).date_naive())
 }
 
-/// The episode a video file names on its own: its stem parsed with the
-/// title's canonical context (so absolute/anime numbering resolves the way
-/// the grab path resolves it), then the context-free stem parse the manual
-/// preview and obfuscation checks use.
+/// The parser-produced filename evidence for a video file: its stem parsed
+/// with the title's canonical context (so absolute/anime numbering resolves
+/// the way the grab path resolves it), then the context-free stem parse the
+/// manual preview and obfuscation checks use.
+fn file_episode_evidence_for_title(
+    source_video: &Path,
+    title: &scryer_domain::Title,
+) -> Option<crate::ParsedReleaseMetadata> {
+    source_video_stem(Some(source_video))
+        .map(|stem| parse_import_release_for_title(&stem, title))
+        .filter(|evidence| evidence.episode.is_some())
+        .or_else(|| {
+            let evidence = parsed_release_from_file_stem(source_video);
+            evidence.episode.is_some().then_some(evidence)
+        })
+}
+
 fn file_episode_identity_for_title(
     source_video: &Path,
     title: &scryer_domain::Title,
 ) -> Option<crate::ParsedEpisodeMetadata> {
-    source_video_stem(Some(source_video))
-        .and_then(|stem| parse_import_release_for_title(&stem, title).episode)
-        .or_else(|| parsed_release_from_file_stem(source_video).episode)
+    file_episode_evidence_for_title(source_video, title).and_then(|evidence| evidence.episode)
 }
