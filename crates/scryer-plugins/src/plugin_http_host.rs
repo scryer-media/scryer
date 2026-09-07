@@ -1172,9 +1172,9 @@ fn execute_challenge_solver_request(
         "challenge solver request started"
     );
 
-    // The solve payload is `request.get` against `request.url`, but the network
-    // send is to the solver. It must still pass the operation's shutdown gate
-    // and is recorded as auxiliary transport activity.
+    // The solve payload is `request.get` against `request.url`; the network
+    // send goes to the solver, which replays it against the indexer. It passes
+    // the operation's shutdown gate and counts as one indexer request.
     let solve_result =
         scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_budget_until_and_dispatch_observer(
             proxy_client.post(&endpoint).timeout(solver_timeout).json(
@@ -1188,7 +1188,7 @@ fn execute_challenge_solver_request(
             solver_deadline,
             || {
                 if let Some(tally) = tally
-                    && !tally.try_note_auxiliary_sent_call(CALL_SOLVER)
+                    && !tally.try_note_sent_call(CALL_SOLVER)
                 {
                     return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
                 }
@@ -2042,8 +2042,8 @@ mod tests {
         assert!(solved.headers.is_empty());
         assert_eq!(
             stats.sent(),
-            0,
-            "a solver POST is auxiliary transport and does not charge the indexer dashboard"
+            1,
+            "a solver POST replays the request against the indexer and charges its dashboard once"
         );
         let requests = server.received_requests().await.expect("recorded requests");
         assert_eq!(requests.len(), 1);
@@ -2157,8 +2157,8 @@ mod tests {
         assert_eq!(solved.body, b"<rss></rss>");
         assert_eq!(
             stats.sent(),
-            1,
-            "only Scryer's clearance-session replay is a direct indexer dispatch"
+            2,
+            "the solver-relayed request and Scryer's clearance-session replay each charge the indexer"
         );
     }
 

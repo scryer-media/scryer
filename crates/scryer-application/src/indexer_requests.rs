@@ -12,8 +12,9 @@
 //!   requests once each, labelled by what was asked (`call`) and what came back
 //!   (`result`), for the breakdown a dashboard cannot carry.
 //!
-//! Solver invocations remain separately observable in the metric, but are not
-//! observed indexer requests because a solver's upstream activity is opaque.
+//! A challenge-solver POST made on an indexer's behalf counts as one request
+//! to that indexer: the solver replays the request upstream and the indexer's
+//! quota pays for it. The metric keeps it distinguishable under `call=solver`.
 
 use std::sync::{Arc, Mutex};
 
@@ -34,8 +35,8 @@ pub const INDEXER_API_REQUESTS_METRIC: &str = "scryer_indexer_api_requests_total
 /// Prowlarr JSON API call or a torrent-site scrape.
 pub const CALL_OTHER: &str = "other";
 /// `call` label for a POST to a challenge solver on an indexer's behalf. The
-/// request does not reach the indexer, so it is telemetry only and does not
-/// contribute to the observed indexer-request dashboard count.
+/// solver replays the request against the indexer, so it counts on the
+/// dashboard as one indexer request; the label keeps it separable in the metric.
 pub const CALL_SOLVER: &str = "solver";
 /// An actual redirect hop outside the configured indexer origin.
 pub const CALL_EXTERNAL_REDIRECT: &str = "external_redirect";
@@ -252,12 +253,6 @@ impl IndexerRequestTally {
         let _ = self.try_note_sent_call(call);
     }
 
-    /// Records auxiliary transport activity (such as a challenge-solver
-    /// invocation) for the labelled metric only.
-    pub fn note_auxiliary_sent_call(&self, call: &'static str) {
-        let _ = self.try_note_auxiliary_sent_call(call);
-    }
-
     /// Resolve the most recent pending send with `result`. Earlier unresolved
     /// attempts are emitted as `unknown`, avoiding a false claim that every
     /// retry received the terminal response.
@@ -410,11 +405,13 @@ mod tests {
     }
 
     #[test]
-    fn solver_telemetry_does_not_claim_an_indexer_dispatch() {
+    fn solver_dispatch_counts_as_one_indexer_request() {
         let stats = Arc::new(CountingTracker::default());
-        let tally = tally(Arc::clone(&stats));
-        tally.note_auxiliary_sent_call(CALL_SOLVER);
-        assert_eq!(stats.sent.load(Ordering::Relaxed), 0);
+        let tally = tally(Arc::clone(&stats)).with_indexer_origin("https://indexer.test/api");
+        // The POST leaves for the solver's origin, not the indexer's, but the
+        // solver replays it upstream, so the indexer's quota pays for it.
+        assert!(tally.try_note_sent_call(CALL_SOLVER));
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 1);
         assert_eq!(tally.pending_len(), 1);
     }
 

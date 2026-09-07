@@ -11,9 +11,11 @@ covered in [the NEXT integration note](indexer-correctness-next-integration.md).
 - Observed calls count Scryer HTTP dispatch attempts after local validation,
   cooldown, and pacing. A failed response or timeout still counts; a rejected
   local dispatch does not. Retries and redirect hops are individually observed.
-- Indexer dashboard totals count the configured indexer origin. Solver POSTs
-  and external redirect destinations remain auxiliary telemetry. Neither solver
-  nor Prowlarr internal work is inferred from a response.
+- Indexer dashboard totals count the configured indexer origin plus one request
+  per challenge-solver POST made on that indexer's behalf, because the solver
+  replays the request upstream and the indexer's quota pays for it. External
+  redirect destinations remain auxiliary telemetry. Neither the solver's own
+  retries nor Prowlarr internal work is inferred from a response.
 - Prowlarr child requests use their child accounting identity. Native parent
   management operations, including their caps enrichment requests, use the
   parent management identity. These are observed Scryer calls, not upstream

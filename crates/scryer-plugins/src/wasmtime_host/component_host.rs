@@ -496,8 +496,8 @@ impl ComponentHost {
         let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
         // The solve payload is `request.get` against `request.url`, so the
         // solver fetches the indexer with the user's API key in the query
-        // string. This is auxiliary transport activity: it must respect the
-        // same shutdown gate, but it is not a direct indexer quota request.
+        // string. It respects the same shutdown gate and counts as one indexer
+        // request, because the indexer's quota pays for the solver's replay.
         let solve_tally = self.request_tally();
         let cancellation = self.cancellation();
         let response = tokio::select! {
@@ -510,7 +510,7 @@ impl ComponentHost {
             }
             result = async {
                 if let Some(tally) = solve_tally.as_ref()
-                    && !tally.try_note_auxiliary_sent_call(CALL_SOLVER)
+                    && !tally.try_note_sent_call(CALL_SOLVER)
                 {
                     return Err(TransportError::Cancelled);
                 }
