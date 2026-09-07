@@ -1949,6 +1949,16 @@ fn decode_grab_result(
             )));
         }
     };
+    // Shipped command/component plugins return an empty object for unknown
+    // actions. Treat that legacy reply like Unsupported so the host can fetch
+    // the original download URL. Nonempty malformed replies remain errors.
+    if response
+        .payload
+        .as_object()
+        .is_some_and(|payload| payload.is_empty())
+    {
+        return Ok(None);
+    }
     let payload: IndexerGrabPayload = serde_json::from_value(response.payload)
         .map_err(|error| AppError::Repository(format!("invalid indexer grab payload: {error}")))?;
     if is_valid_magnet_uri(payload.url.trim()) {
@@ -2270,7 +2280,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grab_fallback_requires_explicit_unsupported() {
+    fn grab_plugin_errors_only_fall_back_for_unsupported() {
         for (code, fallback) in [
             (scryer_plugin_sdk::PluginErrorCode::Unsupported, true),
             (scryer_plugin_sdk::PluginErrorCode::AuthFailed, false),
@@ -2291,6 +2301,32 @@ mod tests {
                     "real provider failure must not fetch again"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn grab_empty_legacy_action_reply_uses_host_fallback() {
+        assert!(
+            decode_grab_result(PluginResult::Ok(PluginActionResponse {
+                payload: serde_json::json!({}),
+            }))
+            .expect("legacy unsupported action")
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn grab_malformed_replies_do_not_trigger_a_second_download() {
+        for payload in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!({"body": [100, 101]}),
+            serde_json::json!({"url": null}),
+            serde_json::json!({"url": "https://indexer.example/download", "body": []}),
+        ] {
+            assert!(
+                decode_grab_result(PluginResult::Ok(PluginActionResponse { payload })).is_err()
+            );
         }
     }
 

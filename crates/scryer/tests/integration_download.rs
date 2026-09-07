@@ -94,6 +94,132 @@ async fn new_staged_nzb_store() -> Arc<FileSystemStagedNzbStore> {
     )
 }
 
+#[tokio::test]
+async fn shipped_nab_plugins_use_host_artifact_fallback_without_plugin_updates() {
+    use scryer_application::{IndexerPluginProvider, ResolvedDownloadArtifact};
+
+    let ctx = TestContext::new().await;
+    let provider = Arc::new(
+        scryer_plugins::WasmIndexerPluginProvider::empty()
+            .with_builtin_asset(scryer_plugins::builtins::NEWZNAB)
+            .with_builtin_asset(scryer_plugins::builtins::TORZNAB),
+    );
+    let configs: Arc<dyn IndexerConfigRepository> = Arc::new(IndexerConfigStore::new(
+        ctx.db.datastore(),
+        ctx.db.encryption_key_state(),
+    ));
+    let staged_dir = tempfile::tempdir().expect("staged artifacts directory");
+    let store = Arc::new(
+        FileSystemStagedNzbStore::new(staged_dir.path())
+            .await
+            .unwrap(),
+    );
+    let resolver = AcquisitionIndexerArtifactResolver::new(
+        provider.clone(),
+        configs.clone(),
+        Arc::new(NullIndexerProxyConfigRepository),
+        store,
+        Arc::new(Semaphore::new(4)),
+    );
+    for provider_type in ["newznab", "torznab"] {
+        let server = MockServer::start().await;
+        let now = chrono::Utc::now();
+        let config = configs
+            .create(scryer_domain::IndexerConfig {
+                id: format!("legacy-{provider_type}"),
+                name: provider_type.into(),
+                provider_type: provider_type.into(),
+                base_url: server.uri(),
+                api_key_encrypted: Some("fixture-key".into()),
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                disabled_until: None,
+                is_enabled: true,
+                enable_interactive_search: true,
+                enable_auto_search: true,
+                indexer_proxy_config_id: None,
+                download_client_id: None,
+                seeding_profile_id: None,
+                managed_parent_config_id: None,
+                managed_child_key: None,
+                managed_metadata_json: None,
+                caps_snapshot_json: None,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                config_json: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("persist indexer config");
+        let source_url = format!("{}/api?t=get&id=fixture&apikey=fixture-key", server.uri());
+        let body = if provider_type == "newznab" {
+            load_fixture("nzbgeek/nzb_content.xml").into_bytes()
+        } else {
+            b"d4:infod4:name4:test6:lengthi1eee".to_vec()
+        };
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .and(query_param("t", "get"))
+            .and(query_param("apikey", "fixture-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = provider
+            .client_for_provider(&config)
+            .expect("shipped plugin client");
+        assert!(
+            client
+                .resolve_download(&source_url)
+                .await
+                .expect("legacy empty action reply must permit host fallback")
+                .is_none()
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "unsupported plugin action must not attempt HTTP"
+        );
+
+        let artifact = resolver
+            .resolve_artifact(&IndexerArtifactResolutionRequest {
+                indexer_id: Some(config.id),
+                source_url,
+                source_kind: Some(if provider_type == "newznab" {
+                    DownloadSourceKind::NzbUrl
+                } else {
+                    DownloadSourceKind::TorrentFile
+                }),
+                info_hash_hint: None,
+                title_id: None,
+                search_facet: None,
+                cancellation: tokio_util::sync::CancellationToken::new(),
+            })
+            .await
+            .expect("host resolves artifact with the shipped plugin");
+        match artifact {
+            PreparedIndexerArtifact::StagedNzb(_) => assert_eq!(provider_type, "newznab"),
+            PreparedIndexerArtifact::Resolved(ResolvedDownloadArtifact::TorrentFile {
+                bytes,
+                info_hash_hint,
+                ..
+            }) => {
+                assert_eq!(provider_type, "torznab");
+                assert_eq!(bytes, body);
+                assert!(info_hash_hint.is_some());
+            }
+            _ => panic!("unexpected artifact from {provider_type}"),
+        }
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "the host must fetch the artifact exactly once"
+        );
+    }
+}
+
 async fn resolve_direct_nzb_request(
     ctx: &TestContext,
     store: Arc<FileSystemStagedNzbStore>,
