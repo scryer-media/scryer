@@ -59,6 +59,10 @@ export function recommendScore(
   if (/^(?:prefer(?:red)?|boost|favor(?:ite)?|favour(?:ite)?|reward)\b/.test(name)) {
     return { value: 100, reasonKey: "settings.arrImportScoreReasonPreference" };
   }
+  // Surround labels are a narrow, explicit audio preference; do not infer from condition patterns.
+  if (/^(?:5|7) 1 surround$/.test(name) && format.specifications.some((spec) => !spec.negate)) {
+    return { value: 100, reasonKey: "settings.arrImportScoreReasonPreference" };
+  }
   // Only plain, positive extras/sample conditions carry this stronger penalty.
   // "No extras" and negated-only conditions do not imply unwanted content.
   if (/^(?:(?:avoid|block|exclude|unwanted) )?(?:extras?|samples?)$/.test(name) && format.specifications.every((spec) => !spec.negate)) {

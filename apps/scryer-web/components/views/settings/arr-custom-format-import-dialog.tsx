@@ -329,8 +329,6 @@ export default function ArrCustomFormatImportDialog({
                   );
                 })}
               </div>
-              <p className="text-xs text-muted-foreground">{t("settings.arrImportBlockScoreHelp")}</p>
-              <p className="text-xs text-muted-foreground">{t("settings.arrImportScoreSuggestionHelp")}</p>
             </div>
           ) : null}
         </div>
