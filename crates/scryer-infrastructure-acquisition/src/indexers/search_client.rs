@@ -1061,6 +1061,10 @@ struct StrategyBatchHealth {
     any_error: bool,
     retry_after: Option<std::time::Duration>,
     had_rate_limit: bool,
+    /// A rate limit the scheduler's cooldown cannot size, so it still has to
+    /// reach the escalating ladder below. See
+    /// `RateLimitSignal::warrants_system_backoff`.
+    rate_limit_needs_system_backoff: bool,
     had_solver_failure: bool,
     representative_error: Option<String>,
     rate_limit_error: Option<String>,
@@ -1079,6 +1083,8 @@ impl StrategyBatchHealth {
     ) {
         self.any_error = true;
         self.had_rate_limit |= rate_limited;
+        self.rate_limit_needs_system_backoff |= rate_limit_signal_from_error(error)
+            .is_some_and(|signal| signal.warrants_system_backoff());
         let message = sanitize_indexer_error_message(&error.to_string());
         if rate_limited {
             self.rate_limit_error.get_or_insert(message);
@@ -1132,7 +1138,11 @@ impl StrategyBatchHealth {
             .await;
         }
 
-        if self.any_error && !self.any_success && !self.had_rate_limit && !self.had_solver_failure {
+        if self.any_error
+            && !self.any_success
+            && (!self.had_rate_limit || self.rate_limit_needs_system_backoff)
+            && !self.had_solver_failure
+        {
             let backoff = backoff_tracker
                 .record_failure(indexer_id, self.retry_after)
                 .await;
@@ -4103,7 +4113,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         }
                                         warn!(indexer = indexer_name.as_str(), error = %err, "RSS feed fetch failed");
                                         stats_tracker.record_query(&indexer_id, &indexer_name, false);
-                                        if rate_limit_signal_from_error(&err).is_none()
+                                        if rate_limit_signal_from_error(&err)
+                                            .is_none_or(|signal| signal.warrants_system_backoff())
                                             && !scryer_application::challenge_solver::is_solver_service_error_message(
                                                 &err.to_string(),
                                             )
@@ -10410,6 +10421,74 @@ mod tests {
         assert!(
             backoff_state(&client, "idx-1").await.is_some(),
             "plain provider failures must still escalate operational backoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn newznab_quota_wall_still_creates_operational_backoff() {
+        let stats = Arc::new(RecordingIndexerStatsTracker::default());
+        let (client, _calls) =
+            scripted_search_client_with_stats(anime_caps(), stats.clone(), |_| {
+                Err(AppError::Repository(
+                    "Newznab error 500: Request limit reached".into(),
+                ))
+            });
+
+        let _ = client
+            .search(
+                "Blade Summit S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await;
+
+        assert!(
+            backoff_state(&client, "idx-1").await.is_some(),
+            "a spent allotment carries no Retry-After, so only the escalating ladder can size \
+             the wait; suppressing it leaves the flat fallback cooldown re-asking the account"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limits_that_name_their_own_delay_still_avoid_operational_backoff() {
+        let stats = Arc::new(RecordingIndexerStatsTracker::default());
+        let (client, _calls) =
+            scripted_search_client_with_stats(anime_caps(), stats.clone(), |_| {
+                Err(AppError::Repository(
+                    "HTTP 429: rate limited; retry_after_seconds=900".into(),
+                ))
+            });
+
+        let _ = client
+            .search(
+                "Blade Summit S02E03".into(),
+                HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                Some("anime".into()),
+                Some("anime".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                Some(2),
+                Some(3),
+                Some(21),
+                vec![],
+            )
+            .await;
+
+        assert!(
+            backoff_state(&client, "idx-1").await.is_none(),
+            "a 429 expires on the indexer's own schedule, so it must keep staying out of \
+             operational backoff rather than disabling the indexer over a transient limit"
         );
     }
 
