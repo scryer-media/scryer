@@ -128,6 +128,7 @@ pub struct InMemoryIndexerStatsTracker {
     datastore: Option<StoreDatastore>,
     pending_quota_updates: Arc<Mutex<HashMap<String, PendingQuotaUpdate>>>,
     quota_flush_scheduled: Arc<AtomicBool>,
+    quota_runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
 }
 
 impl Default for InMemoryIndexerStatsTracker {
@@ -143,6 +144,7 @@ impl InMemoryIndexerStatsTracker {
             datastore,
             pending_quota_updates: Arc::new(Mutex::new(HashMap::new())),
             quota_flush_scheduled: Arc::new(AtomicBool::new(false)),
+            quota_runtime: Arc::new(Mutex::new(tokio::runtime::Handle::try_current().ok())),
         }
     }
 
@@ -154,6 +156,7 @@ impl InMemoryIndexerStatsTracker {
     /// operators were reporting. Rows from an earlier UTC day are ignored: the
     /// window has already rolled over and the next persisted write resets them.
     pub async fn hydrate(&self) {
+        self.quota_runtime_handle();
         let Some(datastore) = &self.datastore else {
             return;
         };
@@ -203,13 +206,31 @@ impl InMemoryIndexerStatsTracker {
         entry.grabs.retain(|ts| *ts > cutoff);
     }
 
+    fn quota_runtime_handle(&self) -> Option<tokio::runtime::Handle> {
+        let mut runtime = self.quota_runtime.lock().unwrap();
+        if runtime.is_none() {
+            *runtime = tokio::runtime::Handle::try_current().ok();
+        }
+        runtime.clone()
+    }
+
     fn schedule_quota_flush(&self) {
-        if self.datastore.is_none() || self.quota_flush_scheduled.swap(true, Ordering::AcqRel) {
+        if self.datastore.is_none() {
+            return;
+        }
+        // Legacy plugins invoke the tracker from ordinary worker threads. Use
+        // the application runtime captured at construction or hydration there.
+        let Some(runtime) = self.quota_runtime_handle() else {
+            // Keep the updates queued for a later flush if no runtime has
+            // been attached yet, without wedging the scheduled flag.
+            return;
+        };
+        if self.quota_flush_scheduled.swap(true, Ordering::AcqRel) {
             return;
         }
 
         let tracker = self.clone();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             tokio::time::sleep(QUOTA_FLUSH_INTERVAL).await;
             tracker.flush_pending_quota_updates().await;
         });
@@ -554,6 +575,58 @@ mod tests {
         .execute(pool)
         .await
         .expect("quota table should be created");
+    }
+
+    #[tokio::test]
+    async fn worker_thread_requests_flush_on_the_application_runtime() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+
+        for constructed_on_worker in [false, true] {
+            let datastore =
+                StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+            let tracker = if constructed_on_worker {
+                std::thread::spawn(move || InMemoryIndexerStatsTracker::new(Some(datastore)))
+                    .join()
+                    .expect("construct tracker outside the runtime")
+            } else {
+                InMemoryIndexerStatsTracker::new(Some(datastore))
+            };
+            tracker.hydrate().await;
+            let indexer_id = format!("idx-worker-{constructed_on_worker}");
+            let worker_id = indexer_id.clone();
+            std::thread::spawn(move || {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                tracker.record_api_request_sent(&worker_id, "Worker Indexer");
+                tracker.record_api_limits(&worker_id, Some(7), Some(100), None, None);
+            })
+            .join()
+            .expect("worker callback must not require an entered runtime");
+
+            let row = timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(row) = sqlx::query(
+                        "SELECT queries_today, api_current FROM indexer_api_quotas WHERE indexer_id = ?",
+                    )
+                    .bind(&indexer_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read worker quota")
+                    {
+                        break row;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect("worker update should flush without another callback");
+            assert_eq!(row.get::<i64, _>("queries_today"), 1);
+            assert_eq!(row.get::<i64, _>("api_current"), 7);
+        }
     }
 
     #[tokio::test]
