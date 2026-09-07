@@ -182,6 +182,29 @@ pub(crate) fn build_search_queries(
 /// `episode` is optional because the interactive lane searches from the season
 /// and episode numbers a user typed and may have no catalog row to read an
 /// absolute number from; the bridge's own `absolute_start` covers that case.
+/// Where a wanted TVDB episode sits in the community's numbering, or `None`
+/// when the title, the bridge or the episode puts it out of scope.
+///
+/// The queries the search dispatches and the numberings the indexer-side guard
+/// admits have to agree about that scope exactly: a community form asked for
+/// but not admitted is the gap the admissible set exists to close, and it fails
+/// silently. So both read it from here rather than each testing its own way in.
+fn community_numbering_scope(
+    title: &Title,
+    season_num: i32,
+    episode_num: i32,
+    bridge: Option<&AnimeNumberingBridge>,
+) -> Option<crate::anime_numbering::CommunityCoordinates> {
+    if title.facet != scryer_domain::MediaFacet::Anime || title.name.trim().is_empty() {
+        return None;
+    }
+    let bridge = bridge.filter(|bridge| !bridge.is_empty())?;
+    if season_num <= 0 || episode_num <= 0 {
+        return None;
+    }
+    crate::anime_numbering::community_coordinates_for_tvdb_episode(bridge, season_num, episode_num)
+}
+
 pub(crate) fn community_numbering_queries(
     title: &Title,
     episode: Option<&Episode>,
@@ -189,20 +212,8 @@ pub(crate) fn community_numbering_queries(
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
 ) -> Vec<String> {
-    if title.facet != scryer_domain::MediaFacet::Anime || title.name.trim().is_empty() {
-        return Vec::new();
-    }
-    let Some(bridge) = bridge.filter(|bridge| !bridge.is_empty()) else {
-        return Vec::new();
-    };
-    if season_num <= 0 || episode_num <= 0 {
-        return Vec::new();
-    }
-    let Some(coordinates) = crate::anime_numbering::community_coordinates_for_tvdb_episode(
-        bridge,
-        season_num,
-        episode_num,
-    ) else {
+    let Some(coordinates) = community_numbering_scope(title, season_num, episode_num, bridge)
+    else {
         return Vec::new();
     };
 
@@ -235,7 +246,7 @@ pub(crate) fn community_numbering_queries(
         .filter(|&value| value > 0)
         .or_else(|| {
             bridge
-                .season(coordinates.season)
+                .and_then(|bridge| bridge.season(coordinates.season))
                 .and_then(|season| season.absolute_start)
                 .map(|start| start + coordinates.episode - 1)
                 .filter(|&value| value > 0)
@@ -266,20 +277,8 @@ pub(crate) fn community_numbering_admissible_pairs(
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
 ) -> Vec<(u32, u32)> {
-    if title.facet != scryer_domain::MediaFacet::Anime {
-        return Vec::new();
-    }
-    let Some(bridge) = bridge.filter(|bridge| !bridge.is_empty()) else {
-        return Vec::new();
-    };
-    if season_num <= 0 || episode_num <= 0 {
-        return Vec::new();
-    }
-    let Some(coordinates) = crate::anime_numbering::community_coordinates_for_tvdb_episode(
-        bridge,
-        season_num,
-        episode_num,
-    ) else {
+    let Some(coordinates) = community_numbering_scope(title, season_num, episode_num, bridge)
+    else {
         return Vec::new();
     };
 

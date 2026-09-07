@@ -5972,9 +5972,14 @@ fn filter_strategy_results(
                     *season == rs && res_ep.episode_numbers.contains(episode)
                 }),
                 (Some(rs), true) => pairs.iter().any(|(season, _)| *season == rs),
-                (None, false) => pairs
-                    .iter()
-                    .any(|(_, episode)| res_ep.episode_numbers.contains(episode)),
+                // An episode number with no season beside it says nothing
+                // about which numbering it belongs to, so reading it in
+                // either would admit an official episode 17 as though it
+                // were the community's. Held to the dispatched episode,
+                // exactly as before the alternatives existed.
+                (None, false) => context
+                    .episode
+                    .is_none_or(|expected| res_ep.episode_numbers.contains(&expected)),
                 // Absolute numbering carries neither; translation and coverage
                 // decide those, as they always have.
                 (None, true) => true,
@@ -11819,6 +11824,24 @@ mod tests {
         }
     }
 
+    /// A result carrying exactly the numbering under test, so the guard's rule
+    /// is what the assertion reads rather than the parser's reading of a title.
+    fn numbered_result(
+        title: &str,
+        season: Option<u32>,
+        episode_numbers: &[u32],
+    ) -> IndexerSearchResult {
+        let mut result = search_result(title);
+        let mut parsed = scryer_application::parse_release_metadata(title);
+        parsed.episode = Some(scryer_application::ParsedEpisodeMetadata {
+            season,
+            episode_numbers: episode_numbers.to_vec(),
+            ..Default::default()
+        });
+        result.parsed_release_metadata = Some(parsed);
+        result
+    }
+
     fn surviving_titles(titles: &[&str], context: &FilterStrategyContext<'_>) -> Vec<String> {
         let mut results: Vec<IndexerSearchResult> =
             titles.iter().map(|title| search_result(title)).collect();
@@ -11855,6 +11878,24 @@ mod tests {
                 "Lantern Verge - 17 [1080p]".to_string(),
             ]
         );
+    }
+
+    /// A release labelled with an episode but no season beside it: the shape
+    /// says nothing about which numbering it is written in, so the wanted
+    /// episode's community form must not let an official episode 17 through.
+    #[test]
+    fn numbering_guard_holds_a_season_less_episode_to_the_dispatched_number() {
+        let admissible = [(1u32, 53u32), (4u32, 17u32)];
+        let context = numbering_guard_context("Lantern Verge S04E17", &admissible);
+        let mut results = vec![
+            numbered_result("Lantern Verge dispatched", None, &[53]),
+            numbered_result("Lantern Verge official seventeen", None, &[17]),
+        ];
+
+        filter_strategy_results(&mut results, &context);
+
+        let kept: Vec<String> = results.into_iter().map(|result| result.title).collect();
+        assert_eq!(kept, vec!["Lantern Verge dispatched".to_string()]);
     }
 
     /// With no alternative numbering — every non-anime search, and anime whose
