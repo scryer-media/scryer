@@ -935,6 +935,17 @@ impl AppUseCase {
             );
             return Ok(PendingGrabOutcome::Rejected);
         }
+        if pending_parsed
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+        {
+            info!(
+                release = pr.release_title.as_str(),
+                "pending release: rejecting unresolved pack coverage"
+            );
+            return Ok(PendingGrabOutcome::Rejected);
+        }
         let pending_coverage = crate::acquisition_coverage::resolve_release_coverage(
             &pending_parsed,
             &catalog_episodes,

@@ -1037,19 +1037,52 @@ async fn preview_manual_import(
         )
         | None => HashSet::new(),
     };
+    // Loaded once for the whole preview: community (per-cour) anime numbering
+    // for this title, when SMG published one. `None` for every non-anime title
+    // and for anime whose community numbering matches the catalog's.
+    let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
+        app.services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(title_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        None
+    };
     // A verified pack vouches for every standard episode in the seasons its
     // release name declares, not only the season (or episode set) the grab was
     // scoped to: a two-season pack grabbed for season 1 imports its season 2
     // members automatically, so Manual Import keeps their suggestions instead
     // of erasing them as "outside the grab".
-    let verified_pack = verified_episode_pack(release_evidence, title);
+    let pack_verification = verified_episode_pack(
+        release_evidence,
+        title,
+        available_episodes,
+        anime_numbering_bridge.as_ref(),
+        Some(&grabbed_episode_ids),
+    );
+    let unresolved_pack = matches!(&pack_verification, EpisodePackVerification::Unresolved);
+    let verified_pack = match pack_verification {
+        EpisodePackVerification::Verified(pack) => Some(pack),
+        EpisodePackVerification::NotPack | EpisodePackVerification::Unresolved => None,
+    };
+    let exact_pack_scope = verified_pack
+        .as_ref()
+        .is_some_and(|pack| pack.exact_episode_ids.is_some());
     if let Some(pack) = verified_pack.as_ref() {
-        grabbed_episode_ids.extend(
-            available_episodes
-                .iter()
-                .filter(|episode| pack.vouches_for(episode))
-                .map(|episode| episode.id.clone()),
-        );
+        let vouched_episode_ids = available_episodes
+            .iter()
+            .filter(|episode| pack.vouches_for(episode))
+            .map(|episode| episode.id.clone())
+            .collect::<HashSet<_>>();
+        if pack.exact_episode_ids.is_some() {
+            // Translation is a proof of this bounded set, not permission to
+            // keep the collection scope that happened to acquire it.
+            grabbed_episode_ids = vouched_episode_ids;
+        } else {
+            grabbed_episode_ids.extend(vouched_episode_ids);
+        }
     }
     let grabbed_series_movie_link_id = match release_evidence.scope() {
         Some(SubmissionScope::SeriesMovie {
@@ -1095,20 +1128,6 @@ async fn preview_manual_import(
         )
     };
 
-    // Loaded once for the whole preview: community (per-cour) anime numbering
-    // for this title, when SMG published one. `None` for every non-anime title
-    // and for anime whose community numbering matches the catalog's.
-    let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
-        app.services
-            .catalog
-            .shows
-            .get_anime_numbering_bridge(title_id)
-            .await
-            .unwrap_or_default()
-    } else {
-        None
-    };
-
     // For each file, parse and attempt auto-match
     let mut previews = Vec::new();
     for candidate in &video_files {
@@ -1145,7 +1164,8 @@ async fn preview_manual_import(
         );
         // Several readings fit equally well: suggest nothing rather than the
         // wrong episode, and let the user pick.
-        let numbering_ambiguous = numbering.is_ambiguous();
+        let numbering_ambiguous = numbering.is_ambiguous()
+            || matches!(numbering, crate::anime_numbering::NumberingResolution::UnresolvedPack);
         if let Some(summary) = numbering.ambiguity_summary() {
             tracing::debug!(
                 title_id = %title_id,
@@ -1260,14 +1280,18 @@ async fn preview_manual_import(
         let is_grabbed_fallback_path = grabbed_fallback_path
             .as_ref()
             .is_some_and(|fallback| fallback == path);
-        let scoped_suggestion = manual_episode_suggestion_for_grabbed_scope(
-            suggested_episode_id.clone(),
-            &grabbed_episode_ids,
-            manual_grabbed_episode_fallback_applies(
-                is_grabbed_fallback_path,
-                parsed.episode.as_ref(),
-            ),
-        );
+        let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous).then(|| {
+            manual_episode_suggestion_for_grabbed_scope(
+                suggested_episode_id.clone(),
+                &grabbed_episode_ids,
+                !exact_pack_scope
+                    && manual_grabbed_episode_fallback_applies(
+                        is_grabbed_fallback_path,
+                        parsed.episode.as_ref(),
+                    ),
+            )
+        })
+        .flatten();
         if scoped_suggestion != suggested_episode_id {
             suggested_episode_label = scoped_suggestion.as_deref().and_then(|episode_id| {
                 available_episodes

@@ -244,13 +244,22 @@ pub(crate) fn parse_library_filename(
             &mut fallback,
             None,
         );
-        if numbering.is_ambiguous() {
+        if numbering.is_ambiguous()
+            || matches!(
+                numbering,
+                crate::anime_numbering::NumberingResolution::UnresolvedPack
+            )
+        {
             return LibraryFilenameParse {
                 query_evidence: query_build.evidence,
                 parsed_release: fallback,
                 episode_identity: None,
                 target: LibraryFilenameTarget::Unmatched {
-                    reason: "anime_numbering_ambiguous",
+                    reason: if numbering.is_ambiguous() {
+                        "anime_numbering_ambiguous"
+                    } else {
+                        "unresolved_pack_scope"
+                    },
                 },
                 strategy: LibraryFilenameParseStrategy::ReleaseParserFallback,
                 release_fallback_used,
@@ -1630,7 +1639,10 @@ mod tests {
             "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05",
         );
         assert_eq!(
-            parsed_filename.episode.as_ref().and_then(|episode| episode.season),
+            parsed_filename
+                .episode
+                .as_ref()
+                .and_then(|episode| episode.season),
             None,
             "the parser must preserve the filename's missing season"
         );

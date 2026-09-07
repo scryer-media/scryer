@@ -91,6 +91,11 @@ pub(crate) enum NumberingResolution {
     /// Several equally-ranked interpretations land on different episodes. A
     /// release nobody can place must not be grabbed or imported silently.
     Ambiguous(Vec<NumberingCandidate>),
+    /// A whole cour-shaped pack supplied insufficient or conflicting evidence
+    /// for a bounded projection. This is distinct from an episode-numbering
+    /// ambiguity: callers must retain the raw evidence but deny broad pack
+    /// scope rather than treating it as a normal title-level release.
+    UnresolvedPack,
 }
 
 impl NumberingResolution {
@@ -144,8 +149,41 @@ pub(crate) struct NumberingInput<'a> {
 const REFERENCE_DATE_WINDOW_DAYS: i64 = 14;
 
 pub(crate) fn resolve_numbering(input: &NumberingInput<'_>) -> NumberingResolution {
-    if input.bridge.is_empty() || !parse_is_translatable(input.parsed) {
+    if input.bridge.is_empty() {
         return NumberingResolution::Unchanged;
+    }
+    if !parse_is_translatable(input.parsed) {
+        return if is_whole_pack(input.parsed) {
+            resolve_whole_pack_numbering(input)
+        } else {
+            NumberingResolution::Unchanged
+        };
+    }
+
+    // A single season-relative bound cannot describe several selected cours.
+    // Keep that mixed coverage unresolved instead of silently dropping a list.
+    if input.parsed.season_numbers.len() > 1
+        || (!input.parsed.season_numbers.is_empty()
+            && input
+                .parsed
+                .season
+                .is_some_and(|season| !input.parsed.season_numbers.contains(&season)))
+    {
+        return NumberingResolution::UnresolvedPack;
+    }
+    if (is_whole_pack(input.parsed)
+        || input.parsed.episode_numbers.len() > 1
+        || input.parsed.absolute_episode_numbers.len() > 1)
+        && let ExactCourTitleMatch::Unique(cour) =
+            exact_cour_title_match(&input.title.name, input.bridge, input.parsed_title_variants)
+        && input
+            .parsed
+            .season
+            .into_iter()
+            .chain(input.parsed.season_numbers.iter().copied())
+            .any(|season| season != 1 && i32::try_from(season).ok() != Some(cour.index))
+    {
+        return NumberingResolution::UnresolvedPack;
     }
 
     let official = official_candidate(input);
@@ -158,21 +196,365 @@ pub(crate) fn resolve_numbering(input: &NumberingInput<'_>) -> NumberingResoluti
     select(candidates, official.as_ref(), input)
 }
 
-/// Only plain episode releases are translated. Season packs and series packs
-/// resolve by collection rather than by episode number, and translating their
-/// season token would move a whole pack onto the wrong season on the strength
-/// of a single number — a much worse failure than the one this fixes.
-fn parse_is_translatable(parsed: &ParsedEpisodeMetadata) -> bool {
-    if parsed.is_series_pack
+fn is_whole_pack(parsed: &ParsedEpisodeMetadata) -> bool {
+    parsed.is_series_pack
         || parsed.full_season
         || parsed.is_multi_season
         || matches!(parsed.release_type, ParsedEpisodeReleaseType::SeasonPack)
-    {
-        return false;
-    }
+}
+
+/// Explicit episode coordinates always outrank completion markers. A pack that
+/// says `Complete E03-E04` still names only those two episodes.
+fn parse_is_translatable(parsed: &ParsedEpisodeMetadata) -> bool {
     !parsed.episode_numbers.is_empty()
         || parsed.absolute_episode.is_some()
         || !parsed.absolute_episode_numbers.is_empty()
+}
+
+/// Resolve a whole cour pack only when its community coordinates form a
+/// closed, catalog-backed set. A raw `S01 Complete` is deliberately not
+/// enough evidence to widen a community cour into an official season.
+fn resolve_whole_pack_numbering(input: &NumberingInput<'_>) -> NumberingResolution {
+    if input.parsed.is_season_extra
+        || input.parsed.special_kind.is_some()
+        || !input.parsed.special_absolute_episode_numbers.is_empty()
+    {
+        return NumberingResolution::UnresolvedPack;
+    }
+    let anchor =
+        exact_cour_title_match(&input.title.name, input.bridge, input.parsed_title_variants);
+    if matches!(anchor, ExactCourTitleMatch::Ambiguous) {
+        return NumberingResolution::UnresolvedPack;
+    }
+    let explicit_seasons = sorted(&input.parsed.season_numbers);
+    let parsed_season = input.parsed.season;
+
+    if explicit_seasons.len() != input.parsed.season_numbers.len() {
+        return NumberingResolution::UnresolvedPack;
+    }
+
+    if matches!(anchor, ExactCourTitleMatch::None)
+        && explicit_seasons.is_empty()
+        && parsed_season.is_none()
+    {
+        return if input.parsed.is_series_pack {
+            NumberingResolution::Unchanged
+        } else {
+            NumberingResolution::UnresolvedPack
+        };
+    }
+
+    let selected = if let ExactCourTitleMatch::Unique(anchor) = anchor {
+        let Some(anchor_u32) = u32::try_from(anchor.index).ok().filter(|index| *index > 0) else {
+            return NumberingResolution::UnresolvedPack;
+        };
+        let allowed = explicit_seasons.is_empty()
+            || explicit_seasons == [anchor_u32]
+            || explicit_seasons == [1];
+        let season_allowed = parsed_season.is_none()
+            || parsed_season == Some(1)
+            || parsed_season == Some(anchor_u32);
+        if !allowed || !season_allowed {
+            return NumberingResolution::UnresolvedPack;
+        }
+        vec![anchor]
+    } else if !explicit_seasons.is_empty() {
+        let Some(indices) = explicit_seasons
+            .iter()
+            .map(|season| i32::try_from(*season).ok())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return NumberingResolution::UnresolvedPack;
+        };
+        if indices.iter().any(|season| *season <= 0)
+            || parsed_season.is_some_and(|season| !explicit_seasons.contains(&season))
+        {
+            return NumberingResolution::UnresolvedPack;
+        }
+        match uniquely_indexed_community_seasons(input.bridge, &indices) {
+            Ok(Some(selected)) => selected,
+            Ok(None) => Vec::new(),
+            Err(()) => return NumberingResolution::UnresolvedPack,
+        }
+    } else if let Some(season) = parsed_season {
+        let Ok(season) = i32::try_from(season) else {
+            return NumberingResolution::UnresolvedPack;
+        };
+        match uniquely_indexed_community_seasons(input.bridge, &[season]) {
+            Ok(Some(selected)) => selected,
+            Ok(None) => Vec::new(),
+            Err(()) => return NumberingResolution::UnresolvedPack,
+        }
+    } else {
+        return NumberingResolution::UnresolvedPack;
+    };
+
+    if selected.is_empty() {
+        return if official_pack_key(input).is_some() {
+            NumberingResolution::Unchanged
+        } else {
+            NumberingResolution::UnresolvedPack
+        };
+    }
+    // Once a release claims a known cour, an incomplete or conflicting bridge
+    // must not fall back to broad official collection coverage.
+    let Some(projection) = community_pack_projection(input, &selected) else {
+        return NumberingResolution::UnresolvedPack;
+    };
+    let title_anchored = matches!(anchor, ExactCourTitleMatch::Unique(_));
+    if !title_anchored && let Some(official) = official_pack_key(input) {
+        let mut community_ids = projection
+            .iter()
+            .map(|(_, _, id)| id.clone())
+            .collect::<Vec<_>>();
+        community_ids.sort();
+        // Identical official coverage needs no translated representation, even
+        // when that official pack spans several seasons.
+        return if official == community_ids {
+            NumberingResolution::Unchanged
+        } else {
+            NumberingResolution::UnresolvedPack
+        };
+    }
+    community_pack_candidate(projection, title_anchored)
+        .map(NumberingResolution::Resolved)
+        .unwrap_or(NumberingResolution::UnresolvedPack)
+}
+
+fn official_pack_key(input: &NumberingInput<'_>) -> Option<Vec<String>> {
+    let seasons = if input.parsed.season_numbers.is_empty() {
+        vec![input.parsed.season?]
+    } else {
+        let seasons = sorted(&input.parsed.season_numbers);
+        input
+            .parsed
+            .season
+            .is_none_or(|season| seasons.contains(&season))
+            .then_some(seasons)?
+    };
+    let mut ids = Vec::new();
+    let mut seen_coordinates = std::collections::HashSet::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    for season in seasons {
+        let rows = input
+            .episodes
+            .iter()
+            .filter(|episode| episode.episode_type == scryer_domain::EpisodeType::Standard)
+            .filter(|episode| parse_u32(episode.season_number.as_deref()) == Some(season))
+            .map(|episode| Some((parse_u32(episode.episode_number.as_deref())?, &episode.id)))
+            .collect::<Option<Vec<_>>>()?;
+        if rows.is_empty() {
+            return None;
+        }
+        for (number, id) in rows {
+            if number == 0
+                || !seen_coordinates.insert((season, number))
+                || !seen_ids.insert(id.clone())
+            {
+                return None;
+            }
+            ids.push(id.clone());
+        }
+    }
+    ids.sort();
+    Some(ids)
+}
+
+fn community_pack_projection(
+    input: &NumberingInput<'_>,
+    selected: &[&AnimeCommunitySeason],
+) -> Option<Vec<(u32, u32, String)>> {
+    if selected.is_empty()
+        || selected
+            .windows(2)
+            .any(|pair| std::ptr::eq(pair[0], pair[1]))
+    {
+        return None;
+    }
+    if selected.len() > 1 && !input.parsed.episode_numbers.is_empty() {
+        // One range cannot safely mean "that range in every listed cour";
+        // accept either one bounded cour or a list of complete cours.
+        return None;
+    }
+    let mut destinations = Vec::<(u32, u32, String)>::new();
+    let mut seen_destinations = std::collections::HashSet::new();
+    let mut seen_episode_ids = std::collections::HashSet::new();
+    for community_season in selected {
+        let numbers = complete_community_pack_numbers(input, community_season)?;
+        let full_projection = complete_community_projection(community_season)?;
+        // A supported cour is closed end to end, not merely at the explicit
+        // bounds named by this release. Missing catalog row 10 must invalidate
+        // an `E01-E02` pack just as it invalidates a complete pack.
+        let catalog_ids = exact_standard_catalog_ids(input.episodes, &full_projection)?;
+        for community_number in numbers {
+            let target_index = usize::try_from(community_number.checked_sub(1)?).ok()?;
+            let (season, episode_number) = *full_projection.get(target_index)?;
+            if !seen_destinations.insert((season, episode_number)) {
+                return None;
+            }
+            let episode_id = catalog_ids.get(target_index)?.clone();
+            if !seen_episode_ids.insert(episode_id.clone()) {
+                return None;
+            }
+            destinations.push((season, episode_number, episode_id));
+        }
+    }
+    Some(destinations)
+}
+
+fn community_pack_candidate(
+    mut destinations: Vec<(u32, u32, String)>,
+    title_anchored: bool,
+) -> Option<NumberingCandidate> {
+    let season = destinations.first()?.0;
+    if destinations
+        .iter()
+        .any(|(destination_season, _, _)| *destination_season != season)
+    {
+        return None;
+    }
+    destinations.sort_by_key(|(_, episode_number, _)| *episode_number);
+    Some(NumberingCandidate {
+        kind: if title_anchored {
+            NumberingCandidateKind::TitleAnchored
+        } else {
+            NumberingCandidateKind::Community
+        },
+        season,
+        episode_numbers: destinations
+            .iter()
+            .map(|(_, episode_number, _)| *episode_number)
+            .collect(),
+        episode_ids: destinations.into_iter().map(|(_, _, id)| id).collect(),
+        explanation: "complete community cour pack".to_string(),
+    })
+}
+
+fn complete_community_pack_numbers(
+    input: &NumberingInput<'_>,
+    community_season: &AnimeCommunitySeason,
+) -> Option<Vec<u32>> {
+    let count = community_season.episode_count?;
+    if count <= 0 {
+        return None;
+    }
+    let count = u32::try_from(count).ok()?;
+    let count_usize = usize::try_from(count).ok()?;
+    let available = input
+        .episodes
+        .iter()
+        .filter(|episode| episode.episode_type == scryer_domain::EpisodeType::Standard)
+        .count();
+    if count_usize > available {
+        return None;
+    }
+    let explicit = sorted(&input.parsed.episode_numbers);
+    if !explicit.is_empty() {
+        (explicit.len() == input.parsed.episode_numbers.len()
+            && explicit.iter().all(|number| *number > 0))
+        .then_some(explicit)
+    } else {
+        Some((1..=count).collect())
+    }
+}
+
+/// Validate the full closed mapping before returning even a bounded subset.
+/// This keeps a range such as `55..56` from silently becoming a one-episode
+/// projection when the catalog or bridge omitted its endpoint.
+fn complete_community_projection(
+    community_season: &AnimeCommunitySeason,
+) -> Option<Vec<(u32, u32)>> {
+    let count = community_season.episode_count?;
+    if count <= 0 {
+        return None;
+    }
+    let count_usize = usize::try_from(count).ok()?;
+    let mut result = vec![None; count_usize];
+    let mut destinations = std::collections::HashSet::new();
+
+    for range in &community_season.ranges {
+        let source_end = range.community_episode_end?;
+        let destination_end = range.tvdb_episode_end?;
+        if range.community_episode_start <= 0
+            || source_end < range.community_episode_start
+            || source_end > count
+            || range.tvdb_season <= 0
+            || range.tvdb_episode_start <= 0
+            || destination_end < range.tvdb_episode_start
+        {
+            return None;
+        }
+        let source_length = source_end.checked_sub(range.community_episode_start)?;
+        let destination_length = destination_end.checked_sub(range.tvdb_episode_start)?;
+        if source_length != destination_length {
+            return None;
+        }
+        for offset in 0..=source_length {
+            let source = range.community_episode_start.checked_add(offset)?;
+            let destination_episode = range.tvdb_episode_start.checked_add(offset)?;
+            let slot = usize::try_from(source.checked_sub(1)?).ok()?;
+            let destination = (
+                u32::try_from(range.tvdb_season).ok()?,
+                u32::try_from(destination_episode).ok()?,
+            );
+            if result.get(slot)?.is_some() || !destinations.insert(destination) {
+                return None;
+            }
+            result[slot] = Some(destination);
+        }
+    }
+    result.into_iter().collect()
+}
+
+fn exact_standard_catalog_ids(
+    episodes: &[Episode],
+    projection: &[(u32, u32)],
+) -> Option<Vec<String>> {
+    let mut ids = Vec::with_capacity(projection.len());
+    let mut seen_coordinates = std::collections::HashSet::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    for (season, number) in projection {
+        if !seen_coordinates.insert((*season, *number)) {
+            return None;
+        }
+        let matches = episodes
+            .iter()
+            .filter(|episode| episode.episode_type == scryer_domain::EpisodeType::Standard)
+            .filter(|episode| parse_u32(episode.season_number.as_deref()) == Some(*season))
+            .filter(|episode| parse_u32(episode.episode_number.as_deref()) == Some(*number))
+            .collect::<Vec<_>>();
+        let [episode] = matches.as_slice() else {
+            return None;
+        };
+        if !seen_ids.insert(episode.id.clone()) {
+            return None;
+        }
+        ids.push(episode.id.clone());
+    }
+    Some(ids)
+}
+
+fn uniquely_indexed_community_seasons<'a>(
+    bridge: &'a AnimeNumberingBridge,
+    indexes: &[i32],
+) -> Result<Option<Vec<&'a AnimeCommunitySeason>>, ()> {
+    let mut selected = Vec::with_capacity(indexes.len());
+    let mut found_missing = false;
+    for index in indexes {
+        let mut matched = bridge
+            .seasons
+            .iter()
+            .filter(|season| season.index == *index);
+        match (matched.next(), matched.next()) {
+            (Some(season), None) => selected.push(season),
+            (None, None) => found_missing = true,
+            (_, Some(_)) => return Err(()),
+        }
+    }
+    if found_missing {
+        return selected.is_empty().then_some(None).ok_or(());
+    }
+    Ok(Some(selected))
 }
 
 fn official_candidate(input: &NumberingInput<'_>) -> Option<NumberingCandidate> {
@@ -616,13 +998,28 @@ fn absolute_candidate(input: &NumberingInput<'_>) -> Option<NumberingCandidate> 
     if absolutes.is_empty() {
         return None;
     }
-    let mut matches = Vec::new();
-    for catalog_episode in input.episodes {
-        let absolute = parse_u32(catalog_episode.absolute_number.as_deref());
-        if absolute.is_some_and(|number| absolutes.contains(&number)) {
-            matches.push(catalog_episode);
-        }
+    if !input.parsed.absolute_episode_numbers.is_empty()
+        && absolutes.len() != input.parsed.absolute_episode_numbers.len()
+    {
+        return None;
     }
+    // A range is an all-or-nothing claim. Retaining only the endpoints found
+    // in the catalog used to turn `55..56` into a valid one-episode mapping
+    // when 56 was absent, which then made a partial cour look complete.
+    let matches = absolutes
+        .iter()
+        .map(|absolute| {
+            let matches = input
+                .episodes
+                .iter()
+                .filter(|episode| parse_u32(episode.absolute_number.as_deref()) == Some(*absolute))
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [episode] => Some(*episode),
+                _ => None,
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
     let (season, episode_numbers, episode_ids) = single_season_projection(&matches)?;
     Some(NumberingCandidate {
         kind: NumberingCandidateKind::Absolute,
@@ -890,6 +1287,13 @@ pub(crate) fn translate_release_numbering(
     if title.facet != scryer_domain::MediaFacet::Anime {
         return NumberingResolution::Unchanged;
     }
+    if parsed
+        .parse_hints
+        .iter()
+        .any(|hint| hint == "identity:unresolved_pack_scope")
+    {
+        return NumberingResolution::UnresolvedPack;
+    }
     if parsed.episode.is_none() {
         return NumberingResolution::Unchanged;
     }
@@ -899,17 +1303,30 @@ pub(crate) fn translate_release_numbering(
     } else {
         parsed.normalized_title_variants.clone()
     };
-    let Some(parsed_episode) = parsed.episode.as_mut() else {
-        return NumberingResolution::Unchanged;
+    let resolution = {
+        let Some(parsed_episode) = parsed.episode.as_mut() else {
+            return NumberingResolution::Unchanged;
+        };
+        translate_parsed_episode_numbering(
+            bridge,
+            title,
+            episodes,
+            parsed_episode,
+            &variants,
+            reference_date,
+        )
     };
-    translate_parsed_episode_numbering(
-        bridge,
-        title,
-        episodes,
-        parsed_episode,
-        &variants,
-        reference_date,
-    )
+    if matches!(&resolution, NumberingResolution::UnresolvedPack)
+        && !parsed
+            .parse_hints
+            .iter()
+            .any(|hint| hint == "identity:unresolved_pack_scope")
+    {
+        parsed
+            .parse_hints
+            .push("identity:unresolved_pack_scope".to_string());
+    }
+    resolution
 }
 
 /// The same translation against a bare episode parse, for the import lane —
@@ -936,8 +1353,13 @@ pub(crate) fn translate_parsed_episode_numbering(
         reference_date,
     });
 
-    if let NumberingResolution::Resolved(candidate) = &resolution {
-        apply_resolved_catalog_coordinates(parsed, candidate, episodes);
+    match &resolution {
+        NumberingResolution::Resolved(candidate) => {
+            apply_resolved_catalog_coordinates(parsed, candidate, episodes);
+        }
+        NumberingResolution::Unchanged
+        | NumberingResolution::Ambiguous(_)
+        | NumberingResolution::UnresolvedPack => {}
     }
     resolution
 }
@@ -951,9 +1373,24 @@ fn apply_resolved_catalog_coordinates(
     candidate: &NumberingCandidate,
     episodes: &[Episode],
 ) {
+    let converted_whole_pack = is_whole_pack(parsed) && !parse_is_translatable(parsed);
     parsed.season = Some(candidate.season);
     parsed.season_numbers = vec![candidate.season];
     parsed.episode_numbers = sorted(&candidate.episode_numbers);
+    // Resolved identities vouch only for these exact catalog coordinates.
+    parsed.full_season = false;
+    parsed.is_partial_season = false;
+    parsed.is_multi_season = false;
+    parsed.is_series_pack = false;
+    parsed.season_part = None;
+    if converted_whole_pack {
+        // Explicit episode bounds keep their parser release-type conventions.
+        parsed.release_type = if parsed.episode_numbers.len() > 1 {
+            ParsedEpisodeReleaseType::RangePack
+        } else {
+            ParsedEpisodeReleaseType::SingleEpisode
+        };
+    }
 
     let absolute_numbers = candidate
         .episode_ids

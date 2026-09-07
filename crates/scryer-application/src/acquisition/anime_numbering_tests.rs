@@ -4,11 +4,11 @@
 //! official season of 60 episodes, while the community carries four seasons of
 //! 14 / 12 / 10 / 24. Every show, season and group name here is invented.
 
-use super::*;
 use super::super::coverage::{
     ReleaseCoverage, parsed_numbering_contradicts_episode,
     parsed_release_contradicts_requested_episode, resolve_release_coverage,
 };
+use super::*;
 use chrono::NaiveDate;
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, Episode, EpisodeType,
@@ -202,24 +202,21 @@ fn a_community_season_token_maps_onto_the_official_order() {
 fn translated_parser_metadata_resolves_coverage_and_vetoes_against_official_coordinates() {
     let series = title(SERIES_NAME);
     let episodes = official_episodes(true);
-    let mut release =
-        crate::parse_release_metadata("Lantern.Verge.S04E20.1080p.WEB-DL-GROUP");
+    let mut release = crate::parse_release_metadata("Lantern.Verge.S04E20.1080p.WEB-DL-GROUP");
     let raw_title = release.raw_title.clone();
     let original = release.episode.as_ref().expect("parser-produced episode");
     let raw_episode = original.raw.clone();
     assert_eq!(original.season, Some(4));
     assert_eq!(original.episode_numbers, vec![20]);
 
-    let resolution = translate_release_numbering(
-        Some(&bridge()),
-        &series,
-        &episodes,
-        &mut release,
-        None,
-    );
+    let resolution =
+        translate_release_numbering(Some(&bridge()), &series, &episodes, &mut release, None);
 
     assert_eq!(
-        resolution.resolved().expect("community candidate").episode_ids,
+        resolution
+            .resolved()
+            .expect("community candidate")
+            .episode_ids,
         vec!["ep-56".to_string()]
     );
     assert_eq!(release.raw_title, raw_title);
@@ -379,39 +376,43 @@ fn a_multi_episode_release_translates_as_a_block() {
     );
 }
 
-/// Season packs and series packs are out of scope: they resolve by collection,
-/// and moving a whole pack onto another season on the strength of one token is
-/// a worse failure than the one being fixed.
+/// A complete community cour can become a bounded official range, while an
+/// explicit member bound remains just that member instead of widening again.
 #[test]
-fn packs_are_never_translated() {
+fn complete_cour_packs_translate_only_when_their_mapping_is_closed() {
     let mut season_pack = parsed(Some(4), &[]);
     season_pack.full_season = true;
     season_pack.release_type = crate::release_parser::ParsedEpisodeReleaseType::SeasonPack;
+    let season_candidate = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &season_pack,
+        &[],
+        None,
+    )
+    .resolved()
+    .cloned()
+    .expect("complete cour candidate");
     assert_eq!(
-        resolve(
-            &bridge(),
-            &title(SERIES_NAME),
-            &official_episodes(true),
-            &season_pack,
-            &[],
-            None
-        ),
-        NumberingResolution::Unchanged
+        season_candidate.episode_numbers,
+        (37..=60).collect::<Vec<_>>()
     );
 
     let mut series_pack = parsed(Some(4), &[20]);
     series_pack.is_series_pack = true;
-    assert_eq!(
-        resolve(
-            &bridge(),
-            &title(SERIES_NAME),
-            &official_episodes(true),
-            &series_pack,
-            &[],
-            None
-        ),
-        NumberingResolution::Unchanged
-    );
+    let bounded_candidate = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &series_pack,
+        &[],
+        None,
+    )
+    .resolved()
+    .cloned()
+    .expect("bounded cour member");
+    assert_eq!(bounded_candidate.episode_numbers, vec![56]);
 }
 
 // ── absolute numbering ────────────────────────────────────────────────────
@@ -1094,4 +1095,489 @@ fn a_cour_titled_almost_like_the_series_anchors_nothing() {
     let candidate = resolution.resolved().expect("absolute candidate");
     assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
     assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+fn whole_pack(season: Option<u32>, episode_numbers: &[u32]) -> ParsedEpisodeMetadata {
+    ParsedEpisodeMetadata {
+        season,
+        season_numbers: season.into_iter().collect(),
+        episode_numbers: episode_numbers.to_vec(),
+        full_season: true,
+        release_type: ParsedEpisodeReleaseType::SeasonPack,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn an_exact_cour_pack_projects_only_its_closed_official_episode_set() {
+    let resolution = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &whole_pack(Some(1), &[]),
+        &[COUR_TITLES[2].to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("bounded cour candidate");
+    assert_eq!(candidate.episode_numbers, (27..=36).collect::<Vec<_>>());
+    assert_eq!(
+        candidate.episode_ids.first().map(String::as_str),
+        Some("ep-27")
+    );
+    assert_eq!(
+        candidate.episode_ids.last().map(String::as_str),
+        Some("ep-36")
+    );
+}
+
+#[test]
+fn unqualified_complete_pack_with_distinct_official_and_community_readings_is_unresolved() {
+    assert!(matches!(
+        resolve(
+            &bridge(),
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &whole_pack(Some(1), &[]),
+            &[SERIES_NAME.to_string()],
+            None,
+        ),
+        NumberingResolution::UnresolvedPack
+    ));
+}
+
+#[test]
+fn incomplete_cour_mapping_cannot_fall_back_to_official_collection_scope() {
+    let mut incomplete = bridge();
+    incomplete.seasons[2].episode_count = None;
+    assert!(matches!(
+        resolve(
+            &incomplete,
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &whole_pack(Some(3), &[]),
+            &[],
+            None,
+        ),
+        NumberingResolution::UnresolvedPack
+    ));
+}
+
+#[test]
+fn incomplete_absolute_range_is_not_reduced_to_its_present_catalog_endpoint() {
+    let episodes = official_episodes(true)
+        .into_iter()
+        .filter(|episode| episode.absolute_number.as_deref() == Some("55"))
+        .collect::<Vec<_>>();
+    let parsed = ParsedEpisodeMetadata {
+        absolute_episode: Some(55),
+        absolute_episode_numbers: vec![55, 56],
+        ..Default::default()
+    };
+    assert_eq!(
+        resolve(
+            &bridge(),
+            &title(SERIES_NAME),
+            &episodes,
+            &parsed,
+            &[],
+            None
+        ),
+        NumberingResolution::Unchanged
+    );
+}
+
+#[test]
+fn explicit_bounds_outrank_completion_flags() {
+    let mut relative = whole_pack(Some(3), &[1]);
+    relative.is_series_pack = true;
+    let relative = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &relative,
+        &[],
+        None,
+    );
+    assert_eq!(
+        relative
+            .resolved()
+            .expect("bounded relative candidate")
+            .episode_numbers,
+        vec![27]
+    );
+
+    let mut absolute = whole_pack(None, &[]);
+    absolute.absolute_episode = Some(27);
+    absolute.absolute_episode_numbers = vec![27];
+    let absolute = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute,
+        &[],
+        None,
+    );
+    assert_eq!(
+        absolute
+            .resolved()
+            .expect("bounded absolute candidate")
+            .episode_numbers,
+        vec![27]
+    );
+
+    let mut translated = whole_pack(Some(3), &[1, 2]);
+    translated.release_type = ParsedEpisodeReleaseType::MultiEpisode;
+    translate_parsed_episode_numbering(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &mut translated,
+        &[],
+        None,
+    );
+    assert_eq!(translated.episode_numbers, vec![27, 28]);
+    assert!(!translated.full_season);
+    assert_eq!(
+        translated.release_type,
+        ParsedEpisodeReleaseType::MultiEpisode
+    );
+}
+
+#[test]
+fn parser_complete_cour_with_local_s01_projects_only_the_named_cour() {
+    let mut release = crate::parse_release_metadata(
+        "Lantern.Verge.Glass.Meridian.S01.Complete.1080p.WEB-DL-GROUP",
+    );
+    let resolution = translate_release_numbering(
+        Some(&bridge()),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &mut release,
+        None,
+    );
+    assert_eq!(
+        resolution
+            .resolved()
+            .expect("cour three candidate")
+            .episode_numbers,
+        (27..=36).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ambiguous_exact_titles_block_fuzzy_and_whole_pack_widening() {
+    let mut ambiguous = bridge();
+    ambiguous.seasons[1]
+        .titles
+        .push("Shared Exact Name".to_string());
+    ambiguous.seasons[2]
+        .titles
+        .push("Shared Exact Name".to_string());
+    ambiguous.seasons[3]
+        .titles
+        .push(LONG_COUR_TITLES[3].to_string());
+
+    let mut pack = whole_pack(None, &[]);
+    pack.season_numbers.clear();
+    pack.season = None;
+    assert_eq!(
+        resolve(
+            &ambiguous,
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &pack,
+            &["Shared Exact Name".to_string()],
+            None,
+        ),
+        NumberingResolution::UnresolvedPack
+    );
+
+    let episodic = resolve(
+        &ambiguous,
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        &[
+            "Shared Exact Name".to_string(),
+            LONG_COUR_TITLES[3].to_string(),
+        ],
+        None,
+    );
+    assert_eq!(
+        episodic
+            .resolved()
+            .expect("catalog absolute candidate")
+            .kind,
+        NumberingCandidateKind::Absolute
+    );
+}
+
+#[test]
+fn exact_entry_remains_authoritative_when_indexes_duplicate() {
+    let mut duplicated = bridge();
+    duplicated.seasons[2].index = 2;
+    let resolution = resolve(
+        &duplicated,
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &parsed(Some(2), &[8]),
+        &["Lantern Verge Glass Meridian".to_string()],
+        None,
+    );
+    assert_eq!(
+        resolution
+            .resolved()
+            .expect("exact cour candidate")
+            .episode_numbers,
+        vec![34]
+    );
+    assert!(matches!(
+        exact_cour_title_match(
+            SERIES_NAME,
+            &duplicated,
+            &["Lantern Verge Glass Meridian".to_string()],
+        ),
+        ExactCourTitleMatch::Unique(cour) if std::ptr::eq(cour, &duplicated.seasons[2])
+    ));
+}
+
+#[test]
+fn bounded_cour_packs_do_not_discard_conflicting_season_restrictions() {
+    let mut pack = whole_pack(Some(2), &[1, 2]);
+    pack.season_numbers = vec![2, 3];
+    assert!(matches!(
+        resolve(
+            &bridge(),
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &pack,
+            &[],
+            None
+        ),
+        NumberingResolution::UnresolvedPack
+    ));
+    pack.season_numbers = vec![2];
+    assert!(matches!(
+        resolve(
+            &bridge(),
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &pack,
+            &[COUR_TITLES[2].to_string()],
+            None
+        ),
+        NumberingResolution::UnresolvedPack
+    ));
+}
+
+#[test]
+fn explicit_cour_lists_keep_exact_coverage_and_reject_reused_catalog_ids() {
+    let mut episodes = official_episodes(true);
+    let mut pack = whole_pack(Some(2), &[]);
+    pack.season_numbers = vec![2, 3];
+    pack.is_multi_season = true;
+    let resolution = resolve(&bridge(), &title(SERIES_NAME), &episodes, &pack, &[], None);
+    let candidate = resolution.resolved().expect("closed cours two and three");
+    assert_eq!(candidate.episode_numbers, (15..=36).collect::<Vec<_>>());
+    episodes[26].id = episodes[14].id.clone();
+    assert!(matches!(
+        resolve(&bridge(), &title(SERIES_NAME), &episodes, &pack, &[], None),
+        NumberingResolution::UnresolvedPack
+    ));
+}
+
+#[test]
+fn identical_official_multi_season_packs_need_no_community_projection() {
+    let mut bridge = bridge();
+    bridge.seasons.truncate(2);
+    let mut episodes = Vec::new();
+    for cour in &mut bridge.seasons {
+        cour.ranges[0].tvdb_season = cour.index;
+        cour.ranges[0].tvdb_episode_start = 1;
+        cour.ranges[0].tvdb_episode_end = cour.episode_count;
+        for number in 1..=cour.episode_count.unwrap() {
+            episodes.push(episode(
+                &format!("s{}e{number}", cour.index),
+                cour.index as u32,
+                number as u32,
+                None,
+                "",
+            ));
+        }
+    }
+    let mut pack = whole_pack(Some(1), &[]);
+    pack.season_numbers = vec![1, 2];
+    pack.is_multi_season = true;
+    assert_eq!(
+        resolve(&bridge, &title(SERIES_NAME), &episodes, &pack, &[], None),
+        NumberingResolution::Unchanged
+    );
+}
+
+#[test]
+fn multi_season_official_pack_disagreement_is_unresolved() {
+    let mut episodes = official_episodes(true);
+    episodes.extend((1..=3).map(|number| episode(&format!("s2-{number}"), 2, number, None, "")));
+    let mut pack = whole_pack(Some(1), &[]);
+    pack.season_numbers = vec![1, 2];
+    pack.is_multi_season = true;
+    assert!(matches!(
+        resolve(&bridge(), &title(SERIES_NAME), &episodes, &pack, &[], None),
+        NumberingResolution::UnresolvedPack
+    ));
+}
+
+#[test]
+fn only_explicit_series_packs_preserve_unqualified_scope() {
+    let mut series = whole_pack(None, &[]);
+    series.season_numbers.clear();
+    series.is_series_pack = true;
+    assert_eq!(
+        resolve(
+            &bridge(),
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &series,
+            &[],
+            None
+        ),
+        NumberingResolution::Unchanged
+    );
+
+    let mut extra = whole_pack(Some(3), &[]);
+    extra.is_season_extra = true;
+    assert!(matches!(
+        resolve(
+            &bridge(),
+            &title(SERIES_NAME),
+            &official_episodes(true),
+            &extra,
+            &[],
+            None
+        ),
+        NumberingResolution::UnresolvedPack
+    ));
+}
+
+#[test]
+fn malformed_community_ranges_are_rejected_before_projection() {
+    let source = bridge().seasons[2].clone();
+    let cases = [
+        (
+            "gap",
+            vec![AnimeCommunitySeasonRange {
+                community_episode_start: 2,
+                ..source.ranges[0].clone()
+            }],
+        ),
+        (
+            "overlap",
+            vec![
+                source.ranges[0].clone(),
+                AnimeCommunitySeasonRange {
+                    community_episode_start: 2,
+                    community_episode_end: Some(3),
+                    tvdb_episode_start: 28,
+                    tvdb_episode_end: Some(29),
+                    ..source.ranges[0].clone()
+                },
+            ],
+        ),
+        (
+            "outside count",
+            vec![AnimeCommunitySeasonRange {
+                community_episode_end: Some(11),
+                tvdb_episode_end: Some(37),
+                ..source.ranges[0].clone()
+            }],
+        ),
+        (
+            "open source",
+            vec![AnimeCommunitySeasonRange {
+                community_episode_end: None,
+                ..source.ranges[0].clone()
+            }],
+        ),
+        (
+            "open destination",
+            vec![AnimeCommunitySeasonRange {
+                tvdb_episode_end: None,
+                ..source.ranges[0].clone()
+            }],
+        ),
+        (
+            "duplicate destination",
+            vec![
+                AnimeCommunitySeasonRange {
+                    community_episode_end: Some(5),
+                    tvdb_episode_end: Some(31),
+                    ..source.ranges[0].clone()
+                },
+                AnimeCommunitySeasonRange {
+                    community_episode_start: 6,
+                    tvdb_episode_start: 27,
+                    ..source.ranges[0].clone()
+                },
+            ],
+        ),
+        (
+            "mismatched span",
+            vec![AnimeCommunitySeasonRange {
+                tvdb_episode_start: i32::MAX,
+                tvdb_episode_end: Some(i32::MAX),
+                ..source.ranges[0].clone()
+            }],
+        ),
+    ];
+    for (name, ranges) in cases {
+        let mut season = source.clone();
+        season.ranges = ranges;
+        assert!(complete_community_projection(&season).is_none(), "{name}");
+    }
+}
+
+#[test]
+fn whole_cour_packs_reject_missing_duplicate_and_cross_season_catalog_rows() {
+    let pack = whole_pack(Some(3), &[]);
+    let missing = official_episodes(true)
+        .into_iter()
+        .filter(|episode| episode.id != "ep-28")
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        resolve(&bridge(), &title(SERIES_NAME), &missing, &pack, &[], None),
+        NumberingResolution::UnresolvedPack
+    ));
+
+    let mut duplicate = official_episodes(true);
+    duplicate.push(duplicate[26].clone());
+    assert!(matches!(
+        resolve(&bridge(), &title(SERIES_NAME), &duplicate, &pack, &[], None),
+        NumberingResolution::UnresolvedPack
+    ));
+
+    let mut split = bridge();
+    split.seasons[2].ranges = vec![
+        AnimeCommunitySeasonRange {
+            community_episode_start: 1,
+            community_episode_end: Some(5),
+            tvdb_season: 1,
+            tvdb_episode_start: 27,
+            tvdb_episode_end: Some(31),
+        },
+        AnimeCommunitySeasonRange {
+            community_episode_start: 6,
+            community_episode_end: Some(10),
+            tvdb_season: 2,
+            tvdb_episode_start: 1,
+            tvdb_episode_end: Some(5),
+        },
+    ];
+    let mut multi_season = official_episodes(true);
+    multi_season
+        .extend((1..=5).map(|number| episode(&format!("split-{number}"), 2, number, None, "")));
+    assert!(matches!(
+        resolve(&split, &title(SERIES_NAME), &multi_season, &pack, &[], None),
+        NumberingResolution::UnresolvedPack
+    ));
 }

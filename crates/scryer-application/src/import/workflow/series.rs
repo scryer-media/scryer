@@ -1511,6 +1511,40 @@ async fn import_single_episode_file(
                 episode_ids: resolved_episodes
                     .iter()
                     .map(|episode| episode.id.clone())
+                .collect(),
+            });
+        }
+        if matches!(
+            &numbering,
+            crate::anime_numbering::NumberingResolution::UnresolvedPack
+        ) {
+            let reason_code = "unresolved_pack_scope";
+            let message = "Automatic import could not prove this pack's exact catalog scope. Open Manual Import and assign the intended episodes.".to_string();
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "rejected",
+                Some(reason_code),
+                None,
+                &resolved_episodes,
+            )
+            .await?;
+            return Ok(EpisodeImportOutcome::Rejected {
+                rejection: crate::post_download_gate::ImportedFileRejection {
+                    message,
+                    recycle_reason: reason_code,
+                    skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                    blocking_rule_codes: vec![reason_code.to_string()],
+                },
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: Some(reason_code.to_string()),
+                episode_ids: resolved_episodes
+                    .iter()
+                    .map(|episode| episode.id.clone())
                     .collect(),
             });
         }
@@ -2258,9 +2292,12 @@ pub(crate) async fn resolve_target_episodes_with_numbering(
             );
             (episodes, resolution)
         }
-        // An ambiguous release still reports what the literal reading found so
-        // the hold message can name it; the caller never imports it.
-        NumberingResolution::Ambiguous(_) | NumberingResolution::Unchanged => {
+        // An ambiguous or unbounded pack still reports what the literal
+        // reading found so the hold message can name it; the caller never
+        // imports it.
+        NumberingResolution::Ambiguous(_)
+        | NumberingResolution::UnresolvedPack
+        | NumberingResolution::Unchanged => {
             (literal().await, resolution)
         }
     }
