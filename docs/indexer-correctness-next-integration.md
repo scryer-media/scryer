@@ -47,8 +47,9 @@ management constructor does not receive a resolved proxy configuration.
 ## Accounting and runtime compatibility
 
 Count Scryer HTTP dispatch attempts after local admission and before sending.
-Do not count solver invocations, proxy handshakes, or Prowlarr's internal work
-as indexer requests. Child-endpoint requests, parent management requests, and
+A challenge-solver POST on an indexer's behalf counts as one request to that
+indexer. Do not count proxy handshakes or Prowlarr's internal work as indexer
+requests. Child-endpoint requests, parent management requests, and
 external artifact redirects remain distinguishable. Saved connection tests use
 the saved accounting identity; unsaved tests do not create persistent rows.
 

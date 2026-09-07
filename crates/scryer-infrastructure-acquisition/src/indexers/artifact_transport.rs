@@ -349,8 +349,10 @@ impl IndexerArtifactTransport {
                 },
                 |_| async {},
                 |_| {
+                    // The solver replays this request against the indexer, so
+                    // it is one indexer request regardless of the POST's origin.
                     tally
-                        .try_note_auxiliary_sent_call(scryer_application::CALL_SOLVER)
+                        .try_note_sent_call(scryer_application::CALL_SOLVER)
                         .then_some(())
                         .ok_or(OutboundHttpError::DispatchRejected)
                 },
@@ -1802,7 +1804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn solver_post_is_auxiliary_and_retry_counts_only_indexer_grabs() {
+    async fn solver_post_counts_as_an_indexer_request_alongside_direct_grabs() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -1871,8 +1873,8 @@ mod tests {
         );
         assert_eq!(
             stats.sent.load(Ordering::SeqCst),
-            2,
-            "solver POST must not increment indexer request quota"
+            3,
+            "two direct grabs plus one solver-relayed grab each spend indexer quota"
         );
     }
 
