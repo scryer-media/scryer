@@ -23,6 +23,7 @@ use super::{
     _0010_download_client_remove_failed_default as migration_0010,
     _0011_long_tail_reconverge_default as migration_0011,
     _0012_legacy_newznab_wrappers_01822 as migration_0012,
+    _0013_indexer_request_accounting as migration_0013,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +106,12 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec {
         id: "0012_legacy_newznab_wrappers_01822",
         description: "migrate legacy Newznab wrapper plugins to provider profiles",
+        phase: MigrationPhase::Early,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: "0013_indexer_request_accounting",
+        description: "establish the corrected indexer request accounting epoch",
         phase: MigrationPhase::Early,
         legacy_state_key: None,
     },
@@ -247,6 +254,11 @@ impl ApplicationMigrator {
                             "legacy Newznab wrapper configurations were left unconverted; those indexers need operator attention"
                         );
                     }
+                }
+                "0013_indexer_request_accounting" => {
+                    let started = Instant::now();
+                    migration_0013::migrate(&self.ledger.datastore).await?;
+                    self.record_success(spec, started).await?;
                 }
                 _ => unreachable!("early migration registry and dispatcher must agree"),
             }
@@ -507,6 +519,62 @@ mod tests {
             .await
             .expect("reload application migrator");
         assert!(restarted.applied.contains(spec.id));
+    }
+
+    #[tokio::test]
+    async fn accounting_epoch_failure_aborts_early_startup_and_remains_retryable() {
+        let (_temp, _, mut migrator) = test_migrator().await;
+        let datastore = migrator.ledger.datastore.clone();
+        let indexers = Arc::new(
+            scryer_infrastructure_acquisition::indexers::config_store::IndexerConfigStore::new(
+                datastore.clone(),
+                Arc::new(std::sync::RwLock::new(None)),
+            ),
+        );
+        let plugins = DatastoreCustomizationStore::new(datastore.clone());
+        // A failed update must stop the runner, not just leave a ledger hole.
+        SqlRuntime::execute_write(
+            &datastore,
+            "inject_accounting_failure",
+            "CREATE TRIGGER reject_accounting_epoch BEFORE INSERT ON settings_values
+             BEGIN SELECT RAISE(ABORT, 'synthetic epoch failure'); END",
+            vec![],
+        )
+        .await
+        .unwrap();
+        let error = migrator
+            .run_early(indexers.clone(), &plugins)
+            .await
+            .expect_err("required epoch failure");
+        assert!(error.contains("accounting epoch"), "{error}");
+        assert!(
+            !migrator
+                .ledger
+                .applied_ids()
+                .await
+                .unwrap()
+                .contains("0013_indexer_request_accounting")
+        );
+        SqlRuntime::execute_write(
+            &datastore,
+            "clear_accounting_failure",
+            "DROP TRIGGER reject_accounting_epoch",
+            vec![],
+        )
+        .await
+        .unwrap();
+        migrator
+            .run_early(indexers, &plugins)
+            .await
+            .expect("retry required epoch");
+        assert!(
+            migrator
+                .ledger
+                .applied_ids()
+                .await
+                .unwrap()
+                .contains("0013_indexer_request_accounting")
+        );
     }
 
     #[tokio::test]

@@ -63,6 +63,9 @@ const en: LocaleDictionary = {
   "label.testConnection": "Test Connection",
   "external.openOn": "Open on {{site}}",
   "label.unknown": "Unknown",
+  "label.multiEpisodePack": "Multi-episode pack",
+  "label.multiEpisodePackHint":
+    "This release covers more than the episode you searched for.",
   "label.unchanged": "Unchanged",
   "label.deleting": "Deleting…",
   "label.default": "default",
@@ -219,6 +222,7 @@ const en: LocaleDictionary = {
   "settings.general": "General",
   "settings.backups": "Backups",
   "settings.security": "Security",
+  "settings.enableFormLogin": "Enable login",
   "settings.securityEnableFormLogin": "Form login",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
@@ -254,10 +258,13 @@ const en: LocaleDictionary = {
     "Enter your password before Scryer starts requiring login.",
   "settings.securityConfirmPassword": "Password",
   "settings.securityConfirmAction": "Enable",
-  "settings.securityAdminPasswordRequiredTitle": "Set the admin password first",
-  "settings.securityAdminPasswordRequiredDescription":
-    "Form login requires the admin account to have a password. Open your profile to set the initial password, then return here to enable form login.",
-  "settings.securityAdminPasswordRequiredAction": "Open Profile",
+  "settings.securitySetAdminPasswordTitle": "Set the admin password",
+  "settings.securitySetAdminPasswordDescription":
+    "Your account has no password yet. Choose one now and Scryer will enable login with it.",
+  "settings.securitySetAdminPasswordAction": "Set password and enable",
+  "settings.securitySetAdminPasswordMinLength": "At least {{count}} characters.",
+  "settings.securityPasswordTooShort":
+    "Password must be at least {{count}} characters.",
   "settings.securityDisableConfirmTitle": "Disable form login?",
   "settings.securityDisableConfirmDescription":
     "Scryer will return to open admin mode after reload.",
@@ -917,6 +924,10 @@ const en: LocaleDictionary = {
   "settings.indexerRoutingEnabled": "Enabled",
   "settings.indexerRoutingCategoriesPlaceholder": "Select categories",
   "settings.indexerRoutingNoIndexers": "No indexers found.",
+  "settings.indexerRoutingCustomCategories": "Custom codes",
+  "settings.indexerRoutingCustomCategoryPlaceholder": "Numeric id from the indexer caps",
+  "settings.indexerRoutingCustomCategoryAdd": "Add",
+  "settings.indexerRoutingIndexerCategories": "Also on this indexer",
   "settings.indexerCategorySeries": "Series",
   "settings.indexerCategoryMovies": "Movies",
   "settings.indexerCategoryOther": "Other",
@@ -1834,6 +1845,41 @@ const en: LocaleDictionary = {
   "settings.ruleLibraryAll": "All",
   "settings.ruleLibraryCommunityEmpty":
     "No community rule packs available. Refresh the plugin registry to check for new packs.",
+  "settings.arrImportAction": "Import Arr custom format",
+  "settings.arrImportTitle": "Import Arr custom formats",
+  "settings.arrImportDescription":
+    "Paste a Sonarr or Radarr custom-format export to create a new Rego rule draft.",
+  "settings.arrImportSource": "Source application",
+  "settings.arrImportJson": "Custom-format JSON",
+  "settings.arrImportJsonPlaceholder": "Paste one custom format or an array of custom formats.",
+  "settings.arrImportReviewAction": "Review formats",
+  "settings.arrImportReview": "{{count}} custom format(s) ready to translate",
+  "settings.arrImportNoFormats": "No valid custom formats were found in this JSON.",
+  "settings.arrImportInvalidJson": "Paste valid JSON exported by Sonarr or Radarr.",
+  "settings.arrImportReviewFailed": "Unable to review these custom formats.",
+  "settings.arrImportScore": "Score",
+  "settings.arrImportScoreRequired": "Enter an integer score for {{name}} before translating.",
+  "settings.arrImportSuggestedScore": "Suggested score: {{score}}.",
+  "settings.arrImportUseSuggestion": "Use suggestion",
+  "settings.arrImportScoreReasonExported": "Uses the score included in the export.",
+  "settings.arrImportScoreReasonDefault": "Uses the export's default score; other profile choices are available below.",
+  "settings.arrImportScoreReasonPreference": "The format name expresses a preference.",
+  "settings.arrImportScoreReasonPenalty": "The format name identifies something undesirable.",
+  "settings.arrImportScoreReasonExtras": "The format appears to identify extras or samples.",
+  "settings.arrImportScoreSuggestionHelp": "Suggestions are editable starting points. Matching formats add their scores together; name-based suggestions never hard-block a release.",
+  "settings.arrImportAmbiguousScore":
+    "This format has more than one suggested score. Choose the score you want to apply.",
+  "settings.arrImportBlockScoreHelp":
+    "Scores at or below -9000 hard-block a release.",
+  "settings.arrImportTranslate": "Translate into Rego",
+  "settings.arrImportTranslationFailed":
+    "Translation failed. Your pasted JSON is still available to review or retry.",
+  "settings.arrImportResultSummary":
+    "{{translated}} translated; {{disabled}} disabled for manual repair.",
+  "settings.arrImportDraftName": "Imported Arr custom formats",
+  "settings.arrImportDraftDescription": "Imported from Arr custom-format JSON.",
+  "settings.arrImportDiagnostics": "Translation notes",
+  "settings.arrImportApply": "Use imported draft",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":
@@ -2541,6 +2587,7 @@ const en: LocaleDictionary = {
     "Renaming in the background; progress appears in Activity.",
   "status.releaseMissingCandidateToken":
     "Selected release is missing a verified candidate token.",
+  "status.searchResultsExpired": "Search results expired, please search again",
   "status.deleteCatalogConfirm":
     "Remove {{name}} from catalog? Use the option below to also remove local files.",
   "status.titleDeleted": "{{name}} removed from catalog.",
@@ -2633,6 +2680,8 @@ const en: LocaleDictionary = {
     "{{client}} connection test passed.",
   "status.downloadClientConnectionTestFailed":
     "{{client}} connection test failed.",
+  "status.autoSearchNoCandidates": "No release found for {{name}}: no indexer returned a candidate. Check indexer routing categories and indexer health.",
+  "status.autoSearchAllRejected": "No release found for {{name}}: automatic search rejected all {{count}} candidates. {{reasons}}",
   "status.queueFailed": "Queue operation failed.",
   "status.apiError": "Request failed",
   "status.permissionDenied": "You do not have permission for this action.",

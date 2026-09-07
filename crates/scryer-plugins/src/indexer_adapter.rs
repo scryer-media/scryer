@@ -4,8 +4,9 @@ use scryer_application::{
     IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
     IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, ResolvedDownloadArtifact,
-    SearchMode, extract_magnet_info_hash, is_valid_magnet_uri, normalize_release_password,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerStatsTracker,
+    NullIndexerStatsTracker, ResolvedDownloadArtifact, SearchMode, extract_magnet_info_hash,
+    is_valid_magnet_uri, normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, ProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
@@ -40,7 +41,12 @@ pub struct WasmIndexerClient {
     descriptor: PluginDescriptor,
     indexer_id: String,
     indexer_name: String,
+    indexer_base_url: String,
     indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+    /// Counts outbound indexer requests. Defaults to the null tracker so the
+    /// constructor and every existing call site keep their signatures.
+    indexer_stats: Arc<dyn IndexerStatsTracker>,
+    accounting: Option<scryer_application::IndexerAccountingContext>,
     component: Arc<ComponentIndexer>,
 }
 
@@ -51,6 +57,7 @@ struct ComponentIndexer {
     runtime: Arc<ComponentRuntime>,
     host: ComponentHost,
     timeout: std::time::Duration,
+    invocation_lock: tokio::sync::Mutex<()>,
     actor: tokio::sync::Mutex<Option<ComponentActor>>,
 }
 
@@ -74,6 +81,8 @@ impl WasmIndexerClient {
         indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     ) -> Result<Self, AppError> {
         let inputs = build_runtime_inputs(&descriptor, &indexer_name, &config, proxy_config);
+        let indexer_base_url = resolve_connection_url(&descriptor, Some(&inputs.config_entries))
+            .unwrap_or_else(|| config.base_url.clone());
         let provider_profile = if descriptor.provider_type() == "newznab" {
             let normalized_config_json =
                 serde_json::to_string(&inputs.config_entries).map_err(|error| {
@@ -124,27 +133,71 @@ impl WasmIndexerClient {
 
         Ok(Self {
             descriptor,
+            accounting: scryer_application::IndexerAccountingContext::for_config(&config),
+            indexer_base_url,
             indexer_id: config.id,
             indexer_name,
             indexer_error_recorder,
+            indexer_stats: Arc::new(NullIndexerStatsTracker),
             component: Arc::new(ComponentIndexer {
                 runtime: Arc::new(runtime),
                 host,
                 timeout: inputs.timeout,
+                invocation_lock: tokio::sync::Mutex::new(()),
                 actor: tokio::sync::Mutex::new(None),
             }),
         })
+    }
+
+    /// Attach the tracker that counts outbound indexer API requests.
+    pub fn with_indexer_stats_tracker(mut self, stats: Arc<dyn IndexerStatsTracker>) -> Self {
+        self.indexer_stats = stats;
+        self
+    }
+
+    pub fn with_accounting_context(
+        mut self,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Self {
+        self.accounting = accounting.cloned();
+        self
     }
 
     fn indexer_error_capture(
         &self,
         operation: IndexerErrorOperation,
     ) -> IndexerErrorCaptureContext {
+        let accounting = self.indexer_request_accounting(operation);
+        self.component
+            .host
+            .set_indexer_request_accounting(Some(accounting));
         IndexerErrorCaptureContext {
             indexer_id: self.indexer_id.clone(),
             indexer_name: self.indexer_name.clone(),
             operation,
             recorder: Arc::clone(&self.indexer_error_recorder),
+            stats: Arc::clone(&self.indexer_stats),
+        }
+    }
+
+    fn indexer_request_accounting(
+        &self,
+        operation: IndexerErrorOperation,
+    ) -> crate::plugin_http_host::IndexerRequestAccountingContext {
+        crate::plugin_http_host::IndexerRequestAccountingContext {
+            indexer_origin: Some(self.indexer_base_url.clone()),
+            indexer_id: self
+                .accounting
+                .as_ref()
+                .map(|value| value.indexer_id.clone())
+                .unwrap_or_else(|| scryer_application::CONNECTION_TEST_INDEXER_ID.to_string()),
+            indexer_name: self
+                .accounting
+                .as_ref()
+                .map(|value| value.indexer_name.clone())
+                .unwrap_or_else(|| self.indexer_name.clone()),
+            operation,
+            stats: self.indexer_stats.clone(),
         }
     }
 
@@ -269,6 +322,7 @@ impl WasmIndexerClient {
             ProviderDescriptor::Indexer(descriptor)
                 if descriptor.search_semantics_version.is_some()
         );
+        let _operation_guard = indexer.invocation_lock.lock().await;
         let mut actor = indexer.actor.lock().await;
         indexer.host.bind_cancellation(cancel_token.clone());
         indexer
@@ -384,6 +438,12 @@ impl WasmIndexerClient {
         query: BTreeMap<String, String>,
     ) -> AppResult<Option<serde_json::Value>> {
         let indexer = &self.component;
+        // Capture state and request accounting are owned by the component
+        // host, while actor serialization is owned by `invoke_component`. Hold
+        // the operation lock across setup, invocation, and cleanup so another
+        // caller cannot replace this operation's accounting/error capture
+        // while it waits.
+        let _operation_guard = indexer.invocation_lock.lock().await;
         indexer.host.begin_indexer_error_capture(
             self.indexer_error_capture(IndexerErrorOperation::IndexerAction),
         );
@@ -426,6 +486,9 @@ impl WasmIndexerClient {
                 if descriptor.search_semantics_version.is_some()
         );
         let indexer = &self.component;
+        // See the action path: host capture is mutable per component, so it
+        // must share the operation's serialization boundary.
+        let _operation_guard = indexer.invocation_lock.lock().await;
         indexer
             .host
             .begin_indexer_error_capture(self.indexer_error_capture(operation));
@@ -444,6 +507,13 @@ impl WasmIndexerClient {
                 "indexer component returned the wrong result for indexer_search".to_string(),
             )),
             Err(error) => Err(error),
+        };
+        let result = match result {
+            Err(error) => match indexer.host.captured_newznab_quota_error() {
+                Some(quota_error) => Err(quota_error),
+                None => Err(error),
+            },
+            ok => ok,
         };
         indexer.host.finish_indexer_error_capture(result.is_err());
         result
@@ -629,6 +699,10 @@ fn build_runtime_inputs(
     config: &IndexerConfig,
     proxy_config: Option<ProxyConfig>,
 ) -> IndexerRuntimeInputs {
+    let proxy_config = proxy_config.filter(|_| {
+        !config.is_prowlarr_nab_proxy()
+            && !config.provider_type.trim().eq_ignore_ascii_case("prowlarr")
+    });
     let config_entries = build_config_entries(descriptor, indexer_name, config);
     let connection_url = resolve_connection_url(descriptor, config_entries.as_ref());
     let allowed_hosts = allowed_hosts_for_descriptor(
@@ -2271,6 +2345,74 @@ mod tests {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
+    }
+
+    fn sample_solver_config() -> scryer_domain::ProxyConfig {
+        scryer_domain::ProxyConfig {
+            id: "solver".to_string(),
+            name: "Solver".to_string(),
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
+            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+            base_url: "http://solver.local".to_string(),
+            request_timeout_seconds: 90,
+            is_enabled: true,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn direct_indexer_runtime_keeps_solver_policy() {
+        let descriptor = descriptor_with_base_url_role("newznab");
+        let config = sample_indexer_config("newznab", None);
+
+        let inputs = build_runtime_inputs(
+            &descriptor,
+            "Direct Indexer",
+            &config,
+            Some(sample_solver_config()),
+        );
+
+        assert!(inputs.proxy_policy.is_some());
+        assert_eq!(inputs.timeout, std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn prowlarr_runtime_strips_stale_solver_policy() {
+        let descriptor = descriptor_with_base_url_role("newznab");
+        let mut config = sample_indexer_config("newznab", Some("prowlarr-parent"));
+        config.managed_child_key = Some("child-42".to_string());
+
+        let inputs = build_runtime_inputs(
+            &descriptor,
+            "Managed Prowlarr Child",
+            &config,
+            Some(sample_solver_config()),
+        );
+
+        assert!(
+            config.is_prowlarr_nab_proxy(),
+            "fixture must model a Prowlarr child"
+        );
+        assert!(inputs.proxy_policy.is_none());
+        assert_eq!(inputs.timeout, scryer_outbound_http::INDEXER_HTTP_TIMEOUT);
     }
 
     #[test]

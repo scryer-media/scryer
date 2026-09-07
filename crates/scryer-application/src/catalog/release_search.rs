@@ -22,6 +22,10 @@ struct PreparedReleaseScoringInputs {
     canonical_context: crate::quality::canonical_context::ResolvedScoringContext,
     catalog_episodes: Vec<Episode>,
     catalog_collections: Vec<Collection>,
+    /// The title's community numbering layout, loaded once per scoring batch.
+    /// `None` for every non-anime title and for anime SMG has no bridge for,
+    /// which is what keeps their numbering handling byte-for-byte as it was.
+    anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
     primary_episode_ids: Option<Option<HashSet<String>>>,
     indexer_priority_by_name: HashMap<String, i64>,
     now: chrono::DateTime<chrono::Utc>,
@@ -267,7 +271,49 @@ fn looks_like_structured_query_token(token: &str) -> bool {
     false
 }
 
-fn normalize_structured_dispatch_query(query: &str, absolute_episode: Option<u32>) -> String {
+/// The season and episode a trailing `Sxx` / `SxxEyy` token asks for, if it is
+/// one of those.
+fn structured_query_token_numbers(token: &str) -> Option<(u32, Option<u32>)> {
+    let trimmed = token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+    let rest = trimmed.to_ascii_uppercase();
+    let rest = rest.strip_prefix('S')?;
+    if let Some((season_part, episode_part)) = rest.split_once('E') {
+        let season = season_part.parse::<u32>().ok()?;
+        let episode = episode_part.parse::<u32>().ok()?;
+        return Some((season, Some(episode)));
+    }
+    rest.parse::<u32>().ok().map(|season| (season, None))
+}
+
+/// Whether a trailing structured token asks for the same thing the dispatch
+/// already carries in its season/episode parameters.
+///
+/// This is what makes the collapse safe. `{title} S01E05` alongside
+/// `season=1&ep=5` is the same request written twice, so dropping one saves an
+/// API call. A token that names a *different* season and episode is not a
+/// duplicate at all — it is a second, genuinely different ask, which is how an
+/// anime numbered per cour is searched for alongside its official numbering.
+fn structured_query_token_agrees(token: &str, season: Option<u32>, episode: Option<u32>) -> bool {
+    let Some((token_season, token_episode)) = structured_query_token_numbers(token) else {
+        // OVA/SPECIAL markers name no season or episode to contradict.
+        return true;
+    };
+    if season.is_some_and(|season| season != token_season) {
+        return false;
+    }
+    match (token_episode, episode) {
+        (Some(token_episode), Some(episode)) => token_episode == episode,
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+fn normalize_structured_dispatch_query(
+    query: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+) -> String {
     let mut tokens: Vec<&str> = query.split_whitespace().collect();
     while let Some(last) = tokens.last().copied() {
         let trimmed = last.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
@@ -280,7 +326,9 @@ fn normalize_structured_dispatch_query(query: &str, absolute_episode: Option<u32
             trimmed.chars().all(|ch| ch.is_ascii_digit())
                 && trimmed.parse::<u32>().ok() == Some(value)
         });
-        let removable_structured = removable_numeric || looks_like_structured_query_token(trimmed);
+        let removable_structured = removable_numeric
+            || (looks_like_structured_query_token(trimmed)
+                && structured_query_token_agrees(trimmed, season, episode));
         if removable_structured {
             tokens.pop();
             continue;
@@ -342,7 +390,8 @@ fn dedupe_structured_dispatch_queries(
     let mut seen = std::collections::HashSet::new();
 
     for query in queries {
-        let normalized = normalize_structured_dispatch_query(&query, absolute_episode);
+        let normalized =
+            normalize_structured_dispatch_query(&query, season, episode, absolute_episode);
         let key_source = if normalized.is_empty() {
             query.trim()
         } else {
@@ -458,7 +507,8 @@ fn dedupe_text_safe_structured_dispatch_queries(
     let mut seen = std::collections::HashSet::new();
 
     for query in queries {
-        let normalized = normalize_structured_dispatch_query(&query, absolute_episode);
+        let normalized =
+            normalize_structured_dispatch_query(&query, season, episode, absolute_episode);
         let key_source = if normalized.is_empty() {
             query.trim()
         } else {
@@ -883,6 +933,16 @@ impl AppUseCase {
                 .list_collections_for_title(title_id)
                 .await
                 .unwrap_or_default();
+            let anime_numbering_bridge = if scored_title.facet == MediaFacet::Anime {
+                self.services
+                    .catalog
+                    .shows
+                    .get_anime_numbering_bridge(title_id)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                None
+            };
             let indexer_priority_by_name =
                 self.build_indexer_priority_by_name(indexer_routing).await;
             *prepared = Some(PreparedReleaseScoringInputs {
@@ -895,6 +955,7 @@ impl AppUseCase {
                 canonical_context,
                 catalog_episodes,
                 catalog_collections,
+                anime_numbering_bridge,
                 primary_episode_ids: None,
                 indexer_priority_by_name,
                 now: chrono::Utc::now(),
@@ -941,13 +1002,39 @@ impl AppUseCase {
 
             let parsed_release_metadata =
                 parse_release_metadata_for_target(&result.title, parse_context);
-            let scored_release_metadata =
+            let mut scored_release_metadata =
                 crate::quality::canonical_context::announced_metadata_for_title(
                     &prepared.title,
                     &parsed_release_metadata,
                     prepared.canonical_context.required_audio_languages(),
                     result.indexer_languages.as_deref(),
                 );
+
+            // Anime released in community (per-cour) numbering is rewritten
+            // into the catalog's TVDB numbering before anything reads it, so
+            // coverage, the numbering veto and the rank all see one numbering.
+            // A release nobody can place is refused outright rather than
+            // grabbed on a coin toss.
+            let numbering = crate::anime_numbering::translate_release_numbering(
+                prepared.anime_numbering_bridge.as_ref(),
+                &prepared.title,
+                &prepared.catalog_episodes,
+                &mut scored_release_metadata,
+                result
+                    .published_at
+                    .as_deref()
+                    .and_then(crate::quality_profile::parse_published_at)
+                    .map(|published| published.date_naive()),
+            );
+            let numbering_ambiguous = numbering.is_ambiguous();
+            if let Some(summary) = numbering.ambiguity_summary() {
+                tracing::info!(
+                    title_id,
+                    release = result.title.as_str(),
+                    readings = summary.as_str(),
+                    "release numbering has several equally-good readings; not auto-grabbing"
+                );
+            }
 
             let is_series_pack = scored_release_metadata
                 .episode
@@ -1075,6 +1162,7 @@ impl AppUseCase {
                     head: crate::acquisition::scoring::RankHead {
                         blocked: !decision.allowed
                             || pack_below_missing_threshold
+                            || numbering_ambiguous
                             || !protocol_enabled,
                         tier_index: decision.tier_index.unwrap_or(usize::MAX),
                         negated_revision: -(i32::from(scored_release_metadata.is_proper_upload)
@@ -1131,7 +1219,12 @@ impl AppUseCase {
                 },
                 ..result
             };
-            if pack_below_missing_threshold {
+            if numbering_ambiguous {
+                crate::acquisition_release_search::annotate_auto_decision(
+                    &mut scored_result,
+                    crate::acquisition_release_search::ReleaseAutoDecisionCode::AnimeNumberingAmbiguous,
+                );
+            } else if pack_below_missing_threshold {
                 crate::acquisition_release_search::annotate_auto_decision(
                     &mut scored_result,
                     crate::acquisition_release_search::ReleaseAutoDecisionCode::PackBelowMissingThreshold,
@@ -1196,6 +1289,7 @@ impl AppUseCase {
             parse_context,
             season,
             episode,
+            numbering_context,
             absolute_episode,
             year,
             tagged_aliases,
@@ -1370,6 +1464,7 @@ impl AppUseCase {
                     indexer_error_operation,
                     season,
                     episode,
+                    numbering_context,
                     absolute_episode,
                     year,
                     tagged_aliases,
@@ -1682,6 +1777,7 @@ impl AppUseCase {
             // title/absolute queries the specials lane already builds.
             season: subject.season.filter(|season| *season > 0),
             episode: subject.episode,
+            numbering_context: subject.numbering_context.clone(),
             absolute_episode: subject.absolute_episode,
             // `title` here is the *search* title — for a series-movie link it is
             // the derived movie record, whose facet and year both come from the
@@ -2133,6 +2229,7 @@ pub(crate) struct ReleaseSearchRequest<'a> {
     pub(crate) runtime_minutes: Option<i32>,
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
+    pub(crate) numbering_context: crate::IndexerSearchNumberingContext,
     pub(crate) absolute_episode: Option<u32>,
     /// Movie release year, when the searched title is a movie that has one.
     /// Series years never travel here: a season/episode search has no single

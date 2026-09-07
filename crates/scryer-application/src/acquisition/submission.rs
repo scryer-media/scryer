@@ -55,10 +55,10 @@ fn submission_for_grab(
         download_client_id: grab.client_id.clone(),
         download_client_type: grab.client_type.clone(),
         download_client_item_id: grab.job_id.clone(),
-        source_hint: normalize_release_attempt_hint(request.source_hint.as_deref()),
+        source_hint: normalize_release_attempt_hint(intent.request.source_hint.as_deref()),
         source_provider_id: request.indexer_id.clone(),
         source_provider_name: intent.source_provider_name.clone(),
-        source_kind: request.source_kind,
+        source_kind: intent.request.source_kind,
         source_title: request.source_title.clone(),
         info_hash: request.info_hash_hint.clone(),
         release_size_bytes: intent.release_size_bytes,
@@ -69,6 +69,7 @@ fn submission_for_grab(
 }
 
 fn accepted_identity_for_grab(
+    intent: &CanonicalDownloadSubmissionIntent,
     request: &DownloadClientAddRequest,
     download_id: scryer_domain::download_identity::DownloadId,
     grab: &DownloadGrabResult,
@@ -76,8 +77,8 @@ fn accepted_identity_for_grab(
     let download_id_wire = download_id.to_wire();
     accepted_download_submission_identity(AcceptedDownloadIdentityInput {
         initial_download_id: Some(download_id_wire.as_str()),
-        source_kind: request.source_kind,
-        source_hint: request.source_hint.as_deref(),
+        source_kind: intent.request.source_kind,
+        source_hint: intent.request.source_hint.as_deref(),
         info_hash_hint: request.info_hash_hint.as_deref(),
         client_type: Some(grab.client_type.as_str()),
         client_item_id: Some(grab.job_id.as_str()),
@@ -135,7 +136,7 @@ impl AppUseCase {
         }
 
         let accepted_identity =
-            accepted_identity_for_grab(request, effective_download_id, &adopted_grab);
+            accepted_identity_for_grab(intent, request, effective_download_id, &adopted_grab);
         if existing.request_signature.is_none()
             && existing.source_hint.is_none()
             && existing.source_title.is_none()
@@ -480,10 +481,81 @@ impl AppUseCase {
         })?;
         let source_kind = intent.request.source_kind;
         let source_hint = normalize_release_attempt_hint(intent.request.source_hint.as_deref());
-        let request = DownloadClientAddRequest {
+        let mut request = DownloadClientAddRequest {
             download_id: Some(download_id),
             ..intent.request.clone()
         };
+        // Keep the staged file active through submission and every client
+        // failover; the request contains only a reference to the lease.
+        let mut _prepared_artifact = None;
+        if request.resolved_download_artifact.is_none()
+            && request.staged_nzb.is_none()
+            && request
+                .source_hint
+                .as_deref()
+                .is_some_and(|source| !source.trim().is_empty())
+            && let Some(resolver) = self
+                .services
+                .integrations
+                .indexer_artifact_resolver
+                .as_ref()
+        {
+            let source_url = request.source_hint.clone().expect("checked above");
+            let artifact = resolver
+                .resolve_artifact(&IndexerArtifactResolutionRequest {
+                    indexer_id: request.indexer_id.clone(),
+                    source_url,
+                    source_kind: request.source_kind,
+                    info_hash_hint: request.info_hash_hint.clone(),
+                    title_id: Some(title_id.clone()),
+                    search_facet: request
+                        .search_facet
+                        .clone()
+                        .or_else(|| Some(request.title.facet.clone())),
+                    cancellation: tokio_util::sync::CancellationToken::new(),
+                })
+                .await?;
+            match &artifact {
+                PreparedIndexerArtifact::StagedNzb(staged_nzb) => {
+                    request.source_kind = Some(DownloadSourceKind::NzbFile);
+                    request.source_hint = None;
+                    request.staged_nzb = Some(staged_nzb.staged_nzb().clone());
+                }
+                PreparedIndexerArtifact::Resolved(artifact) => {
+                    match &artifact {
+                        ResolvedDownloadArtifact::Nzb { bytes, .. } => {
+                            let head_len = bytes.len().min(NZB_HEAD_PROBE_BYTES);
+                            enforce_nzb_category_gate(
+                                &bytes[..head_len],
+                                request
+                                    .search_facet
+                                    .as_ref()
+                                    .unwrap_or(&request.title.facet),
+                            )?;
+                            request.source_kind = Some(DownloadSourceKind::NzbFile);
+                            request.source_hint = None;
+                        }
+                        ResolvedDownloadArtifact::Magnet {
+                            uri,
+                            info_hash_hint,
+                        } => {
+                            request.source_kind = Some(DownloadSourceKind::MagnetUri);
+                            request.source_hint = Some(uri.clone());
+                            request.info_hash_hint =
+                                info_hash_hint.clone().or(request.info_hash_hint.clone());
+                        }
+                        ResolvedDownloadArtifact::TorrentFile { info_hash_hint, .. } => {
+                            request.source_kind = Some(DownloadSourceKind::TorrentFile);
+                            request.source_hint = None;
+                            request.info_hash_hint =
+                                info_hash_hint.clone().or(request.info_hash_hint.clone());
+                        }
+                    }
+                    request.resolved_download_artifact = Some(artifact.clone());
+                }
+            }
+            _prepared_artifact = Some(artifact);
+        }
         let grab = match self
             .services
             .integrations
@@ -585,7 +657,7 @@ impl AppUseCase {
             ));
         }
 
-        let accepted_identity = accepted_identity_for_grab(&request, download_id, &grab);
+        let accepted_identity = accepted_identity_for_grab(&intent, &request, download_id, &grab);
         let submission = submission_for_grab(&intent, &request, download_id, &grab);
         let seed_goals = grab.seed_goals.clone();
         let identity_disposition = match self

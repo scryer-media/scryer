@@ -8,7 +8,8 @@ use smallvec::SmallVec;
 
 use crate::context::{ContextAlias, ContextEpisode, ContextFacetHint, ReleaseParseContext};
 use crate::enrichment::{
-    collect_missing_fields, enrich_candidate, normalize_source_for_service, project_final_metadata,
+    collect_missing_fields, enrich_candidate, normalize_source_for_service,
+    parse_split_video_codec, project_final_metadata,
 };
 use crate::lex::{
     BracketKind, CstNode, LexedRelease, ReleaseCst, SeparatorKind, Token, lex_lossless,
@@ -53,12 +54,35 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         ContextFacetHint::Unknown => None,
     };
     let facts = crate::trash_guides::derive_facts(inputs.raw_input, category_hint);
-    let lexed = lex_lossless(inputs.sanitized_input);
-    let annotations = annotate_tokens(&lexed.tokens);
+    let mut lexed = lex_lossless(inputs.sanitized_input);
+    // A fused episode label (`EP01`, `S01EP01`, `EPISODE07`) is rewritten to the
+    // canonical `E01` / `S01E01` shape before annotation so that every downstream
+    // rule sees one uniform token. Only `Token::normalized` is touched; `raw` and
+    // `span` keep pointing at the original text. Gated on the caller declaring a
+    // series-ish facet: on movie and unknown targets `EP##` is far more often an
+    // installment shorthand than an episode label. The rewrite is also held back
+    // unless the canonical shape actually resolves to a standard episode, so a
+    // trailing-garbage label (`EP01V2`) is left exactly as the lexer produced it
+    // rather than reaching the title as `E01V2`.
+    let mut rewrote_fused_label = false;
+    if fused_episode_labels_enabled(inputs.target.facet_hint) {
+        for token in &mut lexed.tokens {
+            if let Some(rewritten) = defused_episode_label(&token.normalized)
+                && parse_standard_episode_token(&rewritten).is_some()
+            {
+                token.normalized = rewritten;
+                rewrote_fused_label = true;
+            }
+        }
+    }
     let context_index = build_context_index(inputs.target);
+    let annotations = annotate_tokens(&lexed.tokens, &context_index);
     let alias_oracle = build_alias_oracle(&lexed.tokens, &context_index);
     let mut parse_hints = inputs.sanitize_hints.to_vec();
     parse_hints.extend(lexed.hints.clone());
+    if rewrote_fused_label {
+        parse_hints.push("lex:fused_episode_label".to_string());
+    }
     parse_hints.extend(alias_oracle.parse_hints.iter().cloned());
     if annotations.iter().any(|annotation| annotation.role_pruned) {
         parse_hints.push("annotation:role_pruned".to_string());
@@ -86,39 +110,60 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         candidate_facts.dedup();
         candidate.projected.guide_facts = candidate_facts;
         crate::trash_guides::project_safe_facts(&mut candidate.projected);
+        if unknown_target_has_episodic_identity(candidate) {
+            candidate.projected.disposition = ParseDisposition::Unparseable;
+            candidate.projected.parse_confidence = 0.0;
+            candidate.projected.ambiguity_margin = 0;
+            candidate.projected.is_ambiguous = false;
+        }
     }
     let best_candidate_index = candidates
         .iter()
         .enumerate()
         .max_by_key(|(_, candidate)| candidate.raw_score)
         .map(|(index, _)| index);
-    let ambiguity_margin = best_candidate_index
+    let mut ambiguity_margin = best_candidate_index
         .map(|best_index| semantic_ambiguity_margin(&candidates, best_index))
         .unwrap_or_default();
-    let disposition = if candidates.is_empty() {
+    let mut disposition = if candidates.is_empty() {
         ParseDisposition::Unparseable
     } else if ambiguity_margin < 8 {
         ParseDisposition::Ambiguous
     } else {
         ParseDisposition::Parsed
     };
+    if best_candidate_index
+        .and_then(|index| candidates.get(index))
+        .is_some_and(unknown_target_has_episodic_identity)
+    {
+        disposition = ParseDisposition::Unparseable;
+        ambiguity_margin = 0;
+    }
     let is_ambiguous = matches!(disposition, ParseDisposition::Ambiguous);
     // Zones an ambiguous winner may safely treat as title text: the union over
     // every contender close enough to have caused the ambiguity. Tokens outside
     // this union are release metadata under *every* competing interpretation,
     // so extracting structure-independent facts from them cannot leak a title
     // word (issue #170).
-    let ambiguous_title_zone_union = (is_ambiguous && best_candidate_index.is_some()).then(|| {
-        let best_score = best_candidate_index
-            .and_then(|index| candidates.get(index))
-            .map(|candidate| candidate.raw_score)
-            .unwrap_or_default();
-        candidates
-            .iter()
-            .filter(|candidate| candidate.raw_score >= best_score.saturating_sub(8))
-            .flat_map(|candidate| candidate.zones.title_zones.iter().copied())
-            .collect::<Vec<_>>()
-    });
+    let ambiguous_title_zone_union =
+        (ambiguity_margin < 8 && best_candidate_index.is_some()).then(|| {
+            let best_score = best_candidate_index
+                .and_then(|index| candidates.get(index))
+                .map(|candidate| candidate.raw_score)
+                .unwrap_or_default();
+            candidates
+                .iter()
+                .filter(|candidate| candidate.raw_score >= best_score.saturating_sub(8))
+                .flat_map(|candidate| {
+                    candidate.zones.title_zones.iter().copied().chain(
+                        candidate
+                            .context_title_matches
+                            .iter()
+                            .map(|match_| match_.token_range),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
 
     if let Some(best_index) = best_candidate_index
         && let Some(best_candidate) = candidates.get_mut(best_index)
@@ -172,6 +217,18 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
                     .push("enrichment:ambiguous_structure_independent".to_string());
             }
             ParseDisposition::Unparseable => {
+                // A forced unresolved identity still has a deterministic token
+                // scope. Keep the structure-independent facts that were safe
+                // before disposition was tightened, while leaving identity,
+                // score, and coverage unresolved.
+                if let Some(title_zone_union) = ambiguous_title_zone_union.as_ref() {
+                    let mut scoped = best_candidate.clone();
+                    scoped.zones.title_zones = title_zone_union.clone();
+                    let enrichment = enrich_candidate(&lexed.tokens, &scoped, inputs.raw_input);
+                    best_candidate.projected =
+                        project_final_metadata(best_candidate.projected.clone(), &enrichment);
+                    best_candidate.enrichment = Some(enrichment);
+                }
                 if let Some(normalized_source) = normalize_source_for_service(
                     best_candidate
                         .projected
@@ -195,10 +252,28 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
                 best_candidate
                     .projected
                     .parse_hints
-                    .push("enrichment_skipped_unparseable".to_string());
+                    .push("enrichment:unparseable_structure_independent".to_string());
             }
         }
 
+        let mut technical_candidate = best_candidate.clone();
+        if let Some(title_zone_union) = ambiguous_title_zone_union.as_ref() {
+            technical_candidate.zones.title_zones = title_zone_union.clone();
+        }
+        let technical_recovery =
+            recover_independent_technical_metadata(&lexed.tokens, &technical_candidate);
+        apply_independent_technical_metadata(&mut best_candidate.projected, technical_recovery);
+        if has_unresolved_pack_scope(&lexed.tokens, best_candidate, &alias_oracle) {
+            push_parse_hint(
+                &mut best_candidate.projected.parse_hints,
+                "identity:unresolved_pack_scope",
+            );
+            push_parse_hint(&mut parse_hints, "identity:unresolved_pack_scope");
+        }
+        if matches!(disposition, ParseDisposition::Unparseable) {
+            best_candidate.projected.parse_confidence = 0.0;
+        }
+        best_candidate.projected.missing_fields = collect_missing_fields(&best_candidate.projected);
         best_candidate.projected.ambiguity_margin = ambiguity_margin;
         best_candidate.projected.is_ambiguous = is_ambiguous;
         best_candidate.projected.disposition = disposition;
@@ -225,6 +300,409 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         ambiguity_margin,
         is_ambiguous,
         disposition,
+    }
+}
+
+#[derive(Default)]
+struct IndependentTechnicalMetadata {
+    quality: Option<String>,
+    quality_conflicts: bool,
+    source: Option<ReleaseSource>,
+    source_conflicts: bool,
+    video_codec: Option<VideoCodec>,
+    video_codec_conflicts: bool,
+    is_10bit: bool,
+    bit_depth_conflicts: bool,
+}
+
+fn unknown_target_has_episodic_identity(candidate: &ReleaseParseCandidate) -> bool {
+    if !matches!(candidate.identity, ReleaseIdentity::Unknown) {
+        return false;
+    }
+    matches!(
+        candidate.family,
+        ParseFamily::StandardEpisode
+            | ParseFamily::DailyEpisode
+            | ParseFamily::AnimeAbsolute
+            | ParseFamily::SeasonPack
+            | ParseFamily::EpisodeRangePack
+            | ParseFamily::Special
+    )
+}
+
+fn recover_independent_technical_metadata(
+    tokens: &[Token],
+    candidate: &ReleaseParseCandidate,
+) -> IndependentTechnicalMetadata {
+    let mut qualities = Vec::new();
+    let mut sources = Vec::new();
+    let mut codecs = Vec::new();
+    let mut is_10bit = false;
+    let mut has_explicit_8bit = false;
+    let last_protected_title = protected_title_end(candidate);
+
+    for (index, token) in tokens.iter().enumerate() {
+        if !technical_recovery_token(candidate, index, token, last_protected_title) {
+            continue;
+        }
+        let normalized = token.normalized.as_str();
+        let compound = detect_compound_metadata(normalized);
+        let bd_resolution = normalized
+            .strip_prefix("BD")
+            .and_then(parse_resolution_quality_token);
+        if let Some(quality) = parse_resolution_quality_token(normalized)
+            .or_else(|| bd_resolution.clone())
+            .or_else(|| {
+                (compound.source.is_some() || compound.video_codec.is_some())
+                    .then(|| compound.quality.clone())
+                    .flatten()
+            })
+        {
+            push_distinct(&mut qualities, quality);
+        }
+        if let Some(source) = normalize_source_token(normalized)
+            .or_else(|| {
+                bd_resolution
+                    .as_ref()
+                    .and_then(|_| normalize_source_token("BD"))
+            })
+            .or_else(|| {
+                (compound.quality.is_some() || compound.video_codec.is_some())
+                    .then_some(compound.source)
+                    .flatten()
+            })
+        {
+            push_distinct(&mut sources, source.to_string());
+        }
+        let split_codec = tokens.get(index + 1).and_then(|next| {
+            (same_technical_scope(token, next)
+                && technical_recovery_token(candidate, index + 1, next, last_protected_title))
+            .then(|| parse_split_video_codec(normalized, Some(next.normalized.as_str())))
+            .flatten()
+            .and_then(VideoCodec::parse)
+        });
+        if let Some(codec) = compound
+            .video_codec
+            .and_then(VideoCodec::parse)
+            .or(split_codec)
+            && !codecs.contains(&codec)
+        {
+            codecs.push(codec);
+        }
+        is_10bit |= matches!(token.normalized.as_str(), "10BIT" | "10BITS")
+            || (token.normalized == "10"
+                && tokens.get(index + 1).is_some_and(|next| {
+                    matches!(next.normalized.as_str(), "BIT" | "BITS")
+                        && same_technical_scope(token, next)
+                        && technical_recovery_token(
+                            candidate,
+                            index + 1,
+                            next,
+                            last_protected_title,
+                        )
+                }));
+        has_explicit_8bit |= matches!(token.normalized.as_str(), "8BIT" | "8BITS")
+            || (token.normalized == "8"
+                && tokens.get(index + 1).is_some_and(|next| {
+                    matches!(next.normalized.as_str(), "BIT" | "BITS")
+                        && same_technical_scope(token, next)
+                        && technical_recovery_token(
+                            candidate,
+                            index + 1,
+                            next,
+                            last_protected_title,
+                        )
+                }));
+    }
+
+    IndependentTechnicalMetadata {
+        quality_conflicts: qualities.len() > 1,
+        quality: (qualities.len() == 1).then(|| qualities.remove(0)),
+        source_conflicts: sources.len() > 1,
+        source: (sources.len() == 1)
+            .then(|| ReleaseSource::parse(&sources[0]))
+            .flatten(),
+        video_codec_conflicts: codecs.len() > 1,
+        video_codec: (codecs.len() == 1).then(|| codecs.remove(0)),
+        is_10bit: is_10bit && !has_explicit_8bit,
+        bit_depth_conflicts: is_10bit && has_explicit_8bit,
+    }
+}
+
+#[cfg(test)]
+mod independent_technical_metadata_tests {
+    use super::*;
+    use crate::{ContextFacetHint, ContextTitle, ReleaseParseContext, analyze_release_for_target};
+
+    #[test]
+    fn protected_title_span_blocks_fused_bd_resolution_recovery() {
+        // `detect_compound_quality` intentionally predates independent recovery
+        // and classifies embedded resolution substrings in beam parsing. Test
+        // the new recovery contract directly so that legacy beam behavior is
+        // not broadened or rewritten for this edge case.
+        let input = "Known Anime [BD720p]";
+        let context = ReleaseParseContext {
+            facet_hint: ContextFacetHint::Anime,
+            title: ContextTitle {
+                name: "Known Anime".to_string(),
+            },
+            aliases: Vec::new(),
+            known_years: Vec::new(),
+            imdb_ids: Vec::new(),
+            episodes: Vec::new(),
+        };
+        let lexed = lex_lossless(input);
+        let technical_index = lexed
+            .tokens
+            .iter()
+            .position(|token| token.normalized == "BD720P")
+            .expect("BD720p token");
+        let mut candidate = analyze_release_for_target(input, &context)
+            .best_candidate()
+            .expect("candidate")
+            .clone();
+        candidate.zones.title_zones = vec![TokenRange {
+            start_token: technical_index,
+            end_token: technical_index + 1,
+        }];
+
+        let recovered = recover_independent_technical_metadata(&lexed.tokens, &candidate);
+        assert!(recovered.quality.is_none());
+        assert!(recovered.source.is_none());
+        assert!(recovered.video_codec.is_none());
+        assert!(!recovered.is_10bit);
+    }
+}
+
+fn apply_independent_technical_metadata(
+    projected: &mut ParsedReleaseMetadata,
+    recovered: IndependentTechnicalMetadata,
+) {
+    if recovered.quality_conflicts {
+        projected.quality = None;
+    } else if projected.quality.is_none() {
+        projected.quality = recovered.quality;
+    }
+    if recovered.source_conflicts {
+        projected.source = None;
+    } else if projected.source.is_none() {
+        projected.source = recovered.source;
+    }
+    if recovered.video_codec_conflicts {
+        projected.video_codec = None;
+    } else if projected.video_codec.is_none() {
+        projected.video_codec = recovered.video_codec;
+    }
+    if recovered.bit_depth_conflicts {
+        projected.is_10bit = false;
+    } else {
+        projected.is_10bit |= recovered.is_10bit;
+    }
+}
+
+fn has_unresolved_pack_scope(
+    tokens: &[Token],
+    candidate: &ReleaseParseCandidate,
+    alias_oracle: &AliasOracle,
+) -> bool {
+    let contradictory_whole_series_extras = candidate
+        .projected
+        .parse_hints
+        .iter()
+        .any(|hint| hint == "identity:contradictory_whole_series_extras_scope");
+    if !contradictory_whole_series_extras
+        && matches!(
+            candidate.identity,
+            ReleaseIdentity::SpecialIdentity {
+                special_kind: ParsedSpecialKind::Ova,
+                season_hint: None,
+                episode_hint: None,
+            }
+        )
+    {
+        return false;
+    }
+    let visible = tokens
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !protected_title_token(candidate, *index))
+        .map(|(index, token)| (index, token.normalized.as_str()))
+        .collect::<Vec<_>>();
+    let complete_pack = visible.windows(2).any(|pair| {
+        pair[1].0 == pair[0].0 + 1
+            && pair[0].1 == "COMPLETE"
+            && matches!(
+                pair[1].1,
+                "BATCH" | "COLLECTION" | "PACK" | "SERIES" | "SEASONS"
+            )
+    });
+    let counted_seasons = visible.windows(2).any(|pair| {
+        pair[1].0 == pair[0].0 + 1
+            && pair[0]
+                .1
+                .chars()
+                .all(|character| character.is_ascii_digit())
+            && (pair[1].1 == "SEASONS" || pair[1].1.starts_with("SEASONS+"))
+    });
+    let bare_unknown_pack = unknown_target_has_episodic_identity(candidate)
+        && visible
+            .iter()
+            .any(|(_, token)| matches!(*token, "BATCH" | "COLLECTION" | "PACK"));
+    let oversized_season_range = candidate
+        .projected
+        .parse_hints
+        .iter()
+        .any(|hint| hint == "identity:oversized_season_range_scope");
+    let mixed_season_scope = candidate
+        .projected
+        .parse_hints
+        .iter()
+        .any(|hint| hint == "identity:unresolved_mixed_pack_scope");
+    // Explicit scope that could not be attached is not an unrestricted range.
+    // Keep its bounds for diagnostics, but require manual coverage resolution.
+    let unattached_season_scope = matches!(
+        candidate.identity,
+        ReleaseIdentity::RangePackIdentity { season: None, .. }
+    ) && candidate
+        .projected
+        .episode
+        .as_ref()
+        .is_some_and(|episode| episode.season_numbers.is_empty())
+        && visible.iter().any(|(index, token)| {
+            if *token != "SEASONS" {
+                return false;
+            }
+            let Some(scope) = parse_numbered_season_scope_at(tokens, *index) else {
+                return false;
+            };
+            let Some(start) = index.checked_sub(2) else {
+                return false;
+            };
+            let Some(range) = parse_direct_bounded_global_range_at(tokens, start) else {
+                return false;
+            };
+            if candidate.identity
+                != (ReleaseIdentity::RangePackIdentity {
+                    season: None,
+                    range_start: range.range_start,
+                    range_end: range.range_end,
+                })
+            {
+                return false;
+            }
+            let end = scope.consumed.iter().max().copied().unwrap_or(*index) + 1;
+            !alias_oracle
+                .hits_at
+                .iter()
+                .take(index + 1)
+                .flatten()
+                .any(|hit| {
+                    hit.token_range.start_token <= *index
+                        && hit.token_range.end_token >= end
+                        && matches!(
+                            hit.evidence,
+                            AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+                        )
+                })
+        });
+    if !(complete_pack
+        || counted_seasons
+        || bare_unknown_pack
+        || oversized_season_range
+        || mixed_season_scope
+        || unattached_season_scope
+        || contradictory_whole_series_extras)
+    {
+        return false;
+    }
+    let has_supported_coverage = match &candidate.identity {
+        ReleaseIdentity::StandardEpisodeIdentity { .. }
+        | ReleaseIdentity::DailyIdentity { .. }
+        | ReleaseIdentity::AbsoluteIdentity { .. } => true,
+        ReleaseIdentity::SeasonPackIdentity {
+            seasons,
+            is_series_pack,
+            ..
+        } => !seasons.is_empty() || *is_series_pack,
+        ReleaseIdentity::RangePackIdentity { .. } => true,
+        _ => false,
+    };
+    contradictory_whole_series_extras
+        || oversized_season_range
+        || mixed_season_scope
+        || unattached_season_scope
+        || !has_supported_coverage
+}
+
+fn protected_title_end(candidate: &ReleaseParseCandidate) -> Option<usize> {
+    candidate
+        .zones
+        .title_zones
+        .iter()
+        .map(|range| range.end_token)
+        .chain(
+            candidate
+                .context_title_matches
+                .iter()
+                .map(|match_| match_.token_range.end_token),
+        )
+        .chain(
+            candidate
+                .title_segments
+                .iter()
+                .filter(|segment| {
+                    segment.kind == TitleSegmentKind::ContextMatchedAlias
+                        && segment.token_end.saturating_sub(segment.token_start) > 1
+                })
+                .map(|segment| segment.token_end),
+        )
+        .max()
+}
+
+fn technical_recovery_token(
+    candidate: &ReleaseParseCandidate,
+    index: usize,
+    token: &Token,
+    last_protected_title: Option<usize>,
+) -> bool {
+    !protected_title_token(candidate, index)
+        && (token.bracket_depth > 0 || last_protected_title.is_some_and(|end| index >= end))
+}
+
+fn protected_title_token(candidate: &ReleaseParseCandidate, index: usize) -> bool {
+    candidate
+        .zones
+        .title_zones
+        .iter()
+        .any(|range| index >= range.start_token && index < range.end_token)
+        || candidate.context_title_matches.iter().any(|match_| {
+            index >= match_.token_range.start_token && index < match_.token_range.end_token
+        })
+        || candidate.title_segments.iter().any(|segment| {
+            segment.kind == TitleSegmentKind::ContextMatchedAlias
+                && segment.token_end.saturating_sub(segment.token_start) > 1
+                && index >= segment.token_start
+                && index < segment.token_end
+        })
+        || candidate
+            .zones
+            .release_group_span
+            .is_some_and(|range| index >= range.start_token && index < range.end_token)
+}
+
+fn same_technical_scope(left: &Token, right: &Token) -> bool {
+    left.group_id == right.group_id && left.bracket_depth == right.bracket_depth
+}
+
+fn push_distinct(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn push_parse_hint(hints: &mut Vec<String>, hint: &str) {
+    if !hints.iter().any(|existing| existing == hint) {
+        hints.push(hint.to_string());
     }
 }
 
@@ -370,6 +848,7 @@ struct ParseState {
     title_token_indices: TitleTokenIndices,
     title_token_mask: FixedBitSet,
     identity: ReleaseIdentity,
+    identity_token_mask: FixedBitSet,
     metadata: MetadataAst,
     metadata_token_mask: FixedBitSet,
     release_group: Option<String>,
@@ -390,6 +869,7 @@ impl ParseState {
             title_token_indices: SmallVec::new(),
             title_token_mask: FixedBitSet::with_capacity(token_count),
             identity: ReleaseIdentity::Unknown,
+            identity_token_mask: FixedBitSet::with_capacity(token_count),
             metadata: MetadataAst::default(),
             metadata_token_mask: FixedBitSet::with_capacity(token_count),
             release_group: None,
@@ -456,12 +936,13 @@ struct CompoundMetadata {
     audio_channels: Option<&'static str>,
 }
 
-fn annotate_tokens(tokens: &[Token]) -> Vec<TokenAnnotations> {
+fn annotate_tokens(tokens: &[Token], context: &ContextIndex) -> Vec<TokenAnnotations> {
+    let episode_roles_allowed = episode_families_seedable(context);
     tokens
         .iter()
         .enumerate()
         .map(|(index, token)| {
-            let mut roles = classify_token(token, tokens.get(index + 1));
+            let mut roles = classify_token(token, tokens.get(index + 1), episode_roles_allowed);
             roles.sort_by(|left, right| {
                 right
                     .confidence
@@ -492,7 +973,11 @@ fn annotate_tokens(tokens: &[Token]) -> Vec<TokenAnnotations> {
         .collect()
 }
 
-fn classify_token(token: &Token, next: Option<&Token>) -> Vec<RoleCandidate> {
+fn classify_token(
+    token: &Token,
+    next: Option<&Token>,
+    episode_roles_allowed: bool,
+) -> Vec<RoleCandidate> {
     let mut roles = Vec::new();
     let normalized = token.normalized.as_str();
     let compound = detect_compound_metadata(normalized);
@@ -694,14 +1179,14 @@ fn classify_token(token: &Token, next: Option<&Token>) -> Vec<RoleCandidate> {
             strong_anchor: false,
         });
     }
-    if parse_standard_episode_token(normalized).is_some() {
+    if episode_roles_allowed && parse_standard_episode_token(normalized).is_some() {
         roles.push(RoleCandidate {
             role: TokenRole::EpisodeMarker,
             confidence: 100,
             strong_anchor: false,
         });
     }
-    if parse_season_token(normalized).is_some() {
+    if episode_roles_allowed && parse_season_token(normalized).is_some() {
         roles.push(RoleCandidate {
             role: TokenRole::SeasonMarker,
             confidence: 94,
@@ -890,6 +1375,10 @@ fn score_candidates(
     parser_version: &'static str,
 ) -> Vec<ReleaseParseCandidate> {
     let unit_index = build_parse_unit_index(lexed.tokens.as_slice(), &lexed.cst, annotations);
+    // A leading bracketed group tag is decided by token shape alone, so it is
+    // settled before the search rather than left for projection to notice after
+    // the winning candidate has already filed the tag's tokens as title words.
+    let leading_release_group = leading_release_group_token_range(lexed.tokens.as_slice());
     let mut beam = seed_beam(context_index, lexed.tokens.len());
     let mut completed = Vec::<ParseState>::new();
 
@@ -911,6 +1400,7 @@ fn score_candidates(
                 annotations,
                 context_index,
                 alias_oracle,
+                leading_release_group,
             );
             if expanded.is_empty() {
                 let mut stalled = state.clone();
@@ -1226,14 +1716,26 @@ fn seed_beam(context: &ContextIndex, token_count: usize) -> Vec<ParseState> {
         .collect()
 }
 
+/// Whether an episode-bearing family can be seeded for this target at all.
+///
+/// A movie target only reaches the episode families when its own context
+/// carries episode evidence; every other facet always can. Token annotation
+/// shares this predicate so that a target which can never produce an episode
+/// candidate does not mint episode/season role candidates either — those roles
+/// still steer the title boundary and identity-unit rules even when no episode
+/// family survives scoring.
+fn episode_families_seedable(context: &ContextIndex) -> bool {
+    context.facet_hint != ContextFacetHint::Movie
+        || !context.episodes.is_empty()
+        || !context.air_dates.is_empty()
+        || !context.absolute_numbers.is_empty()
+}
+
 fn seeded_families(context: &ContextIndex) -> Vec<(ParseFamily, i32)> {
     match context.facet_hint {
         ContextFacetHint::Movie => {
             let mut families = vec![(ParseFamily::Movie, 0)];
-            if !context.episodes.is_empty()
-                || !context.air_dates.is_empty()
-                || !context.absolute_numbers.is_empty()
-            {
+            if episode_families_seedable(context) {
                 families.extend([
                     (ParseFamily::AnimeAbsolute, -8),
                     (ParseFamily::DailyEpisode, -8),
@@ -1296,12 +1798,25 @@ fn expand_state(
     annotations: &[TokenAnnotations],
     context: &ContextIndex,
     alias_oracle: &AliasOracle,
+    leading_release_group: Option<TokenRange>,
 ) -> Vec<ParseState> {
     let Some(units) = units_by_start.get(state.cursor) else {
         return Vec::new();
     };
     let mut next = Vec::new();
     let protected_context_hits = protected_context_hits_at_cursor(state, alias_oracle, annotations);
+
+    if let Some(cursor) = context_alias_delimiter_cursor(state, tokens, alias_oracle) {
+        let mut bridged = state.clone();
+        bridged.cursor = cursor;
+        bridged.score -= 1;
+        bridged.reasons.push(reason(
+            "beam:context_alias_delimiter",
+            -1,
+            tokens.get(state.cursor).map(|token| token.raw.clone()),
+        ));
+        next.push(bridged);
+    }
 
     if let Some(hits) = alias_oracle.hits_at.get(state.cursor) {
         for hit in hits {
@@ -1322,8 +1837,60 @@ fn expand_state(
             unit_overlaps_protected_context(unit, protected_context_hits.as_slice())
                 || unit_overlaps_accepted_title_tokens(state, unit);
 
+        if !unit_overlaps_protected_context
+            && !unit_overlaps_leading_release_group(unit, leading_release_group)
+            && !matches!(
+                state.identity,
+                ReleaseIdentity::StandardEpisodeIdentity { .. }
+                    | ReleaseIdentity::DailyIdentity { .. }
+                    | ReleaseIdentity::AbsoluteIdentity { .. }
+                    | ReleaseIdentity::MovieIdentity
+            )
+            && oversized_season_range_scope_at(tokens, unit.token_range.start_token)
+        {
+            let mut rejected = state.clone();
+            rejected.cursor = unit.token_range.end_token;
+            rejected
+                .reasons
+                .push(reason("identity:oversized_season_range_scope", 0, None));
+            next.push(rejected);
+            continue;
+        }
+
+        if !unit_overlaps_protected_context
+            && !unit_overlaps_leading_release_group(unit, leading_release_group)
+            && !matches!(
+                state.identity,
+                ReleaseIdentity::StandardEpisodeIdentity { .. }
+                    | ReleaseIdentity::DailyIdentity { .. }
+                    | ReleaseIdentity::AbsoluteIdentity { .. }
+            )
+            && contradictory_whole_series_extras_scope_at(tokens, unit.token_range.start_token)
+        {
+            let mut rejected = state.clone();
+            rejected.cursor = unit.token_range.end_token;
+            rejected.reasons.push(reason(
+                "identity:contradictory_whole_series_extras_scope",
+                0,
+                None,
+            ));
+            next.push(rejected);
+            continue;
+        }
+
+        if !unit_overlaps_protected_context
+            && !unit_overlaps_leading_release_group(unit, leading_release_group)
+            && let Some(replacement) =
+                branch_context_alias_bounded_range_replacement(state, unit, tokens, alias_oracle)
+        {
+            next.push(replacement);
+        }
+
         if !has_identity(&state.identity)
-            && identity_branch_allowed(state)
+            && !season_unit_inside_context_title(unit, tokens, alias_oracle)
+            && (identity_branch_allowed(state)
+                || unit_is_late_explicit_season_scope(unit, tokens)
+                || unit_is_explicit_identity_after_context_alias(state, unit, annotations, context))
             && let Some(identity_state) = branch_identity(state, unit, tokens, annotations, context)
         {
             next.push(identity_state);
@@ -1334,6 +1901,7 @@ fn expand_state(
             && !unit_is_metadata_like(unit)
             && !unit_is_explicit_identity_unit(unit, annotations, context)
             && !unit_is_prefix_release_group_candidate(state, unit, tokens, context)
+            && !unit_overlaps_leading_release_group(unit, leading_release_group)
             && !unit_is_foreign_alt_title_group(unit, context)
         {
             next.push(branch_title(state, unit, context));
@@ -1350,6 +1918,18 @@ fn expand_state(
             && unit_can_be_release_group(unit, tokens)
         {
             next.push(branch_release_group(state, unit, tokens));
+        }
+
+        if let Some(cursor) = complete_qualifier_transition_cursor(state, unit, tokens) {
+            let mut skipped = state.clone();
+            skipped.cursor = cursor;
+            skipped.score -= 2;
+            skipped.reasons.push(reason(
+                "beam:complete_qualifier_transition",
+                -2,
+                Some(unit.raw.clone()),
+            ));
+            next.push(skipped);
         }
     }
 
@@ -1369,6 +1949,299 @@ fn expand_state(
     }
 
     next
+}
+
+fn unit_is_late_explicit_season_scope(unit: &ParseUnit, tokens: &[Token]) -> bool {
+    matches!(unit.kind, UnitKind::BracketGroup(_))
+        && parse_numbered_season_scope_at(tokens, unit.token_range.start_token)
+            .is_some_and(|scope| scope.is_series_pack)
+}
+
+fn season_unit_inside_context_title(
+    unit: &ParseUnit,
+    tokens: &[Token],
+    alias_oracle: &AliasOracle,
+) -> bool {
+    let index = unit.token_range.start_token;
+    parse_season_marker_at(tokens, index).is_some()
+        && alias_oracle
+            .hits_at
+            .iter()
+            .take(index + 1)
+            .flatten()
+            .any(|hit| {
+                hit.token_range.len() > 1
+                    && hit.token_range.end_token > index
+                    && matches!(
+                        hit.evidence,
+                        AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+                    )
+            })
+}
+
+/// A bounded run of symbolic separators may divide title aliases in an upload
+/// name. Cross it only when the next token starts an exact canonical-title or
+/// title-alias hit, so a delimiter cannot become a general-purpose token skip.
+fn context_alias_delimiter_cursor(
+    state: &ParseState,
+    tokens: &[Token],
+    alias_oracle: &AliasOracle,
+) -> Option<usize> {
+    if state.title_token_indices.is_empty() || state.phase == ParsePhase::Metadata {
+        return None;
+    }
+    let mut alias_start = state.cursor;
+    while alias_start < tokens.len()
+        && alias_start.saturating_sub(state.cursor) < 2
+        && tokens
+            .get(alias_start)
+            .is_some_and(symbol_only_delimiter_token)
+    {
+        alias_start += 1;
+    }
+    if alias_start == state.cursor {
+        return None;
+    }
+    if state.accepted_alias_hits.iter().any(|hit| {
+        hit.token_range.end_token == state.cursor
+            && matches!(
+                hit.evidence,
+                AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+            )
+    }) && parse_season_marker_at(tokens, alias_start).is_some()
+    {
+        return Some(alias_start);
+    }
+    alias_oracle
+        .hits_at
+        .get(alias_start)?
+        .iter()
+        .any(|hit| {
+            matches!(
+                hit.evidence,
+                AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+            ) && context_alias_has_explicit_scope_after(tokens, hit.token_range.end_token)
+        })
+        .then_some(alias_start)
+}
+
+fn symbol_only_delimiter_token(token: &Token) -> bool {
+    !token.raw.trim().is_empty()
+        && token
+            .raw
+            .chars()
+            .all(|character| !character.is_alphanumeric())
+}
+
+fn context_alias_has_explicit_scope_after(tokens: &[Token], start: usize) -> bool {
+    let end = (start + 12).min(tokens.len());
+    (start..end).any(|index| {
+        parse_season_token(tokens[index].normalized.as_str()).is_some()
+            || parse_numbered_season_scope_at(tokens, index).is_some()
+            || (tokens[index].normalized == "SEASON"
+                && tokens
+                    .get(index + 1)
+                    .is_some_and(|token| parse_numeric_token(token.normalized.as_str()).is_some()))
+    })
+}
+
+/// An explicit complete-season marker can be followed by an alternate known
+/// title and then concrete episode bounds. The bounds supersede the earlier
+/// unbounded season-pack identity only when an authoritative alias directly
+/// connects them, or a pipe-delimited batch field names the concrete bounds.
+fn branch_context_alias_bounded_range_replacement(
+    state: &ParseState,
+    unit: &ParseUnit,
+    tokens: &[Token],
+    alias_oracle: &AliasOracle,
+) -> Option<ParseState> {
+    let ReleaseIdentity::SeasonPackIdentity {
+        seasons,
+        is_partial: false,
+        is_series_pack: false,
+        ..
+    } = &state.identity
+    else {
+        return None;
+    };
+    let [season] = seasons.as_slice() else {
+        return None;
+    };
+    if state.phase != ParsePhase::Metadata {
+        return None;
+    }
+    let range = parse_range_pack_at(tokens, unit.token_range.start_token)?;
+    if range.consumed.first().copied() != Some(unit.token_range.start_token)
+        || range.range_start == 0
+        || range.range_end <= range.range_start
+        || range.range_end > 999
+    {
+        return None;
+    }
+    let last_token = range.consumed.iter().max().copied()?;
+    let season_end = state.identity_token_mask.ones().next_back()? + 1;
+    let attached_alias = alias_oracle.hits_at.get(season_end)?.iter().any(|hit| {
+        matches!(hit.evidence, AliasEvidenceKind::TitleAlias)
+            && hit.token_range.start_token == season_end
+            && hit.token_range.end_token == unit.token_range.start_token
+    });
+    let delimited_batch = state
+        .context_evidence
+        .iter()
+        .any(|code| code == "context:title_canonical_hit")
+        && unit
+            .token_range
+            .start_token
+            .checked_sub(1)
+            .and_then(|index| tokens.get(index))
+            .is_some_and(|token| token.raw == "|")
+        && tokens
+            .get(last_token + 1)
+            .is_some_and(|token| token.raw == "|")
+        && tokens
+            .get(last_token + 2)
+            .is_some_and(|token| token.normalized == "BATCH");
+    if !attached_alias && !delimited_batch {
+        return None;
+    }
+    let conflicting_scope = delimited_batch
+        && (season_end..unit.token_range.start_token).any(|index| {
+            parse_season_marker_at(tokens, index).is_some()
+                || parse_standard_episode_token(&tokens[index].normalized).is_some()
+                || parse_range_pack_at(tokens, index).is_some()
+        });
+    let mut replacement = state.clone();
+    if conflicting_scope {
+        if let ReleaseIdentity::SeasonPackIdentity { is_partial, .. } = &mut replacement.identity {
+            *is_partial = true;
+        }
+        replacement
+            .reasons
+            .push(reason("identity:unresolved_mixed_pack_scope", 0, None));
+    } else {
+        replacement.family = ParseFamily::EpisodeRangePack;
+        replacement.identity = ReleaseIdentity::RangePackIdentity {
+            season: Some(*season),
+            range_start: range.range_start,
+            range_end: range.range_end,
+        };
+    }
+    replacement.cursor = last_token + 1;
+    replacement.score += 46;
+    replacement
+        .raw_evidence
+        .push("family:range_pack_context_alias_bounded_replacement".to_string());
+    replacement.reasons.push(reason(
+        "family:range_pack_context_alias_bounded_replacement",
+        46,
+        None,
+    ));
+    for token_index in range.consumed {
+        replacement.consumed_tokens.insert(token_index);
+        replacement.identity_token_mask.insert(token_index);
+    }
+    Some(replacement)
+}
+
+/// A matched context title or alias may be followed by presentation text and
+/// then a concrete identity.  Once the beam has entered metadata for that
+/// protected phrase, continue only at an annotated identity marker; this
+/// prevents a known alias from turning arbitrary later title words into a
+/// reason to resume identity parsing.
+fn unit_is_explicit_identity_after_context_alias(
+    state: &ParseState,
+    unit: &ParseUnit,
+    annotations: &[TokenAnnotations],
+    context: &ContextIndex,
+) -> bool {
+    state.phase == ParsePhase::Metadata
+        && state.context_evidence.iter().any(|code| {
+            matches!(
+                code.as_str(),
+                "context:title_alias_hit" | "context:title_canonical_hit"
+            )
+        })
+        && unit_is_explicit_identity_unit(unit, annotations, context)
+}
+
+/// A complete-pack qualifier may sit between an already recognized title and
+/// the concrete scope it qualifies. Advance only across the small qualifier
+/// chain when a bounded range or explicit season scope follows; this never
+/// treats a bare `Complete` as a coverage claim.
+fn complete_qualifier_transition_cursor(
+    state: &ParseState,
+    unit: &ParseUnit,
+    tokens: &[Token],
+) -> Option<usize> {
+    if !matches!(unit.kind, UnitKind::Token)
+        || state.title_token_indices.is_empty()
+        || !matches!(
+            unit.normalized_tokens.first().map(String::as_str),
+            Some("COMPLETE" | "COLLECTION")
+        )
+    {
+        return None;
+    }
+    let start = unit.token_range.end_token;
+    if complete_scope_starts_at(tokens, start) {
+        return Some(start);
+    }
+    if unit
+        .normalized_tokens
+        .first()
+        .is_some_and(|token| token == "COMPLETE")
+        && tokens
+            .get(start)
+            .is_some_and(|token| token.normalized == "COLLECTION")
+        && complete_scope_starts_at(tokens, start + 1)
+    {
+        return Some(start + 1);
+    }
+    if unit
+        .normalized_tokens
+        .first()
+        .is_some_and(|token| token == "COMPLETE")
+        && tokens
+            .get(start)
+            .is_some_and(|token| complete_range_metadata_qualifier(&token.normalized))
+        && parse_range_pack_at(tokens, start + 1).is_some()
+    {
+        return Some(start + 1);
+    }
+    None
+}
+
+fn complete_scope_starts_at(tokens: &[Token], index: usize) -> bool {
+    parse_range_pack_at(tokens, index).is_some()
+        || parse_parenthetical_season_range_at(tokens, index).is_some()
+        || parse_numbered_season_scope_at(tokens, index).is_some()
+        || tokens
+            .get(index)
+            .is_some_and(|token| parse_compact_series_seasons(&token.normalized).is_some())
+        || tokens
+            .get(index)
+            .is_some_and(|token| parse_season_token(token.normalized.as_str()).is_some())
+        || (tokens
+            .get(index)
+            .is_some_and(|token| token.normalized == "ALL")
+            && tokens
+                .get(index + 1)
+                .is_some_and(|token| token.normalized == "SEASONS"))
+}
+
+fn complete_range_metadata_qualifier(token: &str) -> bool {
+    matches!(
+        token,
+        "BD" | "BLURAY"
+            | "BDRIP"
+            | "BRRIP"
+            | "BDREMUX"
+            | "DVD"
+            | "DVDRIP"
+            | "WEB"
+            | "WEBDL"
+            | "WEBRIP"
+    )
 }
 
 fn identity_branch_allowed(state: &ParseState) -> bool {
@@ -1524,6 +2397,9 @@ fn branch_context_phrase(
     for token_index in hit.token_range.start_token..hit.token_range.end_token {
         next.consumed_tokens.insert(token_index);
     }
+    if hit.evidence == AliasEvidenceKind::EpisodeTitle && hit.token_range.len() > 1 {
+        next.accepted_alias_hits.push(hit.clone());
+    }
     let detail = alias_oracle
         .patterns
         .get(hit.pattern_id)
@@ -1558,6 +2434,24 @@ fn unit_is_prefix_release_group_candidate(
             .is_some_and(|token| token.group_id.is_some() && token.bracket_depth > 0),
         _ => false,
     }
+}
+
+/// The leading bracketed group tag is never part of the title, whatever unit
+/// shape happens to cover it.
+///
+/// [`unit_is_prefix_release_group_candidate`] only recognises the tag as a
+/// bracket group or a lone token, so the hyphen group inside `[Lumen-scribe]`
+/// slipped past it and the tag ended up glued to the front of the title — while
+/// still being reported as the release group. Testing the settled token range
+/// covers every unit shape that can span it.
+fn unit_overlaps_leading_release_group(
+    unit: &ParseUnit,
+    leading_release_group: Option<TokenRange>,
+) -> bool {
+    leading_release_group.is_some_and(|range| {
+        unit.token_range.start_token < range.end_token
+            && range.start_token < unit.token_range.end_token
+    })
 }
 
 fn unit_is_foreign_alt_title_group(unit: &ParseUnit, context: &ContextIndex) -> bool {
@@ -1610,7 +2504,43 @@ fn branch_identity(
     context: &ContextIndex,
 ) -> Option<ParseState> {
     let (identity_start, identity, last_token, family_bonus, evidence) =
-        parse_identity_for_unit(state.family, unit, tokens, context)?;
+        parse_identity_for_unit(state.family, unit, tokens, context).or_else(|| {
+            let index = unit.token_range.start_token;
+            if state.family != ParseFamily::EpisodeRangePack
+                || !range_directly_follows_season_marker(tokens, index)
+            {
+                return None;
+            }
+            let marker = index
+                .checked_sub(2)
+                .filter(|previous| tokens[*previous].normalized == "SEASON")
+                .or_else(|| index.checked_sub(1))?;
+            if !state.accepted_alias_hits.iter().any(|hit| {
+                hit.token_range.start_token <= marker
+                    && hit.token_range.end_token >= index
+                    && matches!(
+                        hit.evidence,
+                        AliasEvidenceKind::CanonicalTitle | AliasEvidenceKind::TitleAlias
+                    )
+            }) {
+                return None;
+            }
+            let range = parse_range_pack_at(tokens, index)?;
+            Some((
+                index,
+                ReleaseIdentity::RangePackIdentity {
+                    season: None,
+                    range_start: range.range_start,
+                    range_end: range.range_end,
+                },
+                *range.consumed.iter().max()?,
+                30,
+                "family:range_pack_protected_title_boundary",
+            ))
+        })?;
+    let unresolved_mixed_pack_scope =
+        matches!(identity, ReleaseIdentity::SeasonPackIdentity { .. })
+            && mixed_season_scope_requires_unresolved_hint(tokens, identity_start);
     let mut next = state.clone();
     next.phase = ParsePhase::Metadata;
     next.identity = identity;
@@ -1618,6 +2548,10 @@ fn branch_identity(
     next.cursor = last_token + 1;
     next.raw_evidence.push(evidence.to_string());
     next.reasons.push(reason(evidence, family_bonus, None));
+    if unresolved_mixed_pack_scope {
+        next.reasons
+            .push(reason("identity:unresolved_mixed_pack_scope", 0, None));
+    }
     if INFERRED_IDENTITY_EVIDENCE.contains(&evidence) {
         // Identity inferred from the search context, not read out of the name.
         // Explicit release evidence must always outrank inferred numbering —
@@ -1636,6 +2570,7 @@ fn branch_identity(
     }
     for token_index in identity_start..=last_token {
         next.consumed_tokens.insert(token_index);
+        next.identity_token_mask.insert(token_index);
         if let Some(annotation) = annotations.get(token_index) {
             let expected_role = match next.family {
                 ParseFamily::DailyEpisode => TokenRole::DateMarker,
@@ -1671,6 +2606,20 @@ fn branch_identity(
         }
     }
     Some(next)
+}
+
+fn mixed_season_scope_requires_unresolved_hint(tokens: &[Token], index: usize) -> bool {
+    if parse_mixed_season_scope_at(tokens, index).is_none()
+        && parse_numbered_mixed_season_scope_at(tokens, index).is_none()
+    {
+        return false;
+    }
+    !(tokens
+        .get(index + 2)
+        .is_some_and(|token| token.separator_before == SeparatorKind::OpenParen)
+        && tokens
+            .get(index + 3)
+            .is_some_and(|token| matches!(token.normalized.as_str(), "SEASON" | "SEASONS")))
 }
 
 fn branch_title(state: &ParseState, unit: &ParseUnit, context: &ContextIndex) -> ParseState {
@@ -1871,10 +2820,25 @@ fn unit_is_explicit_identity_unit(
 fn unit_is_metadata_like(unit: &ParseUnit) -> bool {
     unit.has_strong_anchor
         || unit.has_metadata_role
+        || (matches!(unit.kind, UnitKind::BracketGroup(_))
+            && unit.normalized_tokens.len() == 2
+            && (parse_split_video_codec(
+                unit.normalized_tokens[0].as_str(),
+                Some(unit.normalized_tokens[1].as_str()),
+            )
+            .is_some()
+                || is_dual_audio_pair(
+                    unit.normalized_tokens[0].as_str(),
+                    unit.normalized_tokens[1].as_str(),
+                )))
         || unit
             .normalized_tokens
             .iter()
             .any(|token| is_compound_metadata_like_token(token.as_str()))
+}
+
+fn is_dual_audio_pair(first: &str, second: &str) -> bool {
+    matches!((first, second), ("DUAL", "AUDIO"))
 }
 
 fn is_compound_metadata_like_token(token: &str) -> bool {
@@ -1888,13 +2852,26 @@ fn is_compound_metadata_like_token(token: &str) -> bool {
 }
 
 fn unit_can_be_release_group(unit: &ParseUnit, tokens: &[Token]) -> bool {
+    if matches!(unit.kind, UnitKind::BracketGroup(_)) && unit_is_metadata_like(unit) {
+        return false;
+    }
+    if matches!(unit.kind, UnitKind::BracketGroup(_))
+        && leading_release_group_token_range(tokens) == Some(unit.token_range)
+    {
+        return true;
+    }
     match unit.kind {
         UnitKind::Token => tokens
             .get(unit.token_range.start_token)
             .is_some_and(|token| {
                 token.separator_before == SeparatorKind::Hyphen
                     && token.raw.len() <= 24
-                    && release_group_part_is_valid(token, false)
+                    && (release_group_part_is_valid(token, false)
+                        || (numeric_release_group_suffix(token)
+                            && numeric_release_group_suffix_has_technical_prefix(
+                                tokens,
+                                unit.token_range.start_token,
+                            )))
                     && !is_compound_metadata_suffix(tokens, unit.token_range.start_token)
             }),
         UnitKind::HyphenGroup => {
@@ -1947,12 +2924,21 @@ fn unit_can_be_release_group(unit: &ParseUnit, tokens: &[Token]) -> bool {
                                     | "H265"
                                     | "H266"
                                     | "VVC"
+                                    | "10BIT"
+                                    | "10BITS"
                             )
                     })
                 })
         }
         _ => false,
     }
+}
+
+fn numeric_release_group_suffix(token: &Token) -> bool {
+    let normalized = token.normalized.as_str();
+    (1..=3).contains(&normalized.len())
+        && normalized.bytes().all(|byte| byte.is_ascii_digit())
+        && parse_year(normalized).is_none()
 }
 
 fn release_group_token_range(unit: &ParseUnit, tokens: &[Token]) -> TokenRange {
@@ -2102,7 +3088,13 @@ fn is_compound_metadata_suffix(tokens: &[Token], index: usize) -> bool {
             && (token.normalized == "X" || token.normalized.starts_with("HD"))))
 }
 
-fn infer_leading_release_group(tokens: &[Token]) -> Option<String> {
+/// The token span of a leading bracketed release-group tag — `[Lumen-scribe]`
+/// in `[Lumen-scribe] Title - 20 [1080p]`.
+///
+/// A pure function of token shape, so it can be answered before the beam search
+/// runs. The search uses it to keep the tag out of the title zone; projection
+/// uses it to render the group's name.
+fn leading_release_group_token_range(tokens: &[Token]) -> Option<TokenRange> {
     let first = tokens.first()?;
     let group_id = first.group_id?;
     if first.bracket_depth == 0 {
@@ -2115,32 +3107,107 @@ fn infer_leading_release_group(tokens: &[Token]) -> Option<String> {
         .take_while(|(_, token)| token.group_id == Some(group_id))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    if group_indices.is_empty() || group_indices.len() > 3 {
+    if group_indices.is_empty() {
         return None;
     }
 
     let start_token = *group_indices.first()?;
     let end_token = group_indices.last().map(|index| index + 1)?;
-    if !(start_token..end_token).all(|index| {
-        tokens
-            .get(index)
-            .is_some_and(|token| release_group_part_is_valid(token, index > start_token))
-    }) {
+    let standard_group = (group_indices.len() == 1
+        && tokens
+            .get(start_token)
+            .is_some_and(numeric_release_group_suffix))
+        || (group_indices.len() <= 3
+            && (start_token..end_token).all(|index| {
+                tokens
+                    .get(index)
+                    .is_some_and(|token| release_group_part_is_valid(token, index > start_token))
+            }));
+    let compound_group = leading_compound_release_group(tokens, start_token, end_token);
+    if !standard_group && !compound_group {
         return None;
     }
 
-    Some(render_token_range_preserving_separators(
-        tokens,
-        TokenRange {
-            start_token,
-            end_token,
-        },
-    ))
+    Some(TokenRange {
+        start_token,
+        end_token,
+    })
 }
 
-fn infer_release_group_for_candidate(state: &ParseState, tokens: &[Token]) -> Option<String> {
+/// Leading tags sometimes join several credited groups with `_`, `-`, and
+/// ampersands. Sanitization represents an ampersand as `and`, so accept that
+/// narrow tag grammar without broadening ordinary bracketed title phrases.
+fn leading_compound_release_group(tokens: &[Token], start_token: usize, end_token: usize) -> bool {
+    let mut parts = 0usize;
+    let mut connectors = 0usize;
+    let mut previous_was_connector = true;
+    for index in start_token..end_token {
+        let Some(token) = tokens.get(index) else {
+            return false;
+        };
+        if token.normalized == "AND" {
+            if previous_was_connector {
+                return false;
+            }
+            connectors += 1;
+            previous_was_connector = true;
+            continue;
+        }
+        if !release_group_part_is_valid(token, parts > 0) {
+            return false;
+        }
+        parts += 1;
+        previous_was_connector = false;
+    }
+    !previous_was_connector && connectors > 0 && parts <= 5
+}
+
+fn infer_leading_release_group(tokens: &[Token], raw_input: &str) -> Option<String> {
+    let range = leading_release_group_token_range(tokens)?;
+    original_compound_leading_group(raw_input, tokens, range)
+        .or_else(|| Some(render_token_range_preserving_separators(tokens, range)))
+}
+
+fn original_compound_leading_group(
+    raw_input: &str,
+    tokens: &[Token],
+    range: TokenRange,
+) -> Option<String> {
+    let raw_group = raw_input.trim_start().strip_prefix('[')?.split_once(']')?.0;
+    let preserves_sanitized_ampersand = raw_group.contains('&')
+        && tokens[range.start_token..range.end_token]
+            .iter()
+            .any(|token| {
+                token.normalized == "AND"
+                    && matches!(
+                        token.separator_before,
+                        SeparatorKind::Underscore | SeparatorKind::Hyphen
+                    )
+            });
+    let preserves_terminal_period = raw_group.ends_with('.')
+        && range.len() == 1
+        && tokens
+            .get(range.start_token)
+            .is_some_and(|token| token.separator_after == SeparatorKind::Dot);
+    if !preserves_sanitized_ampersand && !preserves_terminal_period {
+        return None;
+    }
+    let sanitized_group = crate::sanitize::sanitize_input(raw_group).value;
+    let raw_group_tokens = normalized_phrase(sanitized_group.as_str())?;
+    let lexed_group_tokens = tokens[range.start_token..range.end_token]
+        .iter()
+        .map(|token| token.normalized.clone())
+        .collect::<Vec<_>>();
+    (raw_group_tokens == lexed_group_tokens).then(|| raw_group.to_string())
+}
+
+fn infer_release_group_for_candidate(
+    state: &ParseState,
+    tokens: &[Token],
+    raw_input: &str,
+) -> Option<String> {
     let title_zones = contiguous_token_ranges(state.title_token_indices.as_slice());
-    infer_leading_release_group(tokens)
+    infer_leading_release_group(tokens, raw_input)
         .or_else(|| infer_release_group_from_token_suffix(state, tokens))
         .or_else(|| infer_state_release_group(state, tokens, title_zones.as_slice()))
 }
@@ -2152,12 +3219,21 @@ fn infer_release_group_from_token_suffix(state: &ParseState, tokens: &[Token]) -
             continue;
         };
         if token.separator_before != SeparatorKind::Hyphen
-            || !release_group_part_is_valid(token, false)
-            || is_compound_metadata_suffix(tokens, index)
+            || !(release_group_part_is_valid(token, false) || numeric_release_group_suffix(token))
+            || (is_compound_metadata_suffix(tokens, index) && !numeric_release_group_suffix(token))
+            || (numeric_release_group_suffix(token)
+                && !numeric_release_group_suffix_has_technical_prefix(tokens, index))
         {
             continue;
         }
-        let range = release_group_suffix_range(tokens, index);
+        let range = if numeric_release_group_suffix(token) {
+            TokenRange {
+                start_token: index,
+                end_token: index + 1,
+            }
+        } else {
+            release_group_suffix_range(tokens, index)
+        };
         if !release_group_suffix_range_allowed(state, tokens, range, title_zones.as_slice()) {
             continue;
         }
@@ -2167,6 +3243,28 @@ fn infer_release_group_from_token_suffix(state: &ParseState, tokens: &[Token]) -
     infer_terminal_release_group(state, tokens, title_zones.as_slice())
 }
 
+fn numeric_release_group_suffix_has_technical_prefix(tokens: &[Token], index: usize) -> bool {
+    let Some(previous) = index
+        .checked_sub(1)
+        .and_then(|previous| tokens.get(previous))
+    else {
+        return false;
+    };
+    if previous.separator_before == SeparatorKind::Hyphen
+        && parse_numeric_token(previous.normalized.as_str()).is_some()
+    {
+        return false;
+    }
+    let compound = detect_compound_metadata(previous.normalized.as_str());
+    compound.quality.is_some()
+        || compound.source.is_some()
+        || compound.video_codec.is_some()
+        || compound.audio_codec.is_some()
+        || compound.audio_channels.is_some()
+        || normalize_source_token(previous.normalized.as_str()).is_some()
+        || VideoCodec::parse(previous.normalized.as_str()).is_some()
+}
+
 fn release_group_suffix_range_allowed(
     state: &ParseState,
     tokens: &[Token],
@@ -2174,6 +3272,9 @@ fn release_group_suffix_range_allowed(
     title_zones: &[TokenRange],
 ) -> bool {
     if range.start_token >= range.end_token {
+        return false;
+    }
+    if (range.start_token..range.end_token).any(|index| state.identity_token_mask.contains(index)) {
         return false;
     }
     if title_zones
@@ -2201,6 +3302,9 @@ fn infer_state_release_group(
 ) -> Option<String> {
     let release_group = state.release_group.as_deref()?;
     let range = find_phrase_span(tokens, release_group)?;
+    if (range.start_token..range.end_token).any(|index| state.identity_token_mask.contains(index)) {
+        return None;
+    }
     if title_zones
         .iter()
         .any(|title_range| overlaps_range(*title_range, Some(range)))
@@ -2262,7 +3366,8 @@ fn range_is_metadata_marker(tokens: &[Token], range: TokenRange) -> bool {
     (range.start_token..range.end_token).any(|index| {
         tokens.get(index).is_some_and(|token| {
             let normalized = token.normalized.as_str();
-            !release_group_part_is_valid(token, index > range.start_token)
+            !(release_group_part_is_valid(token, index > range.start_token)
+                || (range_len == 1 && numeric_release_group_suffix(token)))
                 || is_explicit_language_metadata_token(normalized)
                 || is_release_flag_metadata_token(normalized)
                 || (range_len == 1 && normalize_standalone_streaming_service(normalized).is_some())
@@ -2426,6 +3531,9 @@ fn parse_identity_at(
                     "family:standard_episode_with_absolute_prefix",
                 ));
             }
+            if parse_mixed_season_scope_at(tokens, index).is_some() {
+                return None;
+            }
             if let Some((season, episode_numbers, last_token)) =
                 parse_hyphenated_standard_episode_range_at(tokens, index)
             {
@@ -2519,37 +3627,130 @@ fn parse_identity_at(
                 )
             },
         ),
-        ParseFamily::SeasonPack => parse_season_pack_at(tokens, index).map(
-            |SeasonPackParse {
-                 seasons,
-                 consumed,
-                 is_partial,
-                 season_part,
-                 is_series_pack,
-             }| {
-                let explicit = tokens
-                    .get(index)
-                    .is_some_and(|token| token.normalized == "SEASON");
-                (
-                    ReleaseIdentity::SeasonPackIdentity {
-                        seasons,
-                        is_partial,
-                        season_part,
-                        is_series_pack,
+        ParseFamily::SeasonPack => {
+            if let Some(RangePackParse {
+                season,
+                range_start,
+                range_end,
+                consumed,
+            }) = parse_multi_season_bounded_range_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season,
+                        range_start,
+                        range_end,
                     },
                     consumed.iter().max().copied().unwrap_or(index),
-                    if is_series_pack {
-                        50
-                    } else if explicit {
-                        38
-                    } else {
-                        30
-                    },
-                    "family:season_pack",
-                )
-            },
-        ),
+                    54,
+                    "family:range_pack_multi_season_bounded",
+                ));
+            }
+            parse_season_pack_at(tokens, index).map(
+                |SeasonPackParse {
+                     seasons,
+                     consumed,
+                     is_partial,
+                     season_part,
+                     is_series_pack,
+                 }| {
+                    let explicit = tokens
+                        .get(index)
+                        .is_some_and(|token| token.normalized == "SEASON");
+                    (
+                        ReleaseIdentity::SeasonPackIdentity {
+                            seasons,
+                            is_partial,
+                            season_part,
+                            is_series_pack,
+                        },
+                        consumed.iter().max().copied().unwrap_or(index),
+                        if is_series_pack && is_partial {
+                            54
+                        } else if is_series_pack {
+                            50
+                        } else if explicit {
+                            38
+                        } else {
+                            30
+                        },
+                        "family:season_pack",
+                    )
+                },
+            )
+        }
         ParseFamily::EpisodeRangePack => {
+            if let Some(range) = season_scoped_range_after(tokens, index).filter(|range| {
+                range
+                    .consumed
+                    .iter()
+                    .any(|token| parse_localized_collection_range_at(tokens, *token).is_some())
+            }) {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season: range.season,
+                        range_start: range.range_start,
+                        range_end: range.range_end,
+                    },
+                    range.consumed.iter().max().copied().unwrap_or(index),
+                    44,
+                    "family:range_pack_localized_season",
+                ));
+            }
+            if let Some(RangePackParse {
+                season,
+                range_start,
+                range_end,
+                consumed,
+            }) = parse_series_qualified_bounded_range_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season,
+                        range_start,
+                        range_end,
+                    },
+                    consumed.iter().max().copied().unwrap_or(index),
+                    56,
+                    "family:range_pack_series_qualified",
+                ));
+            }
+            if let Some(RangePackParse {
+                season,
+                range_start,
+                range_end,
+                consumed,
+            }) = parse_complete_season_bounded_range_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season,
+                        range_start,
+                        range_end,
+                    },
+                    consumed.iter().max().copied().unwrap_or(index),
+                    46,
+                    "family:range_pack_complete_season_bounded",
+                ));
+            }
+            if let Some(RangePackParse {
+                season,
+                range_start,
+                range_end,
+                consumed,
+            }) = parse_multi_season_bounded_range_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season,
+                        range_start,
+                        range_end,
+                    },
+                    consumed.iter().max().copied().unwrap_or(index),
+                    54,
+                    "family:range_pack_multi_season_bounded",
+                ));
+            }
             if let Some(RangePackParse {
                 season,
                 range_start,
@@ -2566,6 +3767,24 @@ fn parse_identity_at(
                     consumed.iter().max().copied().unwrap_or(index),
                     44,
                     "family:range_pack_standard_episode",
+                ));
+            }
+            if let Some(RangePackParse {
+                season,
+                range_start,
+                range_end,
+                consumed,
+            }) = parse_parenthetical_season_range_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season,
+                        range_start,
+                        range_end,
+                    },
+                    consumed.iter().max().copied().unwrap_or(index),
+                    42,
+                    "family:range_pack_parenthetical_season",
                 ));
             }
             if let Some(RangePackParse {
@@ -2602,6 +3821,24 @@ fn parse_identity_at(
                     consumed.iter().max().copied().unwrap_or(index),
                     if season.is_some() { 42 } else { 36 },
                     "family:range_pack_labeled",
+                ));
+            }
+            if let Some(RangePackParse {
+                season,
+                range_start,
+                range_end,
+                consumed,
+            }) = parse_localized_collection_range_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::RangePackIdentity {
+                        season,
+                        range_start,
+                        range_end,
+                    },
+                    consumed.iter().max().copied().unwrap_or(index),
+                    if season.is_some() { 42 } else { 36 },
+                    "family:range_pack_localized_collection",
                 ));
             }
             // A bare range directly after a season marker ("Season 1 - 001-020")
@@ -2718,6 +3955,50 @@ fn consume_unit_metadata(
     tokens: &[Token],
     annotations: &[TokenAnnotations],
 ) {
+    if matches!(unit.kind, UnitKind::BracketGroup(_))
+        && unit.token_range.end_token == unit.token_range.start_token + 2
+        && is_dual_audio_pair(
+            tokens
+                .get(unit.token_range.start_token)
+                .map(|token| token.normalized.as_str())
+                .unwrap_or_default(),
+            tokens
+                .get(unit.token_range.start_token + 1)
+                .map(|token| token.normalized.as_str())
+                .unwrap_or_default(),
+        )
+    {
+        state.score += 6;
+        state.reasons.push(reason("metadata:dual_audio", 6, None));
+        for index in unit.token_range.start_token..unit.token_range.end_token {
+            state.consumed_tokens.insert(index);
+            record_metadata_token(state, index);
+        }
+        return;
+    }
+    if matches!(unit.kind, UnitKind::BracketGroup(_))
+        && unit.token_range.end_token == unit.token_range.start_token + 2
+        && state.metadata.video_codec.is_none()
+        && let Some(codec) = parse_split_video_codec(
+            tokens
+                .get(unit.token_range.start_token)
+                .map(|token| token.normalized.as_str())
+                .unwrap_or_default(),
+            tokens
+                .get(unit.token_range.start_token + 1)
+                .map(|token| token.normalized.as_str()),
+        )
+    {
+        state.metadata.video_codec = Some(codec.to_string());
+        state.metadata.video_codec_span = Some(unit.token_range);
+        state.score += 8;
+        state.reasons.push(reason("metadata:video_codec", 8, None));
+        for index in unit.token_range.start_token..unit.token_range.end_token {
+            state.consumed_tokens.insert(index);
+            record_metadata_token(state, index);
+        }
+        return;
+    }
     for index in unit.token_range.start_token..unit.token_range.end_token {
         let Some(token) = tokens.get(index) else {
             continue;
@@ -2986,7 +4267,7 @@ fn source_span_for_token(tokens: &[Token], index: usize) -> TokenRange {
 }
 
 fn build_candidate(
-    state: ParseState,
+    mut state: ParseState,
     tokens: &[Token],
     annotations: &[TokenAnnotations],
     raw_input: &str,
@@ -3050,6 +4331,51 @@ fn build_candidate(
                 })
         })
     };
+    if !matches!(
+        &state.identity,
+        ReleaseIdentity::StandardEpisodeIdentity { .. }
+            | ReleaseIdentity::DailyIdentity { .. }
+            | ReleaseIdentity::AbsoluteIdentity { .. }
+    ) && tokens.iter().enumerate().any(|(index, _)| {
+        !context_title_matches.iter().any(|title_match| {
+            (title_match.token_range.start_token..title_match.token_range.end_token)
+                .contains(&index)
+        }) && !leading_release_group_token_range(tokens)
+            .is_some_and(|group| (group.start_token..group.end_token).contains(&index))
+            && oversized_season_range_scope_at(tokens, index)
+    }) && !state
+        .reasons
+        .iter()
+        .any(|reason| reason.code == "identity:oversized_season_range_scope")
+    {
+        state
+            .reasons
+            .push(reason("identity:oversized_season_range_scope", 0, None));
+    }
+    if !matches!(
+        &state.identity,
+        ReleaseIdentity::StandardEpisodeIdentity { .. }
+            | ReleaseIdentity::DailyIdentity { .. }
+            | ReleaseIdentity::AbsoluteIdentity { .. }
+            | ReleaseIdentity::MovieIdentity
+    ) && tokens.iter().enumerate().any(|(index, _)| {
+        !context_title_matches.iter().any(|title_match| {
+            (title_match.token_range.start_token..title_match.token_range.end_token)
+                .contains(&index)
+        }) && !leading_release_group_token_range(tokens)
+            .is_some_and(|group| (group.start_token..group.end_token).contains(&index))
+            && contradictory_whole_series_extras_scope_at(tokens, index)
+    }) && !state
+        .reasons
+        .iter()
+        .any(|reason| reason.code == "identity:contradictory_whole_series_extras_scope")
+    {
+        state.reasons.push(reason(
+            "identity:contradictory_whole_series_extras_scope",
+            0,
+            None,
+        ));
+    }
     let mut normalized_title_variants = title_segments
         .iter()
         .map(|segment| segment.normalized.clone())
@@ -3083,7 +4409,13 @@ fn build_candidate(
         tokens,
         state.title_token_indices.as_slice(),
     );
-    let episode = project_episode(&state.identity, tokens, context_index);
+    let global_range_seasons = global_range_season_annotations(&state, tokens);
+    let episode = project_episode(
+        &state.identity,
+        tokens,
+        context_index,
+        global_range_seasons.as_slice(),
+    );
     let external_ids = state.metadata.external_ids.clone();
     let imdb_id = external_ids
         .iter()
@@ -3103,7 +4435,7 @@ fn build_candidate(
         .filter(|(index, _)| !state.consumed_tokens.contains(*index))
         .map(|(_, token)| token.span)
         .collect::<Vec<_>>();
-    let release_group = infer_release_group_for_candidate(&state, tokens);
+    let release_group = infer_release_group_for_candidate(&state, tokens, raw_input);
     let raw_score = finalize_score(&state, tokens, annotations);
     let zones = build_candidate_zones(&state, tokens, release_group.as_deref());
     let is_remux = state
@@ -3231,6 +4563,7 @@ fn build_candidate_zones(
         .as_deref()
         .or(release_group)
         .and_then(|release_group| find_phrase_span(tokens, release_group))
+        .or_else(|| leading_release_group_token_range(tokens))
         .filter(|span| {
             max_metadata_token.is_none_or(|max_token| span.start_token > max_token)
                 && !overlaps_range(*span, state.metadata.source_span)
@@ -3807,10 +5140,36 @@ fn contextual_hits_within_title_zone(
     selected
 }
 
+fn global_range_season_annotations(state: &ParseState, tokens: &[Token]) -> Vec<u32> {
+    let ReleaseIdentity::RangePackIdentity {
+        season: None,
+        range_start,
+        range_end,
+    } = state.identity
+    else {
+        return Vec::new();
+    };
+
+    (0..tokens.len())
+        .find_map(|index| {
+            let range = parse_multi_season_bounded_range_at(tokens, index)?;
+            let scope = explicit_season_scope_after(tokens, index)?;
+            (range.range_start == range_start
+                && range.range_end == range_end
+                && range.consumed.iter().all(|token_index| {
+                    state.consumed_tokens.contains(*token_index)
+                        && !state.title_token_mask.contains(*token_index)
+                }))
+            .then_some(scope.seasons)
+        })
+        .unwrap_or_default()
+}
+
 fn project_episode(
     identity: &ReleaseIdentity,
     tokens: &[Token],
     context: &ContextIndex,
+    global_range_seasons: &[u32],
 ) -> Option<ParsedEpisodeMetadata> {
     match identity {
         ReleaseIdentity::StandardEpisodeIdentity {
@@ -3927,7 +5286,11 @@ fn project_episode(
             range_end,
         } => Some(ParsedEpisodeMetadata {
             season: *season,
-            season_numbers: season.iter().copied().collect(),
+            season_numbers: if season.is_some() {
+                season.iter().copied().collect()
+            } else {
+                global_range_seasons.to_vec()
+            },
             episode_numbers: if season.is_some() {
                 (*range_start..=*range_end).collect()
             } else {
@@ -3944,7 +5307,7 @@ fn project_episode(
             daily_part: None,
             full_season: false,
             is_partial_season: false,
-            is_multi_season: false,
+            is_multi_season: season.is_none() && global_range_seasons.len() > 1,
             is_series_pack: false,
             season_part: None,
             is_season_extra: false,
@@ -4020,7 +5383,7 @@ fn contextual_absolute_companion(
             parse_numeric_token(token.normalized.as_str()).map(|value| (index, value))
         })
         .filter(|(_, value)| contains_sorted(&context.absolute_numbers, value))
-        .filter(|(index, value)| absolute_companion_allowed(tokens, *index, *value))
+        .filter(|(index, value)| absolute_companion_allowed(tokens, *index, *value, context))
         .map(|(_, value)| value)
         .collect::<Vec<_>>();
 
@@ -4034,7 +5397,12 @@ fn contextual_absolute_companion(
     }
 }
 
-fn absolute_companion_allowed(tokens: &[Token], index: usize, value: u32) -> bool {
+fn absolute_companion_allowed(
+    tokens: &[Token],
+    index: usize,
+    value: u32,
+    context: &ContextIndex,
+) -> bool {
     if value > 2000 {
         return false;
     }
@@ -4047,8 +5415,9 @@ fn absolute_companion_allowed(tokens: &[Token], index: usize, value: u32) -> boo
         && next.is_some_and(is_title_like_token)
         && token.separator_before != SeparatorKind::Hyphen
         && next.is_none_or(|candidate| candidate.separator_before != SeparatorKind::Hyphen);
+    let technical_group_anchor = bare_absolute_before_technical_group(tokens, index, context);
 
-    if title_sandwiched {
+    if title_sandwiched && !technical_group_anchor {
         return false;
     }
 
@@ -4060,6 +5429,45 @@ fn absolute_companion_allowed(tokens: &[Token], index: usize, value: u32) -> boo
             .skip(index + 1)
             .take(2)
             .any(|candidate| parse_standard_episode_token(candidate.normalized.as_str()).is_some())
+        || technical_group_anchor
+}
+
+fn bare_absolute_before_technical_group(
+    tokens: &[Token],
+    index: usize,
+    context: &ContextIndex,
+) -> bool {
+    let Some(first_technical_token) = tokens.get(index + 1) else {
+        return false;
+    };
+    if !matches!(
+        first_technical_token.separator_before,
+        SeparatorKind::OpenBracket | SeparatorKind::OpenParen
+    ) {
+        return false;
+    }
+    let Some(group_id) = first_technical_token.group_id else {
+        return false;
+    };
+    let title_ends_before_absolute = context.aliases.iter().any(|alias| {
+        !alias.tokens.is_empty()
+            && alias.tokens.len() <= index
+            && tokens[index - alias.tokens.len()..index]
+                .iter()
+                .map(|token| token.normalized.as_str())
+                .eq(alias.tokens.iter().map(String::as_str))
+    });
+    title_ends_before_absolute
+        && tokens
+            .iter()
+            .skip(index + 1)
+            .take_while(|token| token.group_id == Some(group_id))
+            .any(|token| {
+                let compound = detect_compound_metadata(token.normalized.as_str());
+                parse_resolution_quality_token(token.normalized.as_str()).is_some()
+                    || normalize_source_token(token.normalized.as_str()).is_some()
+                    || compound.video_codec.is_some()
+            })
 }
 
 fn is_episode_label_marker(token: &str) -> bool {
@@ -4717,6 +6125,41 @@ fn is_strong_anchor(role: TokenRole) -> bool {
     )
 }
 
+/// Whether fused episode labels (`EP01`) may be rewritten for this target.
+///
+/// Series and anime targets ask for episode identity, so a fused label is read as
+/// one. Movie targets use `EP4`/`EP04` as installment shorthand, and an unknown
+/// target has not told us which of the two it is, so both leave the token alone.
+fn fused_episode_labels_enabled(facet: ContextFacetHint) -> bool {
+    matches!(facet, ContextFacetHint::Series | ContextFacetHint::Anime)
+}
+
+/// Rewrite a fused episode label into the canonical `E`-prefixed shape.
+///
+/// `EP01` -> `E01`, `EPISODE07` -> `E07`, `S01EP04` -> `S01E04`, `EPS01-04` ->
+/// `E01-04`. At least two leading ASCII digits are required after the label, so
+/// the single-digit installment shorthand (`EP4`) is deliberately not a label.
+/// Already-canonical tokens (`E01`, `S01E01`) return `None` — no self-rewrite.
+fn defused_episode_label(token: &str) -> Option<String> {
+    let (prefix, rest) = if let Some(rest) = token.strip_prefix('S') {
+        let split = rest.find(|ch: char| !ch.is_ascii_digit())?;
+        if split == 0 {
+            return None;
+        }
+        (&token[..1 + split], &rest[split..])
+    } else {
+        ("", token)
+    };
+    for label in ["EPISODES", "EPISODE", "EPS", "EP"] {
+        if let Some(tail) = rest.strip_prefix(label)
+            && tail.chars().take(2).filter(char::is_ascii_digit).count() == 2
+        {
+            return Some(format!("{prefix}E{tail}"));
+        }
+    }
+    None
+}
+
 fn parse_standard_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
     if token.starts_with('S') && token.contains('E') {
         let e_index = token.find('E')?;
@@ -4744,12 +6187,33 @@ fn parse_standard_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> 
 }
 
 fn has_explicit_single_standard_episode_marker(tokens: &[Token]) -> bool {
-    tokens.iter().any(|token| {
+    tokens.iter().enumerate().any(|(index, token)| {
         matches!(
             parse_standard_episode_token(&token.normalized),
-            Some((Some(_), episode_numbers)) if episode_numbers.len() == 1
+            Some((Some(_), episode_numbers))
+                if !is_resolution_dimension(&token.normalized)
+                    && episode_numbers.len() == 1
+                    && !is_standard_episode_range_endpoint_at(tokens, index)
         )
     })
+}
+
+fn is_resolution_dimension(token: &str) -> bool {
+    let Some((width, height)) = token.split_once('X') else {
+        return false;
+    };
+    let (Ok(width), Ok(height)) = (width.parse::<u32>(), height.parse::<u32>()) else {
+        return false;
+    };
+    width >= 640 && height >= 360
+}
+
+fn is_standard_episode_range_endpoint_at(tokens: &[Token], index: usize) -> bool {
+    let Some((_, episode_numbers, _)) = parse_hyphenated_standard_episode_range_at(tokens, index)
+    else {
+        return false;
+    };
+    episode_numbers.len() > 1
 }
 
 fn parse_season_keyword_episode_at(
@@ -4944,7 +6408,14 @@ fn parse_hyphenated_standard_episode_range_at(
     if next.separator_before != SeparatorKind::Hyphen {
         return Some((season, episode_numbers, index));
     }
-    let range_end = parse_episode_component(next.normalized.as_str())?;
+    let range_end = parse_episode_component(next.normalized.as_str()).or_else(|| {
+        let (end_season, end_episodes) = parse_standard_episode_token(next.normalized.as_str())?;
+        let range_end = *end_episodes.first()?;
+        // Split episode ranges already limit their endpoint to three digits.
+        // Apply the same bound to the newly accepted repeated-standard form
+        // before materializing the inclusive range.
+        (end_season == season && end_episodes.len() == 1 && range_end <= 999).then_some(range_end)
+    })?;
     let range_start = *episode_numbers.first()?;
     if range_end < range_start {
         return Some((season, episode_numbers, index));
@@ -4989,28 +6460,243 @@ fn series_pack(seasons: Vec<u32>, consumed: Vec<usize>) -> Option<SeasonPackPars
 
 /// Parse the compact no-whitespace season forms that the lexer keeps inside one
 /// token, such as `S01+S02+OVAs`.
+const MAX_EXPLICIT_SEASON: u32 = 100;
+
+fn valid_explicit_season(season: u32) -> bool {
+    season <= MAX_EXPLICIT_SEASON
+}
+
+fn bounded_season_range(start: u32, end: u32) -> Option<Vec<u32>> {
+    (start <= end && valid_explicit_season(start) && valid_explicit_season(end))
+        .then(|| (start..=end).collect())
+}
+
+fn season_compound_exceeds_bound(token: &str) -> bool {
+    token.split('+').any(|component| {
+        lexical_season_exceeds_bound(component)
+            || component.split_once('-').is_some_and(|(start, end)| {
+                [start, end].into_iter().any(lexical_season_exceeds_bound)
+            })
+    })
+}
+
+fn lexical_season_exceeds_bound(token: &str) -> bool {
+    let Some(value) = token
+        .strip_prefix("SEASON")
+        .or_else(|| token.strip_prefix('S'))
+    else {
+        return false;
+    };
+    !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value
+            .parse::<u32>()
+            .map_or(true, |season| !valid_explicit_season(season))
+}
+
+fn oversized_season_range_scope_at(tokens: &[Token], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else {
+        return false;
+    };
+    if season_compound_exceeds_bound(token.normalized.as_str()) {
+        return true;
+    }
+    parse_season_token(token.normalized.as_str()).is_some_and(valid_explicit_season)
+        && tokens.get(index + 1).is_some_and(|next| {
+            next.separator_before == SeparatorKind::Hyphen
+                && season_compound_exceeds_bound(next.normalized.as_str())
+        })
+}
+
 fn parse_compact_series_seasons(token: &str) -> Option<Vec<u32>> {
     let mut seasons = Vec::new();
 
     for component in token.split('+') {
         let component_seasons = if let Some(season) = parse_season_token(component) {
-            Some(vec![season])
+            valid_explicit_season(season).then_some(vec![season])?
         } else if let Some((start, end)) = component.split_once('-') {
             match (parse_season_token(start), parse_season_token(end)) {
-                (Some(start), Some(end)) if end > start => Some((start..=end).collect()),
-                _ => None,
+                (Some(start), Some(end)) if end > start => bounded_season_range(start, end)?,
+                (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => return None,
+                (None, None) => break,
             }
         } else {
-            None
-        };
-
-        let Some(component_seasons) = component_seasons else {
             break;
         };
         seasons.extend(component_seasons);
     }
 
     series_pack(seasons, vec![0]).map(|pack| pack.seasons)
+}
+
+fn scoped_season_pack(seasons: Vec<u32>, consumed: Vec<usize>) -> Option<SeasonPackParse> {
+    let mut seasons = seasons;
+    seasons.sort_unstable();
+    seasons.dedup();
+    (!seasons.is_empty()).then_some(SeasonPackParse {
+        is_series_pack: seasons.len() > 1,
+        seasons,
+        consumed,
+        is_partial: false,
+        season_part: None,
+    })
+}
+
+/// Parse `Seasons 1-2` and fused `Seasons1-2` forms without treating an
+/// unlabeled number of seasons as a coverage claim.
+fn parse_numbered_season_scope_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    let token = tokens.get(index)?.normalized.as_str();
+    if token == "SEASONS"
+        && let Some(suffix) = tokens.get(index + 1).map(|token| token.normalized.as_str())
+        && suffix.contains('+')
+    {
+        let seasons = suffix
+            .split('+')
+            .map(parse_numeric_token)
+            .collect::<Option<Vec<_>>>()?;
+        if seasons.len() > 1
+            && seasons
+                .iter()
+                .all(|season| (1..=MAX_EXPLICIT_SEASON).contains(season))
+        {
+            return scoped_season_pack(seasons, vec![index, index + 1]);
+        }
+        return None;
+    }
+    if let Some(suffix) = token.strip_prefix("SEASONS")
+        && suffix.contains('+')
+    {
+        let seasons = suffix
+            .split('+')
+            .map(parse_numeric_token)
+            .collect::<Option<Vec<_>>>()?;
+        if seasons.len() > 1
+            && seasons
+                .iter()
+                .all(|season| (1..=MAX_EXPLICIT_SEASON).contains(season))
+        {
+            return scoped_season_pack(seasons, vec![index]);
+        }
+        return None;
+    }
+    let (first, mut consumed) = if token == "SEASONS" {
+        (
+            parse_numeric_token(tokens.get(index + 1)?.normalized.as_str())?,
+            vec![index, index + 1],
+        )
+    } else {
+        (
+            token.strip_prefix("SEASONS")?.parse::<u32>().ok()?,
+            vec![index],
+        )
+    };
+    if !(1..=MAX_EXPLICIT_SEASON).contains(&first) {
+        return None;
+    }
+    let next_index = *consumed.last()? + 1;
+    let Some(next) = tokens.get(next_index) else {
+        return scoped_season_pack(vec![first], consumed);
+    };
+    let Some(second) = parse_numeric_token(next.normalized.as_str()) else {
+        return scoped_season_pack(vec![first], consumed);
+    };
+    if !(1..=MAX_EXPLICIT_SEASON).contains(&second) {
+        return scoped_season_pack(vec![first], consumed);
+    }
+    consumed.push(next_index);
+    match next.separator_before {
+        SeparatorKind::Hyphen if second > first => bounded_season_range(first, second)
+            .and_then(|seasons| scoped_season_pack(seasons, consumed)),
+        SeparatorKind::Other if second != first => {
+            scoped_season_pack(vec![first, second], consumed)
+        }
+        _ => scoped_season_pack(vec![first], consumed),
+    }
+}
+
+/// Read the token immediately following a high-signal whole-series qualifier.
+/// Keeping this adjacent prevents a title word or a distant season reference
+/// from becoming an invented coverage restriction.
+fn explicit_season_scope_after(tokens: &[Token], start: usize) -> Option<SeasonPackParse> {
+    let candidate = start;
+    if let Some(scope) = parse_numbered_season_scope_at(tokens, candidate) {
+        return Some(scope);
+    }
+    let token = tokens.get(candidate)?.normalized.as_str();
+    if let Some(seasons) = parse_compact_series_seasons(token) {
+        return scoped_season_pack(seasons, vec![candidate]);
+    }
+    if token == "SEASON" {
+        let season = parse_numeric_token(tokens.get(candidate + 1)?.normalized.as_str())?;
+        return valid_explicit_season(season)
+            .then(|| scoped_season_pack(vec![season], vec![candidate, candidate + 1]))
+            .flatten();
+    }
+    if let Some(first) = parse_season_token(token).filter(|season| valid_explicit_season(*season)) {
+        let mut seasons = vec![first];
+        let mut consumed = vec![candidate];
+        let mut cursor = candidate + 1;
+        while let Some(next) = tokens.get(cursor) {
+            if season_compound_exceeds_bound(next.normalized.as_str()) {
+                return None;
+            }
+            let Some(season) = parse_season_token_with_extras(next.normalized.as_str()) else {
+                break;
+            };
+            if !valid_explicit_season(season) {
+                return None;
+            }
+            let last = *seasons.last()?;
+            match next.separator_before {
+                SeparatorKind::Hyphen if season > last => {
+                    let range = bounded_season_range(last, season)?;
+                    seasons.extend(range.into_iter().skip(1));
+                }
+                SeparatorKind::Other if season != last => seasons.push(season),
+                SeparatorKind::Space | SeparatorKind::Dot | SeparatorKind::Underscore
+                    if season == last + 1 =>
+                {
+                    seasons.push(season)
+                }
+                _ => break,
+            }
+            consumed.push(cursor);
+            cursor += 1;
+        }
+        return scoped_season_pack(seasons, consumed);
+    }
+    None
+}
+
+fn explicit_season_scope_before(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    let candidate = index.checked_sub(1)?;
+    let token = tokens.get(candidate)?.normalized.as_str();
+    if let Some(seasons) = parse_compact_series_seasons(token) {
+        return scoped_season_pack(seasons, vec![candidate]);
+    }
+    parse_numbered_season_scope_at(tokens, candidate).or_else(|| {
+        (tokens.get(candidate)?.normalized == "SEASON")
+            .then(|| parse_numeric_token(tokens.get(candidate + 1)?.normalized.as_str()))
+            .flatten()
+            .filter(|season| valid_explicit_season(*season))
+            .and_then(|season| scoped_season_pack(vec![season], vec![candidate, candidate + 1]))
+    })
+}
+
+fn explicit_season_scope_introduced(tokens: &[Token], index: usize) -> bool {
+    tokens.get(index).is_some_and(|token| {
+        token.normalized.starts_with("SEASONS")
+            || token.normalized == "SEASON"
+            || parse_season_token(token.normalized.as_str()).is_some()
+    })
+}
+
+fn parse_season_token_with_extras(token: &str) -> Option<u32> {
+    parse_season_token(token.split('+').next()?)
+}
+
+fn all_seasons_marker(token: &str) -> bool {
+    token.split('+').next() == Some("SEASONS")
 }
 
 /// Recognize only the empirically observed high-signal series-pack markers.
@@ -5022,17 +6708,36 @@ fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     if has_explicit_single_standard_episode_marker(tokens) {
         return None;
     }
+    if invalid_all_seasons_restriction_at(tokens, index) {
+        return None;
+    }
     let token = tokens.get(index)?.normalized.as_str();
 
     if token == "COMPLETE" {
         let marker = tokens.get(index + 1).map(|token| token.normalized.as_str());
-        let complete_series = marker.is_some_and(|value| value.split('+').next() == Some("SERIES"));
+        let complete_series =
+            marker.is_some_and(|value| matches!(value.split('+').next(), Some("SERIES" | "SERIE")));
         let complete_tv_series = marker == Some("TV")
             && tokens
                 .get(index + 2)
                 .is_some_and(|token| token.normalized.split('+').next() == Some("SERIES"));
         if complete_series || complete_tv_series {
             let end = if complete_tv_series { 2 } else { 1 };
+            if extras_only_restriction_after(tokens, index + end + 1) {
+                return None;
+            }
+            if parse_series_qualified_bounded_range_at(tokens, index).is_some() {
+                return None;
+            }
+            if let Some(scope) = explicit_season_scope_after(tokens, index + end + 1) {
+                return Some(scope);
+            }
+            if let Some(scope) = explicit_season_scope_before(tokens, index) {
+                return Some(scope);
+            }
+            if explicit_season_scope_introduced(tokens, index + end + 1) {
+                return None;
+            }
             return Some(SeasonPackParse {
                 seasons: Vec::new(),
                 consumed: (index..=index + end).collect(),
@@ -5041,6 +6746,54 @@ fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
                 is_series_pack: true,
             });
         }
+        if marker == Some("SEASON") {
+            if parse_parenthetical_season_range_at(tokens, index + 1).is_some()
+                || season_scoped_range_after(tokens, index + 1).is_some()
+            {
+                return None;
+            }
+            let season = parse_numeric_token(tokens.get(index + 2)?.normalized.as_str())?;
+            return scoped_season_pack(vec![season], vec![index, index + 1, index + 2]);
+        }
+    }
+
+    if let Some(season) = token
+        .strip_prefix("COMPLETESEASON")
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        return scoped_season_pack(vec![season], vec![index]);
+    }
+
+    if token == "ALL"
+        && tokens
+            .get(index + 1)
+            .is_some_and(|next| all_seasons_marker(next.normalized.as_str()))
+    {
+        if extras_only_restriction_after(tokens, index + 2) {
+            return None;
+        }
+        if preceding_bounded_range_in_same_group(tokens, index) {
+            return None;
+        }
+        if parse_series_qualified_bounded_range_at(tokens, index).is_some() {
+            return None;
+        }
+        if let Some(scope) = explicit_season_scope_after(tokens, index + 2) {
+            return Some(scope);
+        }
+        if let Some(scope) = explicit_season_scope_before(tokens, index) {
+            return Some(scope);
+        }
+        if explicit_season_scope_introduced(tokens, index + 2) {
+            return None;
+        }
+        return Some(SeasonPackParse {
+            seasons: Vec::new(),
+            consumed: vec![index, index + 1],
+            is_partial: false,
+            season_part: None,
+            is_series_pack: true,
+        });
     }
 
     if let Some(seasons) = parse_compact_series_seasons(token) {
@@ -5048,24 +6801,7 @@ fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     }
 
     if token == "SEASONS" {
-        let first = tokens
-            .get(index + 1)
-            .and_then(|token| parse_numeric_token(&token.normalized))?;
-        let next_index = index + 2;
-        let next = tokens.get(next_index)?;
-        let second = parse_numeric_token(&next.normalized)?;
-        if !matches!(
-            next.separator_before,
-            SeparatorKind::Hyphen | SeparatorKind::Other
-        ) {
-            return None;
-        }
-        let seasons = if next.separator_before == SeparatorKind::Hyphen && second > first {
-            (first..=second).collect()
-        } else {
-            vec![first, second]
-        };
-        return series_pack(seasons, vec![index, index + 1, next_index]);
+        return parse_numbered_season_scope_at(tokens, index).filter(|scope| scope.is_series_pack);
     }
 
     // A run of season tokens declares every season it names. A hyphen (or a
@@ -5074,17 +6810,26 @@ fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     // consecutive seasons (`S01 S02`, `S01.S02`): that is what an indexer that
     // strips hyphens hands back for `S01-S02`, while `S01 S03` stays two
     // unrelated markers.
-    let first = parse_season_token(token)?;
+    let first = parse_season_token(token).filter(|season| valid_explicit_season(*season))?;
     let mut seasons = vec![first];
     let mut consumed = vec![index];
     let mut cursor = index + 1;
     while let Some(next) = tokens.get(cursor) {
-        let Some(season) = parse_season_token(&next.normalized) else {
+        if season_compound_exceeds_bound(next.normalized.as_str()) {
+            return None;
+        }
+        let Some(season) = parse_season_token_with_extras(&next.normalized) else {
             break;
         };
+        if !valid_explicit_season(season) {
+            return None;
+        }
         let last = *seasons.last().expect("seasons start non-empty");
         match next.separator_before {
-            SeparatorKind::Hyphen if season > last => seasons.extend(last + 1..=season),
+            SeparatorKind::Hyphen if season > last => {
+                let range = bounded_season_range(last, season)?;
+                seasons.extend(range.into_iter().skip(1));
+            }
             SeparatorKind::Other if season != last => seasons.push(season),
             SeparatorKind::Space | SeparatorKind::Dot | SeparatorKind::Underscore
                 if season == last + 1 =>
@@ -5099,6 +6844,106 @@ fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     series_pack(seasons, consumed)
 }
 
+fn preceding_bounded_range_in_same_group(tokens: &[Token], index: usize) -> bool {
+    let Some(start_index) = index.checked_sub(2) else {
+        return false;
+    };
+    let (Some(start), Some(end), Some(all)) = (
+        tokens.get(start_index),
+        tokens.get(start_index + 1),
+        tokens.get(index),
+    ) else {
+        return false;
+    };
+    start.group_id.is_some()
+        && start.group_id == end.group_id
+        && end.group_id == all.group_id
+        && end.separator_before == SeparatorKind::Hyphen
+        && parse_numeric_token(start.normalized.as_str()).is_some()
+        && parse_numeric_token(end.normalized.as_str()).is_some()
+}
+
+fn parse_series_qualified_bounded_range_at(
+    tokens: &[Token],
+    index: usize,
+) -> Option<RangePackParse> {
+    let token = tokens.get(index)?.normalized.as_str();
+    let scope_start = if token == "COMPLETE" {
+        let marker = tokens.get(index + 1)?.normalized.as_str();
+        if matches!(marker.split('+').next(), Some("SERIES" | "SERIE")) {
+            index + 2
+        } else if marker == "TV"
+            && tokens
+                .get(index + 2)
+                .is_some_and(|next| next.normalized.split('+').next() == Some("SERIES"))
+        {
+            index + 3
+        } else {
+            return None;
+        }
+    } else if token == "ALL"
+        && tokens
+            .get(index + 1)
+            .is_some_and(|next| all_seasons_marker(next.normalized.as_str()))
+    {
+        index + 2
+    } else {
+        return None;
+    };
+
+    let (range_index, mut consumed, season, has_scope): (usize, Vec<usize>, Option<u32>, bool) =
+        if let Some(scope) = explicit_season_scope_after(tokens, scope_start) {
+            let last_scope_token = scope.consumed.iter().max().copied()?;
+            (
+                last_scope_token + 1,
+                (index..=last_scope_token).collect(),
+                (scope.seasons.len() == 1).then(|| scope.seasons[0]),
+                true,
+            )
+        } else {
+            (scope_start, (index..scope_start).collect(), None, false)
+        };
+    let has_explicit_standard_coordinate =
+        parse_standard_episode_range_pack_at(tokens, range_index)
+            .is_some_and(|range| range.season.is_some());
+    let mut range = parse_direct_bounded_global_range_at(tokens, range_index)?;
+    consumed.extend(range.consumed.iter().copied());
+    if has_scope && !has_explicit_standard_coordinate {
+        range.season = season;
+    }
+    range.consumed = consumed;
+    Some(range)
+}
+
+fn parse_direct_bounded_global_range_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
+    if let Some(range) = parse_labeled_range_pack_at(tokens, index) {
+        return Some(range);
+    }
+    if let Some(range) = parse_standard_episode_range_pack_at(tokens, index) {
+        return Some(range);
+    }
+    if let Some(range) = parse_range_pack_at(tokens, index) {
+        return Some(range);
+    }
+    let start = tokens.get(index)?;
+    let end = tokens.get(index + 1)?;
+    if start.separator_before != SeparatorKind::OpenParen
+        || end.separator_before != SeparatorKind::Hyphen
+        || !(1..=3).contains(&start.normalized.len())
+        || !(1..=3).contains(&end.normalized.len())
+    {
+        return None;
+    }
+    let range_start = parse_numeric_token(start.normalized.as_str())?;
+    let range_end = parse_numeric_token(end.normalized.as_str())?;
+    (range_end > range_start).then_some(RangePackParse {
+        season: None,
+        range_start,
+        range_end,
+        consumed: vec![index, index + 1],
+    })
+}
+
 struct RangePackParse {
     season: Option<u32>,
     range_start: u32,
@@ -5107,6 +6952,20 @@ struct RangePackParse {
 }
 
 fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    if invalid_all_seasons_restriction_at(tokens, index) {
+        return None;
+    }
+    if let Some(mixed_scope) = parse_mixed_season_scope_at(tokens, index) {
+        return Some(mixed_scope);
+    }
+    if let Some(mixed_scope) = parse_numbered_mixed_season_scope_at(tokens, index) {
+        return Some(mixed_scope);
+    }
+    if parse_season_marker_at(tokens, index).is_some()
+        && parse_localized_collection_range_at(tokens, index + 1).is_some()
+    {
+        return None;
+    }
     if let Some(series_pack) = parse_series_pack_at(tokens, index) {
         return Some(series_pack);
     }
@@ -5114,7 +6973,7 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     let token = tokens.get(index)?.normalized.as_str();
     if token == "SEASON" {
         if season_scoped_range_after(tokens, index).is_some()
-            && !has_unlabeled_parenthetical_range_after(tokens, index + 2)
+            || parse_parenthetical_season_range_at(tokens, index).is_some()
         {
             return None;
         }
@@ -5126,7 +6985,12 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
         {
             return None;
         }
-        let season = tokens.get(index + 1)?.normalized.parse::<u32>().ok()?;
+        let season = tokens
+            .get(index + 1)?
+            .normalized
+            .parse::<u32>()
+            .ok()
+            .filter(|season| valid_explicit_season(*season))?;
         let mut consumed = vec![index, index + 1];
         let part_parse = parse_part_markers_after(tokens, index + 2);
         let (is_partial, season_part) = match part_parse {
@@ -5158,9 +7022,10 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             is_series_pack: false,
         });
     }
-    if let Some(season) = parse_season_token(token) {
+    if let Some(season) = parse_season_token(token).filter(|season| valid_explicit_season(*season))
+    {
         if season_scoped_range_after(tokens, index).is_some()
-            && !has_unlabeled_parenthetical_range_after(tokens, index + 1)
+            || parse_parenthetical_season_range_at(tokens, index).is_some()
         {
             return None;
         }
@@ -5170,8 +7035,9 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             && end_season > season
             && !has_explicit_single_standard_episode_marker(tokens)
         {
+            let seasons = bounded_season_range(season, end_season)?;
             return Some(SeasonPackParse {
-                seasons: (season..=end_season).collect(),
+                seasons,
                 consumed: vec![index, index + 1],
                 is_partial: false,
                 season_part: None,
@@ -5213,40 +7079,62 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
     None
 }
 
-fn has_unlabeled_parenthetical_range_after(tokens: &[Token], index: usize) -> bool {
-    let end = (index + 8).min(tokens.len());
-    for start_index in index..end {
-        let Some(start_token) = tokens.get(start_index) else {
-            continue;
+fn invalid_all_seasons_restriction_at(tokens: &[Token], index: usize) -> bool {
+    let Some(all_index) = index.checked_sub(2) else {
+        return false;
+    };
+    tokens
+        .get(all_index)
+        .is_some_and(|token| token.normalized == "ALL")
+        && tokens
+            .get(all_index + 1)
+            .is_some_and(|token| all_seasons_marker(token.normalized.as_str()))
+        && explicit_season_scope_introduced(tokens, index)
+        && explicit_season_scope_after(tokens, index).is_none()
+}
+
+/// An adjacent extras-only qualifier narrows a collection to non-episodic
+/// material and therefore cannot support a whole-series episode claim.
+fn extras_only_restriction_after(tokens: &[Token], index: usize) -> bool {
+    tokens.get(index).is_some_and(|token| {
+        matches!(
+            token.normalized.as_str(),
+            "MOVIE" | "MOVIES" | "OVA" | "OVAS"
+        )
+    }) && tokens
+        .get(index + 1)
+        .is_some_and(|token| token.normalized == "ONLY")
+}
+
+fn contradictory_whole_series_extras_scope_at(tokens: &[Token], index: usize) -> bool {
+    let Some(token) = tokens.get(index).map(|token| token.normalized.as_str()) else {
+        return false;
+    };
+    let extras_index = if token == "COMPLETE" {
+        let Some(marker) = tokens.get(index + 1).map(|token| token.normalized.as_str()) else {
+            return false;
         };
-        if start_token.separator_before != SeparatorKind::OpenParen {
-            continue;
-        }
-        let Some(range_start) = parse_numeric_token(start_token.normalized.as_str()) else {
-            continue;
-        };
-        let Some(end_token) = tokens.get(start_index + 1) else {
-            continue;
-        };
-        if end_token.separator_before != SeparatorKind::Hyphen {
-            continue;
-        }
-        let Some(range_end) = parse_numeric_token(end_token.normalized.as_str()) else {
-            continue;
-        };
-        if range_end <= range_start {
-            continue;
-        }
-        if start_index
-            .checked_sub(1)
-            .and_then(|previous| tokens.get(previous))
-            .is_some_and(|token| is_episode_label_marker(token.normalized.as_str()))
+        if matches!(marker.split('+').next(), Some("SERIES" | "SERIE")) {
+            index + 2
+        } else if marker == "TV"
+            && tokens
+                .get(index + 2)
+                .is_some_and(|next| next.normalized.split('+').next() == Some("SERIES"))
         {
-            continue;
+            index + 3
+        } else {
+            return false;
         }
-        return true;
-    }
-    false
+    } else if token == "ALL"
+        && tokens
+            .get(index + 1)
+            .is_some_and(|next| all_seasons_marker(next.normalized.as_str()))
+    {
+        index + 2
+    } else {
+        return false;
+    };
+    extras_only_restriction_after(tokens, extras_index)
 }
 
 fn part_marker_scan_can_consume(tokens: &[Token], scan_start: usize, consumed: &[usize]) -> bool {
@@ -5370,7 +7258,18 @@ fn season_scoped_range_after(tokens: &[Token], index: usize) -> Option<RangePack
     let season = parse_season_marker_at(tokens, index)?;
     let end = (index + 18).min(tokens.len());
     for candidate_index in index + 1..end {
-        if let Some(mut range) = parse_labeled_range_pack_at(tokens, candidate_index) {
+        let range = parse_labeled_range_pack_at(tokens, candidate_index).or_else(|| {
+            season_scoped_range_starts_directly(tokens, index, candidate_index)
+                .then(|| {
+                    parse_localized_collection_range_at(tokens, candidate_index).or_else(|| {
+                        season_has_complete_or_batch_marker(tokens, index)
+                            .then(|| parse_season_scoped_bounded_range_at(tokens, candidate_index))
+                            .flatten()
+                    })
+                })
+                .flatten()
+        });
+        if let Some(mut range) = range {
             range.season = Some(season);
             let mut consumed = vec![index];
             if tokens
@@ -5385,6 +7284,88 @@ fn season_scoped_range_after(tokens: &[Token], index: usize) -> Option<RangePack
         }
     }
     None
+}
+
+fn season_scoped_range_starts_directly(tokens: &[Token], index: usize, candidate: usize) -> bool {
+    let season_end = if tokens
+        .get(index)
+        .is_some_and(|token| token.normalized == "SEASON")
+    {
+        index + 1
+    } else {
+        index
+    };
+    candidate == season_end + 1
+        || (candidate == season_end + 2
+            && tokens
+                .get(season_end + 1)
+                .is_some_and(|token| matches!(token.normalized.as_str(), "COMPLETE" | "BATCH")))
+}
+
+fn parse_complete_season_bounded_range_at(
+    tokens: &[Token],
+    index: usize,
+) -> Option<RangePackParse> {
+    tokens
+        .get(index)
+        .filter(|token| token.normalized == "COMPLETE")?;
+    tokens
+        .get(index + 1)
+        .filter(|token| token.normalized == "SEASON")?;
+    season_scoped_range_after(tokens, index + 1)
+}
+
+fn season_has_complete_or_batch_marker(tokens: &[Token], index: usize) -> bool {
+    let season_end = if tokens
+        .get(index)
+        .is_some_and(|token| token.normalized == "SEASON")
+    {
+        index + 1
+    } else {
+        index
+    };
+    let start = index.saturating_sub(1);
+    // The Roman form is only recognized after the literal `SEASON`, and its
+    // trailing marker follows a direct two-token range. Keep all numeric
+    // season forms on the existing tighter window.
+    let roman_marker = tokens
+        .get(index)
+        .is_some_and(|token| token.normalized == "SEASON")
+        && tokens
+            .get(index + 1)
+            .is_some_and(|token| parse_roman_season(token.normalized.as_str()).is_some());
+    let end = (season_end + if roman_marker { 4 } else { 2 }).min(tokens.len());
+    tokens[start..end]
+        .iter()
+        .any(|token| matches!(token.normalized.as_str(), "COMPLETE" | "BATCH"))
+}
+
+fn parse_season_scoped_bounded_range_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
+    if let Some(range) = parse_range_pack_at(tokens, index) {
+        let start_token = tokens.get(index)?;
+        let end_token = tokens.get(index + 1)?;
+        return ((1..=3).contains(&start_token.normalized.len())
+            && (1..=3).contains(&end_token.normalized.len()))
+        .then_some(range);
+    }
+
+    let start_token = tokens.get(index)?;
+    let end_token = tokens.get(index + 1)?;
+    if start_token.separator_before != SeparatorKind::OpenParen
+        || end_token.separator_before != SeparatorKind::Hyphen
+        || !(1..=3).contains(&start_token.normalized.len())
+        || !(1..=3).contains(&end_token.normalized.len())
+    {
+        return None;
+    }
+    let range_start = parse_numeric_token(start_token.normalized.as_str())?;
+    let range_end = parse_numeric_token(end_token.normalized.as_str())?;
+    (range_end > range_start).then_some(RangePackParse {
+        season: None,
+        range_start,
+        range_end,
+        consumed: vec![index, index + 1],
+    })
 }
 
 fn range_directly_follows_season_marker(tokens: &[Token], index: usize) -> bool {
@@ -5402,9 +7383,94 @@ fn range_directly_follows_season_marker(tokens: &[Token], index: usize) -> bool 
 fn parse_season_marker_at(tokens: &[Token], index: usize) -> Option<u32> {
     let token = tokens.get(index)?.normalized.as_str();
     if token == "SEASON" {
-        return parse_numeric_token(tokens.get(index + 1)?.normalized.as_str());
+        let value = tokens.get(index + 1)?.normalized.as_str();
+        return parse_numeric_token(value).or_else(|| parse_roman_season(value));
     }
     parse_season_token(token)
+}
+
+/// A season span with an episode-bearing endpoint names the included seasons,
+/// but cannot prove full coverage for any of them. Keep that scope as a
+/// partial pack so downstream coverage never expands it into a whole series.
+fn parse_mixed_season_scope_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    let first = tokens.get(index)?.normalized.as_str();
+    let second = tokens.get(index + 1)?;
+    if second.separator_before != SeparatorKind::Hyphen {
+        return None;
+    }
+    let (start_season, start_has_episode) = mixed_season_endpoint(first)?;
+    let (end_season, end_has_episode) = mixed_season_endpoint(second.normalized.as_str())?;
+    let parenthetical_episode = tokens.get(index + 2).is_some_and(|token| {
+        token.separator_before == SeparatorKind::OpenParen
+            && parse_episode_component(token.normalized.as_str()).is_some()
+    });
+    if !(start_has_episode || end_has_episode || parenthetical_episode)
+        || end_season <= start_season
+    {
+        return None;
+    }
+    let seasons = bounded_season_range(start_season, end_season)?;
+    Some(SeasonPackParse {
+        seasons,
+        consumed: (index..index + if parenthetical_episode { 3 } else { 2 }).collect(),
+        is_partial: true,
+        season_part: None,
+        is_series_pack: true,
+    })
+}
+
+fn parse_numbered_mixed_season_scope_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    let mut scope = parse_numbered_season_scope_at(tokens, index)?;
+    if !scope.is_series_pack {
+        return None;
+    }
+    let last = scope.consumed.iter().max().copied()?;
+    let additional_season = tokens
+        .get(last + 1)
+        .is_some_and(|token| token.normalized == "AND")
+        .then(|| {
+            parse_numeric_token(tokens.get(last + 2)?.normalized.as_str())?;
+            (tokens.get(last + 3)?.normalized == "EPISODES").then_some(())?;
+            (tokens.get(last + 4)?.normalized == "OF").then_some(())?;
+            parse_season_token(tokens.get(last + 5)?.normalized.as_str())
+                .filter(|season| valid_explicit_season(*season))
+        })
+        .flatten()?;
+    scope.seasons.push(additional_season);
+    scope.seasons.sort_unstable();
+    scope.seasons.dedup();
+    scope.is_partial = true;
+    Some(scope)
+}
+
+fn mixed_season_endpoint(token: &str) -> Option<(u32, bool)> {
+    // A plus begins a separate release component; only the explicit endpoint
+    // before it participates in this bounded season span.
+    let endpoint = token.split('+').next()?;
+    if let Some(season) =
+        parse_season_token(endpoint).filter(|season| valid_explicit_season(*season))
+    {
+        return Some((season, false));
+    }
+    let (season, episodes) = parse_standard_episode_token(endpoint)?;
+    let season = season.filter(|season| valid_explicit_season(*season))?;
+    (!episodes.is_empty()).then_some((season, true))
+}
+
+fn parse_roman_season(token: &str) -> Option<u32> {
+    match token {
+        "I" => Some(1),
+        "II" => Some(2),
+        "III" => Some(3),
+        "IV" => Some(4),
+        "V" => Some(5),
+        "VI" => Some(6),
+        "VII" => Some(7),
+        "VIII" => Some(8),
+        "IX" => Some(9),
+        "X" => Some(10),
+        _ => None,
+    }
 }
 
 fn parse_daily_at(tokens: &[Token], index: usize) -> Option<(NaiveDate, Vec<usize>, Option<u32>)> {
@@ -5513,6 +7579,38 @@ fn month_from_name(token: &str) -> Option<u32> {
     }
 }
 
+fn parse_multi_season_bounded_range_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
+    let scope = explicit_season_scope_after(tokens, index)?;
+    if !scope.is_series_pack || scope.seasons.len() < 2 {
+        return None;
+    }
+    let mut range_index = scope.consumed.iter().max().copied()? + 1;
+    if tokens
+        .get(range_index)
+        .is_some_and(|token| token.normalized == "COMPLETE")
+    {
+        range_index += 1;
+    }
+    if tokens
+        .get(range_index)
+        .is_some_and(|token| token.normalized.starts_with('E'))
+    {
+        let (_, episodes, last_token) =
+            parse_hyphenated_standard_episode_range_at(tokens, range_index)?;
+        return (episodes.len() > 1).then(|| RangePackParse {
+            season: None,
+            range_start: *episodes.first().expect("non-empty range"),
+            range_end: *episodes.last().expect("non-empty range"),
+            consumed: (index..=last_token).collect(),
+        });
+    }
+    let mut range = parse_direct_bounded_global_range_at(tokens, range_index)?;
+    let last_range_token = range.consumed.iter().max().copied()?;
+    range.season = None;
+    range.consumed = (index..=last_range_token).collect();
+    Some(range)
+}
+
 fn parse_standard_episode_range_pack_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
     if let Some((season, episode_numbers)) =
         parse_standard_episode_token(tokens.get(index)?.normalized.as_str())
@@ -5550,13 +7648,86 @@ fn parse_range_pack_at(tokens: &[Token], index: usize) -> Option<RangePackParse>
         && tokens.get(index)?.group_id == tokens.get(index + 1)?.group_id;
     if (separator == SeparatorKind::Hyphen || same_group) && end > start {
         return Some(RangePackParse {
-            season: None,
+            season: following_bounded_season_annotation(tokens, index + 1),
             range_start: start,
             range_end: end,
             consumed: vec![index, index + 1],
         });
     }
     None
+}
+
+/// A trailing season marker is only a coordinate when it immediately follows
+/// a numeric range and is itself followed by a collection marker.
+fn following_bounded_season_annotation(tokens: &[Token], range_end: usize) -> Option<u32> {
+    let season_at = |index: usize| {
+        let token = tokens.get(index)?.normalized.as_str();
+        let season = if token == "SEASON" {
+            parse_numeric_token(tokens.get(index + 1)?.normalized.as_str())?
+        } else {
+            parse_season_token(token)?
+        };
+        valid_explicit_season(season).then_some(season)
+    };
+    if tokens
+        .get(range_end + 2)
+        .is_some_and(|token| matches!(token.normalized.as_str(), "BATCH" | "COMPLETE"))
+        && let Some(season) = season_at(range_end + 1)
+    {
+        return Some(season);
+    }
+    let marker_count = match (
+        tokens
+            .get(range_end + 1)
+            .map(|token| token.normalized.as_str()),
+        tokens
+            .get(range_end + 2)
+            .map(|token| token.normalized.as_str()),
+    ) {
+        (Some("COMPLETE"), Some("BATCH")) => 2,
+        (Some("COMPLETE"), _) => 1,
+        _ => return None,
+    };
+    season_at(range_end + marker_count + 1)
+}
+
+/// Recognize fused localized collection labels such as `01-13TV全集`. The
+/// exact collection suffix and ordinary episode-width endpoints prevent title
+/// punctuation or arbitrary mixed-script numbers from becoming coverage.
+fn parse_localized_collection_range_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
+    let token = tokens.get(index)?.normalized.as_str();
+    let (start_digits, tail, last_token) = if let Some((start, tail)) = token.split_once('-') {
+        (start, tail, index)
+    } else {
+        let next = tokens.get(index + 1)?;
+        (next.separator_before == SeparatorKind::Hyphen)
+            .then(|| (token, next.normalized.as_str(), index + 1))?
+    };
+    if !(1..=3).contains(&start_digits.len())
+        || !start_digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let end_len = tail.bytes().take_while(u8::is_ascii_digit).count();
+    let end_digits = tail.get(..end_len)?;
+    let suffix = tail.get(end_len..)?;
+    let collection_suffix = ["TV全集", "全集"].iter().any(|marker| {
+        suffix == *marker
+            || suffix
+                .strip_prefix(marker)
+                .is_some_and(|extras| extras.starts_with('+') && extras.len() > 1)
+    });
+    if !(1..=3).contains(&end_digits.len()) || !collection_suffix {
+        return None;
+    }
+    let range_start = parse_numeric_token(start_digits)?;
+    let range_end = parse_numeric_token(end_digits)?;
+    (range_end > range_start).then_some(RangePackParse {
+        season: following_bounded_season_annotation(tokens, last_token),
+        range_start,
+        range_end,
+        consumed: (index..=last_token).collect(),
+    })
 }
 
 fn is_unlabeled_parenthetical_season_annotation(tokens: &[Token], index: usize) -> bool {
@@ -5590,6 +7761,59 @@ fn parse_labeled_range_pack_at(tokens: &[Token], index: usize) -> Option<RangePa
     range.season = preceding_season_hint(tokens, index);
     range.consumed = [vec![index], range.consumed].concat();
     Some(range)
+}
+
+/// A parenthesized numeric span immediately following an explicit season is a
+/// season-relative batch (`S3 (01-12)`), not a full-season marker. Limit the
+/// endpoints to ordinary episode-width numbers so years and dimensions cannot
+/// become coverage claims.
+fn parse_parenthetical_season_range_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
+    let season = parse_season_marker_at(tokens, index)?;
+    let start = if tokens
+        .get(index)
+        .is_some_and(|token| token.normalized == "SEASON")
+    {
+        index + 2
+    } else {
+        index + 1
+    };
+    let start = if tokens
+        .get(start)
+        .is_some_and(|token| token.normalized == "SHORTS")
+    {
+        start + 1
+    } else {
+        start
+    };
+    let range_start_token = tokens.get(start)?;
+    if range_start_token.separator_before != SeparatorKind::OpenParen
+        || !(1..=3).contains(&range_start_token.normalized.len())
+    {
+        return None;
+    }
+    let range_start = parse_numeric_token(range_start_token.normalized.as_str())?;
+    let range_end_token = tokens.get(start + 1)?;
+    if range_end_token.separator_before != SeparatorKind::Hyphen
+        || !(1..=3).contains(&range_end_token.normalized.len())
+    {
+        return None;
+    }
+    let range_end = parse_numeric_token(range_end_token.normalized.as_str())?;
+    (range_end > range_start).then(|| {
+        let mut consumed = vec![index, start, start + 1];
+        if tokens
+            .get(index)
+            .is_some_and(|token| token.normalized == "SEASON")
+        {
+            consumed.push(index + 1);
+        }
+        RangePackParse {
+            season: Some(season),
+            range_start,
+            range_end,
+            consumed,
+        }
+    })
 }
 
 fn parse_batch_season_range_at(tokens: &[Token], index: usize) -> Option<RangePackParse> {
@@ -5686,7 +7910,7 @@ fn parse_anime_absolute_at(
         let contextual_match = contains_sorted(&context.absolute_numbers, &number);
         if (is_anime_cued || contextual_match)
             && number <= 2000
-            && (contextual_match || absolute_companion_allowed(tokens, index, number))
+            && (contextual_match || absolute_companion_allowed(tokens, index, number, context))
         {
             return Some((vec![number], None));
         }
@@ -5941,7 +8165,7 @@ fn detect_compound_metadata(token: &str) -> CompoundMetadata {
     } else if contains_any(token, &["BDMV", "BDISO", "BRDISK"]) {
         metadata.source = Some("BRDISK");
     } else if contains_any(token, &["BLURAY", "BDREMUX", "BDRIO", "BDRIP", "BRRIP"])
-        || matches!(token, "BLU" | "BD")
+        || matches!(token, "BLU" | "BD" | "JPBD")
     {
         metadata.source = Some("BluRay");
     } else if token.contains("HDTV") {
@@ -6056,7 +8280,9 @@ fn normalize_source_token(token: &str) -> Option<&'static str> {
         "WEB" | "WEBDL" => Some("WEB-DL"),
         "WEBRIP" => Some("WEBRip"),
         "BDMV" | "BDISO" | "BRDISK" => Some("BRDISK"),
-        "BLURAY" | "BD" | "BDRIP" | "BDRIO" | "BRRIP" | "BDREMUX" | "BLU" => Some("BluRay"),
+        "BLURAY" | "BD" | "BDRIP" | "BDRIO" | "BRRIP" | "BDREMUX" | "BLU" | "JPBD" => {
+            Some("BluRay")
+        }
         "DVD" | "DVDRIP" => Some("DVD"),
         "HDTV" => Some("HDTV"),
         "CAM" | "HQCAM" => Some("CAM"),

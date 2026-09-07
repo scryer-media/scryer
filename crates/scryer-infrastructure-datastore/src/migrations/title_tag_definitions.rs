@@ -1,7 +1,7 @@
-//! Migration 0218 — adopt pre-registry title tags into `title_tag_definitions`.
+//! Migration 0220 — adopt pre-registry title tags into `title_tag_definitions`.
 //!
 //! Until now any unprefixed string could be written into `titles.tags` through
-//! `updateTitle(input: { tags })`. From 0218 onward the registry is the gate:
+//! `updateTitle(input: { tags })`. From 0220 onward the registry is the gate:
 //! an unprefixed label may only be written if a row defines it. That gate would
 //! strand whatever is already in the bags — an operator could see a tag on a
 //! title, and be unable to apply it anywhere else or to filter by it, because

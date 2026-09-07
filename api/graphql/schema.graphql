@@ -7335,6 +7335,21 @@ input IndexerApiKeyOverrideInput {
 }
 
 """
+One category the indexer advertises in its caps document, used to offer
+indexer-specific routing categories that the standard newznab tree lacks.
+"""
+type IndexerCapsCategoryPayload {
+	"""
+	Category id exactly as the indexer expects it in the `cat` parameter.
+	"""
+	code: String!
+	"""
+	Human-readable name from the caps document, or null when it has none.
+	"""
+	label: String
+}
+
+"""
 Indexer configuration, health, capability, routing, and masked secret metadata.
 """
 type IndexerConfigPayload {
@@ -7442,6 +7457,11 @@ type IndexerConfigPayload {
 	Provider configuration fields with secret values masked.
 	"""
 	config: [ProviderConfigValuePayload!]!
+	"""
+	Categories from the most recent caps snapshot, sorted by code. Empty
+	until the first successful caps refresh.
+	"""
+	capsCategories: [IndexerCapsCategoryPayload!]!
 	"""
 	UTC creation time.
 	"""
@@ -7852,6 +7872,18 @@ type IndexerQueryStatsPayload {
 	UTC time of the most recent query, or null when never queried.
 	"""
 	lastQueryAt: DateTime
+	"""
+	Every HTTP request Scryer has sent to this indexer in the current quota window, counted at the send site: pagination, retries, RSS sweeps, caps refreshes and failures included. Persisted, so it survives a restart.
+	"""
+	apiRequestsToday: Int!
+	"""
+	UTC time the current api_requests_today window opened, or null when the counter has never been persisted.
+	"""
+	apiRequestsWindowStartedAt: DateTime
+	"""
+	UTC time corrected Scryer-owned API request observation began. The first UTC day is partial.
+	"""
+	apiRequestsObservedSince: DateTime
 	"""
 	Current API request count, or null when not reported.
 	"""

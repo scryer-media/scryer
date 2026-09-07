@@ -1302,6 +1302,35 @@ pub enum ResolvedDownloadArtifact {
     },
 }
 
+/// The indexer-owned context used to turn a release source into a submission
+/// artifact.  It deliberately carries no download-client selection: the same
+/// resolved bytes or magnet may be submitted to more than one client when a
+/// client fails over.
+#[derive(Clone, Debug)]
+pub struct IndexerArtifactResolutionRequest {
+    pub indexer_id: Option<String>,
+    pub source_url: String,
+    pub source_kind: Option<DownloadSourceKind>,
+    pub info_hash_hint: Option<String>,
+    pub title_id: Option<String>,
+    pub search_facet: Option<MediaFacet>,
+    pub cancellation: tokio_util::sync::CancellationToken,
+}
+
+/// A prepared indexer source.  NZBs remain staged rather than being copied
+/// into an in-memory resolver result, so one acquisition attempt owns a
+/// bounded, cleanable file across download-client failover.
+pub trait IndexerArtifactLease: Send + Sync {
+    fn staged_nzb(&self) -> &StagedNzbRef;
+}
+
+pub enum PreparedIndexerArtifact {
+    /// Held by the canonical acquisition operation until a download client
+    /// accepts or rejects the staged source.
+    StagedNzb(Box<dyn IndexerArtifactLease>),
+    Resolved(ResolvedDownloadArtifact),
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DownloadClientStatus {
     pub version: Option<String>,

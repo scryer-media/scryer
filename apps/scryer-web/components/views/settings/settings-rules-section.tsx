@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Copy,
   Edit,
+  FileInput,
   Library,
   Plus,
   Power,
@@ -52,6 +53,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import type { ArrCustomFormatDraft } from "@/components/views/settings/arr-custom-format-import-dialog";
 import type {
   RuleSetRecord,
   RuleSetDraft,
@@ -88,7 +90,15 @@ type SettingsRulesSectionProps = {
     regoSource: string;
     appliedFacets?: string[];
   }) => void;
+  importCustomFormats: (draft: ArrCustomFormatDraft) => void;
+  translationDiagnostics: string[];
+  focusEditor: boolean;
+  onEditorFocused: () => void;
 };
+
+const ArrCustomFormatImportDialog = React.lazy(
+  () => import("@/components/views/settings/arr-custom-format-import-dialog"),
+);
 
 const FACET_OPTIONS = [
   { value: "movie", label: "Movie" },
@@ -957,8 +967,13 @@ export function SettingsRulesSection({
   validating,
   validationResult,
   applyTemplate,
+  importCustomFormats,
+  translationDiagnostics,
+  focusEditor,
+  onEditorFocused,
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
+  const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
     () => getRuleValidationDiagnostics(validationResult, ruleSetDraft.regoSource),
     [ruleSetDraft.regoSource, validationResult],
@@ -974,6 +989,16 @@ export function SettingsRulesSection({
           <CardTitle className="text-base text-foreground">
             {t("settings.rules")}
           </CardTitle>
+          <Button
+            id="settings-rules-arr-custom-format-import"
+            type="button"
+            variant="secondary"
+            onClick={() => setIsArrImportOpen(true)}
+            disabled={mutatingRuleSetId !== null}
+          >
+            <FileInput className="mr-2 h-4 w-4" />
+            {t("settings.arrImportAction")}
+          </Button>
         </div>
         <div className="overflow-x-auto">
           <Table>
@@ -1151,7 +1176,20 @@ export function SettingsRulesSection({
                   <Label className="mb-2 block">
                     {t("settings.ruleRegoSource")}
                   </Label>
+                  {translationDiagnostics.length ? (
+                    <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
+                      <p className="font-medium">{t("settings.arrImportDiagnostics")}</p>
+                      <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                        {translationDiagnostics.map((diagnostic, index) => (
+                          <li key={index}>{diagnostic}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                   <LazyRegoEditor
+                    id="settings-rule-rego-source"
+                    autoFocus={focusEditor}
+                    onAutoFocus={onEditorFocused}
                     value={ruleSetDraft.regoSource}
                     onChange={(value) =>
                       setRuleSetDraft((prev) => ({
@@ -1313,6 +1351,18 @@ export function SettingsRulesSection({
           <RulesContextReference />
         </div>
       </div>
+      {isArrImportOpen ? (
+        <React.Suspense fallback={null}>
+          <ArrCustomFormatImportDialog
+            open={isArrImportOpen}
+            onOpenChange={setIsArrImportOpen}
+            onApply={(draft) => {
+              importCustomFormats(draft);
+              setIsArrImportOpen(false);
+            }}
+          />
+        </React.Suspense>
+      ) : null}
     </div>
   );
 }

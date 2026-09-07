@@ -50,6 +50,8 @@ export type CodeEditorProps = {
   copyable?: boolean;
   copyLabel?: string;
   copiedLabel?: string;
+  autoFocus?: boolean;
+  onAutoFocus?: () => void;
 };
 
 const regoKeywords = new Set([
@@ -390,6 +392,8 @@ export default function CodeEditor({
   copyable = false,
   copyLabel = "Copy code",
   copiedLabel = "Copied",
+  autoFocus = false,
+  onAutoFocus,
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -497,6 +501,12 @@ export default function CodeEditor({
       effects: setDiagnosticsEffect.of(diagnostics),
     });
   }, [diagnostics]);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    viewRef.current?.focus();
+    onAutoFocus?.();
+  }, [autoFocus, language, onAutoFocus, readOnly, resolvedTheme]);
 
   return (
     <div className="group/code-editor relative">

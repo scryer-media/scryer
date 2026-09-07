@@ -256,6 +256,16 @@ impl SubscriptionRoot {
             }
         };
 
+        // Capture the cursor before subscribing. The stream reads durable
+        // events before waiting, including anything appended during setup.
+        let start_cursor = match app.latest_domain_event_sequence(&actor).await {
+            Ok(sequence) => sequence,
+            Err(e) => {
+                tracing::warn!("activity_events: latest sequence lookup failed: {e}");
+                0
+            }
+        };
+
         let receiver = match app.subscribe_domain_event_sequences(&actor).await {
             Ok(receiver) => receiver,
             Err(e) => {
@@ -265,12 +275,13 @@ impl SubscriptionRoot {
         };
 
         tracing::debug!(
-            "activity_events: subscription started for user {}",
-            actor.id
+            "activity_events: subscription started for user {} at sequence {}",
+            actor.id,
+            start_cursor
         );
 
         let stream = unfold(
-            (receiver, 0_i64, VecDeque::new()),
+            (receiver, start_cursor, VecDeque::new()),
             move |(mut receiver, mut cursor, mut pending): (
                 tokio::sync::broadcast::Receiver<i64>,
                 i64,
@@ -344,6 +355,19 @@ impl SubscriptionRoot {
             }
         };
 
+        // An explicit `afterSequence` resumes from that point; otherwise the
+        // initial durable read catches events appended after this snapshot,
+        // including events written before the receiver is registered.
+        let initial_after = match after_sequence {
+            Some(value) => value.0,
+            None => match app.latest_domain_event_sequence(&actor).await {
+                Ok(sequence) => sequence,
+                Err(error) => {
+                    tracing::warn!("domain_event_feed: latest sequence lookup failed: {error}");
+                    0
+                }
+            },
+        };
         let receiver = match app.subscribe_domain_event_sequences(&actor).await {
             Ok(receiver) => receiver,
             Err(error) => {
@@ -351,8 +375,6 @@ impl SubscriptionRoot {
                 return empty_box_stream();
             }
         };
-
-        let initial_after = after_sequence.map(|value| value.0).unwrap_or(0);
         let event_types = user_facing_domain_event_types();
         let stream = unfold(
             (receiver, initial_after, VecDeque::<DomainEvent>::new()),

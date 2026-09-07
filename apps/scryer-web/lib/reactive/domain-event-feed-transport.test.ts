@@ -135,6 +135,10 @@ test("degrades to an interval refresh after repeated failures and recovers on de
 
   assert.equal(transport.isDegraded(), false);
 
+  // Establish the replay cursor first. An unanchored reconnect uses the
+  // stronger immediate fallback covered by the next test.
+  capture.get().next({ data: { domainEventFeed: { sequence: 1 } } });
+
   // Three consecutive drops (each followed by a reconnect) trip the fallback.
   for (let i = 0; i < 3; i += 1) {
     capture.get().error(new Error("drop"));
@@ -150,9 +154,58 @@ test("degrades to an interval refresh after repeated failures and recovers on de
   assert.equal(ran, 1);
 
   // A successful delivery clears the degraded state and stops the interval.
-  capture.get().next({ data: { domainEventFeed: { sequence: 1 } } });
+  capture.get().next({ data: { domainEventFeed: { sequence: 2 } } });
   assert.equal(transport.isDegraded(), false);
   assert.equal(sched.intervalCount(), 0);
 
+  transport.stop();
+});
+
+test("refreshes while reconnecting without an event cursor", () => {
+  const engineSched = createManualScheduler();
+  const engine = createReactiveRefreshEngine({ scheduler: engineSched.scheduler });
+  let ran = 0;
+  engine.register({
+    aliasKey: "a",
+    predicate: () => false,
+    run: () => {
+      ran += 1;
+    },
+  });
+  const sched = createManualScheduler();
+  const capture = createSinkCapture();
+  const afterSequences: Array<number | string | null> = [];
+  const transport = startDomainEventFeedTransport({
+    query: "SUB",
+    engine,
+    subscribe: (request, sink) => {
+      afterSequences.push(request.variables.afterSequence);
+      capture.set(sink);
+      return () => {};
+    },
+    scheduler: sched.scheduler,
+    logError: () => {},
+    warn: () => {},
+  });
+
+  capture.get().error(new Error("drop"));
+  sched.runTimeouts();
+  engineSched.runTimeouts();
+  assert.deepEqual(afterSequences, [null, null]);
+  assert.equal(transport.isDegraded(), true);
+  assert.equal(ran, 1);
+
+  sched.tickIntervals();
+  engineSched.runTimeouts();
+  assert.equal(ran, 2);
+
+  capture.get().next({ data: { domainEventFeed: { sequence: 7 } } });
+  engineSched.runTimeouts();
+  assert.equal(ran, 3);
+  assert.equal(transport.isDegraded(), false);
+
+  capture.get().complete();
+  sched.runTimeouts();
+  assert.deepEqual(afterSequences, [null, null, 7]);
   transport.stop();
 });

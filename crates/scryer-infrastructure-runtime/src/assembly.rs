@@ -7,14 +7,13 @@ use scryer_application::DiscoveryRepository;
 use scryer_application::{
     AppError, AppResult, AppServices, AppServicesBuilder, DownloadClient,
     DownloadClientConfigRepository, ImageProxyRepository, IndexerClient, IndexerConfigRepository,
-    IndexerErrorRepository, IndexerSearchLearningRepository, IndexerStatsTracker,
-    LibraryRepository, LogicalBackupExporter, MediaRequestRepository,
-    MediaServerConnectionRepository, OAuthRepository, PluginInstallationRepository,
-    PostProcessingScriptRepository, QualityProfileRepository, RuleSetRepository,
-    ScopeIndexerCoverageRepository, SettingsRepository, ShowRepository,
-    SubtitleProviderConfigRepository, TitleImageProcessor, TitleImageRepository, TitleRepository,
-    TotpRepository, UpstreamScheduler, UserExternalAccountRepository, UserRepository,
-    UserUiSettingsRepository, WebauthnRepository,
+    IndexerErrorRepository, IndexerSearchLearningRepository, LibraryRepository,
+    LogicalBackupExporter, MediaRequestRepository, MediaServerConnectionRepository,
+    OAuthRepository, PluginInstallationRepository, PostProcessingScriptRepository,
+    QualityProfileRepository, RuleSetRepository, ScopeIndexerCoverageRepository,
+    SettingsRepository, ShowRepository, SubtitleProviderConfigRepository, TitleImageProcessor,
+    TitleImageRepository, TitleRepository, TotpRepository, UpstreamScheduler,
+    UserExternalAccountRepository, UserRepository, UserUiSettingsRepository, WebauthnRepository,
 };
 
 #[cfg(feature = "image-processing")]
@@ -1334,12 +1333,21 @@ impl DatastoreAssembly {
         }
     }
 
-    pub fn indexer_stats_tracker(&self) -> Arc<dyn IndexerStatsTracker> {
+    /// Returns the concrete tracker rather than the trait object so callers can
+    /// run its async `hydrate` at boot; it still coerces to
+    /// `Arc<dyn IndexerStatsTracker>` at every consumer.
+    ///
+    /// Both arms hand over their datastore: API hit counts have to survive a
+    /// restart the same way whichever database is configured, and the quota SQL
+    /// runs on either dialect.
+    pub fn indexer_stats_tracker(&self) -> Arc<InMemoryIndexerStatsTracker> {
         match &self.stores {
             DatastoreStores::Sqlite { db, .. } => {
                 Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
             }
-            DatastoreStores::Postgres { .. } => Arc::new(InMemoryIndexerStatsTracker::new(None)),
+            DatastoreStores::Postgres { db, .. } => {
+                Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
+            }
         }
     }
 

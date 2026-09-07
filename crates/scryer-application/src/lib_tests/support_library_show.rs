@@ -278,6 +278,7 @@ impl LibraryRepository for MockLibraryRepo {
 
 #[derive(Default)]
 pub(super) struct MockShowRepo {
+    pub(super) anime_numbering_bridges: Mutex<HashMap<String, scryer_domain::AnimeNumberingBridge>>,
     pub(super) collections: Arc<Mutex<Vec<Collection>>>,
     pub(super) episodes: Arc<Mutex<Vec<Episode>>>,
     pub(super) series_movie_links: Arc<Mutex<Vec<scryer_domain::SeriesMovieLink>>>,
@@ -287,6 +288,32 @@ pub(super) struct MockShowRepo {
 
 #[async_trait]
 impl ShowRepository for MockShowRepo {
+    async fn get_anime_numbering_bridge(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<scryer_domain::AnimeNumberingBridge>> {
+        Ok(self
+            .anime_numbering_bridges
+            .lock()
+            .await
+            .get(title_id)
+            .cloned())
+    }
+
+    async fn replace_anime_numbering_bridge(
+        &self,
+        title_id: &str,
+        bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    ) -> AppResult<()> {
+        let mut bridges = self.anime_numbering_bridges.lock().await;
+        if let Some(bridge) = bridge {
+            bridges.insert(title_id.to_string(), bridge.clone());
+        } else {
+            bridges.remove(title_id);
+        }
+        Ok(())
+    }
+
     async fn list_series_movie_links_for_title(
         &self,
         title_id: &str,

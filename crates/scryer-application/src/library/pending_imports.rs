@@ -617,12 +617,13 @@ impl AppUseCase {
                 ));
             }
 
-            self.bind_pending_import_to_existing_title(&item, &existing_title)
+            let (title, library_scan) = self
+                .bind_pending_import_to_existing_title(actor, &item, &existing_title)
                 .await?;
             return Ok(ResolvePendingImportResult {
-                title: existing_title,
+                title,
                 created: false,
-                library_scan: None,
+                library_scan,
                 metadata_hydration_state: AddTitleHydrationState::NotRequired,
             });
         }
@@ -646,12 +647,13 @@ impl AppUseCase {
                 ));
             }
 
-            self.bind_pending_import_to_existing_title(&item, &outcome.title)
+            let (title, library_scan) = self
+                .bind_pending_import_to_existing_title(actor, &item, &outcome.title)
                 .await?;
             return Ok(ResolvePendingImportResult {
-                title: outcome.title,
+                title,
                 created: false,
-                library_scan: None,
+                library_scan,
                 metadata_hydration_state: outcome.metadata_hydration_state,
             });
         }
@@ -664,17 +666,76 @@ impl AppUseCase {
         })
     }
 
-    /// Put the pending import into exactly the state the create-and-bind path
-    /// leaves it in, but against a title that already exists: a movie item is
-    /// consumed outright (its file is imported by the title's next scan, the
-    /// same as after a created title), while a series/anime item stays pending
-    /// with `title_id` set so the user can still bind episodes.
+    /// Bind an item to a title that already exists. Movies are scanned before
+    /// their pending row is deleted so an attach cannot silently lose a file.
+    /// Series and anime retain their title-bound pending row for episode
+    /// selection.
     async fn bind_pending_import_to_existing_title(
         &self,
+        actor: &User,
         item: &LibraryScanUnmatchedItem,
         title: &Title,
-    ) -> AppResult<()> {
+    ) -> AppResult<(Title, Option<LibraryScanSummary>)> {
         if item.facet == MediaFacet::Movie {
+            let mut title = title.clone();
+            let item_path = stored_path_to_path_buf(item.item_path.trim());
+            let metadata = tokio::fs::metadata(&item_path).await.map_err(|error| {
+                AppError::Validation(format!("pending import path is unavailable: {error}"))
+            })?;
+            let discovered_files = if metadata.is_file() {
+                vec![build_pending_import_library_file(item).await?]
+            } else if metadata.is_dir() {
+                self.services
+                    .library
+                    .library_scanner
+                    .scan_library(path_to_stored_string(&item_path).as_str())
+                    .await?
+            } else {
+                return Err(AppError::Validation(
+                    "pending import path is not a file or directory".into(),
+                ));
+            };
+            if discovered_files.is_empty() {
+                return Err(AppError::Validation(
+                    "pending import directory contains no files to attach".into(),
+                ));
+            }
+            let entry_path = pending_import_movie_entry_path(item);
+            if metadata.is_dir() || entry_path != item_path {
+                crate::folder_ownership::claim_title_folder_if_missing(
+                    self,
+                    &mut title,
+                    &entry_path,
+                )
+                .await?;
+            } else if title.folder_path.is_some() {
+                let parent = item_path.parent().ok_or_else(|| {
+                    AppError::Validation("pending import path has no parent folder".into())
+                })?;
+                crate::folder_ownership::ensure_folder_available_to_title(self, &title, parent)
+                    .await?;
+            }
+            let expected_paths = discovered_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<HashSet<_>>();
+            let summary = self
+                .scan_title_library_with_discovered_files(actor, title.clone(), discovered_files)
+                .await?;
+            let attached_paths = self
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await?
+                .into_iter()
+                .map(|media_file| media_file.file_path)
+                .collect::<HashSet<_>>();
+            if !expected_paths.is_subset(&attached_paths) {
+                return Err(AppError::Validation(
+                    "failed to attach pending import file to selected movie".into(),
+                ));
+            }
             self.services
                 .library
                 .library_scan_unmatched_items
@@ -684,7 +745,7 @@ impl AppUseCase {
                     &item.item_path,
                 )
                 .await?;
-            return Ok(());
+            return Ok((title, Some(summary)));
         }
 
         let mut bound = item.clone();
@@ -696,7 +757,7 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .upsert_library_scan_unmatched_item(&bound)
             .await?;
-        Ok(())
+        Ok((title.clone(), None))
     }
 
     pub async fn pending_import_title_search(

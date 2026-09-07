@@ -23,7 +23,10 @@ use scryer_application::{
     TitleCredit, TitleExternalRating, TitleRatingSummary, TitleRecommendationsInput,
     TitleResolution,
 };
-use scryer_domain::{CanonicalMediaTag, ExternalId};
+use scryer_domain::{
+    AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
+    ExternalId,
+};
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
     smg_reqwest_client,
@@ -510,6 +513,7 @@ pub struct MetadataGatewayClient {
     titles_hash: String,
     resolve_titles_hash: String,
     search_titles_hash: String,
+    discover_public_feed_hash: String,
     title_recommendations_hash: String,
     collection_completions_hash: String,
     submit_discovery_context_snapshot_hash: String,
@@ -534,6 +538,7 @@ impl MetadataGatewayClient {
         let titles_hash = apq_hash(graphql_docs::TITLES_QUERY);
         let resolve_titles_hash = apq_hash(graphql_docs::RESOLVE_TITLES_QUERY);
         let search_titles_hash = apq_hash(graphql_docs::SEARCH_TITLES_QUERY);
+        let discover_public_feed_hash = apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
         let title_recommendations_hash = apq_hash(graphql_docs::TITLE_RECOMMENDATIONS_QUERY);
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
         let submit_discovery_context_snapshot_hash =
@@ -597,6 +602,7 @@ impl MetadataGatewayClient {
             titles_hash,
             resolve_titles_hash,
             search_titles_hash,
+            discover_public_feed_hash,
             title_recommendations_hash,
             collection_completions_hash,
             submit_discovery_context_snapshot_hash,
@@ -626,6 +632,7 @@ impl MetadataGatewayClient {
         let titles_hash = apq_hash(graphql_docs::TITLES_QUERY);
         let resolve_titles_hash = apq_hash(graphql_docs::RESOLVE_TITLES_QUERY);
         let search_titles_hash = apq_hash(graphql_docs::SEARCH_TITLES_QUERY);
+        let discover_public_feed_hash = apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
         let title_recommendations_hash = apq_hash(graphql_docs::TITLE_RECOMMENDATIONS_QUERY);
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
         let submit_discovery_context_snapshot_hash =
@@ -668,6 +675,7 @@ impl MetadataGatewayClient {
             titles_hash,
             resolve_titles_hash,
             search_titles_hash,
+            discover_public_feed_hash,
             title_recommendations_hash,
             collection_completions_hash,
             submit_discovery_context_snapshot_hash,
@@ -1300,63 +1308,21 @@ impl MetadataGatewayClient {
             .await
     }
 
-    async fn execute_public_graphql_get<T: serde::de::DeserializeOwned>(
+    async fn execute_authenticated_graphql_apq_post<T: serde::de::DeserializeOwned>(
         &self,
         operation_name: &'static str,
         query: &str,
+        hash: &str,
         variables: serde_json::Value,
     ) -> AppResult<T> {
-        let variables_str = serde_json::to_string(&variables)
-            .map_err(|e| AppError::Repository(format!("failed to serialize variables: {e}")))?;
-        let mut url = reqwest::Url::parse(&self.endpoint)
-            .map_err(|e| AppError::Repository(format!("invalid endpoint URL: {e}")))?;
-        url.query_pairs_mut()
-            .append_pair("operationName", operation_name)
-            .append_pair("query", query)
-            .append_pair("variables", &variables_str);
-
-        debug!(endpoint = %self.endpoint, operation_name, "sending public metadata gateway GET");
-
-        let client = self.http.clone();
-        let response = self
-            .send_request_with_retry(
-                || {
-                    let client = client.clone();
-                    let url = url.clone();
-                    async move { Ok(client.get(url)) }
-                },
-                "metadata gateway public GraphQL GET",
-            )
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let preview = read_response_body_preview(
-                response,
-                "metadata gateway public response read failed",
-            )
-            .await?;
-            warn!(
-                status = %status,
-                body_preview = %preview.escaped_text(),
-                body_preview_bytes = preview.preview_bytes,
-                content_length = ?preview.content_length,
-                content_type = ?preview.content_type,
-                body_truncated = preview.truncated,
-                "metadata gateway public request failed"
-            );
-            return Err(AppError::Repository(format!(
-                "metadata gateway public request failed ({status})"
-            )));
+        if self.enrollment_config.registration_secret.is_none() {
+            return Err(AppError::Repository(
+                "metadata gateway discovery requests require configured instance auth enrollment"
+                    .to_string(),
+            ));
         }
-
-        let raw_text = response
-            .text()
+        self.execute_graphql_apq_post(operation_name, query, hash, variables)
             .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
-        debug!(status = %status, body_len = raw_text.len(), "metadata gateway public response");
-
-        self.parse_graphql_response(&raw_text)
     }
 
     async fn execute_graphql<T: serde::de::DeserializeOwned>(
@@ -2504,6 +2470,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
                 signal_summary: movie.signal_summary,
             })
             .collect(),
+        anime_numbering_bridge: anime_numbering_bridge_from_gateway(s.anime_numbering_bridge),
         ratings: rating_summary_from_gateway(s.rating, s.rating_sources, s.external_ratings),
         credits: credits_from_gateway(s.credits),
         genres: genres_from_gateway(s.genres),
@@ -2536,7 +2503,8 @@ mod tests {
     use super::{
         ArtworkItem, InstanceAuth, MetadataGatewayClient, MetadataSearchQuery, MovieItem,
         MovieTitleRef, MtlsState, OP_DISCOVER_PUBLIC_FEED, OP_GET_MOVIE, OP_GET_SERIES,
-        OP_METADATA_BULK, OP_SEARCH_TVDB, SearchTvdbBatchResult, SearchTvdbResponse, SeriesItem,
+        OP_METADATA_BULK, OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH, OP_SEARCH_TVDB_MULTI,
+        OP_SEARCH_TVDB_RICH, SearchTvdbBatchResult, SearchTvdbResponse, SeriesItem,
         SmgEnrollmentConfig, apply_instance_auth_headers_with_nonce, apq_cache_key, apq_hash,
         build_bulk_artwork_url_query, build_search_tvdb_batch_query, canonical_request_host,
         canonical_request_path_and_query, compatibility_poll_phase, enrollment_retry_delay,
@@ -2572,6 +2540,220 @@ mod tests {
                 }
             }
         })
+    }
+
+    fn smg_fixture_variables(name: &str) -> serde_json::Value {
+        let batch_requests = (1..=50)
+            .map(|id| json!({ "query": format!("Fixture {id}"), "type": "movie", "year": 2024, "imdbId": null, "tmdbId": null, "tvdbId": null, "limit": 10 }))
+            .collect::<Vec<_>>();
+        match name {
+            "search_tvdb" => {
+                json!({ "query": "Fixture", "type": "movie", "limit": 25, "year": 2024 })
+            }
+            "search_tvdb_batch" => json!({ "requests": batch_requests, "language": "eng" }),
+            "search_tvdb_rich" => {
+                json!({ "query": "Fixture", "type": "movie", "limit": 25, "language": "eng", "year": 2024 })
+            }
+            "search_tvdb_multi" => json!({ "query": "Fixture", "limit": 25, "language": "eng" }),
+            "get_movie" => json!({ "tvdbId": 1, "language": "eng" }),
+            "get_series" => json!({ "id": "1", "includeEpisodes": true, "language": "eng" }),
+            "metadata_bulk" => {
+                json!({ "movieTvdbIds": [], "seriesTvdbIds": (1..=50).collect::<Vec<_>>(), "language": "eng", "includeEpisodes": true })
+            }
+            "titles" => json!({ "ids": (1..=50).collect::<Vec<_>>(), "language": "eng" }),
+            "resolve_titles" => {
+                json!({ "refs": (1..=50).map(|id| json!({ "id": id })).collect::<Vec<_>>(), "kind": "movie", "createMissing": false })
+            }
+            "search_titles" => {
+                json!({ "query": "Fixture", "kind": "movie", "limit": 25, "language": "eng", "year": 2024 })
+            }
+            "search_titles_batch" => {
+                json!({ "requests": batch_requests, "kind": "movie", "language": "eng", "createMissing": false })
+            }
+            "discover_public_feed" => {
+                json!({ "input": { "region": "US", "language": "eng", "sectionTypes": [], "limitPerSection": 25, "includeUnresolved": false, "fullSections": true } })
+            }
+            "title_recommendations" => {
+                json!({ "subject": { "key": "tvdb:series:1", "kind": "series" }, "query": "Fixture", "limit": 25, "language": "eng", "includeUnresolved": false })
+            }
+            "collection_completions" => {
+                json!({ "input": { "librarySubjects": [{ "key": "tvdb:series:1", "kind": "series" }], "limit": 25, "includeFuture": false } })
+            }
+            "submit_discovery_context_snapshot" => {
+                json!({ "input": { "subjects": (1..=30_000).map(|id| json!({ "key": format!("tvdb:series:{id}"), "kind": "series" })).collect::<Vec<_>>(), "region": "US", "language": "eng", "maxItems": 50, "includeOwned": true, "includeUnresolved": false } })
+            }
+            "discovery_context_snapshot_status" | "acknowledge_discovery_context_snapshot" => {
+                json!({ "requestId": "fixture-request" })
+            }
+            "discovery_context_snapshot_page" => {
+                json!({ "requestId": "fixture-request", "page": 1 })
+            }
+            "discovery_context_changes" => {
+                json!({ "input": { "contextSubjectKeys": (1..=30_000).map(|id| format!("tvdb:series:{id}")).collect::<Vec<_>>(), "changedSubjects": (1..=250).map(|id| json!({ "subject": { "key": format!("tvdb:series:{id}"), "kind": "series" }, "changeType": "UPDATED" })).collect::<Vec<_>>(), "region": "US", "language": "eng", "maxItems": 50, "includeOwned": true, "includeUnresolved": false } })
+            }
+            _ => json!({}),
+        }
+    }
+
+    fn smg_compatibility_fixture_corpus() -> Vec<serde_json::Value> {
+        let documents = [
+            (
+                "search_tvdb",
+                OP_SEARCH_TVDB,
+                graphql_docs::SEARCH_TVDB_QUERY,
+            ),
+            (
+                "search_tvdb_batch",
+                OP_SEARCH_TVDB_BATCH,
+                graphql_docs::SEARCH_TVDB_BATCH_QUERY,
+            ),
+            (
+                "search_tvdb_rich",
+                OP_SEARCH_TVDB_RICH,
+                graphql_docs::SEARCH_TVDB_RICH_QUERY,
+            ),
+            (
+                "search_tvdb_multi",
+                OP_SEARCH_TVDB_MULTI,
+                graphql_docs::SEARCH_TVDB_MULTI_QUERY,
+            ),
+            ("get_movie", OP_GET_MOVIE, graphql_docs::GET_MOVIE_QUERY),
+            ("get_series", OP_GET_SERIES, graphql_docs::GET_SERIES_QUERY),
+            (
+                "metadata_bulk",
+                OP_METADATA_BULK,
+                graphql_docs::METADATA_BULK_QUERY,
+            ),
+            ("titles", super::OP_TITLES, graphql_docs::TITLES_QUERY),
+            (
+                "resolve_titles",
+                super::OP_RESOLVE_TITLES,
+                graphql_docs::RESOLVE_TITLES_QUERY,
+            ),
+            (
+                "search_titles",
+                super::OP_SEARCH_TITLES,
+                graphql_docs::SEARCH_TITLES_QUERY,
+            ),
+            (
+                "search_titles_batch",
+                super::OP_SEARCH_TITLES_BATCH,
+                graphql_docs::SEARCH_TITLES_BATCH_QUERY,
+            ),
+            (
+                "discover_public_feed",
+                OP_DISCOVER_PUBLIC_FEED,
+                graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,
+            ),
+            (
+                "title_recommendations",
+                super::OP_TITLE_RECOMMENDATIONS,
+                graphql_docs::TITLE_RECOMMENDATIONS_QUERY,
+            ),
+            (
+                "collection_completions",
+                super::OP_COLLECTION_COMPLETIONS,
+                graphql_docs::COLLECTION_COMPLETIONS_QUERY,
+            ),
+            (
+                "submit_discovery_context_snapshot",
+                super::OP_SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT,
+                graphql_docs::SUBMIT_DISCOVERY_CONTEXT_SNAPSHOT_QUERY,
+            ),
+            (
+                "discovery_context_snapshot_status",
+                super::OP_DISCOVERY_CONTEXT_SNAPSHOT_STATUS,
+                graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_STATUS_QUERY,
+            ),
+            (
+                "discovery_context_snapshot_page",
+                super::OP_DISCOVERY_CONTEXT_SNAPSHOT_PAGE,
+                graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_PAGE_QUERY,
+            ),
+            (
+                "discovery_context_changes",
+                super::OP_DISCOVERY_CONTEXT_CHANGES,
+                graphql_docs::DISCOVERY_CONTEXT_CHANGES_QUERY,
+            ),
+            (
+                "acknowledge_discovery_context_snapshot",
+                super::OP_ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT,
+                graphql_docs::ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT_QUERY,
+            ),
+        ];
+        let mut cases = documents.into_iter().map(|(name, operation_name, query)| json!({ "name": name, "query": query, "operationName": operation_name, "variables": smg_fixture_variables(name) })).collect::<Vec<_>>();
+        for (name, operation_name, query) in documents.into_iter().filter(|(name, _, _)| {
+            matches!(
+                *name,
+                "search_tvdb"
+                    | "search_tvdb_batch"
+                    | "search_tvdb_rich"
+                    | "search_tvdb_multi"
+                    | "get_movie"
+                    | "metadata_bulk"
+            )
+        }) {
+            cases.push(json!({ "name": format!("legacy_{name}"), "query": MetadataGatewayClient::legacy_metadata_query(query), "operationName": operation_name, "variables": smg_fixture_variables(name) }));
+        }
+        let movie_ids = (1..=100).collect::<Vec<_>>();
+        let series_ids = (101..=200).collect::<Vec<_>>();
+        cases.extend([
+            json!({ "name": "artwork_movies_100", "query": build_bulk_artwork_url_query(&movie_ids, &[], "eng"), "operationName": "", "variables": {} }),
+            json!({ "name": "artwork_series_100", "query": build_bulk_artwork_url_query(&[], &series_ids, "eng"), "operationName": "", "variables": {} }),
+            json!({ "name": "artwork_combined_50_50", "query": build_bulk_artwork_url_query(&movie_ids[..50], &series_ids[..50], "eng"), "operationName": "", "variables": {} }),
+        ]);
+        cases
+    }
+
+    #[test]
+    fn smg_compatibility_fixture_corpus_uses_actual_gateway_builders() {
+        let corpus = smg_compatibility_fixture_corpus();
+        if let Some(path) = std::env::var_os("SCRYER_SMG_FIXTURE_EXPORT") {
+            let encoded = serde_json::to_vec_pretty(&corpus).expect("serialize fixture corpus");
+            std::fs::write(path, encoded).expect("write fixture corpus");
+        }
+        assert_eq!(corpus.len(), 28);
+        assert_eq!(
+            corpus[6]["variables"]["movieTvdbIds"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            corpus[6]["variables"]["seriesTvdbIds"]
+                .as_array()
+                .map(Vec::len),
+            Some(50)
+        );
+        assert_eq!(
+            corpus[25]["query"]
+                .as_str()
+                .expect("movie query")
+                .matches(": movie(")
+                .count(),
+            100
+        );
+        assert_eq!(
+            corpus[26]["query"]
+                .as_str()
+                .expect("series query")
+                .matches(": series(")
+                .count(),
+            100
+        );
+        assert_eq!(
+            corpus[27]["query"]
+                .as_str()
+                .expect("combined query")
+                .matches(": movie(")
+                .count()
+                + corpus[27]["query"]
+                    .as_str()
+                    .expect("combined query")
+                    .matches(": series(")
+                    .count(),
+            100
+        );
     }
 
     #[test]
@@ -3385,24 +3567,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_public_feed_uses_full_query_public_get() {
+    async fn discover_public_feed_uses_signed_apq_post_and_preserves_input() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
+        Mock::given(method("POST"))
             .and(path("/graphql"))
-            .and(query_param("operationName", OP_DISCOVER_PUBLIC_FEED))
-            .and(query_param(
-                "query",
-                graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,
-            ))
             .respond_with(|request: &Request| {
-                let params = request
-                    .url
-                    .query_pairs()
-                    .map(|(key, _)| key.into_owned())
-                    .collect::<Vec<_>>();
-                assert!(
-                    !params.iter().any(|key| key == "extensions"),
-                    "public feed GET must not use hash-only APQ"
+                assert_v2_signed_request(request);
+                let payload: serde_json::Value = serde_json::from_slice(&request.body)
+                    .expect("public feed request should contain JSON");
+                assert_eq!(payload["operationName"], OP_DISCOVER_PUBLIC_FEED);
+                assert_eq!(payload["query"], graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
+                assert_eq!(
+                    payload["extensions"]["persistedQuery"]["sha256Hash"],
+                    apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY)
+                );
+                assert_eq!(
+                    payload["variables"]["input"],
+                    json!({
+                        "region": "CA",
+                        "language": "fra",
+                        "sectionTypes": ["TRENDING", "POPULAR"],
+                        "limitPerSection": 17,
+                        "includeUnresolved": true,
+                        "fullSections": true,
+                    })
                 );
                 ResponseTemplate::new(200).set_body_json(json!({
                     "data": {
@@ -3417,9 +3605,38 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        let client = signed_gateway_client(format!("{}/graphql", server.uri())).await;
 
         let data = client
+            .discover_public_feed(&DiscoveryPublicFeedInput {
+                region: "CA".to_string(),
+                language: "fra".to_string(),
+                section_types: vec!["TRENDING".to_string(), "POPULAR".to_string()],
+                limit_per_section: 17,
+                include_unresolved: true,
+                full_sections: true,
+            })
+            .await
+            .expect("discovery feed should succeed through signed APQ POST");
+
+        assert!(data.sections.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discover_public_feed_auth_failure_never_downgrades_to_anonymous_get() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(|request: &Request| {
+                assert_v2_signed_request(request);
+                ResponseTemplate::new(401).set_body_string("auth rejected")
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = signed_gateway_client(format!("{}/graphql", server.uri())).await;
+
+        let error = client
             .discover_public_feed(&DiscoveryPublicFeedInput {
                 region: "US".to_string(),
                 language: "eng".to_string(),
@@ -3429,9 +3646,58 @@ mod tests {
                 full_sections: true,
             })
             .await
-            .expect("discovery feed should succeed through public GET");
+            .expect_err("an auth rejection must not fall back to an anonymous request");
+        assert!(matches!(
+            error,
+            AppError::Repository(message)
+                if message == "SMG instance auth enrollment failed: SMG enrollment persistence is not implemented for this datastore engine"
+        ));
 
-        assert!(data.sections.is_empty());
+        let requests = server
+            .received_requests()
+            .await
+            .expect("auth failure request should be captured");
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.method.as_str() == "POST")
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| header_value(request, "x-scryer-signature").is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_public_feed_requires_configured_instance_auth_before_http() {
+        let server = MockServer::start().await;
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+
+        let error = client
+            .discover_public_feed(&DiscoveryPublicFeedInput {
+                region: "US".to_string(),
+                language: "eng".to_string(),
+                section_types: Vec::new(),
+                limit_per_section: 25,
+                include_unresolved: false,
+                full_sections: true,
+            })
+            .await
+            .expect_err("public discovery must require configured instance auth");
+        assert!(matches!(
+            error,
+            AppError::Repository(message)
+                if message == "metadata gateway discovery requests require configured instance auth enrollment"
+        ));
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("discovery requests should be captured")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -5580,6 +5846,7 @@ fn metadata_gateway_transient_delay(attempt: u32) -> Duration {
 
 fn map_metadata_gateway_outbound_error(request_label: &str, error: OutboundHttpError) -> AppError {
     match error {
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch closed"),
         OutboundHttpError::RateLimited(rate_limited) => {
             let retry_after_seconds = rate_limited
                 .retry_after
@@ -5716,6 +5983,90 @@ struct SeriesItem {
     anime_mappings: Vec<AnimeMappingItem>,
     #[serde(default)]
     anime_movies: Vec<AnimeMovieItem>,
+    /// Absent on an SMG that predates the numbering bridge, and explicitly null
+    /// for a series with no qualifying community numbering.
+    #[serde(default)]
+    anime_numbering_bridge: Option<AnimeNumberingBridgeItem>,
+}
+
+#[derive(Deserialize)]
+struct AnimeNumberingBridgeItem {
+    #[serde(default)]
+    generated_on: String,
+    #[serde(default)]
+    corroborating_order: Option<String>,
+    #[serde(default)]
+    seasons: Vec<AnimeCommunitySeasonItem>,
+}
+
+#[derive(Deserialize)]
+struct AnimeCommunitySeasonItem {
+    index: i32,
+    #[serde(default)]
+    anidb_id: Option<i64>,
+    #[serde(default)]
+    anilist_id: Option<i64>,
+    #[serde(default)]
+    mal_id: Option<i64>,
+    #[serde(default)]
+    titles: Vec<String>,
+    #[serde(default)]
+    ranges: Vec<AnimeCommunitySeasonRangeItem>,
+    #[serde(default)]
+    absolute_start: Option<i32>,
+    #[serde(default)]
+    episode_count: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct AnimeCommunitySeasonRangeItem {
+    community_episode_start: i32,
+    #[serde(default)]
+    community_episode_end: Option<i32>,
+    tvdb_season: i32,
+    tvdb_episode_start: i32,
+    #[serde(default)]
+    tvdb_episode_end: Option<i32>,
+}
+
+/// The gateway payload as the domain reads it. A bridge with no seasons carries
+/// nothing to translate through, so it collapses to `None` rather than an empty
+/// shell every consumer would have to re-check.
+fn anime_numbering_bridge_from_gateway(
+    item: Option<AnimeNumberingBridgeItem>,
+) -> Option<AnimeNumberingBridge> {
+    let item = item?;
+    let bridge = AnimeNumberingBridge {
+        generated_on: item.generated_on,
+        corroborating_order: item
+            .corroborating_order
+            .filter(|value| !value.trim().is_empty()),
+        seasons: item
+            .seasons
+            .into_iter()
+            .map(|season| AnimeCommunitySeason {
+                index: season.index,
+                anidb_id: season.anidb_id,
+                anilist_id: season.anilist_id,
+                mal_id: season.mal_id,
+                titles: season.titles,
+                ranges: season
+                    .ranges
+                    .into_iter()
+                    .map(|range| AnimeCommunitySeasonRange {
+                        community_episode_start: range.community_episode_start,
+                        community_episode_end: range.community_episode_end,
+                        tvdb_season: range.tvdb_season,
+                        tvdb_episode_start: range.tvdb_episode_start,
+                        tvdb_episode_end: range.tvdb_episode_end,
+                    })
+                    .collect(),
+                absolute_start: season.absolute_start,
+                episode_count: season.episode_count,
+            })
+            .collect(),
+    };
+    (!bridge.is_empty()).then_some(bridge)
 }
 
 #[derive(Deserialize)]
@@ -6463,9 +6814,10 @@ impl MetadataGateway for MetadataGatewayClient {
         input: &DiscoveryPublicFeedInput,
     ) -> AppResult<DiscoveryDashboardResult> {
         let data: DiscoverPublicFeedResponse = self
-            .execute_public_graphql_get(
+            .execute_authenticated_graphql_apq_post(
                 OP_DISCOVER_PUBLIC_FEED,
                 graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,
+                &self.discover_public_feed_hash,
                 json!({ "input": input }),
             )
             .await?;

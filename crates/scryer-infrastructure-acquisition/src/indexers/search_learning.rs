@@ -1557,6 +1557,20 @@ mod tests {
         .execute(&pool)
         .await
         .map_err(repo_err)?;
+        // `cleanup_search_diagnostics` deletes candidate *sources* and lets the
+        // orphan sweep take the candidates, so the sources table has to exist
+        // here even though only its cutoff columns are exercised.
+        sqlx::query(
+            "CREATE TEMP TABLE indexer_search_candidate_sources (
+                id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                first_seen_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            ) ON COMMIT PRESERVE ROWS",
+        )
+        .execute(&pool)
+        .await
+        .map_err(repo_err)?;
         sqlx::query(
             "CREATE TEMP TABLE indexer_search_runs (
                 id TEXT PRIMARY KEY,
@@ -1586,6 +1600,20 @@ mod tests {
             .execute(&pool)
             .await
             .map_err(repo_err)?;
+            // One source per candidate, so deleting a source orphans exactly
+            // one candidate and the orphan sweep has something to do.
+            sqlx::query(
+                "INSERT INTO indexer_search_candidate_sources
+                    (id, candidate_id, first_seen_at, expires_at)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(format!("source-{ordinal}"))
+            .bind(format!("candidate-{ordinal}"))
+            .bind(old_candidate)
+            .bind(old_candidate)
+            .execute(&pool)
+            .await
+            .map_err(repo_err)?;
             sqlx::query(
                 "INSERT INTO indexer_search_runs (id, created_at)
                  VALUES ($1, $2)",
@@ -1607,24 +1635,40 @@ mod tests {
             .await
             .map_err(repo_err)?;
         assert_eq!(kept, 1);
-        assert_eq!(
-            store
-                .cleanup_search_diagnostics(Utc::now(), Utc::now(), 1)
-                .await?,
-            2
-        );
-        assert_eq!(
-            store
-                .cleanup_search_diagnostics(Utc::now(), Utc::now(), 1)
-                .await?,
-            2
-        );
+
+        // Each sweep is limited to one source and one run, and reports those
+        // two deletions. The candidate the source belonged to goes with it via
+        // the orphan sweep, which is deliberately not counted.
+        for remaining_candidates in [1_i64, 0] {
+            assert_eq!(
+                store
+                    .cleanup_search_diagnostics(Utc::now(), Utc::now(), 1)
+                    .await?,
+                2,
+                "one expired source plus one expired run are reported"
+            );
+            let candidates: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM indexer_search_candidates")
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(repo_err)?;
+            assert_eq!(
+                candidates, remaining_candidates,
+                "a candidate whose last source was deleted must not survive as an orphan"
+            );
+        }
         assert_eq!(
             store
                 .cleanup_search_diagnostics(Utc::now(), Utc::now(), 1)
                 .await?,
             0
         );
+        let sources: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM indexer_search_candidate_sources")
+                .fetch_one(&pool)
+                .await
+                .map_err(repo_err)?;
+        assert_eq!(sources, 0, "every expired source is eventually swept");
 
         Ok(())
     }

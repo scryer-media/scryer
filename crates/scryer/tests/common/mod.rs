@@ -22,8 +22,8 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 use scryer_application::{
     AcquisitionScopeStateRepository, AppResult, AppServices, AppUseCase, AuthenticatedTokenClaims,
     BlocklistRepository, ExternalIdentityVerifier, FacetRegistry, HousekeepingRepository,
-    IndexerPluginProvider, JwtAuthConfig, MediaFileRepository, MovieFacetHandler,
-    OAuthAuthorizationSource, PendingReleaseRepository, SeriesFacetHandler,
+    IndexerArtifactResolver, IndexerPluginProvider, JwtAuthConfig, MediaFileRepository,
+    MovieFacetHandler, OAuthAuthorizationSource, PendingReleaseRepository, SeriesFacetHandler,
     SubtitleDownloadRepository,
 };
 use scryer_infrastructure_acquisition::{
@@ -32,9 +32,10 @@ use scryer_infrastructure_acquisition::{
         staged_nzb_store::FileSystemStagedNzbStore,
     },
     indexers::{
-        config_store::IndexerConfigStore, search_client::MultiIndexerSearchClient,
-        stats::InMemoryIndexerStatsTracker,
+        artifact_resolver::AcquisitionIndexerArtifactResolver, config_store::IndexerConfigStore,
+        search_client::MultiIndexerSearchClient, stats::InMemoryIndexerStatsTracker,
     },
+    proxy_config_store::ProxyConfigStore,
 };
 use scryer_infrastructure_configuration::{
     customization::{
@@ -820,6 +821,10 @@ impl TestContext {
             datastore.clone(),
             db.encryption_key_state(),
         ));
+        let proxy_config_store = Arc::new(ProxyConfigStore::new(
+            datastore.clone(),
+            db.encryption_key_state(),
+        ));
         let download_client_config_store = Arc::new(DownloadClientConfigStore::new(
             datastore.clone(),
             db.encryption_key_state(),
@@ -837,6 +842,15 @@ impl TestContext {
             indexer_config_store.clone(),
             indexer_stats.clone(),
             plugin_provider.clone(),
+        );
+        let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
+            AcquisitionIndexerArtifactResolver::new(
+                indexer_config_store.clone(),
+                proxy_config_store,
+                staged_nzb_store.clone(),
+                staged_nzb_pipeline_limit.clone(),
+            )
+            .with_indexer_stats_tracker(indexer_stats.clone()),
         );
 
         let metadata_gateway = MetadataGatewayClient::new_with_enrollment_store(
@@ -977,6 +991,7 @@ impl TestContext {
         .with_metadata_gateway(Arc::new(metadata_gateway))
         .with_library_scanner(Arc::new(FileSystemLibraryScanner::new()))
         .with_indexer_stats(indexer_stats.clone())
+        .with_indexer_artifact_resolver(Some(indexer_artifact_resolver))
         .with_plugin_provider(plugin_provider)
         .with_staged_nzb_store(staged_nzb_store.clone())
         .with_staged_nzb_pipeline_limit(staged_nzb_pipeline_limit)

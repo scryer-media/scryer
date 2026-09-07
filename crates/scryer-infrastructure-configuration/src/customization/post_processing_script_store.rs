@@ -2,6 +2,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult, PostProcessingScriptRepository};
 use scryer_domain::{PostProcessingScript, PostProcessingScriptRun};
+use scryer_infrastructure_sql::script_output::{
+    decode_script_output_tail, encode_script_output_tail,
+};
 use sqlx::Row;
 
 use crate::postgres::timestamp::{parse_optional_rfc3339_timestamp, parse_rfc3339_timestamp};
@@ -122,7 +125,7 @@ impl PostProcessingScriptRepository for PostProcessingScriptStore {
 
     async fn record_run(&self, run: PostProcessingScriptRun) -> AppResult<()> {
         let args = match &self.datastore {
-            StoreDatastore::Sqlite { .. } => sqlite_run_args(&run),
+            StoreDatastore::Sqlite { .. } => sqlite_run_args(&run)?,
             StoreDatastore::Postgres { .. } => postgres_run_args(&run)?,
         };
         execute_write(
@@ -262,8 +265,8 @@ fn script_args(script: &PostProcessingScript) -> AppResult<Vec<SqlArg>> {
     ])
 }
 
-fn sqlite_run_args(run: &PostProcessingScriptRun) -> Vec<SqlArg> {
-    vec![
+fn sqlite_run_args(run: &PostProcessingScriptRun) -> AppResult<Vec<SqlArg>> {
+    Ok(vec![
         SqlArg::Text(run.id.clone()),
         SqlArg::Text(run.script_id.clone()),
         SqlArg::Text(run.script_name.clone()),
@@ -273,13 +276,27 @@ fn sqlite_run_args(run: &PostProcessingScriptRun) -> Vec<SqlArg> {
         SqlArg::OptText(run.file_path.clone()),
         SqlArg::Text(run.status.as_str().to_string()),
         SqlArg::OptI32(run.exit_code),
-        SqlArg::OptText(run.stdout_tail.clone()),
-        SqlArg::OptText(run.stderr_tail.clone()),
+        SqlArg::OptBytes(encode_output_tail(run.stdout_tail.as_deref())?),
+        SqlArg::OptBytes(encode_output_tail(run.stderr_tail.as_deref())?),
         SqlArg::OptI64(run.duration_ms),
         SqlArg::OptText(run.env_payload_json.clone()),
         SqlArg::Text(run.started_at.clone()),
         SqlArg::OptText(run.completed_at.clone()),
-    ]
+    ])
+}
+
+/// Output tails are stored as zstd frames; see
+/// [`scryer_infrastructure_sql::script_output`].
+fn encode_output_tail(tail: Option<&str>) -> AppResult<Option<Vec<u8>>> {
+    tail.map(|text| encode_script_output_tail(text).map_err(repo_err))
+        .transpose()
+}
+
+fn decode_output_tail(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
+    row.opt_bytes(column)?
+        .as_deref()
+        .map(|bytes| decode_script_output_tail(bytes).map_err(repo_err))
+        .transpose()
 }
 
 fn postgres_run_args(run: &PostProcessingScriptRun) -> AppResult<Vec<SqlArg>> {
@@ -293,8 +310,8 @@ fn postgres_run_args(run: &PostProcessingScriptRun) -> AppResult<Vec<SqlArg>> {
         SqlArg::OptText(run.file_path.clone()),
         SqlArg::Text(run.status.as_str().to_string()),
         SqlArg::OptI32(run.exit_code),
-        SqlArg::OptText(run.stdout_tail.clone()),
-        SqlArg::OptText(run.stderr_tail.clone()),
+        SqlArg::OptBytes(encode_output_tail(run.stdout_tail.as_deref())?),
+        SqlArg::OptBytes(encode_output_tail(run.stderr_tail.as_deref())?),
         SqlArg::OptI64(run.duration_ms),
         SqlArg::OptText(run.env_payload_json.clone()),
         SqlArg::Timestamp(parse_rfc3339_timestamp(
@@ -345,8 +362,8 @@ fn row_to_run(row: &SqlRow) -> AppResult<PostProcessingScriptRun> {
         status: scryer_domain::ScriptRunStatus::parse(&status_raw)
             .unwrap_or(scryer_domain::ScriptRunStatus::Failed),
         exit_code: row.opt_i32("exit_code")?,
-        stdout_tail: row.opt_text("stdout_tail")?,
-        stderr_tail: row.opt_text("stderr_tail")?,
+        stdout_tail: decode_output_tail(row, "stdout_tail")?,
+        stderr_tail: decode_output_tail(row, "stderr_tail")?,
         duration_ms: row.opt_i64("duration_ms")?,
         env_payload_json: row.opt_text("env_payload_json")?,
         started_at: timestamp_text(row, "started_at")?,

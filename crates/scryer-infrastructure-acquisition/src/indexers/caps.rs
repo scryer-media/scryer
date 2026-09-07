@@ -8,8 +8,9 @@ use chrono::Utc;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use scryer_application::{
-    AppError, AppResult, EstimatedCost, ExpectedValueHint, IndexerCapsSnapshotRefresher,
-    NullUpstreamScheduler, RateLimitCooldownAction, SchedulerAdmission, SchedulerBatchRequest,
+    AppError, AppResult, CapturedIndexerHttpResponse, EstimatedCost, ExpectedValueHint,
+    IndexerCapsSnapshotRefresher, IndexerRequestResult, NullUpstreamScheduler,
+    RateLimitCooldownAction, RateLimitSignal, SchedulerAdmission, SchedulerBatchRequest,
     SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome,
     SchedulerIntent, SchedulerLease, SchedulerOperation, SchedulerPluginKind, UpstreamScheduler,
 };
@@ -272,6 +273,7 @@ fn is_direct_nab_control_query_key(key: &str) -> bool {
 pub struct DirectNabCapsSnapshotRefresher {
     outbound_http: OutboundHttpClient,
     upstream_scheduler: Arc<dyn UpstreamScheduler>,
+    indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker>,
 }
 
 impl DirectNabCapsSnapshotRefresher {
@@ -282,11 +284,20 @@ impl DirectNabCapsSnapshotRefresher {
                 RateLimitRegistry::new(),
             ),
             upstream_scheduler: Arc::new(NullUpstreamScheduler),
+            indexer_stats: Arc::new(scryer_application::NullIndexerStatsTracker),
         }
     }
 
     pub fn with_upstream_scheduler(mut self, scheduler: Arc<dyn UpstreamScheduler>) -> Self {
         self.upstream_scheduler = scheduler;
+        self
+    }
+
+    pub fn with_indexer_stats_tracker(
+        mut self,
+        stats: Arc<dyn scryer_application::IndexerStatsTracker>,
+    ) -> Self {
+        self.indexer_stats = stats;
         self
     }
 }
@@ -302,6 +313,18 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
     async fn fetch_for_config(
         &self,
         config: &IndexerConfig,
+    ) -> AppResult<Option<IndexerCapsSnapshot>> {
+        self.fetch_for_config_with_accounting(
+            config,
+            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
+        )
+        .await
+    }
+
+    async fn fetch_for_config_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
     ) -> AppResult<Option<IndexerCapsSnapshot>> {
         if !config.is_direct_nab() {
             return Ok(None);
@@ -360,9 +383,19 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
             None => return Ok(None),
         };
         let url = direct_config.caps_url()?;
+        let tally = scryer_application::IndexerRequestTally::new(
+            accounting
+                .map(|value| value.indexer_id.clone())
+                .unwrap_or_else(|| scryer_application::CONNECTION_TEST_INDEXER_ID.to_string()),
+            accounting
+                .map(|value| value.indexer_name.clone())
+                .unwrap_or_else(|| config.name.clone()),
+            scryer_application::IndexerErrorOperation::CapsRefresh,
+            self.indexer_stats.clone(),
+        );
         let response_result = self
             .outbound_http
-            .send(
+            .send_with_rate_limit_and_dispatch_observer(
                 RequestPolicy::safe_read(
                     format!("direct_nab_caps:{}", direct_config.base_url),
                     format!(
@@ -380,6 +413,19 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
                         .header("Accept", "application/xml, text/xml, application/rss+xml")
                         .header("User-Agent", DIRECT_NAB_CAPS_USER_AGENT)
                 },
+                |_| async {},
+                |actual_url| {
+                    let admitted = if reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin())
+                    {
+                        tally.try_note_sent(actual_url.as_str())
+                    } else {
+                        tally.try_note_auxiliary_sent_call("external_redirect")
+                    };
+                    admitted
+                        .then_some(())
+                        .ok_or(OutboundHttpError::DispatchRejected)
+                },
             )
             .await;
         let response = match response_result {
@@ -391,7 +437,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
                         rate_limited.retry_after,
                         RateLimitCooldownAction::AlreadyRecorded,
                     ),
-                    OutboundHttpError::Transport { .. } => (
+                    OutboundHttpError::Transport { .. } | OutboundHttpError::DispatchRejected => (
                         SchedulerFeedbackOutcome::TransportFailure,
                         None,
                         RateLimitCooldownAction::None,
@@ -413,9 +459,20 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         };
 
         let status = response.status();
-        let body = response.bytes().await.map_err(|error| {
-            AppError::Repository(format!("indexer caps response read failed: {error}"))
-        })?;
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+                return Err(AppError::Repository(format!(
+                    "indexer caps response read failed: {error}"
+                )));
+            }
+        };
+        tally.note_response(&CapturedIndexerHttpResponse {
+            status: status.as_u16(),
+            headers: Vec::new(),
+            body: body.to_vec(),
+        });
         if !status.is_success() {
             let body_snippet = String::from_utf8_lossy(&body);
             record_caps_scheduler_feedback(
@@ -437,19 +494,30 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         }
 
         let snapshot = parse_caps_snapshot_xml(&body).map(Some);
+        let rate_limit_signal = snapshot
+            .as_ref()
+            .err()
+            .and_then(RateLimitSignal::from_error);
         record_caps_scheduler_feedback(
             self.upstream_scheduler.as_ref(),
             scheduler_lease,
             host_key,
             destination_key,
             Some(config.id.clone().into()),
-            if snapshot.is_ok() {
+            if rate_limit_signal.is_some() {
+                SchedulerFeedbackOutcome::RateLimited
+            } else if snapshot.is_ok() {
                 SchedulerFeedbackOutcome::Success
             } else {
                 SchedulerFeedbackOutcome::ProviderFailure
             },
-            None,
-            RateLimitCooldownAction::None,
+            rate_limit_signal
+                .as_ref()
+                .and_then(|signal| signal.retry_after),
+            rate_limit_signal
+                .as_ref()
+                .map(|signal| signal.cooldown_action)
+                .unwrap_or(RateLimitCooldownAction::None),
         )
         .await;
         snapshot
@@ -522,6 +590,7 @@ pub fn parse_caps_snapshot_xml(body: &[u8]) -> AppResult<IndexerCapsSnapshot> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
                 match element.name().as_ref() {
+                    "error" => return Err(parse_caps_newznab_error(&element)?),
                     "server" => {
                         snapshot.server_title = attr_value(&element, "title")?;
                     }
@@ -596,6 +665,31 @@ pub fn parse_caps_snapshot_xml(body: &[u8]) -> AppResult<IndexerCapsSnapshot> {
     Ok(snapshot)
 }
 
+fn parse_caps_newznab_error(element: &BytesStart<'_>) -> AppResult<AppError> {
+    let code = attr_value(element, "code")?
+        .ok_or_else(|| {
+            AppError::Repository("indexer caps returned a Newznab error without a code".into())
+        })?
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "indexer caps returned an invalid Newznab error code: {error}"
+            ))
+        })?;
+    let message = attr_value(element, "description")?
+        .or(attr_value(element, "message")?)
+        .unwrap_or_else(|| format!("Newznab error {code}"));
+
+    if matches!(code, 500 | 501) {
+        return Ok(AppError::NewznabQuotaExceeded { code, message });
+    }
+
+    Ok(AppError::Repository(format!(
+        "indexer caps returned Newznab error {code}: {message}"
+    )))
+}
+
 fn parse_caps_node(element: &BytesStart<'_>) -> AppResult<IndexerCapsSearchNode> {
     Ok(IndexerCapsSearchNode {
         available: attr_value(element, "available")?
@@ -654,6 +748,7 @@ fn map_caps_outbound_error(error: OutboundHttpError) -> AppError {
                 RateLimitCooldownAction::AlreadyRecorded,
             )
         }
+        OutboundHttpError::DispatchRejected => AppError::canceled("indexer dispatch is closed"),
         OutboundHttpError::Transport { source, .. } => {
             AppError::Repository(format!("indexer caps request failed: {source}"))
         }
@@ -685,6 +780,31 @@ mod tests {
                 assert_eq!(retry_after, Some(Duration::from_secs(55)));
             }
             other => panic!("expected temporary unavailable error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_caps_snapshot_xml_preserves_quota_errors_and_rejects_other_newznab_errors() {
+        for (code, typed_quota) in [(500, true), (501, true), (910, false), (777, false)] {
+            let xml = format!(
+                r#"<caps><error code="{code}" description="provider failure {code}" /></caps>"#
+            );
+            let error = parse_caps_snapshot_xml(xml.as_bytes()).expect_err("caps error document");
+            assert_eq!(
+                matches!(
+                    &error,
+                    AppError::NewznabQuotaExceeded { code: actual, .. } if *actual == code
+                ),
+                typed_quota,
+                "Newznab code {code} should {} be a typed quota error",
+                if typed_quota { "" } else { "not" },
+            );
+            if !typed_quota {
+                assert!(
+                    error.to_string().contains(&format!("Newznab error {code}")),
+                    "unexpected error: {error}"
+                );
+            }
         }
     }
 

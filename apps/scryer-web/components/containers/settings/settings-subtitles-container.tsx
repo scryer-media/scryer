@@ -12,6 +12,7 @@ import type {
   PluginInstallProgressRecord,
   RegistryPluginRecord,
 } from "@/components/views/settings/settings-plugins-section";
+import { claimPluginTerminalOperation } from "@/lib/utils/plugin-install-state";
 import {
   pluginInstallProgressSubscription,
   pluginsQuery,
@@ -248,6 +249,9 @@ export function SettingsSubtitlesContainer({
   const syncPluginProgressSubscriptionRef = React.useRef<(() => void) | null>(
     null,
   );
+  // Whichever of `next`, `error` and `complete` reaches the plugin first owns
+  // winding the install down; the others must not undo that work.
+  const syncPluginTerminalRef = React.useRef(new Set<string>());
 
   React.useEffect(() => {
     setPluginsTarget(document.getElementById(SETTINGS_REFERENCE_SLOT_ID));
@@ -473,6 +477,7 @@ export function SettingsSubtitlesContainer({
       initialSnapshot: PluginInstallProgressRecord,
     ) => {
       stopSyncPluginProgressSubscription();
+      syncPluginTerminalRef.current.delete(plugin.id);
       setSyncPluginProgress(initialSnapshot);
       const unsubscribe = wsClient.subscribe(
         {
@@ -488,6 +493,14 @@ export function SettingsSubtitlesContainer({
             setSyncPluginProgress(snapshot);
 
             if (snapshot.state === "SUCCEEDED" || snapshot.state === "FAILED") {
+              if (
+                !claimPluginTerminalOperation(
+                  syncPluginTerminalRef.current,
+                  plugin.id,
+                )
+              ) {
+                return;
+              }
               stopSyncPluginProgressSubscription();
               void (async () => {
                 try {
@@ -526,6 +539,14 @@ export function SettingsSubtitlesContainer({
             }
           },
           error: (error) => {
+            if (
+              !claimPluginTerminalOperation(
+                syncPluginTerminalRef.current,
+                plugin.id,
+              )
+            ) {
+              return;
+            }
             stopSyncPluginProgressSubscription();
             setInstallingSyncPlugin(false);
             setSyncPluginProgress(null);
@@ -539,6 +560,24 @@ export function SettingsSubtitlesContainer({
           },
           complete: () => {
             syncPluginProgressSubscriptionRef.current = null;
+            // A stream that ends without a terminal snapshot — the finished
+            // snapshot aged out before this connection attached, a reconnect
+            // resubscribed too late, an auth epoch bumped the socket — used to
+            // leave the button pinned on "Installing" with nothing left to
+            // correct it. Reconcile the way reloading the page did.
+            if (
+              !claimPluginTerminalOperation(
+                syncPluginTerminalRef.current,
+                plugin.id,
+              )
+            ) {
+              return;
+            }
+            setInstallingSyncPlugin(false);
+            setSyncPluginProgress(null);
+            void loadPlugins()
+              .then((nextPlugins) => setPlugins(nextPlugins))
+              .catch(() => undefined);
           },
         },
       );

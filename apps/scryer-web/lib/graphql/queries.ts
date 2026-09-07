@@ -2160,6 +2160,10 @@ export const indexersQuery = `query Indexers($providerType: String) {
     lastQueryAt
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
+    capsCategories {
+      code
+      label
+    }
     createdAt
     updatedAt
   }
@@ -2374,6 +2378,10 @@ const indexerFieldSelection = `
     lastErrorAt
     lastQueryAt
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
+    }
+    capsCategories {
+      code
+      label
     }
     createdAt
     updatedAt`;
@@ -3190,6 +3198,9 @@ export const systemHealthQuery = `query SystemHealth {
       successfulLast24H
       failedLast24H
       lastQueryAt
+      apiRequestsToday
+      apiRequestsWindowStartedAt
+      apiRequestsObservedSince
       apiCurrent
       apiMax
       grabCurrent

@@ -450,6 +450,7 @@ pub fn to_gql_error(err: AppError) -> Error {
                                 "code": reason.code,
                                 "summary": reason.summary,
                                 "count": reason.count as i64,
+                                "blockCodes": reason.block_codes,
                             })
                         })
                         .collect::<Vec<_>>(),
@@ -477,6 +478,12 @@ pub fn to_gql_error(err: AppError) -> Error {
         }),
         AppError::ArchiveExtractionTimedOut { message } => {
             coded_gql_error(message, "ARCHIVE_EXTRACTION_TIMED_OUT")
+        }
+        AppError::NewznabQuotaExceeded { code, message } => {
+            Error::new(message).extend_with(|_, extensions| {
+                extensions.set("code", "TEMPORARY_UNAVAILABLE");
+                extensions.set("providerErrorCode", code);
+            })
         }
         AppError::TemporaryUnavailable {
             message,
@@ -601,6 +608,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::ArchiveExtractionPluginRequired { .. } => "ArchiveExtractionPluginRequired",
         AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
+        AppError::NewznabQuotaExceeded { .. } => "NewznabQuotaExceeded",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
         AppError::ReauthenticationRequired(_) => "ReauthenticationRequired",
         AppError::TotpEnrollmentRequired(_) => "TotpEnrollmentRequired",
@@ -1089,11 +1097,20 @@ mod tests {
     fn no_auto_eligible_release_graphql_error_includes_reason_counts() {
         let error = to_gql_error(AppError::NoAutoEligibleRelease {
             candidate_count: 3,
-            reasons: vec![scryer_application::AutoEligibilityReason {
-                code: "title_mismatch".to_string(),
-                summary: "release title does not match the target title".to_string(),
-                count: 2,
-            }],
+            reasons: vec![
+                scryer_application::AutoEligibilityReason {
+                    code: "title_mismatch".to_string(),
+                    summary: "release title does not match the target title".to_string(),
+                    count: 2,
+                    block_codes: Vec::new(),
+                },
+                scryer_application::AutoEligibilityReason {
+                    code: "quality_blocked".to_string(),
+                    summary: "quality profile blocked this release".to_string(),
+                    count: 1,
+                    block_codes: vec!["managed_required_audio_missing".to_string()],
+                },
+            ],
         });
 
         assert_eq!(error.message, "validation: no auto-eligible release found");
@@ -1111,7 +1128,7 @@ mod tests {
                 .get("autoDecisionReasons")
                 .expect("reason counts extension is present")
                 .to_string(),
-            "[{code: \"title_mismatch\", summary: \"release title does not match the target title\", count: 2}]"
+            "[{code: \"title_mismatch\", summary: \"release title does not match the target title\", count: 2, blockCodes: []}, {code: \"quality_blocked\", summary: \"quality profile blocked this release\", count: 1, blockCodes: [\"managed_required_audio_missing\"]}]"
         );
     }
 

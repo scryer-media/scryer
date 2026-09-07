@@ -13,6 +13,7 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "compact_event_storage" => true,
         "migrate_synthetic_root_ids" => true,
         "adopt_existing_title_tag_definitions" => true,
+        "compress_post_processing_output" => true,
         #[cfg(test)]
         "test_insert_hook_marker" => true,
         _ => false,

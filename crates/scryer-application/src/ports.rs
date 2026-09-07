@@ -15,9 +15,10 @@ use crate::types::{
     TitleCatalogFilterCounts,
 };
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
-    CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
+    AnimeNumberingBridge, CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
     MaintenanceRuleRevision, MaintenanceRuleSet, MonitorSelection, PersistedPluginWasmPayload,
     title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
@@ -29,6 +30,8 @@ use scryer_plugin_sdk::{
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 pub const NOTIFICATION_REQUEST_SCHEMA_VERSION: u32 = 1;
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
@@ -38,6 +41,81 @@ const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 /// rather than pretending to succeed.
 fn title_tag_registry_unsupported() -> AppError {
     AppError::Repository("this repository does not store the title tag registry".to_string())
+}
+
+/// Admission gate for observed indexer dispatches during orderly shutdown.
+/// The transport holds an admission while it invokes its dispatch observer;
+/// closing the gate makes later attempts fail before HTTP can start.
+#[derive(Clone)]
+pub struct IndexerDispatchGate {
+    state: Arc<Mutex<IndexerDispatchGateState>>,
+    idle: Arc<Notify>,
+}
+
+impl Default for IndexerDispatchGate {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(IndexerDispatchGateState::default())),
+            idle: Arc::new(Notify::new()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct IndexerDispatchGateState {
+    closed: bool,
+    admitted: u32,
+}
+
+impl IndexerDispatchGate {
+    pub fn admit(&self) -> Option<IndexerDispatchAdmission> {
+        let mut state = self.state.lock().ok()?;
+        if state.closed {
+            return None;
+        }
+        state.admitted = state.admitted.saturating_add(1);
+        Some(IndexerDispatchAdmission { gate: self.clone() })
+    }
+
+    pub fn close(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closed = true;
+        }
+    }
+
+    /// Wait until every dispatch admitted before close has completed its
+    /// observer/send boundary. No later dispatch can be admitted.
+    pub async fn wait_for_idle(&self) {
+        loop {
+            let notified = self.idle.notified();
+            let idle = self
+                .state
+                .lock()
+                .map(|state| state.admitted == 0)
+                .unwrap_or(true);
+            if idle {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+/// A successful gate admission. Its lifetime documents that the dispatch
+/// observer and transport send belong to the pre-shutdown producer set.
+pub struct IndexerDispatchAdmission {
+    gate: IndexerDispatchGate,
+}
+
+impl Drop for IndexerDispatchAdmission {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.gate.state.lock() {
+            state.admitted = state.admitted.saturating_sub(1);
+            if state.admitted == 0 {
+                self.gate.idle.notify_waiters();
+            }
+        }
+    }
 }
 
 /// A field-level title option patch. `None` preserves stored state, `Some(None)`
@@ -2186,6 +2264,14 @@ pub struct ImageProxyCacheEntryRecord {
     pub last_accessed_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Aggregate size of the on-disk image proxy cache, as recorded by the
+/// `byte_size` scalars persisted with each cache entry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ImageProxyCacheUsage {
+    pub total_bytes: u64,
+    pub entry_count: u64,
+}
+
 #[async_trait]
 pub trait ImageProxyRepository: Send + Sync {
     /// Registers a server-approved image source and returns its Scryer-owned URL.
@@ -2224,12 +2310,26 @@ pub trait ImageProxyRepository: Send + Sync {
         &self,
     ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
 
+    /// Returns the least-recently-accessed cache entries, oldest first,
+    /// bounded to `limit` rows so budget enforcement never loads the table.
+    async fn list_image_proxy_cache_entries_lru_oldest(
+        &self,
+        limit: u32,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
+
+    /// Sums the persisted `byte_size` scalars without reading entry rows.
+    async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage>;
+
     async fn clear_image_proxy_cache_entries(&self) -> AppResult<()>;
 
     async fn prune_image_proxy_sources_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<u64>;
+
+    /// Removes discovery-owned sources whose discovery item no longer exists.
+    /// Cache entries follow through the foreign-key cascade.
+    async fn prune_orphaned_discovery_image_proxy_sources(&self) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -2392,6 +2492,27 @@ pub trait ShowRepository: Send + Sync {
         Ok(episodes)
     }
     async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>>;
+    /// The community season layout stored for an anime title, or `None` when
+    /// SMG has never sent one.
+    ///
+    /// Defaulted rather than required: the bridge is a cache of an upstream
+    /// dataset, and a store that does not keep it simply reports none, which
+    /// leaves every lane on plain TVDB numbering.
+    async fn get_anime_numbering_bridge(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<scryer_domain::AnimeNumberingBridge>> {
+        Ok(None)
+    }
+    /// Replace a title's stored bridge. `None` clears it, which is what a
+    /// hydration that no longer reports one means.
+    async fn replace_anime_numbering_bridge(
+        &self,
+        _title_id: &str,
+        _bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn list_episode_external_ids(&self, episode_id: &str)
     -> AppResult<Vec<ScopedExternalId>>;
     async fn get_episode_by_id(&self, episode_id: &str) -> AppResult<Option<Episode>>;
@@ -3462,6 +3583,11 @@ pub trait DomainEventRepository: Send + Sync {
     async fn delete_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn get_subscriber_offset(&self, subscriber: &str) -> AppResult<i64>;
     async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()>;
+    /// The highest persisted event sequence, or 0 when the log is empty. Live
+    /// subscriptions start here so a new client never replays history.
+    async fn latest_sequence(&self) -> AppResult<i64> {
+        Ok(0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3573,6 +3699,14 @@ pub trait IndexerCapsSnapshotRefresher: Send + Sync {
         &self,
         config: &IndexerConfig,
     ) -> AppResult<Option<IndexerCapsSnapshot>>;
+
+    async fn fetch_for_config_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        _accounting: Option<&IndexerAccountingContext>,
+    ) -> AppResult<Option<IndexerCapsSnapshot>> {
+        self.fetch_for_config(config).await
+    }
 }
 
 /// One coverage-ledger row: the raw `(scope_key, indexer_id)`
@@ -3805,6 +3939,10 @@ pub trait HousekeepingRepository: Send + Sync {
 }
 
 pub trait IndexerStatsTracker: Send + Sync {
+    /// Present for durable trackers that coordinate dispatch shutdown.
+    fn dispatch_gate(&self) -> Option<IndexerDispatchGate> {
+        None
+    }
     fn record_query(&self, indexer_id: &str, indexer_name: &str, success: bool);
     /// Record one release grabbed through this indexer and accepted by a
     /// download client.
@@ -3820,6 +3958,34 @@ pub trait IndexerStatsTracker: Send + Sync {
         grab_current: Option<u32>,
         grab_max: Option<u32>,
     );
+
+    /// One outbound HTTP request to this indexer has just been sent.
+    ///
+    /// Called at the send site, before any response exists, so a timeout, a
+    /// retry, an extra pagination request, a caps refresh and a solver replay
+    /// all count. This is the number shown on the dashboard and compared
+    /// against the indexer's own quota page; unlike `record_query` it is
+    /// persisted and survives a restart.
+    ///
+    /// Defaulted to a no-op so trackers that do not persist anything (tests,
+    /// the null tracker) need not implement it.
+    fn record_api_request_sent(&self, indexer_id: &str, indexer_name: &str) {
+        let _ = (indexer_id, indexer_name);
+    }
+
+    /// Record an observed indexer dispatch with the timestamp captured by the
+    /// transport after admission and immediately before the request leaves.
+    /// Implementations that only need the current time can retain the legacy
+    /// method; durable trackers override this to preserve UTC-day attribution.
+    fn record_api_request_sent_at(
+        &self,
+        indexer_id: &str,
+        indexer_name: &str,
+        _dispatched_at: DateTime<Utc>,
+    ) {
+        self.record_api_request_sent(indexer_id, indexer_name);
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
 
     fn is_at_quota(&self, indexer_id: &str) -> bool {
@@ -4738,7 +4904,7 @@ pub struct LocationOperationProgress {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-/// Persistence for location operations (D5, migration 0215): the operation row,
+/// Persistence for location operations (D5, migration 0217): the operation row,
 /// its per-title checkpoints, its per-file verification records, and the
 /// ownership registry the concurrency guard reads.
 ///
@@ -6769,6 +6935,26 @@ pub trait PluginDescriptorLoader: Send + Sync {
     ) -> AppResult<scryer_plugin_sdk::PluginDescriptor>;
 }
 
+/// The numbering evidence an application search gives the multi-indexer guard.
+///
+/// The core pair set preserves the existing fast-path for conventional
+/// numbered releases. The optional anime portion is deliberately application
+/// context rather than an indexer/plugin request field: only the local guard
+/// uses it to make a narrowly anchored cour reading available.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexerSearchNumberingContext {
+    pub admissible_episode_numberings: Vec<(u32, u32)>,
+    pub anime: Option<AnimeSearchNumberingContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnimeSearchNumberingContext {
+    pub canonical_title: String,
+    pub bridge: AnimeNumberingBridge,
+    pub official_season: u32,
+    pub official_episode: u32,
+}
+
 #[async_trait]
 pub trait IndexerClient: Send + Sync {
     async fn finalize_search_session(
@@ -6889,6 +7075,9 @@ pub trait IndexerClient: Send + Sync {
         operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
+        // Application-only guard context. Single-indexer adapters ignore it;
+        // it must never alter the external plugin search protocol.
+        _numbering_context: IndexerSearchNumberingContext,
         absolute_episode: Option<u32>,
         year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
@@ -7015,6 +7204,23 @@ pub trait IndexerClient: Send + Sync {
     }
 }
 
+/// Persisted identity charged for an observed request, independent of the
+/// configuration used to execute a connection test.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerAccountingContext {
+    pub indexer_id: String,
+    pub indexer_name: String,
+}
+
+impl IndexerAccountingContext {
+    pub fn for_config(config: &IndexerConfig) -> Option<Self> {
+        crate::indexer_error_history_is_persistable(&config.id).then(|| Self {
+            indexer_id: config.id.clone(),
+            indexer_name: config.name.clone(),
+        })
+    }
+}
+
 pub trait IndexerPluginProvider: Send + Sync {
     /// Validate normalized instance configuration using provider-owned
     /// descriptor metadata. Providers without such metadata accept it.
@@ -7039,6 +7245,21 @@ pub trait IndexerPluginProvider: Send + Sync {
         _config: &IndexerConfig,
     ) -> Option<Arc<dyn IndexerManagementClient>> {
         None
+    }
+    fn client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
+        _accounting: Option<&IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerClient>> {
+        self.client_for_provider_with_proxy(config, proxy_config)
+    }
+    fn management_client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        _accounting: Option<&IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerManagementClient>> {
+        self.management_client_for_provider(config)
     }
     fn available_provider_types(&self) -> Vec<String>;
     fn builtin_provider_types(&self) -> Vec<String> {
@@ -7817,6 +8038,15 @@ impl DownloadClientListing {
     pub fn all_unreadable(&self) -> bool {
         self.polled_client_count > 0 && self.unreadable_client_ids.len() >= self.polled_client_count
     }
+}
+
+#[async_trait]
+pub trait IndexerArtifactResolver: Send + Sync {
+    /// Resolves an artifact through host-owned indexer HTTP and solver handling.
+    async fn resolve_artifact(
+        &self,
+        request: &IndexerArtifactResolutionRequest,
+    ) -> AppResult<PreparedIndexerArtifact>;
 }
 
 #[async_trait]

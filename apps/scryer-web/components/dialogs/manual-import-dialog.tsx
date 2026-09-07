@@ -570,7 +570,7 @@ export function ManualImportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         id="activity-manual-import-dialog"
-        className="sm:max-w-4xl max-h-[85vh] overflow-y-auto"
+        className="sm:max-w-[67.2rem] max-h-[85vh] overflow-y-auto"
       >
         <DialogHeader>
           <DialogTitle>Manual Import</DialogTitle>
@@ -654,7 +654,7 @@ export function ManualImportDialog({
                         <div className="flex items-start gap-2">
                           <FileVideo className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60" />
                           <div className="min-w-0">
-                            <span className="block max-w-[280px] truncate font-[var(--font-code)] text-xs text-card-foreground" title={file.fileName}>
+                            <span className="block break-all font-[var(--font-code)] text-xs text-card-foreground">
                               {file.fileName}
                             </span>
                             {file.videoFacts ? (

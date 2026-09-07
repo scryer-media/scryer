@@ -358,6 +358,18 @@ impl AppUseCase {
         &self,
         config: &IndexerConfig,
     ) -> AppResult<Option<String>> {
+        self.fetch_caps_snapshot_json_for_config_with_accounting(
+            config,
+            crate::IndexerAccountingContext::for_config(config).as_ref(),
+        )
+        .await
+    }
+
+    pub(crate) async fn fetch_caps_snapshot_json_for_config_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        accounting: Option<&crate::IndexerAccountingContext>,
+    ) -> AppResult<Option<String>> {
         let Some(refresher) = self
             .services
             .integrations
@@ -366,7 +378,7 @@ impl AppUseCase {
         else {
             return Ok(None);
         };
-        let Some(snapshot) = refresher.fetch_for_config(config).await? else {
+        let Some(snapshot) = refresher.fetch_for_config_with_accounting(config, accounting).await? else {
             if config.is_direct_nab() {
                 return Err(AppError::Repository(
                     "caps refresh returned no Newznab caps snapshot".into(),
@@ -602,7 +614,11 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn validate_enabled_proxy_config_id(&self, raw_id: &str) -> AppResult<String> {
+    async fn validate_enabled_proxy_config_id_for_provider(
+        &self,
+        provider_type: &str,
+        raw_id: &str,
+    ) -> AppResult<String> {
         let id = raw_id.trim();
         if id.is_empty() {
             return Err(AppError::Validation(
@@ -619,6 +635,15 @@ impl AppUseCase {
         if !config.is_enabled {
             return Err(AppError::Validation(
                 "Proxy is disabled for this indexer.".into(),
+            ));
+        }
+        // Prowlarr owns challenge handling for the indexers it fronts, so a
+        // challenge solver can never sit in front of it. Transport and tunnel
+        // proxies only carry bytes and remain allowed.
+        if config.is_challenge_solver() && provider_type.trim().eq_ignore_ascii_case("prowlarr") {
+            return Err(AppError::Validation(
+                "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
+                    .into(),
             ));
         }
         Ok(config.id)
@@ -666,7 +691,10 @@ impl AppUseCase {
         let base_url =
             derive_indexer_base_url_from_config_fields(&fields, Some(&normalized_config_json))?;
         let proxy_config_id = match input.proxy_config_id {
-            Some(id) => Some(self.validate_enabled_proxy_config_id(&id).await?),
+            Some(id) => Some(
+                self.validate_enabled_proxy_config_id_for_provider(&provider_type, &id)
+                    .await?,
+            ),
             None => None,
         };
         let download_client_id = input
@@ -838,6 +866,22 @@ impl AppUseCase {
             };
         let management_capabilities =
             self.indexer_management_capabilities_for_provider_type(&effective_provider);
+        // A provider switch to Prowlarr sheds a lingering challenge-solver
+        // assignment; transport and tunnel proxies only carry bytes and stay.
+        let existing_prowlarr_solver_assignment = if effective_provider
+            .trim()
+            .eq_ignore_ascii_case("prowlarr")
+            && let Some(existing_proxy_id) = existing.proxy_config_id.as_deref()
+        {
+            self.services
+                .integrations
+                .proxy_configs
+                .get_by_id(existing_proxy_id)
+                .await?
+                .is_some_and(|proxy| proxy.is_challenge_solver())
+        } else {
+            false
+        };
         let normalized_proxy_config_id = match update.proxy_config_id.clone() {
             Some(Some(id)) => {
                 if existing.managed_parent_config_id.is_some() {
@@ -845,9 +889,13 @@ impl AppUseCase {
                         "managed indexers cannot use a proxy; the managing application owns challenge solving".into(),
                     ));
                 }
-                Some(Some(self.validate_enabled_proxy_config_id(&id).await?))
+                Some(Some(
+                    self.validate_enabled_proxy_config_id_for_provider(&effective_provider, &id)
+                        .await?,
+                ))
             }
             Some(None) => Some(None),
+            None if existing_prowlarr_solver_assignment => Some(None),
             None => None,
         };
         let should_validate_connection = normalized_provider.is_some()

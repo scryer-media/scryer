@@ -579,6 +579,167 @@ async fn newznab_builtin_rss_search_uses_category_only_request() {
 }
 
 #[tokio::test]
+async fn concurrent_newznab_component_searches_count_each_saved_indexer_dispatch() {
+    use scryer_application::IndexerStatsTracker;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Default)]
+    struct Stats(AtomicU32);
+
+    impl IndexerStatsTracker for Stats {
+        fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+        fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+        fn record_api_request_sent(&self, _indexer_id: &str, _indexer_name: &str) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
+            Vec::new()
+        }
+    }
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "application/json")
+                .set_body_string(
+                    r#"{"channel":{"item":[{"title":"Example.Show.S01E01.1080p.WEB-DL","guid":"guid-1","link":"http://example.test/info","enclosure":{"@attributes":{"url":"http://example.test/download.nzb","length":"12345","type":"application/x-nzb"}},"attr":[{"@attributes":{"name":"grabs","value":"4"}}]}]}}"#,
+                )
+                .set_delay(Duration::from_millis(100)),
+        )
+        .mount(&server)
+        .await;
+    let stats = Arc::new(Stats::default());
+    let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
+        .with_builtin_asset(scryer_plugins::builtins::NEWZNAB)
+        .with_indexer_stats_tracker(stats.clone());
+    let mut config = test_config("newznab");
+    config.id = "saved-indexer".to_string();
+    config.name = "Saved indexer".to_string();
+    config.config_json =
+        Some(serde_json::json!({"base_url": server.uri(), "api_key": "test-key"}).to_string());
+    let client = provider
+        .client_for_provider(&config)
+        .expect("Newznab client");
+    let first = client.search(
+        "first".to_string(),
+        std::collections::HashMap::new(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        scryer_application::SearchMode::Interactive,
+        scryer_application::IndexerErrorOperation::InteractiveSearch,
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let second = client.search(
+        "second".to_string(),
+        std::collections::HashMap::new(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        scryer_application::SearchMode::Interactive,
+        scryer_application::IndexerErrorOperation::InteractiveSearch,
+        None,
+        None,
+        None,
+        None,
+        vec![],
+        None,
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let (first, second) = tokio::join!(first, second);
+    first.expect("first search should succeed");
+    second.expect("second search should succeed");
+
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(stats.0.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn newznab_component_preserves_only_quota_codes_as_typed_errors() {
+    for (code, description, quota) in [
+        (500, "Request limit reached", true),
+        (501, "Download limit reached", true),
+        (910, "Generic temporary failure", false),
+    ] {
+        let body = Box::leak(
+            format!(r#"<?xml version="1.0"?><error code="{code}" description="{description}"/>"#)
+                .into_boxed_str(),
+        );
+        let (base_url, request_rx) = spawn_newznab_raw_response_server(
+            "200 OK",
+            &["Content-Type: application/rss+xml"],
+            body,
+        );
+        let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
+            .with_builtin_asset(scryer_plugins::builtins::NEWZNAB);
+        let mut config = test_config("newznab");
+        config.config_json =
+            Some(serde_json::json!({"base_url": base_url, "api_key": "test-key"}).to_string());
+        let client = provider
+            .client_for_provider(&config)
+            .expect("Newznab client");
+
+        let error = client
+            .search(
+                "quota test".to_string(),
+                std::collections::HashMap::new(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                scryer_application::SearchMode::Interactive,
+                scryer_application::IndexerErrorOperation::InteractiveSearch,
+                None,
+                None,
+                None,
+                None,
+                vec![],
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect_err("Newznab error document should fail the search");
+        request_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("mock Newznab server should receive a request");
+
+        assert_eq!(
+            matches!(
+                error,
+                scryer_application::AppError::NewznabQuotaExceeded { code: actual, .. }
+                    if actual == code
+            ),
+            quota,
+            "Newznab code {code} should {} be a typed quota error",
+            if quota { "" } else { "not" },
+        );
+    }
+}
+
+#[tokio::test]
 async fn newznab_builtin_preserves_prowlarr_429_description_and_retry_after() {
     let body = r#"<?xml version="1.0" encoding="UTF-8"?>
 <error code="429" description="User configurable Indexer Query Limit of 100 in last 1 hour(s) reached." />"#;

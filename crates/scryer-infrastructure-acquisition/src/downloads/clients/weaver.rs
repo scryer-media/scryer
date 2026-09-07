@@ -1234,6 +1234,7 @@ fn map_weaver_outbound_error(operation: &str, error: OutboundHttpError) -> AppEr
                 RateLimitCooldownAction::AlreadyRecorded,
             )
         }
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
         OutboundHttpError::Transport { source, .. } => {
             AppError::Repository(format!("{operation} failed: {source}"))
         }
@@ -1265,7 +1266,6 @@ impl DownloadClient for WeaverDownloadClient {
         );
 
         let staged = resolve_staged_nzb_for_request(
-            &self.outbound_http,
             &self.staged_nzb_store,
             &self.staged_nzb_pipeline_limit,
             request,
@@ -2043,7 +2043,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/release.nzb"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"<nzb></nzb>".to_vec()))
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -2075,11 +2075,16 @@ mod tests {
         let client = WeaverDownloadClient::with_staged_nzb_store(
             server.uri(),
             Some("wvr_test".to_string()),
-            staged_nzb_store,
+            staged_nzb_store.clone(),
             Arc::new(Semaphore::new(1)),
         );
         let mut request = test_add_request(download_id);
-        request.source_hint = Some(format!("{}/release.nzb", server.uri()));
+        request.staged_nzb = Some(
+            staged_nzb_store
+                .stage_nzb_bytes_for_test(b"<nzb></nzb>")
+                .await
+                .expect("stage NZB fixture"),
+        );
         let result = client
             .submit_download(&request)
             .await

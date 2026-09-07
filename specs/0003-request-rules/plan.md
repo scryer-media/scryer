@@ -266,9 +266,9 @@ UNIQUE (producer, producer_ref) WHERE state IN ('dormant','active');  INDEX (tit
 
 | migration | contents |
 |---|---|
-| `0219_request_rule_sets.sql` | `request_rule_sets(id, name, description, enabled, evaluation_mode 'disabled', library_ids '[]', current_revision_number, created_at, updated_at)`; `request_rule_revisions(id, rule_set_id FK cascade, revision_number, rego_source, matcher_content_hash, created_by, created_at, UNIQUE(rule_set_id, revision_number))`; `request_rule_decisions(id, request_id, evaluated_at, mode, effective_outcome, policy_outcome, fallback_reason, votes_json, tags_json, input_hash, input_schema_version, created_at)` + index `(request_id)`. |
-| `0220_lifecycle_claims.sql` | §5 table. |
-| `0221_media_request_policy.sql` | `media_requests` + `requested_lease_days INT NULL`, `approved_lease_days INT NULL`, `decision_id TEXT NULL`, `decided_by_rule_set_ids TEXT NOT NULL DEFAULT '[]'`, `policy_tags_json TEXT NOT NULL DEFAULT '[]'`, `metadata_snapshot_json TEXT NOT NULL DEFAULT '{}'`; `resolved_by_user_id` → nullable via the 0206 rebuild pattern (SQLite) / `DROP NOT NULL` (PG). |
+| `0221_request_rule_sets.sql` | `request_rule_sets(id, name, description, enabled, evaluation_mode 'disabled', library_ids '[]', current_revision_number, created_at, updated_at)`; `request_rule_revisions(id, rule_set_id FK cascade, revision_number, rego_source, matcher_content_hash, created_by, created_at, UNIQUE(rule_set_id, revision_number))`; `request_rule_decisions(id, request_id, evaluated_at, mode, effective_outcome, policy_outcome, fallback_reason, votes_json, tags_json, input_hash, input_schema_version, created_at)` + index `(request_id)`. |
+| `0222_lifecycle_claims.sql` | §5 table. |
+| `0223_media_request_policy.sql` | `media_requests` + `requested_lease_days INT NULL`, `approved_lease_days INT NULL`, `decision_id TEXT NULL`, `decided_by_rule_set_ids TEXT NOT NULL DEFAULT '[]'`, `policy_tags_json TEXT NOT NULL DEFAULT '[]'`, `metadata_snapshot_json TEXT NOT NULL DEFAULT '{}'`; `resolved_by_user_id` → nullable via the 0206 rebuild pattern (SQLite) / `DROP NOT NULL` (PG). |
 
 Renumber per the standing recipe if `main` claims 0218+ first (it did: title tags took 0218, so these are 0219–0221).
 

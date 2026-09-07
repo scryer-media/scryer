@@ -43,6 +43,9 @@ fn plugin_http_client(profile: PluginHttpClientProfile) -> AppResult<&'static Ou
 }
 fn map_plugin_outbound_error(label: &str, error: OutboundHttpError) -> AppError {
     match error {
+        OutboundHttpError::DispatchRejected => {
+            AppError::canceled(format!("failed to download {label}: dispatch rejected"))
+        }
         OutboundHttpError::RateLimited(rate_limited) => {
             let retry_after = rate_limited.retry_after.filter(|delay| !delay.is_zero());
             AppError::rate_limited_temporary_unavailable(

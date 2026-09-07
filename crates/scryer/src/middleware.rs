@@ -3004,6 +3004,11 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
             }
             response
         }
+        AppError::NewznabQuotaExceeded { message, .. } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse::new(message)),
+        )
+            .into_response(),
         AppError::MfaStepUpRequired(message)
         | AppError::ReauthenticationRequired(message)
         | AppError::TotpEnrollmentRequired(message)

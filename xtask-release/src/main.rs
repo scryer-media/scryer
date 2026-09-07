@@ -119,9 +119,6 @@ const TRASH_GUIDES_GENERATED_PATHS: &[&str] = &[
 ];
 const RELEASE_DRY_RUN_BUILTINS_DIR: &str = "tmp/xtask-release-dry-run-builtins";
 const RELEASE_NOTES_DIR: &str = "release-notes";
-const RELEASE_NOTES_AI_MARKER: &str = "AI generated release notes";
-const RELEASE_NOTES_DEFAULT_CODEX_MODEL: &str = "gpt-5.4";
-const RELEASE_NOTES_DEFAULT_CODEX_REASONING: &str = "xhigh";
 const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_URL: &str =
     "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.json";
 const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_BUNDLE_URL: &str =
@@ -563,6 +560,30 @@ fn git_status_porcelain(ctx: &TaskContext) -> Result<String> {
     git_capture(ctx, &["status", "--porcelain"])
 }
 
+fn porcelain_status_paths(status: &str) -> Vec<String> {
+    status
+        .lines()
+        .filter(|line| line.len() > 3)
+        .map(|line| {
+            let entry = line[3..].trim();
+            entry
+                .rsplit_once(" -> ")
+                .map_or(entry, |(_, renamed)| renamed)
+                .trim_matches('"')
+                .to_string()
+        })
+        .collect()
+}
+
+/// True when the only uncommitted path is this release's notes file.
+///
+/// Release notes are a required input written before the dry run, so a tree that
+/// carries nothing else is treated as ready instead of prompting the operator.
+fn dirty_paths_are_release_notes_only(status: &str, release_notes_relative: &str) -> bool {
+    let paths = porcelain_status_paths(status);
+    !paths.is_empty() && paths.iter().all(|path| path == release_notes_relative)
+}
+
 fn git_tracked_dirty_paths(ctx: &TaskContext) -> Result<Vec<PathBuf>> {
     let mut command = ctx.command_in("git", &ctx.repo_root);
     command.args(["diff", "--name-only", "HEAD", "--"]);
@@ -979,12 +1000,6 @@ fn release_notes_context_path(ctx: &TaskContext, tag_name: &str) -> PathBuf {
         .join(format!("{tag_name}-context.md"))
 }
 
-fn release_notes_output_path(ctx: &TaskContext, tag_name: &str) -> PathBuf {
-    ctx.path("tmp")
-        .join("xtask-release-notes")
-        .join(format!("{tag_name}-output.md"))
-}
-
 fn release_notes_sha256(path: &Path) -> Result<String> {
     let bytes = fs::read(path).with_context(|| {
         format!(
@@ -993,6 +1008,13 @@ fn release_notes_sha256(path: &Path) -> Result<String> {
         )
     })?;
     Ok(sha256_hex(&bytes))
+}
+
+fn release_notes_headings(tag_name: &str, next_version: &Version) -> (String, String) {
+    (
+        format!("# Scryer {next_version} release notes"),
+        format!("# {tag_name}"),
+    )
 }
 
 fn release_notes_context(
@@ -1027,23 +1049,26 @@ fn release_notes_context(
     } else {
         String::new()
     };
+    let (preferred_heading, tag_heading) = release_notes_headings(tag_name, next_version);
 
     Ok(format!(
-        r#"# Release Notes Generation Context
+        r#"# Release Notes Authoring Context
 
 Proposed tag: {tag_name}
 Proposed version: {next_version}
 Previous tag: {previous_tag}
 Commit range: {range}
+Write the notes to: {notes_path}
 
 ## Required output contract
 
 - Write Markdown only.
-- The first line must be exactly `# {tag_name}`.
-- Include this line near the top: `{RELEASE_NOTES_AI_MARKER}`.
-- Summarize user-facing changes first.
+- The first line must be exactly `{preferred_heading}` or `{tag_heading}`.
+- Summarize user-facing changes first, under `## Highlights`.
+- Describe what changed for someone running Scryer, not which files or commits changed.
 - Keep wording suitable for a GitHub Release.
 - Do not mention local filesystem paths.
+- Do not include AI, agent, or release-process markers.
 - Do not include placeholder text.
 - Do not use the word `placeholder`; describe missing data directly.
 
@@ -1066,13 +1091,31 @@ Commit range: {range}
 ```
 "#,
         previous_tag = latest_tag.unwrap_or("none"),
+        notes_path = release_notes_path_relative(tag_name),
     ))
+}
+
+fn write_release_notes_context(
+    ctx: &TaskContext,
+    latest_tag: Option<&str>,
+    tag_name: &str,
+    next_version: &Version,
+) -> Result<PathBuf> {
+    let context_path = release_notes_context_path(ctx, tag_name);
+    if let Some(parent) = context_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let context = release_notes_context(ctx, latest_tag, tag_name, next_version)?;
+    fs::write(&context_path, context)
+        .with_context(|| format!("failed to write {}", context_path.display()))?;
+    Ok(context_path)
 }
 
 fn validate_release_notes_document(
     path: &Path,
     tag_name: &str,
-    require_ai_marker: bool,
+    next_version: &Version,
 ) -> Result<()> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("failed to read release notes at {}", path.display()))?;
@@ -1080,29 +1123,15 @@ fn validate_release_notes_document(
     if trimmed.is_empty() {
         bail!("release notes are empty");
     }
-    let expected_heading = format!("# {tag_name}");
-    let prewritten_heading = format!(
-        "# Scryer {} release notes",
-        tag_name.trim_start_matches("scryer-v")
-    );
+    let (preferred_heading, tag_heading) = release_notes_headings(tag_name, next_version);
     let heading = trimmed.lines().next();
-    if heading != Some(expected_heading.as_str())
-        && (require_ai_marker || heading != Some(prewritten_heading.as_str()))
-    {
-        let accepted_headings = if require_ai_marker {
-            format!("`{expected_heading}`")
-        } else {
-            format!("`{expected_heading}` or `{prewritten_heading}`")
-        };
-        bail!("release notes must start with {accepted_headings}");
-    }
-    if require_ai_marker && !trimmed.contains(RELEASE_NOTES_AI_MARKER) {
-        bail!("generated release notes must include `{RELEASE_NOTES_AI_MARKER}`");
+    if heading != Some(preferred_heading.as_str()) && heading != Some(tag_heading.as_str()) {
+        bail!("release notes must start with `{preferred_heading}` or `{tag_heading}`");
     }
     let lower = trimmed.to_ascii_lowercase();
     for placeholder in ["todo:", "tbd", "placeholder", "<insert", "lorem ipsum"] {
         if lower.contains(placeholder) {
-            bail!("generated release notes contain placeholder text: {placeholder}");
+            bail!("release notes contain placeholder text: {placeholder}");
         }
     }
     let violations = scan_release_hygiene_content(path, &content);
@@ -1115,164 +1144,87 @@ fn validate_release_notes_document(
     Ok(())
 }
 
-fn validate_release_notes_output(path: &Path, tag_name: &str) -> Result<()> {
-    validate_release_notes_document(path, tag_name, true)
-}
-
-fn validate_prewritten_release_notes(path: &Path, tag_name: &str) -> Result<()> {
-    validate_release_notes_document(path, tag_name, false)
-}
-
-fn codex_release_notes_command_for(output_path: &Path, model: &str, reasoning: &str) -> Command {
-    let reasoning_config = format!("model_reasoning_effort=\"{reasoning}\"");
-    let mut command = Command::new("codex");
-    command
-        .args(["exec", "--ephemeral", "--sandbox", "read-only", "--model"])
-        .arg(model)
-        .arg("-c")
-        .arg(reasoning_config)
-        .arg("--output-last-message")
-        .arg(output_path)
-        .arg("-");
-    command
-}
-
-fn codex_release_notes_command(output_path: &Path) -> Command {
-    let model = std::env::var("SCRYER_RELEASE_NOTES_CODEX_MODEL")
-        .unwrap_or_else(|_| RELEASE_NOTES_DEFAULT_CODEX_MODEL.to_string());
-    let reasoning = std::env::var("SCRYER_RELEASE_NOTES_CODEX_REASONING")
-        .unwrap_or_else(|_| RELEASE_NOTES_DEFAULT_CODEX_REASONING.to_string());
-    codex_release_notes_command_for(output_path, &model, &reasoning)
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "release notes command invocation passes explicit release context into the generator"
-)]
-fn run_release_notes_command_with_template(
-    ctx: &TaskContext,
-    context_path: &Path,
-    output_path: &Path,
-    tag_name: &str,
+fn release_notes_authoring_instructions(
     latest_tag: Option<&str>,
+    tag_name: &str,
     next_version: &Version,
-    prompt: &str,
-    command_template: Option<&str>,
-) -> Result<()> {
-    if let Some(command_template) = command_template.filter(|value| !value.trim().is_empty()) {
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(command_template)
-            .current_dir(&ctx.repo_root)
-            .env("SCRYER_RELEASE_NOTES_CONTEXT", prompt)
-            .env(
-                "SCRYER_RELEASE_NOTES_CONTEXT_PATH",
-                context_path.as_os_str(),
+    context_path: Option<&str>,
+    dry_run: bool,
+) -> String {
+    let (preferred_heading, tag_heading) = release_notes_headings(tag_name, next_version);
+    let notes_path = release_notes_path_relative(tag_name);
+    let context_step = context_path.map_or_else(
+        || {
+            let range = latest_tag.map_or_else(|| "HEAD".to_string(), |tag| format!("{tag}..HEAD"));
+            format!(
+                "  1. Read `git log --no-merges {range}` to learn what changed in this release."
             )
-            .env("SCRYER_RELEASE_NOTES_OUTPUT", output_path.as_os_str())
-            .env("SCRYER_RELEASE_TAG", tag_name)
-            .env("SCRYER_PREVIOUS_RELEASE_TAG", latest_tag.unwrap_or(""))
-            .env("SCRYER_RELEASE_VERSION", next_version.to_string())
-            .status()
-            .context("failed to run SCRYER_RELEASE_NOTES_COMMAND")?;
-        if !status.success() {
-            bail!("SCRYER_RELEASE_NOTES_COMMAND failed with status {status}");
-        }
-        return Ok(());
-    }
+        },
+        |path| {
+            format!("  1. Read {path} for this release's commit log, changed files, and diffstat.")
+        },
+    );
+    let retry = if dry_run {
+        "  5. Re-run the same `cargo xtask release --dry-run` command."
+    } else {
+        "  5. Re-run `cargo xtask release --dry-run` with the same release selection, then retry \
+         this release."
+    };
 
-    require_command("codex")?;
-    let mut command = codex_release_notes_command(output_path);
-    command.current_dir(&ctx.repo_root).stdin(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .context("failed to start Codex release notes generator")?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("failed to open Codex stdin"))?;
-        stdin
-            .write_all(prompt.as_bytes())
-            .context("failed to write release notes prompt to Codex")?;
-    }
-    let status = child
-        .wait()
-        .context("failed waiting for Codex release notes generator")?;
-    if !status.success() {
-        bail!("Codex release notes generator failed with status {status}");
-    }
-    Ok(())
-}
-
-fn run_release_notes_command(
-    ctx: &TaskContext,
-    context_path: &Path,
-    output_path: &Path,
-    tag_name: &str,
-    latest_tag: Option<&str>,
-    next_version: &Version,
-    prompt: &str,
-) -> Result<()> {
-    let command_template = std::env::var("SCRYER_RELEASE_NOTES_COMMAND").ok();
-    run_release_notes_command_with_template(
-        ctx,
-        context_path,
-        output_path,
-        tag_name,
-        latest_tag,
-        next_version,
-        prompt,
-        command_template.as_deref(),
+    format!(
+        "The release workflow does not write release notes. Author them, then run the release \
+         again.\n\n\
+         If you are an agent running this command, do this now instead of stopping:\n\
+         {context_step}\n\
+         \x20 2. Read the two or three most recent files in {RELEASE_NOTES_DIR}/ for tone, \
+         structure, and level of detail.\n\
+         \x20 3. Write {notes_path} yourself, in your own words.\n\
+         \x20 4. Requirements:\n\
+         \x20    - First line exactly `{preferred_heading}` (or `{tag_heading}`).\n\
+         \x20    - Lead with user-facing changes under `## Highlights`.\n\
+         \x20    - Say what changed for someone running Scryer, not which files or commits \
+         changed.\n\
+         \x20    - No placeholder text (`TODO:`, `TBD`, `placeholder`, `<insert`).\n\
+         \x20    - No AI, agent, or release-process markers.\n\
+         \x20    - No local filesystem paths.\n\
+         {retry}"
     )
 }
 
-fn generate_release_notes(
+fn require_release_notes(
     ctx: &TaskContext,
     latest_tag: Option<&str>,
     tag_name: &str,
     next_version: &Version,
-) -> Result<(PathBuf, String)> {
-    let final_path = release_notes_path(ctx, tag_name);
-    let context_path = release_notes_context_path(ctx, tag_name);
-    let output_path = release_notes_output_path(ctx, tag_name);
-    if let Some(parent) = context_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    if let Some(parent) = final_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
+    dry_run: bool,
+) -> Result<PathBuf> {
+    let notes_path = release_notes_path(ctx, tag_name);
+    let notes_relative = release_notes_path_relative(tag_name);
+    let problem = if notes_path.is_file() {
+        validate_release_notes_document(&notes_path, tag_name, next_version)
+            .err()
+            .map(|error| format!("release notes at {notes_relative} are not usable: {error:#}"))
+    } else {
+        Some(format!(
+            "release notes are missing: {notes_relative} does not exist"
+        ))
+    };
 
-    let prompt = release_notes_context(ctx, latest_tag, tag_name, next_version)?;
-    fs::write(&context_path, &prompt)
-        .with_context(|| format!("failed to write {}", context_path.display()))?;
-    if output_path.exists() {
-        fs::remove_file(&output_path)
-            .with_context(|| format!("failed to remove {}", output_path.display()))?;
-    }
+    let Some(problem) = problem else {
+        return Ok(notes_path);
+    };
 
-    run_release_notes_command(
-        ctx,
-        &context_path,
-        &output_path,
-        tag_name,
+    let context_relative = write_release_notes_context(ctx, latest_tag, tag_name, next_version)
+        .ok()
+        .and_then(|path| relative_to_repo_root(ctx, &path).ok());
+    let instructions = release_notes_authoring_instructions(
         latest_tag,
+        tag_name,
         next_version,
-        &prompt,
-    )?;
-    validate_release_notes_output(&output_path, tag_name)?;
-    fs::copy(&output_path, &final_path).with_context(|| {
-        format!(
-            "failed to copy generated release notes from {} to {}",
-            output_path.display(),
-            final_path.display()
-        )
-    })?;
-    validate_release_notes_output(&final_path, tag_name)?;
-    let digest = release_notes_sha256(&final_path)?;
-    Ok((final_path, digest))
+        context_relative.as_deref(),
+        dry_run,
+    );
+    bail!("{problem}\n\n{instructions}")
 }
 
 #[derive(Clone, Copy)]
@@ -3893,9 +3845,25 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
     println!("   Branch : {branch}");
     require_app_release_branch(&branch, &next_version)?;
     require_main_merged(ctx)?;
-    let worktree_clean_at_start = git_status_porcelain(ctx)?.trim().is_empty();
+    require_release_notes(
+        ctx,
+        latest_tag.as_deref(),
+        &tag_name,
+        &next_version,
+        args.dry_run,
+    )?;
+    let release_notes_relative = release_notes_path_relative(&tag_name);
+    println!("   Notes  : {release_notes_relative}");
+    let status_at_start = git_status_porcelain(ctx)?;
+    let worktree_clean_at_start = status_at_start.trim().is_empty();
     if !worktree_clean_at_start {
-        prompt_continue_if_dirty(ctx)?;
+        if dirty_paths_are_release_notes_only(&status_at_start, &release_notes_relative) {
+            println!(
+                "   {YELLOW}Release notes are uncommitted; they join the release-prep commit{RESET}"
+            );
+        } else {
+            prompt_continue_if_dirty(ctx)?;
+        }
     }
     require_command("gh")?;
     run_scryer_release_container_contract_validation(ctx, "[release] ")?;
@@ -4092,30 +4060,18 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
         if args.dry_run {
             match validation_result {
                 Ok((refreshed_builtins, validated_steps)) => {
-                    let prewritten_release_notes = expected_release_notes_file.is_file();
-                    let (release_notes_path, release_notes_sha256) = if prewritten_release_notes {
-                        step("Validating prewritten release notes");
-                        validate_prewritten_release_notes(&expected_release_notes_file, &tag_name)?;
-                        (
-                            expected_release_notes_file.clone(),
-                            release_notes_sha256(&expected_release_notes_file)?,
-                        )
-                    } else {
-                        step("Generating AI release notes");
-                        generate_release_notes(
-                            ctx,
-                            latest_tag.as_deref(),
-                            &tag_name,
-                            &next_version,
-                        )?
-                    };
+                    step("Validating release notes");
+                    let release_notes_path = require_release_notes(
+                        ctx,
+                        latest_tag.as_deref(),
+                        &tag_name,
+                        &next_version,
+                        args.dry_run,
+                    )?;
+                    let release_notes_sha256 = release_notes_sha256(&release_notes_path)?;
                     let release_notes_path_relative =
                         relative_to_repo_root(ctx, &release_notes_path)?;
-                    ok(if prewritten_release_notes {
-                        format!("Using {release_notes_path_relative}")
-                    } else {
-                        format!("Generated {release_notes_path_relative}")
-                    });
+                    ok(format!("Using {release_notes_path_relative}"));
 
                     let mut prep_changed_paths = git_tracked_dirty_paths(ctx)?;
                     maybe_add_changed_graphql_schema_artifact(ctx, &mut prep_changed_paths)?;
@@ -5330,6 +5286,45 @@ mod tests {
     }
 
     #[test]
+    fn release_notes_only_dirty_tree_skips_the_operator_prompt() {
+        let notes = "release-notes/scryer-v1.2.3.md";
+
+        assert!(dirty_paths_are_release_notes_only(
+            "?? release-notes/scryer-v1.2.3.md\n",
+            notes
+        ));
+        assert!(dirty_paths_are_release_notes_only(
+            " M release-notes/scryer-v1.2.3.md\n",
+            notes
+        ));
+        assert!(!dirty_paths_are_release_notes_only(
+            "?? release-notes/scryer-v1.2.3.md\n M crates/scryer/src/main.rs\n",
+            notes
+        ));
+        assert!(!dirty_paths_are_release_notes_only(
+            " M crates/scryer/src/main.rs\n",
+            notes
+        ));
+        assert!(!dirty_paths_are_release_notes_only("", notes));
+        assert!(!dirty_paths_are_release_notes_only(
+            "?? release-notes/scryer-v1.2.2.md\n",
+            notes
+        ));
+    }
+
+    #[test]
+    fn porcelain_status_paths_read_renames_and_quoted_paths() {
+        assert_eq!(
+            porcelain_status_paths("R  release-notes/old.md -> release-notes/new.md\n"),
+            vec!["release-notes/new.md".to_string()]
+        );
+        assert_eq!(
+            porcelain_status_paths("?? \"release-notes/scryer-v1.2.3.md\"\n"),
+            vec!["release-notes/scryer-v1.2.3.md".to_string()]
+        );
+    }
+
+    #[test]
     fn release_notes_path_uses_tag_name() {
         let ctx = TaskContext::new();
         let path = release_notes_path(&ctx, "scryer-v1.2.3");
@@ -5341,99 +5336,132 @@ mod tests {
     }
 
     #[test]
-    fn release_notes_validation_requires_ai_marker() {
+    fn release_notes_validation_accepts_either_heading() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("notes.md");
+        let version = Version::parse("1.2.3").unwrap();
+
+        let human = temp.path().join("human.md");
         fs::write(
-            &path,
-            "# scryer-v1.2.3\n\n- User-facing release note without marker.\n",
+            &human,
+            "# Scryer 1.2.3 release notes\n\n- Improved imports.\n",
         )
         .unwrap();
+        validate_release_notes_document(&human, "scryer-v1.2.3", &version).unwrap();
 
-        let error = validate_release_notes_output(&path, "scryer-v1.2.3").unwrap_err();
-        assert!(
-            format!("{error:#}")
-                .contains("generated release notes must include `AI generated release notes`")
-        );
+        let tagged = temp.path().join("tagged.md");
+        fs::write(&tagged, "# scryer-v1.2.3\n\n- Improved imports.\n").unwrap();
+        validate_release_notes_document(&tagged, "scryer-v1.2.3", &version).unwrap();
     }
 
     #[test]
-    fn release_notes_validation_accepts_ai_marker() {
+    fn release_notes_validation_rejects_wrong_heading() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("notes.md");
-        fs::write(
+        fs::write(&path, "# Release notes\n\n- Improved imports.\n").unwrap();
+
+        let error = validate_release_notes_document(
             &path,
-            "# scryer-v1.2.3\n\nAI generated release notes\n\n- Improved release notes.\n",
-        )
-        .unwrap();
-
-        validate_release_notes_output(&path, "scryer-v1.2.3").unwrap();
-    }
-
-    #[test]
-    fn prewritten_release_notes_accept_human_heading_without_ai_marker() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("notes.md");
-        fs::write(
-            &path,
-            "# Scryer 1.2.3 release notes\n\n- Improved release notes.\n",
-        )
-        .unwrap();
-
-        validate_prewritten_release_notes(&path, "scryer-v1.2.3").unwrap();
-    }
-
-    #[test]
-    fn release_notes_codex_command_uses_gpt_54_xhigh_by_default() {
-        let command = codex_release_notes_command_for(
-            Path::new("release-notes/scryer-v1.2.3.md"),
-            RELEASE_NOTES_DEFAULT_CODEX_MODEL,
-            RELEASE_NOTES_DEFAULT_CODEX_REASONING,
-        );
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-
-        assert_eq!(command.get_program().to_string_lossy(), "codex");
-        assert!(args.windows(2).any(|window| {
-            window[0] == "--model" && window[1] == RELEASE_NOTES_DEFAULT_CODEX_MODEL
-        }));
-        assert!(args.windows(2).any(|window| {
-            window[0] == "-c"
-                && window[1]
-                    == format!(
-                        "model_reasoning_effort=\"{}\"",
-                        RELEASE_NOTES_DEFAULT_CODEX_REASONING
-                    )
-        }));
-        assert!(!args.contains(&"--ask-for-approval".to_string()));
-        assert!(args.contains(&"--output-last-message".to_string()));
-        assert_eq!(args.last().map(String::as_str), Some("-"));
-    }
-
-    #[test]
-    fn release_notes_command_override_receives_environment() {
-        let ctx = TaskContext::new();
-        let temp = tempfile::tempdir().unwrap();
-        let context_path = temp.path().join("context.md");
-        let output_path = temp.path().join("output.md");
-        fs::write(&context_path, "release context").unwrap();
-        let command = r#"test "$SCRYER_RELEASE_NOTES_CONTEXT" = "release context" && test -s "$SCRYER_RELEASE_NOTES_CONTEXT_PATH" && printf '# %s\n\nAI generated release notes\n\n- Generated by override.\n' "$SCRYER_RELEASE_TAG" > "$SCRYER_RELEASE_NOTES_OUTPUT""#;
-
-        run_release_notes_command_with_template(
-            &ctx,
-            &context_path,
-            &output_path,
             "scryer-v1.2.3",
-            Some("scryer-v1.2.2"),
             &Version::parse("1.2.3").unwrap(),
-            "release context",
-            Some(command),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains(
+            "release notes must start with `# Scryer 1.2.3 release notes` or `# scryer-v1.2.3`"
+        ));
+    }
+
+    #[test]
+    fn release_notes_validation_rejects_placeholder_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("notes.md");
+        fs::write(&path, "# scryer-v1.2.3\n\n- TBD\n").unwrap();
+
+        let error = validate_release_notes_document(
+            &path,
+            "scryer-v1.2.3",
+            &Version::parse("1.2.3").unwrap(),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("placeholder text"));
+    }
+
+    #[test]
+    fn release_notes_validation_no_longer_requires_an_ai_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("notes.md");
+        fs::write(
+            &path,
+            "# Scryer 1.2.3 release notes\n\n- Written by hand, no marker line.\n",
         )
         .unwrap();
 
-        validate_release_notes_output(&output_path, "scryer-v1.2.3").unwrap();
+        validate_release_notes_document(&path, "scryer-v1.2.3", &Version::parse("1.2.3").unwrap())
+            .unwrap();
+    }
+
+    #[test]
+    fn missing_release_notes_fail_with_agent_authoring_instructions() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = TaskContext::with_repo_root(temp.path().to_path_buf());
+        let version = Version::parse("1.2.3").unwrap();
+
+        let error =
+            require_release_notes(&ctx, Some("scryer-v1.2.2"), "scryer-v1.2.3", &version, true)
+                .unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("release notes are missing"));
+        assert!(message.contains("release-notes/scryer-v1.2.3.md"));
+        assert!(message.contains("If you are an agent running this command"));
+        assert!(message.contains("Write release-notes/scryer-v1.2.3.md yourself"));
+        assert!(message.contains("# Scryer 1.2.3 release notes"));
+        assert!(message.contains("cargo xtask release --dry-run"));
+
+        let context_path = release_notes_context_path(&ctx, "scryer-v1.2.3");
+        assert!(message.contains(&relative_to_repo_root(&ctx, &context_path).unwrap()));
+        let context = fs::read_to_string(&context_path).unwrap();
+        assert!(context.contains("# Release Notes Authoring Context"));
+        assert!(context.contains("Write the notes to: release-notes/scryer-v1.2.3.md"));
+    }
+
+    #[test]
+    fn invalid_release_notes_fail_with_agent_authoring_instructions() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = TaskContext::with_repo_root(temp.path().to_path_buf());
+        let version = Version::parse("1.2.3").unwrap();
+        let notes_path = ctx.path("release-notes/scryer-v1.2.3.md");
+        fs::create_dir_all(notes_path.parent().unwrap()).unwrap();
+        fs::write(&notes_path, "# Wrong heading\n\n- Something changed.\n").unwrap();
+
+        let error =
+            require_release_notes(&ctx, Some("scryer-v1.2.2"), "scryer-v1.2.3", &version, true)
+                .unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("are not usable"));
+        assert!(message.contains("release notes must start with"));
+        assert!(message.contains("If you are an agent running this command"));
+    }
+
+    #[test]
+    fn present_release_notes_pass_preflight_without_writing_authoring_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = TaskContext::with_repo_root(temp.path().to_path_buf());
+        let version = Version::parse("1.2.3").unwrap();
+        let notes_path = ctx.path("release-notes/scryer-v1.2.3.md");
+        fs::create_dir_all(notes_path.parent().unwrap()).unwrap();
+        fs::write(
+            &notes_path,
+            "# Scryer 1.2.3 release notes\n\n## Highlights\n\n- Imports are faster.\n",
+        )
+        .unwrap();
+
+        let resolved =
+            require_release_notes(&ctx, Some("scryer-v1.2.2"), "scryer-v1.2.3", &version, true)
+                .unwrap();
+
+        assert_eq!(resolved, notes_path);
+        assert!(!release_notes_context_path(&ctx, "scryer-v1.2.3").exists());
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod hook_ids;
 pub mod known_bad;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
+pub mod post_processing_output;
 pub mod rule_set_runtime_wrapper;
 pub mod synthetic_root_ids;
 #[cfg(test)]
@@ -799,6 +800,9 @@ async fn run_rust_hook(
         }
         "adopt_existing_title_tag_definitions" => {
             title_tag_definitions::adopt_existing_title_tag_definitions_sqlite(tx).await
+        }
+        "compress_post_processing_output" => {
+            post_processing_output::compress_post_processing_output_sqlite(tx).await
         }
         #[cfg(test)]
         "test_insert_hook_marker" => {

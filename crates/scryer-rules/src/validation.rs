@@ -895,6 +895,22 @@ pub fn validate_user_rule(
     rego_source: &str,
     rule_set_id: &str,
 ) -> Result<ValidationResult, RulesError> {
+    validate_user_rule_with_limits(rego_source, rule_set_id, &RuntimeLimits::release_defaults())
+}
+
+/// [`validate_user_rule`] with caller-supplied runtime limits.
+///
+/// The dry run evaluates the rule under the same host-enforced budget the
+/// release-scoring engine applies, so a rule that validates here also runs in
+/// production. Callers that exercise the validator outside a release build
+/// — corpus tests over hundreds of translated formats in an unoptimised
+/// interpreter — pass a wider evaluation budget so wall-clock noise does not
+/// masquerade as a rejected rule.
+pub fn validate_user_rule_with_limits(
+    rego_source: &str,
+    rule_set_id: &str,
+    limits: &RuntimeLimits,
+) -> Result<ValidationResult, RulesError> {
     let expected_pkg = format!("package scryer.rules.user.{rule_set_id}");
 
     // Check package declaration
@@ -906,7 +922,7 @@ pub fn validate_user_rule(
     }
 
     // Compile in a throwaway engine
-    let mut engine = runtime::configured_engine(&RuntimeLimits::release_defaults());
+    let mut engine = runtime::configured_engine(limits);
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {

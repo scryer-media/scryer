@@ -534,6 +534,10 @@ async fn run_postgres_rust_hook(
             crate::migrations::title_tag_definitions::adopt_existing_title_tag_definitions_postgres(tx)
                 .await
         }
+        "compress_post_processing_output" => {
+            crate::migrations::post_processing_output::compress_post_processing_output_postgres(tx)
+                .await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

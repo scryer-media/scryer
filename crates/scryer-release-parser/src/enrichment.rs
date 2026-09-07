@@ -52,7 +52,7 @@ pub(crate) fn enrich_candidate(
     let scoped_tokens = metadata_tokens_for_candidate(tokens, candidate);
     let normalized_tokens = scoped_tokens
         .iter()
-        .map(|token| token.normalized.clone())
+        .map(|(_, token)| token.normalized.clone())
         .collect::<Vec<_>>();
 
     let mut enrichment = MetadataEnrichment::default();
@@ -71,6 +71,15 @@ pub(crate) fn enrich_candidate(
     while index < normalized_tokens.len() {
         let token = normalized_tokens[index].as_str();
         let next = normalized_tokens.get(index + 1).map(String::as_str);
+        let technical_next = scoped_tokens
+            .get(index + 1)
+            .and_then(|(next_index, next_token)| {
+                let (token_index, token) = scoped_tokens[index];
+                (next_index == &(token_index + 1)
+                    && token.group_id == next_token.group_id
+                    && token.bracket_depth == next_token.bracket_depth)
+                    .then_some(next_token.normalized.as_str())
+            });
 
         if matches!(token, "PROPER" | "REPACK") {
             enrichment.is_proper_upload = true;
@@ -155,7 +164,7 @@ pub(crate) fn enrich_candidate(
             index += 1;
             continue;
         }
-        if token == "10" && next.is_some_and(|value| matches!(value, "BIT" | "BITS")) {
+        if token == "10" && technical_next.is_some_and(|value| matches!(value, "BIT" | "BITS")) {
             enrichment.is_10bit = true;
             index += 2;
             continue;
@@ -267,12 +276,12 @@ pub(crate) fn enrich_candidate(
 
         let (video_codec, video_encoding) = parse_video(token);
         if enrichment.video_codec.is_none() {
-            enrichment.video_codec =
-                video_codec.or_else(|| parse_split_video_codec(token, next).map(str::to_string));
+            enrichment.video_codec = video_codec
+                .or_else(|| parse_split_video_codec(token, technical_next).map(str::to_string));
         }
         if enrichment.video_encoding.is_none() {
             enrichment.video_encoding = video_encoding
-                .or_else(|| parse_split_video_encoding(token, next).map(str::to_string));
+                .or_else(|| parse_split_video_encoding(token, technical_next).map(str::to_string));
         }
 
         if let Some((audio, consumed)) = parse_split_audio_at(&normalized_tokens, index) {
@@ -483,7 +492,7 @@ pub(crate) fn collect_missing_fields(projected: &ParsedReleaseMetadata) -> Vec<S
 fn metadata_tokens_for_candidate<'a>(
     tokens: &'a [Token],
     candidate: &ReleaseParseCandidate,
-) -> Vec<&'a Token> {
+) -> Vec<(usize, &'a Token)> {
     let first_title_token = candidate
         .zones
         .title_zones
@@ -498,12 +507,13 @@ fn metadata_tokens_for_candidate<'a>(
         .unwrap_or(tokens.len());
     let mut scoped_indices = Vec::new();
     scoped_indices.extend((0..first_title_token).filter(|index| {
-        tokens
-            .get(*index)
-            .is_some_and(|token| is_prefix_metadata_token(token.normalized.as_str()))
+        !metadata_token_is_protected(candidate, *index)
+            && tokens
+                .get(*index)
+                .is_some_and(|token| is_prefix_metadata_token(token.normalized.as_str()))
     }));
     scoped_indices.extend((0..metadata_start).filter(|index| {
-        !token_in_ranges(*index, candidate.zones.title_zones.as_slice())
+        !metadata_token_is_protected(candidate, *index)
             && tokens
                 .get(*index)
                 .is_some_and(|token| is_gap_metadata_token(token.normalized.as_str()))
@@ -514,23 +524,27 @@ fn metadata_tokens_for_candidate<'a>(
         scoped_indices.dedup();
         return scoped_indices
             .into_iter()
-            .filter_map(|index| tokens.get(index))
+            .filter_map(|index| tokens.get(index).map(|token| (index, token)))
             .collect();
     };
     scoped_indices.extend(
-        (metadata_zone.start_token..metadata_zone.end_token).filter(|index| {
-            !candidate
-                .zones
-                .release_group_span
-                .is_some_and(|range| (*index >= range.start_token) && (*index < range.end_token))
-        }),
+        (metadata_zone.start_token..metadata_zone.end_token)
+            .filter(|index| !metadata_token_is_protected(candidate, *index)),
     );
     scoped_indices.sort_unstable();
     scoped_indices.dedup();
     scoped_indices
         .into_iter()
-        .filter_map(|index| tokens.get(index))
+        .filter_map(|index| tokens.get(index).map(|token| (index, token)))
         .collect()
+}
+
+fn metadata_token_is_protected(candidate: &ReleaseParseCandidate, index: usize) -> bool {
+    token_in_ranges(index, candidate.zones.title_zones.as_slice())
+        || token_in_ranges(index, candidate.zones.release_group_span.as_slice())
+        || candidate.context_title_matches.iter().any(|match_| {
+            index >= match_.token_range.start_token && index < match_.token_range.end_token
+        })
 }
 
 fn is_prefix_metadata_token(token: &str) -> bool {
@@ -747,7 +761,7 @@ fn is_10bit_token(token: &str) -> bool {
         || token.ends_with("10BITS")
 }
 
-fn parse_split_video_codec(token: &str, next: Option<&str>) -> Option<&'static str> {
+pub(crate) fn parse_split_video_codec(token: &str, next: Option<&str>) -> Option<&'static str> {
     match (token, next) {
         ("H" | "X", Some("265")) => Some("H.265"),
         ("H" | "X", Some("264")) => Some("H.264"),
@@ -1241,4 +1255,79 @@ pub(crate) fn normalize_source_for_service(
 
 fn is_digit_str(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod scoped_metadata_tests {
+    use super::*;
+    use crate::{
+        ContextFacetHint, ContextTitle, ReleaseParseContext, TokenRange, analyze_release_for_target,
+    };
+
+    fn context() -> ReleaseParseContext {
+        ReleaseParseContext {
+            facet_hint: ContextFacetHint::Anime,
+            title: ContextTitle {
+                name: "Known Anime".to_string(),
+            },
+            aliases: Vec::new(),
+            known_years: Vec::new(),
+            imdb_ids: Vec::new(),
+            episodes: Vec::new(),
+        }
+    }
+
+    fn scoped_candidate(input: &str, title_tokens: &[&str]) -> (Vec<Token>, ReleaseParseCandidate) {
+        let lexed = crate::lex::lex_lossless(input);
+        let mut candidate = analyze_release_for_target(input, &context())
+            .best_candidate()
+            .expect("candidate")
+            .clone();
+        candidate.zones.metadata_zone = Some(TokenRange {
+            start_token: 0,
+            end_token: lexed.tokens.len(),
+        });
+        candidate.zones.title_zones = title_tokens
+            .iter()
+            .map(|title| {
+                let index = lexed
+                    .tokens
+                    .iter()
+                    .position(|token| token.normalized == *title)
+                    .expect("title token");
+                TokenRange {
+                    start_token: index,
+                    end_token: index + 1,
+                }
+            })
+            .collect();
+        (lexed.tokens, candidate)
+    }
+
+    #[test]
+    fn scoped_metadata_does_not_join_across_protected_or_bracket_boundaries() {
+        let (tokens, candidate) = scoped_candidate(
+            "[1080p] H Protected 264 [H] [264] [10] [bit]",
+            &["1080P", "PROTECTED"],
+        );
+        let enrichment = enrich_candidate(&tokens, &candidate, "");
+
+        assert!(
+            metadata_tokens_for_candidate(&tokens, &candidate)
+                .iter()
+                .all(|(_, token)| !matches!(token.normalized.as_str(), "1080P" | "PROTECTED"))
+        );
+        assert!(enrichment.video_codec.is_none());
+        assert!(enrichment.video_encoding.is_none());
+        assert!(!enrichment.is_10bit);
+    }
+
+    #[test]
+    fn scoped_metadata_keeps_split_technical_tokens_in_one_bracket_scope() {
+        let (tokens, candidate) = scoped_candidate("[H.264] [10bit]", &[]);
+        let enrichment = enrich_candidate(&tokens, &candidate, "");
+
+        assert_eq!(enrichment.video_codec.as_deref(), Some("H.264"));
+        assert!(enrichment.is_10bit);
+    }
 }

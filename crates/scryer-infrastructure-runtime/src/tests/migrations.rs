@@ -499,13 +499,13 @@ async fn migrations_apply_then_validate_is_idempotent() {
     let _ = std::fs::remove_file(db);
 }
 
-/// 0219-0221 land the request-rules tables and the media-request policy
+/// 0221-0223 land the request-rules tables and the media-request policy
 /// columns. A fresh database must carry all three, and re-opening it in
 /// validate mode must accept the manifest checksums the build script derived
 /// from the SQL files — an edit to a shipped migration would fail here rather
 /// than in production (constitution C1).
 #[tokio::test]
-async fn migrations_0219_through_0221_apply_then_validate() {
+async fn migrations_0221_through_0223_apply_then_validate() {
     let db = std::env::temp_dir().join(format!(
         "scryer_request_rules_migrations_{}.db",
         chrono::Utc::now().timestamp_micros()
@@ -528,7 +528,7 @@ async fn migrations_0219_through_0221_apply_then_validate() {
         .fetch_one(&pool)
         .await
         .expect("read sqlite_master");
-        assert_eq!(found, 1, "{table} should exist after 0219-0220");
+        assert_eq!(found, 1, "{table} should exist after 0221-0222");
     }
 
     for index in [
@@ -544,7 +544,7 @@ async fn migrations_0219_through_0221_apply_then_validate() {
         .fetch_one(&pool)
         .await
         .expect("read sqlite_master");
-        assert_eq!(found, 1, "{index} should exist after 0219-0220");
+        assert_eq!(found, 1, "{index} should exist after 0221-0222");
     }
 
     let request_columns: Vec<String> =
@@ -562,11 +562,11 @@ async fn migrations_0219_through_0221_apply_then_validate() {
     ] {
         assert!(
             request_columns.iter().any(|name| name == column),
-            "media_requests should carry {column} after 0221"
+            "media_requests should carry {column} after 0223"
         );
     }
 
-    // 0221 deliberately leaves `resolved_by_user_id` alone: it is already
+    // 0223 deliberately leaves `resolved_by_user_id` alone: it is already
     // nullable, so a rule-driven denial can record no resolver without
     // inventing a system user.
     let resolver_notnull: i64 = sqlx::query_scalar(
@@ -4818,13 +4818,13 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
 }
 
 #[tokio::test]
-async fn migration_0216_makes_proxies_first_class_and_preserves_solver_rows() {
+async fn migration_0218_makes_proxies_first_class_and_preserves_solver_rows() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("migration test database should open");
-    // The pre-0216 shape, verbatim from the 0198 baseline: the proxy table, the
+    // The pre-0220 shape, verbatim from the 0198 baseline: the proxy table, the
     // indexer column that names it, and the download-client table that does not
     // know about proxies at all yet.
     sqlx::raw_sql(
@@ -4889,11 +4889,11 @@ async fn migration_0216_makes_proxies_first_class_and_preserves_solver_rows() {
     )
     .execute(&pool)
     .await
-    .expect("initialize pre-0216 schema");
+    .expect("initialize pre-0218 schema");
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0216_first_class_proxies.sql"),
+        include_str!("../../../scryer/src/db/migrations/0218_first_class_proxies.sql"),
     )
     .await;
 
@@ -5025,14 +5025,14 @@ async fn migration_0216_makes_proxies_first_class_and_preserves_solver_rows() {
 }
 
 #[tokio::test]
-async fn migration_0217_adds_the_wireguard_columns_without_disturbing_existing_rows() {
+async fn migration_0219_adds_the_wireguard_columns_without_disturbing_existing_rows() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("migration test database should open");
-    // The post-0216 shape, verbatim from that migration, plus one SSH tunnel
-    // row: 0217 must leave it exactly as it found it.
+    // The post-0218 shape, verbatim from that migration, plus one SSH tunnel
+    // row: 0219 must leave it exactly as it found it.
     sqlx::raw_sql(
         "CREATE TABLE proxy_configs (
              id TEXT PRIMARY KEY NOT NULL,
@@ -5069,11 +5069,11 @@ async fn migration_0217_adds_the_wireguard_columns_without_disturbing_existing_r
     )
     .execute(&pool)
     .await
-    .expect("initialize post-0216 schema");
+    .expect("initialize post-0218 schema");
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0217_wireguard_proxies.sql"),
+        include_str!("../../../scryer/src/db/migrations/0219_wireguard_proxies.sql"),
     )
     .await;
 
@@ -5172,7 +5172,7 @@ async fn migration_0217_adds_the_wireguard_columns_without_disturbing_existing_r
         )
     );
 
-    // 0216's index is untouched: 0217 only adds columns.
+    // 0218's index is untouched: 0219 only adds columns.
     let index: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master
           WHERE type = 'index' AND name = 'idx_proxy_configs_provider_type'",
@@ -5347,7 +5347,7 @@ async fn migration_0206_rebuilds_media_requests_without_losing_child_rows() {
 }
 
 #[tokio::test]
-async fn migration_0218_creates_the_tag_registry_and_adopts_the_labels_already_in_the_bags() {
+async fn migration_0220_creates_the_tag_registry_and_adopts_the_labels_already_in_the_bags() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -5375,11 +5375,11 @@ async fn migration_0218_creates_the_tag_registry_and_adopts_the_labels_already_i
     )
     .execute(&pool)
     .await
-    .expect("initialize the pre-0218 shape");
+    .expect("initialize the pre-0220 shape");
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0218_title_tag_definitions.sql"),
+        include_str!("../../../scryer/src/db/migrations/0220_title_tag_definitions.sql"),
     )
     .await;
 

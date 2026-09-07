@@ -9,9 +9,10 @@ use quick_xml::{Reader, XmlVersion};
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use scryer_application::{
-    CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerErrorOperation,
-    IndexerErrorRecorder, challenge_solver as solver, classify_indexer_http_response,
-    indexer_response_content_type, transport_proxy, unknown_indexer_error,
+    CALL_SOLVER, CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerErrorOperation,
+    IndexerErrorRecorder, IndexerRequestResult, IndexerRequestTally, IndexerStatsTracker,
+    challenge_solver as solver, classify_indexer_http_response, indexer_response_content_type,
+    transport_proxy, unknown_indexer_error,
 };
 
 const DEFAULT_MAX_HTTP_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
@@ -46,7 +47,35 @@ struct PluginHttpHostState {
     destination_cooldown_key: Option<scryer_outbound_http::DestinationKey>,
     max_http_response_bytes: Option<u64>,
     last_responses: HashMap<String, PluginHttpLastResponse>,
+    indexer_request_accounting: Option<IndexerRequestAccountingContext>,
     indexer_error_capture: Option<ActiveIndexerErrorCapture>,
+}
+
+/// Immutable identity and tracker used to account for actual indexer HTTP
+/// dispatches. It intentionally remains separate from error-response capture:
+/// a transport error must not decide which indexer's quota is charged.
+#[derive(Clone)]
+pub(crate) struct IndexerRequestAccountingContext {
+    pub(crate) indexer_id: String,
+    pub(crate) indexer_name: String,
+    pub(crate) operation: IndexerErrorOperation,
+    pub(crate) stats: Arc<dyn IndexerStatsTracker>,
+    pub(crate) indexer_origin: Option<String>,
+}
+
+impl IndexerRequestAccountingContext {
+    pub(crate) fn tally(&self) -> IndexerRequestTally {
+        let tally = IndexerRequestTally::new(
+            self.indexer_id.clone(),
+            self.indexer_name.clone(),
+            self.operation,
+            Arc::clone(&self.stats),
+        );
+        match self.indexer_origin.as_deref() {
+            Some(origin) => tally.with_indexer_origin(origin),
+            None => tally,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,6 +84,21 @@ pub(crate) struct IndexerErrorCaptureContext {
     pub(crate) indexer_name: String,
     pub(crate) operation: IndexerErrorOperation,
     pub(crate) recorder: Arc<dyn IndexerErrorRecorder>,
+    /// Counts the HTTP requests this operation sends. Every plugin request
+    /// reaches the network through this host, so counting here is the whole
+    /// count: pagination, retries and post-solve replays included.
+    pub(crate) stats: Arc<dyn IndexerStatsTracker>,
+}
+
+impl IndexerErrorCaptureContext {
+    pub(crate) fn tally(&self) -> IndexerRequestTally {
+        IndexerRequestTally::new(
+            self.indexer_id.clone(),
+            self.indexer_name.clone(),
+            self.operation,
+            Arc::clone(&self.stats),
+        )
+    }
 }
 
 struct ActiveIndexerErrorCapture {
@@ -311,6 +355,7 @@ impl PluginHttpHost {
                     .map(scryer_outbound_http::DestinationKey::from),
                 max_http_response_bytes,
                 last_responses: HashMap::new(),
+                indexer_request_accounting: None,
                 indexer_error_capture: None,
             })),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -390,6 +435,17 @@ impl PluginHttpHost {
             Err(error) => {
                 tracing::warn!(error = %error, "failed to start indexer HTTP error capture")
             }
+        }
+    }
+
+    /// See [`Self::begin_indexer_error_capture`].
+    #[allow(dead_code)]
+    pub(crate) fn set_indexer_request_accounting(
+        &self,
+        context: Option<IndexerRequestAccountingContext>,
+    ) {
+        if let Ok(mut state) = self.state.lock() {
+            state.indexer_request_accounting = context;
         }
     }
 
@@ -593,6 +649,7 @@ impl PluginHttpHost {
                     .session_headers(&policy.config.id, &request.url)
             })
             .unwrap_or_default();
+        let tally = Self::request_tally(state);
         let response = execute_request_with_extra_headers(
             &request_client,
             &request,
@@ -601,6 +658,7 @@ impl PluginHttpHost {
             &session_headers,
             destination_cooldown_key.as_ref(),
             transport_policy.map(|policy| &policy.config),
+            tally.as_ref(),
         )?;
         if let Some(policy) = transport_policy {
             transport_proxy::record_transport_proxy_success(&policy.config);
@@ -610,14 +668,15 @@ impl PluginHttpHost {
         let headers = response_headers(&response);
         let captured_headers = captured_response_headers(&response);
         let direct_body = read_response_body(response, max_http_response_bytes)?;
-        Self::capture_indexer_response(
-            state,
-            CapturedIndexerHttpResponse {
-                status: status_code,
-                headers: captured_headers,
-                body: direct_body.clone(),
-            },
-        );
+        let captured = CapturedIndexerHttpResponse {
+            status: status_code,
+            headers: captured_headers,
+            body: direct_body.clone(),
+        };
+        if let Some(tally) = tally.as_ref() {
+            tally.note_response(&captured);
+        }
+        Self::capture_indexer_response(state, captured);
 
         if status == StatusCode::TOO_MANY_REQUESTS {
             let response_bytes = direct_body.len();
@@ -677,6 +736,7 @@ impl PluginHttpHost {
                     original_timeout: Some(timeout),
                     max_http_response_bytes,
                     destination_cooldown_key: destination_cooldown_key.as_ref(),
+                    tally: tally.as_ref(),
                 },
             ) {
                 Ok(solved) => {
@@ -765,6 +825,23 @@ impl PluginHttpHost {
             .last_responses
             .get(plugin_id)
             .and_then(|response| response.rate_limit_message.clone()))
+    }
+
+    /// The immutable accounting identity takes precedence over error capture.
+    /// Error capture remains a fallback for legacy callers while adapters are
+    /// migrated to set the accounting context explicitly.
+    fn request_tally(state: &Arc<Mutex<PluginHttpHostState>>) -> Option<IndexerRequestTally> {
+        let state = state.lock().ok()?;
+        state
+            .indexer_request_accounting
+            .as_ref()
+            .map(IndexerRequestAccountingContext::tally)
+            .or_else(|| {
+                state
+                    .indexer_error_capture
+                    .as_ref()
+                    .map(|capture| capture.context.tally())
+            })
     }
 
     fn capture_indexer_response(
@@ -948,6 +1025,13 @@ fn merge_cookie_headers(original: Option<&str>, solved: &str) -> Option<String> 
     })
 }
 
+/// The one place a plugin's HTTP request reaches the network on this host.
+///
+/// `tally` is counted here rather than at the call sites because both of them
+/// — the direct send and the post-solve replay — pass through this function,
+/// and because the count must happen *after* the cooldown gate below: that gate
+/// can reject a request before it is dispatched, and a request that never left
+/// is not one the indexer served.
 fn execute_request_with_extra_headers(
     client: &Client,
     request: &PluginHttpRequest,
@@ -959,6 +1043,7 @@ fn execute_request_with_extra_headers(
     // nothing about the request; it only lets a connector failure be reported
     // as "the proxy is unreachable" rather than "the indexer is down".
     transport_proxy_config: Option<&scryer_domain::ProxyConfig>,
+    tally: Option<&IndexerRequestTally>,
 ) -> HostResult<reqwest::blocking::Response> {
     let method = Method::from_bytes(
         request
@@ -1010,12 +1095,37 @@ fn execute_request_with_extra_headers(
         builder = builder.body(body);
     }
 
-    scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_policy(
+    let result = scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
         builder,
         timeout,
         destination_cooldown_key.cloned(),
-    )
-    .map_err(|error| match error {
+        || {
+            if let Some(tally) = tally
+                && !tally.try_note_sent(&request.url) {
+                return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
+            }
+            Ok(())
+        },
+    );
+
+    if let Some(tally) = tally {
+        match &result {
+            Ok(_) => {}
+            Err(scryer_outbound_http::BlockingOutboundHttpError::Request(_)) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+            }
+            // Rejected by the local cooldown or deadline gate before dispatch.
+            // Counting these would inflate the dashboard exactly when an
+            // indexer is rate limited, which is when the number matters most.
+            Err(
+                scryer_outbound_http::BlockingOutboundHttpError::CooldownBudgetExceeded { .. }
+                | scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded
+                | scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected,
+            ) => {}
+        }
+    }
+
+    result.map_err(|error| match error {
         scryer_outbound_http::BlockingOutboundHttpError::Request(error) if error.is_timeout() => {
             "timeout".to_string()
         }
@@ -1151,6 +1261,10 @@ struct ChallengeSolverRequestOptions<'a> {
     original_timeout: Option<Duration>,
     max_http_response_bytes: Option<u64>,
     destination_cooldown_key: Option<&'a scryer_outbound_http::DestinationKey>,
+    /// Carries the caller's tally through the solve. A solve costs the account
+    /// two requests, and both are counted: the solver fetches the indexer URL
+    /// itself, API key and all, and then we replay the request ourselves.
+    tally: Option<&'a IndexerRequestTally>,
 }
 
 fn execute_challenge_solver_request(
@@ -1165,6 +1279,7 @@ fn execute_challenge_solver_request(
         original_timeout,
         max_http_response_bytes,
         destination_cooldown_key,
+        tally,
     } = options;
     if !policy.config.is_enabled {
         return Err(format!("Proxy {} is disabled.", policy.config.name.trim()));
@@ -1186,19 +1301,43 @@ fn execute_challenge_solver_request(
         "challenge solver request started"
     );
 
-    let response = scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_budget_until(
-        proxy_client
-            .post(&endpoint)
-            .timeout(solver_timeout)
-            .json(&solver::solver_solve_request(
-                provider,
-                &request.url,
-                policy.config.request_timeout_seconds,
-            )),
-        Some(Duration::ZERO),
-        solver_deadline,
-    )
-    .map_err(|error| match error {
+    // The solve payload is `request.get` against `request.url`; the network
+    // send goes to the solver, which replays it against the indexer. It passes
+    // the operation's shutdown gate and counts as one indexer request.
+    let solve_result =
+        scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_budget_until_and_dispatch_observer(
+            proxy_client.post(&endpoint).timeout(solver_timeout).json(
+                &solver::solver_solve_request(
+                    provider,
+                    &request.url,
+                    policy.config.request_timeout_seconds,
+                ),
+            ),
+            Some(Duration::ZERO),
+            solver_deadline,
+            || {
+                if let Some(tally) = tally
+                    && !tally.try_note_sent_call(CALL_SOLVER)
+                {
+                    return Err(scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected);
+                }
+                Ok(())
+            },
+        );
+    if let Some(tally) = tally {
+        match &solve_result {
+            Err(scryer_outbound_http::BlockingOutboundHttpError::Request(_)) => {
+                tally.note_result(IndexerRequestResult::NoResponse);
+            }
+            Ok(_) => {}
+            Err(
+                scryer_outbound_http::BlockingOutboundHttpError::CooldownBudgetExceeded { .. }
+                | scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded
+                | scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected,
+            ) => {}
+        }
+    }
+    let response = solve_result.map_err(|error| match error {
         scryer_outbound_http::BlockingOutboundHttpError::Request(error) if error.is_timeout() => {
             solver::solver_error_message(provider, solver::SolverErrorKind::Timeout).to_string()
         }
@@ -1211,10 +1350,16 @@ fn execute_challenge_solver_request(
         scryer_outbound_http::BlockingOutboundHttpError::DeadlineExceeded => {
             solver::solver_error_message(provider, solver::SolverErrorKind::Timeout).to_string()
         }
+        scryer_outbound_http::BlockingOutboundHttpError::DispatchRejected => {
+            solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable).to_string()
+        }
     })?;
 
     let solver_status = response.status();
     if solver_status == StatusCode::TOO_MANY_REQUESTS || solver_status.is_server_error() {
+        if let Some(tally) = tally {
+            tally.note_result(IndexerRequestResult::HttpStatus(solver_status.as_u16()));
+        }
         tracing::warn!(
             proxy_consumer_id = policy.consumer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
@@ -1232,6 +1377,15 @@ fn execute_challenge_solver_request(
         .map_err(|error| error.message(provider).to_string())?;
 
     let solution_status = solution.status.unwrap_or_else(|| solver_status.as_u16());
+    // The solver reports the indexer's own status, which is a truer `result`
+    // than the status of the solve call that carried it.
+    if let Some(tally) = tally {
+        tally.note_result(if (200..300).contains(&solution_status) {
+            IndexerRequestResult::Success
+        } else {
+            IndexerRequestResult::HttpStatus(solution_status)
+        });
+    }
     let solved_final_url = solution.url.as_deref().map(solver::sanitized_url_for_log);
     let solved_body = solution.response.clone().unwrap_or_default().into_bytes();
     let headers = solver::safe_solution_response_headers(solution.headers.as_ref());
@@ -1308,11 +1462,19 @@ fn execute_challenge_solver_request(
             destination_cooldown_key,
             // The solver replay is a direct hop, by construction.
             None,
+            tally,
         )?;
         let status = retry.status();
         let headers = response_headers(&retry);
         let captured_headers = captured_response_headers(&retry);
         let body = read_response_body(retry, max_http_response_bytes)?;
+        if let Some(tally) = tally {
+            tally.note_response(&CapturedIndexerHttpResponse {
+                status: status.as_u16(),
+                headers: captured_headers.clone(),
+                body: body.clone(),
+            });
+        }
         let terminal_error = if status == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = solver::header_value(&headers, "retry-after").and_then(|value| {
                 scryer_outbound_http::parse_retry_after(value).map(|(delay, _)| delay)
@@ -1760,6 +1922,38 @@ mod tests {
         scryer_application::tunnel_proxy::stop_tunnel("tunnel-blocking-host-dead");
     }
 
+    /// Counts what the dashboard would show: one per request actually sent.
+    #[derive(Default)]
+    struct CountingIndexerStatsTracker {
+        sent: std::sync::atomic::AtomicU32,
+    }
+
+    impl CountingIndexerStatsTracker {
+        fn sent(&self) -> u32 {
+            self.sent.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl IndexerStatsTracker for CountingIndexerStatsTracker {
+        fn record_query(&self, _indexer_id: &str, _indexer_name: &str, _success: bool) {}
+        fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+        fn record_api_request_sent(&self, _indexer_id: &str, _indexer_name: &str) {
+            self.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn all_stats(&self) -> Vec<scryer_application::IndexerQueryStats> {
+            Vec::new()
+        }
+    }
+
     #[derive(Default)]
     struct RecordingIndexerErrorRecorder {
         errors: Mutex<Vec<scryer_application::NewIndexerError>>,
@@ -1817,6 +2011,7 @@ mod tests {
             indexer_name: "Test Connection".to_string(),
             operation: IndexerErrorOperation::ConnectionTest,
             recorder: recorder.clone(),
+            stats: Arc::new(CountingIndexerStatsTracker::default()),
         };
 
         PluginHttpHost::record_captured_response(&capture, captured_failure_response());
@@ -1841,6 +2036,7 @@ mod tests {
             indexer_name: "Test indexer".to_string(),
             operation: IndexerErrorOperation::ConnectionTest,
             recorder: recorder.clone(),
+            stats: Arc::new(CountingIndexerStatsTracker::default()),
         };
 
         PluginHttpHost::record_captured_response(&capture, captured_failure_response());
@@ -1886,11 +2082,13 @@ mod tests {
             None,
             Some(64 * 1024),
         );
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
         let context = || IndexerErrorCaptureContext {
             indexer_id: "indexer-1".to_string(),
             indexer_name: "Test indexer".to_string(),
             operation: IndexerErrorOperation::InteractiveSearch,
             recorder: recorder.clone(),
+            stats: stats.clone(),
         };
 
         Mock::given(method("GET"))
@@ -1935,6 +2133,11 @@ mod tests {
                 scryer_application::IndexerErrorClassification::HttpUnauthorized
             );
         }
+        assert_eq!(
+            stats.sent(),
+            1,
+            "a 401 is still a request the indexer served"
+        );
 
         Mock::given(method("GET"))
             .and(path("/malformed"))
@@ -1956,6 +2159,12 @@ mod tests {
         )
         .expect("accepted HTTP success response");
         host.finish_indexer_error_capture(true);
+
+        assert_eq!(
+            stats.sent(),
+            2,
+            "every request through the host counts once, whatever came back"
+        );
 
         let errors = recorder.errors.lock().expect("recorded errors");
         assert_eq!(errors.len(), 2);
@@ -1980,14 +2189,22 @@ mod tests {
             None,
             Some(64 * 1024),
         );
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
         host.begin_indexer_error_capture(IndexerErrorCaptureContext {
             indexer_id: "indexer-1".to_string(),
             indexer_name: "Test indexer".to_string(),
             operation: IndexerErrorOperation::AutomaticSearch,
             recorder: recorder.clone(),
+            stats: stats.clone(),
         });
 
         host.finish_indexer_error_capture(true);
+
+        assert_eq!(
+            stats.sent(),
+            0,
+            "an operation that never reached the network sent no requests"
+        );
 
         let errors = recorder.errors.lock().expect("recorded errors");
         assert_eq!(errors.len(), 1);
@@ -2289,6 +2506,7 @@ mod tests {
                     "response": "<html>Trawl</html>"
                 }
             })))
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -2331,21 +2549,32 @@ mod tests {
             headers: BTreeMap::new(),
         };
 
-        let solved = tokio::task::spawn_blocking(move || {
-            let proxy_client =
-                scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
-            let request_client =
-                scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
-            execute_challenge_solver_request(
-                &proxy_client,
-                &request_client,
-                &policy,
-                &request,
-                ChallengeSolverRequestOptions {
-                    max_http_response_bytes: Some(1024 * 1024),
-                    ..Default::default()
-                },
-            )
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let solved = tokio::task::spawn_blocking({
+            let stats = Arc::clone(&stats);
+            move || {
+                let proxy_client =
+                    scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
+                let request_client =
+                    scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
+                let tally = IndexerRequestTally::new(
+                    "indexer-1".to_string(),
+                    "Test indexer".to_string(),
+                    IndexerErrorOperation::InteractiveSearch,
+                    stats,
+                );
+                execute_challenge_solver_request(
+                    &proxy_client,
+                    &request_client,
+                    &policy,
+                    &request,
+                    ChallengeSolverRequestOptions {
+                        max_http_response_bytes: Some(1024 * 1024),
+                        tally: Some(&tally),
+                        ..Default::default()
+                    },
+                )
+            }
         })
         .await
         .expect("solver task should join")
@@ -2354,6 +2583,11 @@ mod tests {
         assert_eq!(solved.status_code, 200);
         assert_eq!(solved.body, b"<html>Trawl</html>");
         assert!(solved.headers.is_empty());
+        assert_eq!(
+            stats.sent(),
+            1,
+            "a solver POST replays the request against the indexer and charges its dashboard once"
+        );
         let requests = server.received_requests().await.expect("recorded requests");
         assert_eq!(requests.len(), 1);
         assert_eq!(
@@ -2390,6 +2624,7 @@ mod tests {
                     "response": "<html>Just a moment</html>"
                 }
             })))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -2401,6 +2636,7 @@ mod tests {
                     .insert_header("content-type", "application/xml")
                     .set_body_bytes(b"<rss></rss>"),
             )
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -2443,21 +2679,32 @@ mod tests {
             headers: BTreeMap::new(),
         };
 
-        let solved = tokio::task::spawn_blocking(move || {
-            let proxy_client =
-                scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
-            let request_client =
-                scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
-            execute_challenge_solver_request(
-                &proxy_client,
-                &request_client,
-                &policy,
-                &request,
-                ChallengeSolverRequestOptions {
-                    max_http_response_bytes: Some(1024 * 1024),
-                    ..Default::default()
-                },
-            )
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let solved = tokio::task::spawn_blocking({
+            let stats = Arc::clone(&stats);
+            move || {
+                let proxy_client =
+                    scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
+                let request_client =
+                    scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
+                let tally = IndexerRequestTally::new(
+                    "indexer-1".to_string(),
+                    "Test indexer".to_string(),
+                    IndexerErrorOperation::InteractiveSearch,
+                    stats,
+                );
+                execute_challenge_solver_request(
+                    &proxy_client,
+                    &request_client,
+                    &policy,
+                    &request,
+                    ChallengeSolverRequestOptions {
+                        max_http_response_bytes: Some(1024 * 1024),
+                        tally: Some(&tally),
+                        ..Default::default()
+                    },
+                )
+            }
         })
         .await
         .expect("solver task should join")
@@ -2465,6 +2712,11 @@ mod tests {
 
         assert_eq!(solved.status_code, 200);
         assert_eq!(solved.body, b"<rss></rss>");
+        assert_eq!(
+            stats.sent(),
+            2,
+            "the solver-relayed request and Scryer's clearance-session replay each charge the indexer"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

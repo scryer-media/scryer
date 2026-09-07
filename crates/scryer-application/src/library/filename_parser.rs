@@ -87,6 +87,10 @@ pub(crate) struct LibraryFilenameParseInput<'a> {
     pub(crate) existing_record: Option<LibraryFilenameExistingRecord<'a>>,
     pub(crate) mode: LibraryFilenameParseMode,
     pub(crate) fallback_policy: LibraryFilenameFallbackPolicy,
+    /// Community (per-cour) anime numbering for this title, when the catalog
+    /// stores one. `None` for every non-anime title and for anime whose
+    /// community numbering already matches the catalog's.
+    pub(crate) anime_numbering_bridge: Option<&'a scryer_domain::AnimeNumberingBridge>,
 }
 
 impl<'a> LibraryFilenameParseInput<'a> {
@@ -103,6 +107,7 @@ impl<'a> LibraryFilenameParseInput<'a> {
             existing_record: None,
             mode: LibraryFilenameParseMode::TitleOnly,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+            anime_numbering_bridge: None,
         }
     }
 }
@@ -227,6 +232,55 @@ pub(crate) fn parse_library_filename(
 
     let mut fallback = parse_release_fallback(input, &raw_name);
     release_fallback_used = true;
+    // A library file may be named in the community's per-cour numbering while
+    // the catalog follows TVDB's official order. Translate before resolving so
+    // the file lands on the episode it actually holds; without a bridge this
+    // leaves the parse untouched.
+    if let Some(title) = input.title {
+        let numbering = crate::anime_numbering::translate_release_numbering(
+            input.anime_numbering_bridge,
+            title,
+            input.episodes,
+            &mut fallback,
+            None,
+        );
+        if numbering.is_ambiguous()
+            || matches!(
+                numbering,
+                crate::anime_numbering::NumberingResolution::UnresolvedPack
+            )
+        {
+            return LibraryFilenameParse {
+                query_evidence: query_build.evidence,
+                parsed_release: fallback,
+                episode_identity: None,
+                target: LibraryFilenameTarget::Unmatched {
+                    reason: if numbering.is_ambiguous() {
+                        "anime_numbering_ambiguous"
+                    } else {
+                        "unresolved_pack_scope"
+                    },
+                },
+                strategy: LibraryFilenameParseStrategy::ReleaseParserFallback,
+                release_fallback_used,
+            };
+        }
+    }
+    if matches!(
+        match_series_movie_filename(input.series_movie_links, &raw_name, fallback.year),
+        SeriesMovieFilenameMatch::Ambiguous
+    ) {
+        return LibraryFilenameParse {
+            query_evidence: query_build.evidence,
+            parsed_release: fallback,
+            episode_identity: None,
+            target: LibraryFilenameTarget::Unmatched {
+                reason: "series_movie_ambiguous",
+            },
+            strategy: LibraryFilenameParseStrategy::ReleaseParserFallback,
+            release_fallback_used,
+        };
+    }
     let fallback_episode = fallback.episode.clone();
     if fallback_episode.is_some()
         && !raw_name_has_explicit_episode_marker(&raw_name)
@@ -726,31 +780,46 @@ fn resolve_series_movie_from_name(
     raw_name: &str,
     filename_year: Option<i32>,
 ) -> Option<LibraryFilenameSeriesMovieTarget> {
-    let raw_key = library_name_match_key(raw_name);
-    if raw_key.is_empty() {
-        return None;
-    }
-
-    input
-        .series_movie_links
-        .iter()
-        .filter_map(|link| {
-            if let (Some(filename_year), Some(movie_year)) = (filename_year, link.movie.year)
-                && filename_year != movie_year
-            {
-                return None;
-            }
-
-            let movie_matches = series_movie_match_keys(link)
-                .into_iter()
-                .any(|key| normalized_key_contains_phrase(&raw_key, &key));
-            if !movie_matches {
-                return None;
-            }
-
+    match match_series_movie_filename(input.series_movie_links, raw_name, filename_year) {
+        SeriesMovieFilenameMatch::Unique(link) => {
             Some(build_series_movie_target(link, input.episodes))
-        })
-        .next()
+        }
+        SeriesMovieFilenameMatch::NoMatch | SeriesMovieFilenameMatch::Ambiguous => None,
+    }
+}
+
+pub(crate) enum SeriesMovieFilenameMatch<'a> {
+    NoMatch,
+    Unique(&'a SeriesMovieLink),
+    Ambiguous,
+}
+
+/// Match a full linked movie title without turning a title number into an episode.
+/// Explicit episode coordinates and ambiguous movie names remain authoritative.
+pub(crate) fn match_series_movie_filename<'a>(
+    links: &'a [SeriesMovieLink],
+    raw_name: &str,
+    filename_year: Option<i32>,
+) -> SeriesMovieFilenameMatch<'a> {
+    let raw_key = library_name_match_key(raw_name);
+    if raw_key.is_empty() || raw_name_has_explicit_episode_marker(raw_name) {
+        return SeriesMovieFilenameMatch::NoMatch;
+    }
+    let mut matches = links.iter().filter(|link| {
+        if let (Some(filename_year), Some(movie_year)) = (filename_year, link.movie.year)
+            && filename_year != movie_year
+        {
+            return false;
+        }
+        series_movie_match_keys(link)
+            .into_iter()
+            .any(|key| normalized_key_contains_phrase(&raw_key, &key))
+    });
+    match (matches.next(), matches.next()) {
+        (Some(link), None) => SeriesMovieFilenameMatch::Unique(link),
+        (Some(_), Some(_)) => SeriesMovieFilenameMatch::Ambiguous,
+        _ => SeriesMovieFilenameMatch::NoMatch,
+    }
 }
 
 fn resolve_series_movie_from_episode_identity(
@@ -1487,6 +1556,185 @@ mod tests {
         );
     }
 
+    /// Community (per-cour) anime numbering on disk. TVDB carries one official
+    /// season; the community carries four cours of 14 / 12 / 10 / 24, so
+    /// community S04E20 is official S01E56. Names are invented.
+    fn anime_numbering_bridge_fixture() -> scryer_domain::AnimeNumberingBridge {
+        anime_numbering_bridge_fixture_with_titles(&[
+            "Lantern Verge Cour 1",
+            "Lantern Verge Cour 2",
+            "Lantern Verge Cour 3",
+            "Lantern Verge Cour 4",
+        ])
+    }
+
+    fn anime_numbering_bridge_fixture_with_titles(
+        titles: &[&str; 4],
+    ) -> scryer_domain::AnimeNumberingBridge {
+        let mut seasons = Vec::new();
+        let mut tvdb_start = 1;
+        for (offset, length) in [14, 12, 10, 24].iter().enumerate() {
+            let index = i32::try_from(offset).expect("small index") + 1;
+            seasons.push(scryer_domain::AnimeCommunitySeason {
+                index,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: vec![titles[offset].to_string()],
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 1,
+                    community_episode_end: Some(*length),
+                    tvdb_season: 1,
+                    tvdb_episode_start: tvdb_start,
+                    tvdb_episode_end: Some(tvdb_start + length - 1),
+                }],
+                absolute_start: Some(tvdb_start),
+                episode_count: Some(*length),
+            });
+            tvdb_start += length;
+        }
+        scryer_domain::AnimeNumberingBridge {
+            generated_on: "2026-08-30".to_string(),
+            corroborating_order: None,
+            seasons,
+        }
+    }
+
+    #[test]
+    fn title_scan_maps_a_community_numbered_anime_file_onto_the_official_episode() {
+        let title = title("Lantern Verge", MediaFacet::Anime);
+        let episodes: Vec<Episode> = (1..=60)
+            .map(|number| episode(&format!("ep-{number}"), "1", &number.to_string()))
+            .collect();
+        let bridge = anime_numbering_bridge_fixture();
+        let input = LibraryFilenameParseInput {
+            path: Path::new("/library/Lantern Verge/Season 01/Lantern Verge - S04E20.mkv"),
+            display_name: None,
+            library_root: Some(Path::new("/library")),
+            title: Some(&title),
+            facet: Some(&title.facet),
+            collections: &[],
+            series_movie_links: &[],
+            episodes: &episodes,
+            existing_record: None,
+            anime_numbering_bridge: Some(&bridge),
+            mode: LibraryFilenameParseMode::TitleScan,
+            fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+        };
+
+        let parse = parse_library_filename(&input);
+
+        assert_eq!(
+            parse
+                .target_episodes()
+                .iter()
+                .map(|episode| episode.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ep-56"]
+        );
+    }
+
+    #[test]
+    fn title_scan_fuzzily_anchors_a_cour_title_without_inventing_a_season() {
+        let title = title(
+            "Rantan Kyoukai Monogatari Honzuki no Gekokujou",
+            MediaFacet::Anime,
+        );
+        let episodes: Vec<Episode> = (1..=60)
+            .map(|number| episode(&format!("ep-{number}"), "1", &number.to_string()))
+            .collect();
+        let bridge = anime_numbering_bridge_fixture_with_titles(&[
+            "Rantan Kyoukai Monogatari Hajimari no Akatsuki",
+            "Rantan Kyoukai Monogatari Madoromi no Kaze",
+            "Rantan Kyoukai Monogatari Shirogane no Hane",
+            "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta",
+        ]);
+        let input = LibraryFilenameParseInput {
+            path: Path::new(
+                "/library/Rantan Kyoukai Monogatari Honzuki no Gekokujou/Season 01/Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05.mkv",
+            ),
+            display_name: None,
+            library_root: Some(Path::new("/library")),
+            title: Some(&title),
+            facet: Some(&title.facet),
+            collections: &[],
+            series_movie_links: &[],
+            episodes: &episodes,
+            existing_record: None,
+            anime_numbering_bridge: Some(&bridge),
+            mode: LibraryFilenameParseMode::TitleScan,
+            fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+        };
+
+        let parsed_filename = crate::parse_release_metadata(
+            "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - 05",
+        );
+        assert_eq!(
+            parsed_filename
+                .episode
+                .as_ref()
+                .and_then(|episode| episode.season),
+            None,
+            "the parser must preserve the filename's missing season"
+        );
+        let parse = parse_library_filename(&input);
+
+        assert_eq!(
+            parse
+                .target_episodes()
+                .iter()
+                .map(|episode| episode.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ep-41"]
+        );
+
+        let explicitly_seasoned_input = LibraryFilenameParseInput {
+            path: Path::new(
+                "/library/Rantan Kyoukai Monogatari Honzuki no Gekokujou/Season 01/Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta - S01E05.mkv",
+            ),
+            ..input
+        };
+        let explicit_parse = parse_library_filename(&explicitly_seasoned_input);
+        assert_eq!(
+            explicit_parse
+                .target_episodes()
+                .iter()
+                .map(|episode| episode.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ep-5"],
+            "an explicit official season must not be title-anchored to a cour"
+        );
+    }
+
+    #[test]
+    fn title_scan_leaves_a_community_numbered_file_alone_without_a_bridge() {
+        let title = title("Lantern Verge", MediaFacet::Anime);
+        let episodes: Vec<Episode> = (1..=60)
+            .map(|number| episode(&format!("ep-{number}"), "1", &number.to_string()))
+            .collect();
+        let input = LibraryFilenameParseInput {
+            path: Path::new("/library/Lantern Verge/Season 01/Lantern Verge - S04E20.mkv"),
+            display_name: None,
+            library_root: Some(Path::new("/library")),
+            title: Some(&title),
+            facet: Some(&title.facet),
+            collections: &[],
+            series_movie_links: &[],
+            episodes: &episodes,
+            existing_record: None,
+            anime_numbering_bridge: None,
+            mode: LibraryFilenameParseMode::TitleScan,
+            fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
+        };
+
+        let parse = parse_library_filename(&input);
+
+        // Season 4 does not exist in the catalog, so the file matches nothing —
+        // exactly the behaviour this feature is fixing, preserved without a
+        // bridge.
+        assert!(parse.target_episodes().is_empty());
+    }
+
     #[test]
     fn title_scan_release_parser_resolves_standard_episode() {
         let title = title("Example Show", MediaFacet::Series);
@@ -1501,6 +1749,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1549,6 +1798,7 @@ mod tests {
             series_movie_links: &series_movie_links,
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1594,6 +1844,7 @@ mod tests {
             series_movie_links: &series_movie_links,
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1629,6 +1880,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1665,6 +1917,7 @@ mod tests {
             series_movie_links: &series_movie_links,
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1706,6 +1959,7 @@ mod tests {
             series_movie_links: &series_movie_links,
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1730,6 +1984,7 @@ mod tests {
             series_movie_links: &series_movie_links,
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::WhenNeeded,
         };
@@ -1755,6 +2010,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
         };
@@ -1794,6 +2050,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
         };
@@ -1829,6 +2086,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
         };
@@ -1864,6 +2122,7 @@ mod tests {
             series_movie_links: &[],
             episodes: &episodes,
             existing_record: None,
+            anime_numbering_bridge: None,
             mode: LibraryFilenameParseMode::TitleScan,
             fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
         };

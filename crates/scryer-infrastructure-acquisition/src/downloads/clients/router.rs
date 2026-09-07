@@ -7,27 +7,20 @@ use std::time::{Duration, Instant};
 use super::native_download_client_http_client;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use scryer_application::challenge_solver as solver;
-use scryer_application::transport_proxy;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest,
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
     DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
     DownloadClientRemotePathMapping, DownloadClientSnapshotOutcome, DownloadClientStatus,
-    DownloadGrabResult, DownloadSourceKind, IndexerConfigRepository, IndexerPluginProvider,
-    PersistedSeedGoals, ProxyConfigRepository, RateLimitCooldownAction, ResolvedDownloadArtifact,
-    ResolvedSeedGoals, SeedGoalRequest, SeedGoalResolver, SeedingProfileRepository,
-    SettingsRepository, StagedNzbRef, StagedNzbStore, accepted_inputs_for_client,
-    apply_remote_path_mappings_to_completed_download, apply_remote_path_mappings_to_status,
-    extract_magnet_info_hash, is_valid_magnet_uri, normalize_torrent_info_hash,
-    parse_download_client_remote_path_mappings,
+    DownloadGrabResult, DownloadSourceKind, IndexerArtifactResolutionRequest,
+    IndexerArtifactResolver, IndexerConfigRepository, PersistedSeedGoals, PreparedIndexerArtifact,
+    ProxyConfigRepository, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
+    SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
+    accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
+    apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
+    normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet, ProxyConfig};
-use scryer_outbound_http::{
-    AsyncOutboundHttpError, OutboundHttpClient, PluginEgressPolicy, RateLimitRegistry,
-    generic_reqwest_client, prepare_plugin_http_target, prepare_plugin_http_target_from_url,
-    proxy_reqwest_client, send_reqwest_request_with_cooldown_budget,
-};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
@@ -36,8 +29,7 @@ use super::nzbget::NzbgetDownloadClient;
 use super::sabnzbd::SabnzbdDownloadClient;
 use super::weaver::WeaverDownloadClient;
 use super::{
-    parse_download_client_config_json, read_config_string, request_source_hint_for_nzb,
-    resolve_download_client_base_url, stage_nzb_from_bytes, stage_nzb_from_url,
+    parse_download_client_config_json, read_config_string, resolve_download_client_base_url,
 };
 
 const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
@@ -45,17 +37,6 @@ const LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY: &str = "nzbget.client_routing";
 const DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT_SECS_ENV: &str =
     "SCRYER_DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT_SECS";
 const DOWNLOAD_CLIENT_FEEDBACK_POLL_CONCURRENCY: usize = 4;
-const PROXIED_TORRENT_FILE_MAX_BYTES: usize = 32 * 1024 * 1024;
-const SOLVER_RESPONSE_MAX_BYTES: usize = PROXIED_TORRENT_FILE_MAX_BYTES * 2;
-
-/// Who fetches an NZB URL during request preparation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ArtifactFetch {
-    /// The download client pulls the URL itself (the submit path).
-    ClientSide,
-    /// Scryer resolves the bytes so it holds the file (D17 browser downloads).
-    HostSide,
-}
 
 pub fn download_client_feedback_timeout() -> Duration {
     static CACHED: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
@@ -66,6 +47,27 @@ pub fn download_client_feedback_timeout() -> Duration {
             scryer_outbound_http::DEFAULT_DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT,
         )
     })
+}
+
+/// Read a staged NZB back out of its zstd frame, for handing to a browser.
+async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
+    let input = tokio::fs::File::open(&staged_nzb.compressed_path)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open staged nzb {}: {error}",
+                staged_nzb.compressed_path.display()
+            ))
+        })?;
+    let mut decoder =
+        async_compression::tokio::bufread::ZstdDecoder::new(tokio::io::BufReader::new(input));
+    let mut bytes = Vec::with_capacity(usize::try_from(staged_nzb.raw_size_bytes).unwrap_or(0));
+    tokio::io::AsyncReadExt::read_to_end(&mut decoder, &mut bytes)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("staged nzb decompression failed: {error}"))
+        })?;
+    Ok(bytes)
 }
 
 fn parse_download_client_feedback_timeout(raw: Option<&str>, default: Duration) -> Duration {
@@ -86,60 +88,6 @@ fn download_feedback_timeout_message(timeout: Duration) -> String {
     format!("download feedback timed out after {elapsed}; queue status is temporarily unavailable")
 }
 
-#[derive(Debug)]
-enum BoundedResponseBodyError {
-    Read(reqwest::Error),
-    TooLarge,
-}
-
-async fn read_response_body_bounded(
-    mut response: reqwest::Response,
-    max_bytes: usize,
-) -> Result<Vec<u8>, BoundedResponseBodyError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > max_bytes as u64)
-    {
-        return Err(BoundedResponseBodyError::TooLarge);
-    }
-
-    let capacity = response
-        .content_length()
-        .and_then(|length| usize::try_from(length).ok())
-        .unwrap_or_default()
-        .min(max_bytes);
-    let mut body = Vec::with_capacity(capacity);
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(BoundedResponseBodyError::Read)?
-    {
-        let next_len = body
-            .len()
-            .checked_add(chunk.len())
-            .ok_or(BoundedResponseBodyError::TooLarge)?;
-        if next_len > max_bytes {
-            return Err(BoundedResponseBodyError::TooLarge);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
-fn content_disposition_filename(headers: Option<&serde_json::Value>) -> Option<String> {
-    let value = solver::solution_header_string(headers, "content-disposition")?;
-    value.split(';').find_map(|part| {
-        let part = part.trim();
-        let filename = part.strip_prefix("filename=")?;
-        let filename = filename.trim_matches('"').trim();
-        let safe = filename
-            .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' '))
-            .collect::<String>();
-        (!safe.trim().is_empty()).then_some(safe)
-    })
-}
-
 fn hexadecimal_v1_magnet_info_hash(uri: &str) -> Option<String> {
     extract_magnet_info_hash(uri)
         .and_then(|hash| normalize_torrent_info_hash(Some(&hash)))
@@ -152,10 +100,6 @@ fn resolved_magnet_info_hash_hint(info_hash_hint: Option<String>, uri: &str) -> 
         .or_else(|| extract_magnet_info_hash(uri))
 }
 
-fn preserves_v2_info_hash_hint(info_hash_hint: Option<&str>) -> bool {
-    normalize_torrent_info_hash(info_hash_hint).is_some_and(|hash| hash.len() == 64)
-}
-
 fn resolved_v1_info_hash(request: &DownloadClientAddRequest) -> Option<String> {
     let info_hash_hint = match request.resolved_download_artifact.as_ref()? {
         ResolvedDownloadArtifact::Magnet { info_hash_hint, .. }
@@ -163,172 +107,6 @@ fn resolved_v1_info_hash(request: &DownloadClientAddRequest) -> Option<String> {
         ResolvedDownloadArtifact::Nzb { .. } => return None,
     };
     normalize_torrent_info_hash(info_hash_hint).filter(|hash| hash.len() == 40)
-}
-
-#[cfg(test)]
-fn looks_like_torrent_metainfo(bytes: &[u8]) -> bool {
-    torrent_info_hash_v1(bytes).is_some()
-}
-
-/// The BitTorrent v1 info hash is the SHA-1 of the raw bencoded `info`
-/// dictionary. Never deserialize and re-encode it: bencode byte order is part
-/// of the torrent identity.
-fn torrent_info_hash_v1(bytes: &[u8]) -> Option<String> {
-    if bytes.is_empty() || bytes.len() > PROXIED_TORRENT_FILE_MAX_BYTES {
-        return None;
-    }
-    let (consumed, info_span) = parse_bencode_dict(bytes, 0, 0).ok()?;
-    if consumed != bytes.len() {
-        return None;
-    }
-    let (info_start, info_end) = info_span?;
-    let digest = aws_lc_rs::digest::digest(
-        &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY,
-        &bytes[info_start..info_end],
-    );
-    Some(
-        digest
-            .as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    )
-}
-
-fn parse_bencode_value(bytes: &[u8], offset: usize, depth: usize) -> Result<usize, ()> {
-    if depth > 64 || offset >= bytes.len() {
-        return Err(());
-    }
-    match bytes[offset] {
-        b'i' => {
-            let end = bytes[offset + 1..]
-                .iter()
-                .position(|byte| *byte == b'e')
-                .map(|position| offset + 1 + position)
-                .ok_or(())?;
-            if end == offset + 1 {
-                return Err(());
-            }
-            Ok(end + 1)
-        }
-        b'l' => {
-            let mut cursor = offset + 1;
-            while cursor < bytes.len() && bytes[cursor] != b'e' {
-                cursor = parse_bencode_value(bytes, cursor, depth + 1)?;
-            }
-            if cursor >= bytes.len() {
-                return Err(());
-            }
-            Ok(cursor + 1)
-        }
-        b'd' => parse_bencode_dict(bytes, offset, depth + 1).map(|(cursor, _)| cursor),
-        b'0'..=b'9' => parse_bencode_string(bytes, offset).map(|(cursor, _, _)| cursor),
-        _ => Err(()),
-    }
-}
-
-fn parse_bencode_dict(
-    bytes: &[u8],
-    offset: usize,
-    depth: usize,
-) -> Result<(usize, Option<(usize, usize)>), ()> {
-    if depth > 64 || bytes.get(offset) != Some(&b'd') {
-        return Err(());
-    }
-    let mut cursor = offset + 1;
-    let mut info_span = None;
-    while cursor < bytes.len() && bytes[cursor] != b'e' {
-        let (after_key, key_start, key_end) = parse_bencode_string(bytes, cursor)?;
-        let is_top_level_info = depth == 0 && &bytes[key_start..key_end] == b"info";
-        if is_top_level_info && bytes.get(after_key) != Some(&b'd') {
-            return Err(());
-        }
-        let after_value = parse_bencode_value(bytes, after_key, depth + 1)?;
-        if is_top_level_info && info_span.replace((after_key, after_value)).is_some() {
-            return Err(());
-        }
-        cursor = after_value;
-    }
-    if cursor >= bytes.len() {
-        return Err(());
-    }
-    Ok((cursor + 1, info_span))
-}
-
-fn parse_bencode_string(bytes: &[u8], offset: usize) -> Result<(usize, usize, usize), ()> {
-    let colon = bytes[offset..]
-        .iter()
-        .position(|byte| *byte == b':')
-        .map(|position| offset + position)
-        .ok_or(())?;
-    if colon == offset {
-        return Err(());
-    }
-    let length = std::str::from_utf8(&bytes[offset..colon])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .ok_or(())?;
-    let start = colon + 1;
-    let end = start.checked_add(length).ok_or(())?;
-    if end > bytes.len() {
-        return Err(());
-    }
-    Ok((end, start, end))
-}
-
-fn looks_like_nzb(bytes: &[u8]) -> bool {
-    let preview = &bytes[..bytes.len().min(4096)];
-    let Ok(text) = std::str::from_utf8(preview) else {
-        return false;
-    };
-    let text = text.trim_start().to_ascii_lowercase();
-    text.starts_with("<?xml") && text.contains("<nzb")
-        || text.starts_with("<nzb")
-        || text.contains("<!doctype nzb")
-}
-
-fn looks_like_rejected_download_document(bytes: &[u8]) -> bool {
-    let preview = &bytes[..bytes.len().min(256 * 1024)];
-    let Ok(text) = std::str::from_utf8(preview) else {
-        return false;
-    };
-    let lower = text.trim_start().to_ascii_lowercase();
-    lower.starts_with("<!doctype html")
-        || lower.starts_with("<html")
-        || lower.contains("cf-chl")
-        || lower.contains("checking your browser")
-        || lower.contains("just a moment")
-        || lower.contains("captcha")
-        || lower.contains("<form") && lower.contains("login")
-        || lower.starts_with("<error")
-        || lower.contains("<error ")
-}
-
-fn target_rate_limit_error(headers: Option<&serde_json::Value>) -> AppError {
-    let retry_after = solver::retry_after_from_solution_headers(headers);
-    AppError::TemporaryUnavailable {
-        message: solver::rate_limit_message_with_retry_after(retry_after),
-        retry_after,
-        rate_limit_cooldown: RateLimitCooldownAction::RecordFallback,
-    }
-}
-
-#[derive(Debug)]
-struct FetchedDownloadArtifact {
-    bytes: Vec<u8>,
-    headers: Option<serde_json::Value>,
-    final_url: Option<String>,
-}
-
-/// How an artifact fetch leaves the host.
-///
-/// Solver-assigned indexers are `Direct` here too: a solver's own solve request
-/// is a separate call, and its direct-first attempt and its post-solve replay
-/// both dial the origin themselves.
-#[derive(Clone, Copy, Debug)]
-enum ArtifactFetchEgress<'a> {
-    Direct,
-    TransportProxy(&'a ProxyConfig),
 }
 
 const DOWNLOAD_CLIENT_FEEDBACK_BACKOFF_INITIAL_SECS: u64 = 15;
@@ -494,7 +272,10 @@ pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     indexer_configs: Option<Arc<dyn IndexerConfigRepository>>,
     proxy_configs: Option<Arc<dyn ProxyConfigRepository>>,
-    indexer_plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+    /// Resolves release artifacts at the indexer boundary for browser
+    /// downloads (D17). The submit path never fetches here: callers resolve
+    /// before routing and the router refuses unresolved URLs.
+    indexer_artifact_resolver: Option<Arc<dyn IndexerArtifactResolver>>,
     settings: Arc<dyn SettingsRepository>,
     staged_nzb_store: Arc<dyn StagedNzbStore>,
     staged_nzb_pipeline_limit: Arc<Semaphore>,
@@ -502,7 +283,6 @@ pub struct PrioritizedDownloadClientRouter {
     /// Seeding-profile catalog for grab-time goal resolution. `None` leaves
     /// every grab without goals, i.e. today's behavior.
     seeding_profiles: Option<Arc<dyn SeedingProfileRepository>>,
-    outbound_http: OutboundHttpClient,
     feedback_read_timeout: Duration,
     category_snapshot_store: DownloadClientCategorySnapshotStore,
     feedback_read_backoff:
@@ -989,18 +769,16 @@ impl PrioritizedDownloadClientRouter {
         plugin_provider: Option<Arc<dyn DownloadClientPluginProvider>>,
         feedback_read_timeout: Duration,
     ) -> Self {
-        let http_client = generic_reqwest_client();
         Self {
             download_client_configs,
             indexer_configs: None,
             proxy_configs: None,
-            indexer_plugin_provider: None,
+            indexer_artifact_resolver: None,
             settings,
             staged_nzb_store,
             staged_nzb_pipeline_limit,
             plugin_provider,
             seeding_profiles: None,
-            outbound_http: OutboundHttpClient::new(http_client.clone(), RateLimitRegistry::new()),
             feedback_read_timeout,
             category_snapshot_store: DownloadClientCategorySnapshotStore::default(),
             feedback_read_backoff: Arc::new(Mutex::new(HashMap::new())),
@@ -1017,14 +795,14 @@ impl PrioritizedDownloadClientRouter {
         self
     }
 
-    /// Enable indexer-owned grab resolution ahead of the router's direct and
-    /// challenge-solver fallbacks. Indexers with no grab action return `None`
-    /// and leave those fallbacks unchanged.
-    pub fn with_indexer_plugin_provider(
+    /// Wire the indexer artifact resolver that backs browser downloads
+    /// (`fetch_release_artifact`). Without it the router cannot hand the
+    /// operator a file, because it never fetches artifacts itself.
+    pub fn with_indexer_artifact_resolver(
         mut self,
-        indexer_plugin_provider: Arc<dyn IndexerPluginProvider>,
+        indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver>,
     ) -> Self {
-        self.indexer_plugin_provider = Some(indexer_plugin_provider);
+        self.indexer_artifact_resolver = Some(indexer_artifact_resolver);
         self
     }
 
@@ -1473,32 +1251,6 @@ impl PrioritizedDownloadClientRouter {
         })
     }
 
-    fn download_url_matches_indexer_origin(
-        indexer: &scryer_domain::IndexerConfig,
-        raw: &str,
-    ) -> bool {
-        let Ok(download_url) = url::Url::parse(raw) else {
-            return false;
-        };
-        if !matches!(download_url.scheme(), "http" | "https") {
-            return false;
-        }
-        let Ok(base_url) = url::Url::parse(&indexer.base_url) else {
-            return false;
-        };
-        if !matches!(base_url.scheme(), "http" | "https")
-            || download_url.scheme() != base_url.scheme()
-            || download_url.port_or_known_default() != base_url.port_or_known_default()
-        {
-            return false;
-        }
-        download_url.host_str().is_some_and(|host| {
-            base_url
-                .host_str()
-                .is_some_and(|base_host| host.eq_ignore_ascii_case(base_host))
-        })
-    }
-
     async fn load_indexer_config_for_submission(
         &self,
         request: &DownloadClientAddRequest,
@@ -1516,1004 +1268,42 @@ impl PrioritizedDownloadClientRouter {
                 "indexer {indexer_id} routing is unavailable: indexer configuration repository is not wired"
             )));
         };
-        let indexer = indexer_configs.get_by_id(indexer_id).await.map_err(|error| {
-            AppError::download_submit_unavailable(format!(
-                "indexer {indexer_id} routing is unavailable: failed to load indexer configuration: {error}"
-            ))
-        })?;
-        indexer
-            .ok_or_else(|| {
-                AppError::download_submit_unavailable(format!(
-                    "indexer {indexer_id} routing is unavailable: indexer configuration was not found"
-                ))
-            })
-            .map(Some)
+        indexer_configs.get_by_id(indexer_id).await?.ok_or_else(|| {
+            AppError::download_submit_unavailable(format!("indexer {indexer_id} routing is unavailable: indexer configuration was not found"))
+        }).map(Some)
     }
 
     async fn prepare_download_request(
         &self,
         request: &DownloadClientAddRequest,
-        indexer: Option<&scryer_domain::IndexerConfig>,
+        _indexer: Option<&scryer_domain::IndexerConfig>,
     ) -> AppResult<DownloadClientAddRequest> {
-        self.prepare_download_request_with(request, indexer, ArtifactFetch::ClientSide)
-            .await
-    }
-
-    /// `prepare_download_request` with the NZB fetch policy made explicit.
-    ///
-    /// `ClientSide` is the submit path's historical behaviour: an NZB URL is
-    /// handed to the download client untouched. `HostSide` (D17) makes Scryer
-    /// resolve the bytes itself, which is the only way to put the file in the
-    /// operator's browser.
-    async fn prepare_download_request_with(
-        &self,
-        request: &DownloadClientAddRequest,
-        indexer: Option<&scryer_domain::IndexerConfig>,
-        artifact_fetch: ArtifactFetch,
-    ) -> AppResult<DownloadClientAddRequest> {
-        if request.resolved_download_artifact.is_some() {
+        if request.resolved_download_artifact.is_some() || request.staged_nzb.is_some() {
             return Ok(request.clone());
         }
-        let download_url = request
+        let source = request
             .source_hint
             .as_deref()
             .map(str::trim)
             .unwrap_or_default();
-        if download_url.is_empty() {
+        if source.is_empty() {
             return Ok(request.clone());
         }
-        if is_valid_magnet_uri(download_url) {
-            let uri = download_url.to_string();
-            let resolved_v1_info_hash = hexadecimal_v1_magnet_info_hash(&uri);
+        if is_valid_magnet_uri(source) {
             let mut prepared = request.clone();
             prepared.resolved_download_artifact = Some(ResolvedDownloadArtifact::Magnet {
-                info_hash_hint: resolved_v1_info_hash
-                    .clone()
-                    .or_else(|| request.info_hash_hint.clone())
-                    .or_else(|| extract_magnet_info_hash(&uri)),
-                uri: uri.clone(),
+                uri: source.to_string(),
+                info_hash_hint: resolved_magnet_info_hash_hint(
+                    request.info_hash_hint.clone(),
+                    source,
+                ),
             });
             prepared.source_kind = Some(DownloadSourceKind::MagnetUri);
-            prepared.source_hint = Some(uri);
-            prepared.info_hash_hint =
-                resolved_v1_info_hash.or_else(|| request.info_hash_hint.clone());
             return Ok(prepared);
         }
-
-        // NZBs do not need host-side fetching unless an assigned challenge
-        // solver owns the indexer URL. Unlabelled HTTP is conservatively
-        // treated as a torrent artifact, matching the adapter's historical
-        // default and ensuring download clients never fetch arbitrary URLs.
-        let has_proxy = indexer.and_then(|value| value.proxy_config_id.as_deref());
-        if artifact_fetch == ArtifactFetch::ClientSide
-            && has_proxy.is_none()
-            && (request.staged_nzb.is_some()
-                || matches!(
-                    request.source_kind,
-                    Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
-                ))
-        {
-            return Ok(request.clone());
-        }
-        // The operator typed the indexer's base URL, so an artifact served from
-        // that exact origin may sit on a rootless container's host bridge.
-        let egress_policy = indexer
-            .map(|indexer| PluginEgressPolicy::for_operator_configured_url(&indexer.base_url))
-            .unwrap_or_default();
-        // Resolve the assigned solver's proxy first: both the origin guard and
-        // the indexer-owned grab below need it, and a misconfigured proxy must
-        // fail the same way whichever path ends up resolving the artifact.
-        let proxy_config = if let Some((indexer, proxy_config_id)) = indexer.zip(has_proxy) {
-            let Some(proxy_configs) = self.proxy_configs.as_ref() else {
-                return Err(AppError::download_submit_unavailable(format!(
-                    "indexer {} routing is unavailable: proxy repository is not wired",
-                    indexer.id
-                )));
-            };
-            let proxy_config = proxy_configs
-                .get_by_id(proxy_config_id)
-                .await
-                .map_err(|error| {
-                    AppError::download_submit_unavailable(format!(
-                        "indexer {} routing is unavailable: failed to load proxy configuration: {error}",
-                        indexer.id
-                    ))
-                })?
-                .ok_or_else(|| {
-                    AppError::download_submit_unavailable(format!(
-                        "indexer {} routing is unavailable: proxy configuration {} was not found",
-                        indexer.id, proxy_config_id
-                    ))
-                })?;
-            if !proxy_config.is_enabled {
-                return Err(AppError::download_submit_unavailable(format!(
-                    "indexer {} routing is unavailable: assigned proxy {} is disabled",
-                    indexer.id, proxy_config_id
-                )));
-            }
-            if !Self::download_url_matches_indexer_origin(indexer, download_url) {
-                return Err(AppError::Validation(
-                    "Proxied download URL does not match the assigned indexer origin.".into(),
-                ));
-            }
-            Some(proxy_config)
-        } else {
-            None
-        };
-
-        // An indexer that owns an authenticated grab flow resolves the artifact
-        // itself: a private tracker will not serve the file to a bare fetch, and
-        // the plugin already holds that session. Providers without such a flow
-        // answer `None` and leave the paths below untouched.
-        if let (Some(indexer), Some(provider)) = (indexer, self.indexer_plugin_provider.as_ref())
-            && let Some(client) =
-                provider.client_for_provider_with_proxy(indexer, proxy_config.as_ref())
-            && let Some(artifact) = client.resolve_download(download_url).await?
-        {
-            return self.prepare_resolved_request(request, artifact);
-        }
-
-        let Some(proxy_config) = proxy_config else {
-            // No indexer, or an indexer without an assigned solver: fetch the
-            // artifact directly and classify it.
-            let fetched = self
-                .fetch_download_artifact_direct(
-                    "indexer",
-                    download_url,
-                    &[],
-                    scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
-                    &egress_policy,
-                )
-                .await?;
-            return self.prepare_resolved_request(
-                request,
-                Self::classify_resolved_download_artifact(
-                    "indexer",
-                    fetched.final_url.as_deref(),
-                    fetched.headers.as_ref(),
-                    fetched.bytes,
-                    request.info_hash_hint.clone(),
-                )?,
-            );
-        };
-        let artifact_result = if !proxy_config.is_challenge_solver() {
-            // A transport proxy solves nothing: this is the direct fetch above,
-            // dialled through the operator's proxy instead of straight out. A
-            // tunnel takes the same arm and fails there until its engine
-            // exists, rather than being handed to the solver path or fetched
-            // directly.
-            self.resolve_download_artifact_via_transport_proxy(
-                &proxy_config,
-                download_url,
-                request.info_hash_hint.clone(),
-                &egress_policy,
-            )
-            .await
-        } else {
-            self.resolve_download_artifact_via_proxy(
-                &proxy_config,
-                download_url,
-                request.info_hash_hint.clone(),
-                &egress_policy,
-            )
-            .await
-        };
-        if let Some(repo) = self.proxy_configs.as_ref() {
-            solver::flush_solver_health(repo.as_ref()).await;
-        }
-        let artifact = artifact_result?;
-
-        self.prepare_resolved_request(request, artifact)
-    }
-
-    /// Fetch and classify a download artifact through an assigned transport
-    /// proxy. Same fetch, same classification, same redirect and size rules as
-    /// the unproxied arm — only the egress client differs.
-    async fn resolve_download_artifact_via_transport_proxy(
-        &self,
-        proxy_config: &ProxyConfig,
-        download_url: &str,
-        info_hash_hint: Option<String>,
-        egress_policy: &PluginEgressPolicy,
-    ) -> AppResult<ResolvedDownloadArtifact> {
-        let provider_name = solver::solver_provider_name(proxy_config.provider_type);
-        let fetched = self
-            .fetch_download_artifact(
-                provider_name,
-                download_url,
-                &[],
-                scryer_outbound_http::effective_proxy_request_timeout(
-                    proxy_config.request_timeout_seconds,
-                ),
-                egress_policy,
-                ArtifactFetchEgress::TransportProxy(proxy_config),
-            )
-            .await?;
-        transport_proxy::record_transport_proxy_success(proxy_config);
-        Self::classify_resolved_download_artifact(
-            provider_name,
-            fetched.final_url.as_deref(),
-            fetched.headers.as_ref(),
-            fetched.bytes,
-            info_hash_hint,
-        )
-    }
-
-    fn prepare_resolved_request(
-        &self,
-        request: &DownloadClientAddRequest,
-        artifact: ResolvedDownloadArtifact,
-    ) -> AppResult<DownloadClientAddRequest> {
-        let mut prepared = request.clone();
-        prepared.resolved_download_artifact = Some(artifact.clone());
-        match artifact {
-            ResolvedDownloadArtifact::Nzb { .. } => {
-                prepared.source_kind = Some(DownloadSourceKind::NzbFile);
-                prepared.source_hint = None;
-            }
-            ResolvedDownloadArtifact::Magnet {
-                uri,
-                info_hash_hint,
-            } => {
-                prepared.source_kind = Some(DownloadSourceKind::MagnetUri);
-                prepared.source_hint = Some(uri);
-                prepared.info_hash_hint = info_hash_hint.or(prepared.info_hash_hint);
-            }
-            ResolvedDownloadArtifact::TorrentFile { info_hash_hint, .. } => {
-                prepared.source_kind = Some(DownloadSourceKind::TorrentFile);
-                prepared.source_hint = None;
-                prepared.info_hash_hint = info_hash_hint.or(prepared.info_hash_hint);
-            }
-        }
-        Ok(prepared)
-    }
-
-    async fn resolve_download_artifact_via_proxy(
-        &self,
-        proxy_config: &ProxyConfig,
-        download_url: &str,
-        info_hash_hint: Option<String>,
-        egress_policy: &PluginEgressPolicy,
-    ) -> AppResult<ResolvedDownloadArtifact> {
-        let provider = proxy_config.provider_type;
-        let provider_name = solver::solver_provider_name(provider);
-
-        // Validate before delegating to the solver as well as before any direct
-        // retry. Otherwise the solver itself becomes a deputy for blocked
-        // link-local or cloud-metadata destinations.
-        drop(
-            prepare_plugin_http_target(download_url, "indexer download artifact", egress_policy)
-                .await
-                .map_err(|error| {
-                    warn!(error = %error, "blocked unsafe indexer download artifact URL");
-                    AppError::DownloadSubmitUnavailable(
-                        "Scryer refused an unsafe download artifact destination.".into(),
-                    )
-                })?,
-        );
-
-        // Keep artifact resolution direct-first, just like indexer searches.
-        // A fresh solved session is applied when available; otherwise this is
-        // an ordinary guarded fetch. Direct rate limits still propagate and
-        // challenge/error responses fall back to a full solve.
-        let session_headers =
-            solver::SolvedSessionCache::shared().session_headers(&proxy_config.id, download_url);
-        let had_solved_session = !session_headers.is_empty();
-        match self
-            .fetch_download_artifact_direct(
-                provider_name,
-                download_url,
-                &session_headers,
-                scryer_outbound_http::effective_proxy_request_timeout(
-                    proxy_config.request_timeout_seconds,
-                ),
-                egress_policy,
-            )
-            .await
-        {
-            Ok(fetched) => {
-                match Self::classify_resolved_download_artifact(
-                    provider_name,
-                    fetched.final_url.as_deref(),
-                    fetched.headers.as_ref(),
-                    fetched.bytes,
-                    info_hash_hint.clone(),
-                ) {
-                    Ok(artifact) => return Ok(artifact),
-                    Err(error) => {
-                        debug!(
-                            proxy_config_id = proxy_config.id.as_str(),
-                            error = %error,
-                            had_solved_session,
-                            "direct artifact fetch not usable; falling back to solver"
-                        );
-                        if had_solved_session {
-                            solver::SolvedSessionCache::shared()
-                                .invalidate(&proxy_config.id, download_url);
-                        }
-                    }
-                }
-            }
-            Err(error @ AppError::TemporaryUnavailable { .. }) => return Err(error),
-            Err(error) => {
-                debug!(
-                    proxy_config_id = proxy_config.id.as_str(),
-                    error = %error,
-                    had_solved_session,
-                    "direct artifact fetch failed; falling back to solver"
-                );
-                if had_solved_session {
-                    solver::SolvedSessionCache::shared().invalidate(&proxy_config.id, download_url);
-                }
-            }
-        }
-
-        let endpoint = solver::solver_solve_endpoint(&proxy_config.base_url);
-        let solver_timeout = scryer_outbound_http::effective_proxy_request_timeout(
-            proxy_config.request_timeout_seconds,
-        );
-        let solver_deadline = tokio::time::Instant::now() + solver_timeout;
-        let response = tokio::time::timeout_at(
-            solver_deadline,
-            send_reqwest_request_with_cooldown_budget(
-                proxy_reqwest_client()
-                    .post(endpoint)
-                    .timeout(solver_timeout)
-                    .json(&solver::solver_solve_request(
-                        provider,
-                        download_url,
-                        proxy_config.request_timeout_seconds,
-                    )),
-                Some(Duration::ZERO),
-            ),
-        )
-        .await
-        .map_err(|_| {
-            let message = solver::solver_error_message(provider, solver::SolverErrorKind::Timeout);
-            solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
-            AppError::DownloadSubmitUnavailable(message.into())
-        })?
-        .map_err(|error| {
-            let kind = match error {
-                AsyncOutboundHttpError::Request(error) if error.is_timeout() => {
-                    solver::SolverErrorKind::Timeout
-                }
-                AsyncOutboundHttpError::Request(_) => solver::SolverErrorKind::Unreachable,
-                AsyncOutboundHttpError::CooldownBudgetExceeded { .. } => {
-                    solver::SolverErrorKind::Unavailable
-                }
-            };
-            let message = solver::solver_error_message(provider, kind);
-            solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
-            AppError::DownloadSubmitUnavailable(message.into())
-        })?;
-        let solver_status = response.status();
-        if solver_status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || solver_status.is_server_error()
-        {
-            let message =
-                solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable);
-            solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
-            return Err(AppError::DownloadSubmitUnavailable(message.into()));
-        }
-        let body = match tokio::time::timeout_at(
-            solver_deadline,
-            read_response_body_bounded(response, SOLVER_RESPONSE_MAX_BYTES),
-        )
-        .await
-        {
-            Err(_) => {
-                let message =
-                    solver::solver_error_message(provider, solver::SolverErrorKind::Timeout);
-                solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
-                return Err(AppError::DownloadSubmitUnavailable(message.into()));
-            }
-            Ok(Ok(body)) => body,
-            Ok(Err(BoundedResponseBodyError::Read(error))) => {
-                debug!(
-                    proxy_config_id = proxy_config.id.as_str(),
-                    is_timeout = error.is_timeout(),
-                    is_body = error.is_body(),
-                    is_decode = error.is_decode(),
-                    "failed to read challenge solver response body"
-                );
-                let message =
-                    solver::solver_error_message(provider, solver::SolverErrorKind::Unreadable);
-                solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, message);
-                return Err(AppError::DownloadSubmitUnavailable(message.into()));
-            }
-            Ok(Err(BoundedResponseBodyError::TooLarge)) => {
-                let message = format!(
-                    "{provider_name} returned a response larger than Scryer's download artifact limit."
-                );
-                solver::SolverHealthLedger::shared().record_failure(&proxy_config.id, &message);
-                return Err(AppError::DownloadSubmitUnavailable(message));
-            }
-        };
-        let solution = solver::parse_solver_solution(&body).map_err(|error| {
-            if matches!(
-                error,
-                solver::ChallengeSolverParseError::Malformed
-                    | solver::ChallengeSolverParseError::ServiceError
-            ) {
-                solver::SolverHealthLedger::shared()
-                    .record_failure(&proxy_config.id, error.message(provider));
-            }
-            AppError::DownloadSubmitUnavailable(error.message(provider).into())
-        })?;
-        solver::SolverHealthLedger::shared().record_success(&proxy_config.id);
-        let solution_status = solution.status.unwrap_or_else(|| solver_status.as_u16());
-        if solution_status == reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16() {
-            return Err(target_rate_limit_error(solution.headers.as_ref()));
-        }
-        let solution_body = solution.response.as_deref().unwrap_or_default();
-        if solution_body.len() > PROXIED_TORRENT_FILE_MAX_BYTES {
-            return Err(AppError::DownloadSubmitUnavailable(format!(
-                "The resolved download artifact exceeded Scryer's {} MiB limit.",
-                PROXIED_TORRENT_FILE_MAX_BYTES / (1024 * 1024)
-            )));
-        }
-        if solver::solved_body_looks_rate_limited(solution_body.as_bytes()) {
-            return Err(target_rate_limit_error(solution.headers.as_ref()));
-        }
-        let retry_headers = solver::solution_retry_headers(&solution);
-        if !(200..300).contains(&solution_status) {
-            if retry_headers.is_empty() {
-                return Err(AppError::DownloadSubmitUnavailable(format!(
-                    "{provider_name} target request returned HTTP {solution_status}."
-                )));
-            }
-            let fetched = self
-                .fetch_download_artifact_direct(
-                    provider_name,
-                    download_url,
-                    &retry_headers,
-                    scryer_outbound_http::effective_proxy_request_timeout(
-                        proxy_config.request_timeout_seconds,
-                    ),
-                    egress_policy,
-                )
-                .await?;
-            solver::SolvedSessionCache::shared().store_solution(
-                &proxy_config.id,
-                download_url,
-                &solution,
-            );
-            return Self::classify_resolved_download_artifact(
-                provider_name,
-                fetched.final_url.as_deref(),
-                fetched.headers.as_ref(),
-                fetched.bytes,
-                info_hash_hint,
-            );
-        }
-        solver::SolvedSessionCache::shared().store_solution(
-            &proxy_config.id,
-            download_url,
-            &solution,
-        );
-        if Self::should_refetch_binary_download_artifact(
-            download_url,
-            solution.url.as_deref(),
-            solution.headers.as_ref(),
-        ) && !retry_headers.is_empty()
-        {
-            let fetched = self
-                .fetch_download_artifact_direct(
-                    provider_name,
-                    download_url,
-                    &retry_headers,
-                    scryer_outbound_http::effective_proxy_request_timeout(
-                        proxy_config.request_timeout_seconds,
-                    ),
-                    egress_policy,
-                )
-                .await?;
-            return Self::classify_resolved_download_artifact(
-                provider_name,
-                fetched.final_url.as_deref(),
-                fetched.headers.as_ref(),
-                fetched.bytes,
-                info_hash_hint,
-            );
-        }
-        let bytes = solution.response.unwrap_or_default().into_bytes();
-        let embedded_artifact = Self::classify_resolved_download_artifact(
-            provider_name,
-            solution.url.as_deref(),
-            solution.headers.as_ref(),
-            bytes,
-            info_hash_hint.clone(),
-        );
-        match embedded_artifact {
-            Ok(artifact) => Ok(artifact),
-            Err(error) if retry_headers.is_empty() => Err(error),
-            Err(error) => {
-                debug!(
-                    proxy_config_id = proxy_config.id.as_str(),
-                    error = %error,
-                    "embedded solver artifact was not usable; retrying original URL with solved session"
-                );
-                let fetched = self
-                    .fetch_download_artifact_direct(
-                        provider_name,
-                        download_url,
-                        &retry_headers,
-                        scryer_outbound_http::effective_proxy_request_timeout(
-                            proxy_config.request_timeout_seconds,
-                        ),
-                        egress_policy,
-                    )
-                    .await?;
-                Self::classify_resolved_download_artifact(
-                    provider_name,
-                    fetched.final_url.as_deref(),
-                    fetched.headers.as_ref(),
-                    fetched.bytes,
-                    info_hash_hint,
-                )
-            }
-        }
-    }
-
-    fn should_refetch_binary_download_artifact(
-        original_url: &str,
-        final_url: Option<&str>,
-        headers: Option<&serde_json::Value>,
-    ) -> bool {
-        let content_type = solver::solution_header_string(headers, "content-type")
-            .map(|value| value.to_ascii_lowercase())
-            .unwrap_or_default();
-        if content_type.contains("application/x-bittorrent")
-            || content_type.contains("application/octet-stream")
-        {
-            return true;
-        }
-        [Some(original_url), final_url]
-            .into_iter()
-            .flatten()
-            .any(|raw| {
-                url::Url::parse(raw)
-                    .ok()
-                    .is_some_and(|url| url.path().to_ascii_lowercase().ends_with(".torrent"))
-            })
-    }
-
-    async fn fetch_download_artifact_direct(
-        &self,
-        provider_name: &str,
-        download_url: &str,
-        session_headers: &[(String, String)],
-        request_timeout: Duration,
-        egress_policy: &PluginEgressPolicy,
-    ) -> AppResult<FetchedDownloadArtifact> {
-        self.fetch_download_artifact(
-            provider_name,
-            download_url,
-            session_headers,
-            request_timeout,
-            egress_policy,
-            ArtifactFetchEgress::Direct,
-        )
-        .await
-    }
-
-    /// The artifact fetch, parameterized on how it leaves the host.
-    ///
-    /// `Direct` resolves and pins every hop through the guarded plugin target.
-    /// `TransportProxy` dials the operator's proxy instead: the destination is
-    /// validated syntactically but not resolved here, because with `remote_dns`
-    /// that name belongs to the proxy and may not resolve locally at all. The
-    /// caller has already confirmed the URL matches the assigned indexer's
-    /// origin (`download_url_matches_indexer_origin`).
-    async fn fetch_download_artifact(
-        &self,
-        provider_name: &str,
-        download_url: &str,
-        session_headers: &[(String, String)],
-        request_timeout: Duration,
-        egress_policy: &PluginEgressPolicy,
-        egress: ArtifactFetchEgress<'_>,
-    ) -> AppResult<FetchedDownloadArtifact> {
-        let original = url::Url::parse(download_url)
-            .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
-        let deadline = Instant::now() + request_timeout;
-        let origin_scheme = original.scheme().to_string();
-        let origin_host = original.host_str().map(str::to_string);
-        let origin_port = original.port_or_known_default();
-        let mut current = original;
-        let mut visited = HashSet::from([current.clone()]);
-        for redirect_count in 0..=5 {
-            if current.scheme().eq_ignore_ascii_case("magnet")
-                && is_valid_magnet_uri(current.as_str())
-            {
-                return Ok(FetchedDownloadArtifact {
-                    bytes: Vec::new(),
-                    headers: None,
-                    final_url: Some(current.to_string()),
-                });
-            }
-            if !matches!(current.scheme(), "http" | "https") {
-                return Err(AppError::Validation(
-                    "Download artifact redirects must use HTTP(S) or magnet URLs.".into(),
-                ));
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let (hop_client, hop_url) = match egress {
-                ArtifactFetchEgress::Direct => {
-                    let target = timeout(
-                        remaining,
-                        prepare_plugin_http_target_from_url(
-                            current.clone(),
-                            "indexer download artifact",
-                            egress_policy,
-                        ),
-                    )
-                    .await
-                    .map_err(|_| {
-                        AppError::DownloadSubmitUnavailable(
-                            "The download artifact fetch timed out.".into(),
-                        )
-                    })?
-                    .map_err(|error| {
-                        warn!(error = %error, "blocked unsafe indexer download artifact URL");
-                        AppError::DownloadSubmitUnavailable(
-                            "Scryer refused an unsafe download artifact destination.".into(),
-                        )
-                    })?;
-                    (target.client().clone(), target.url().clone())
-                }
-                ArtifactFetchEgress::TransportProxy(proxy_config) => {
-                    let url = scryer_outbound_http::validate_operator_http_url(
-                        current.as_str(),
-                        "indexer download artifact",
-                    )
-                    .map_err(|error| {
-                        warn!(error = %error, "blocked unsafe indexer download artifact URL");
-                        AppError::DownloadSubmitUnavailable(
-                            "Scryer refused an unsafe download artifact destination.".into(),
-                        )
-                    })?;
-                    let client =
-                        transport_proxy::transport_proxied_reqwest_client(proxy_config, "")
-                            .map_err(|message| {
-                                transport_proxy::record_transport_proxy_failure(
-                                    proxy_config,
-                                    &message,
-                                );
-                                AppError::DownloadSubmitUnavailable(message)
-                            })?;
-                    (client, url)
-                }
-            };
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let mut builder = hop_client.get(hop_url.clone()).timeout(remaining);
-            let same_origin = origin_scheme == hop_url.scheme()
-                && origin_host
-                    .as_deref()
-                    .zip(hop_url.host_str())
-                    .is_some_and(|(original, target)| original.eq_ignore_ascii_case(target))
-                && origin_port == hop_url.port_or_known_default();
-            if same_origin {
-                for (name, value) in session_headers {
-                    builder = builder.header(name, value);
-                }
-            }
-            let response = timeout(
-                remaining,
-                send_reqwest_request_with_cooldown_budget(builder, Some(Duration::ZERO)),
-            )
-                .await
-                .map_err(|_| {
-                    AppError::DownloadSubmitUnavailable(
-                        "The download artifact fetch timed out.".into(),
-                    )
-                })?
-                .map_err(|error| {
-                debug!(
-                    proxy_provider = provider_name,
-                    is_timeout = matches!(&error, AsyncOutboundHttpError::Request(value) if value.is_timeout()),
-                    "download artifact fetch failed"
-                );
-                match error {
-                    AsyncOutboundHttpError::CooldownBudgetExceeded { remaining, .. } => {
-                        AppError::TemporaryUnavailable {
-                            message: "The download artifact destination is rate limited.".into(),
-                            retry_after: Some(remaining),
-                            rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
-                        }
-                    }
-                    AsyncOutboundHttpError::Request(error) if error.is_timeout() => {
-                        AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
-                    }
-                    // A connector failure on a proxied hop is the proxy's, not
-                    // the indexer's, and says so by name.
-                    AsyncOutboundHttpError::Request(error)
-                        if matches!(egress, ArtifactFetchEgress::TransportProxy(_)) =>
-                    {
-                        let ArtifactFetchEgress::TransportProxy(proxy_config) = egress else {
-                            unreachable!("guarded by the match arm")
-                        };
-                        match transport_proxy::transport_proxy_connect_failure(proxy_config, &error)
-                        {
-                            Some(message) => {
-                                transport_proxy::record_transport_proxy_failure(
-                                    proxy_config,
-                                    &message,
-                                );
-                                AppError::DownloadSubmitUnavailable(message)
-                            }
-                            None => AppError::DownloadSubmitUnavailable(
-                                "Scryer could not fetch the download artifact.".into(),
-                            ),
-                        }
-                    }
-                    AsyncOutboundHttpError::Request(_) => AppError::DownloadSubmitUnavailable(
-                        "Scryer could not fetch the download artifact.".into(),
-                    ),
-                }
-            })?;
-            if response.status().is_redirection() {
-                if !matches!(
-                    response.status(),
-                    reqwest::StatusCode::MOVED_PERMANENTLY
-                        | reqwest::StatusCode::FOUND
-                        | reqwest::StatusCode::SEE_OTHER
-                        | reqwest::StatusCode::TEMPORARY_REDIRECT
-                        | reqwest::StatusCode::PERMANENT_REDIRECT
-                ) {
-                    return Err(AppError::Validation(format!(
-                        "Download artifact returned unsupported HTTP redirect {}.",
-                        response.status().as_u16()
-                    )));
-                }
-                if redirect_count == 5 {
-                    return Err(AppError::Validation(
-                        "The download artifact exceeded the redirect limit.".into(),
-                    ));
-                }
-                let location = response
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                    .ok_or_else(|| {
-                        AppError::Validation(
-                            "Download artifact redirect was missing a location.".into(),
-                        )
-                    })?;
-                let next = if location
-                    .trim_start()
-                    .to_ascii_lowercase()
-                    .starts_with("magnet:")
-                {
-                    let magnet = url::Url::parse(location.trim()).map_err(|_| {
-                        AppError::Validation(
-                            "Download artifact magnet redirect was invalid.".into(),
-                        )
-                    })?;
-                    if !is_valid_magnet_uri(magnet.as_str()) {
-                        return Err(AppError::Validation(
-                            "Download artifact magnet redirect was invalid.".into(),
-                        ));
-                    }
-                    magnet
-                } else {
-                    current.join(location).map_err(|_| {
-                        AppError::Validation(
-                            "Download artifact redirect location was invalid.".into(),
-                        )
-                    })?
-                };
-                if !visited.insert(next.clone()) {
-                    return Err(AppError::Validation(
-                        "The download artifact redirect looped.".into(),
-                    ));
-                }
-                current = next;
-                continue;
-            }
-            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                let retry_after = response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| {
-                        scryer_outbound_http::parse_retry_after(value).map(|(delay, _)| delay)
-                    });
-                return Err(AppError::TemporaryUnavailable {
-                    message: solver::rate_limit_message_with_retry_after(retry_after),
-                    retry_after,
-                    rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
-                });
-            }
-            if !response.status().is_success() {
-                let status = response.status();
-                return Err(
-                    if matches!(
-                        status,
-                        reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
-                    ) {
-                        AppError::DownloadSourceGone(format!(
-                            "The download artifact is no longer available (HTTP {}).",
-                            status.as_u16()
-                        ))
-                    } else if matches!(
-                        status,
-                        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-                    ) {
-                        AppError::DownloadSubmitUnavailable(format!(
-                            "The download artifact fetch was rejected by indexer '{provider_name}'; check its credentials (HTTP {}).",
-                            status.as_u16()
-                        ))
-                    } else {
-                        AppError::DownloadSubmitUnavailable(format!(
-                            "The download artifact fetch returned HTTP {}.",
-                            status.as_u16()
-                        ))
-                    },
-                );
-            }
-            let final_url = Some(response.url().to_string());
-            let mut header_map = serde_json::Map::new();
-            for name in ["content-type", "content-disposition"] {
-                if let Some(value) = response
-                    .headers()
-                    .get(name)
-                    .and_then(|value| value.to_str().ok())
-                {
-                    header_map.insert(name.to_string(), serde_json::Value::from(value));
-                }
-            }
-            let headers = (!header_map.is_empty()).then_some(serde_json::Value::Object(header_map));
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(AppError::DownloadSubmitUnavailable(
-                    "The download artifact fetch timed out.".into(),
-                ));
-            }
-            let bytes = match timeout(
-                remaining,
-                read_response_body_bounded(response, PROXIED_TORRENT_FILE_MAX_BYTES),
-            )
-            .await
-            {
-                Ok(Ok(bytes)) => bytes,
-                Ok(Err(BoundedResponseBodyError::Read(error))) => {
-                    debug!(
-                        is_timeout = error.is_timeout(),
-                        "failed to read download artifact body"
-                    );
-                    return Err(AppError::DownloadSubmitUnavailable(
-                        "Scryer could not read the download artifact.".into(),
-                    ));
-                }
-                Ok(Err(BoundedResponseBodyError::TooLarge)) => {
-                    return Err(AppError::DownloadSubmitUnavailable(format!(
-                        "The resolved download artifact exceeded Scryer's {} MiB limit.",
-                        PROXIED_TORRENT_FILE_MAX_BYTES / (1024 * 1024)
-                    )));
-                }
-                Err(_) => {
-                    return Err(AppError::DownloadSubmitUnavailable(
-                        "The download artifact fetch timed out.".into(),
-                    ));
-                }
-            };
-            return Ok(FetchedDownloadArtifact {
-                bytes,
-                headers,
-                final_url,
-            });
-        }
-        Err(AppError::Validation(
-            "The download artifact redirect loop was exhausted.".into(),
+        Err(AppError::DownloadSubmitUnavailable(
+            "The indexer did not resolve this download artifact before client routing.".into(),
         ))
-    }
-
-    fn classify_resolved_download_artifact(
-        provider_name: &str,
-        final_url: Option<&str>,
-        headers: Option<&serde_json::Value>,
-        bytes: Vec<u8>,
-        info_hash_hint: Option<String>,
-    ) -> AppResult<ResolvedDownloadArtifact> {
-        if final_url.is_some_and(is_valid_magnet_uri) {
-            let uri = final_url.unwrap().trim().to_string();
-            return Ok(ResolvedDownloadArtifact::Magnet {
-                info_hash_hint: resolved_magnet_info_hash_hint(info_hash_hint, &uri),
-                uri,
-            });
-        }
-        if let Ok(text) = std::str::from_utf8(&bytes) {
-            let trimmed = text.trim();
-            if is_valid_magnet_uri(trimmed) {
-                let uri = trimmed.to_string();
-                return Ok(ResolvedDownloadArtifact::Magnet {
-                    info_hash_hint: resolved_magnet_info_hash_hint(info_hash_hint, &uri),
-                    uri,
-                });
-            }
-        }
-
-        let torrent_info_hash_v1 = torrent_info_hash_v1(&bytes);
-        let content_type = solver::solution_header_string(headers, "content-type");
-        let file_name = content_disposition_filename(headers);
-        let final_path = final_url
-            .and_then(|value| url::Url::parse(value).ok())
-            .map(|url| url.path().to_ascii_lowercase());
-        let file_name_lower = file_name.as_ref().map(|value| value.to_ascii_lowercase());
-        if looks_like_rejected_download_document(&bytes) {
-            return Err(AppError::Validation(format!(
-                "{provider_name} did not resolve download artifact."
-            )));
-        }
-
-        if content_type.as_deref().is_some_and(|value| {
-            let value = value.to_ascii_lowercase();
-            value.contains("application/x-bittorrent")
-                || value.contains("application/octet-stream") && torrent_info_hash_v1.is_some()
-        }) || final_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with(".torrent"))
-            || file_name_lower
-                .as_deref()
-                .is_some_and(|name| name.ends_with(".torrent"))
-            || torrent_info_hash_v1.is_some()
-        {
-            if torrent_info_hash_v1.is_none() {
-                return Err(AppError::Validation(format!(
-                    "{provider_name} resolved invalid torrent file bytes."
-                )));
-            }
-            if bytes.len() > PROXIED_TORRENT_FILE_MAX_BYTES {
-                return Err(AppError::Validation(format!(
-                    "{provider_name} resolved torrent file is too large."
-                )));
-            }
-            return Ok(ResolvedDownloadArtifact::TorrentFile {
-                bytes,
-                file_name,
-                content_type,
-                info_hash_hint: if preserves_v2_info_hash_hint(info_hash_hint.as_deref()) {
-                    info_hash_hint
-                } else {
-                    torrent_info_hash_v1.or(info_hash_hint)
-                },
-            });
-        }
-
-        if content_type.as_deref().is_some_and(|value| {
-            matches!(
-                value.to_ascii_lowercase().split(';').next().unwrap_or(""),
-                "application/x-nzb"
-            )
-        }) || looks_like_nzb(&bytes)
-        {
-            if !looks_like_nzb(&bytes) {
-                return Err(AppError::Validation(format!(
-                    "{provider_name} resolved invalid NZB bytes."
-                )));
-            }
-            return Ok(ResolvedDownloadArtifact::Nzb {
-                bytes,
-                file_name,
-                content_type,
-            });
-        }
-
-        Err(AppError::Validation(format!(
-            "{provider_name} resolved the download URL, but the result was not an NZB, magnet URI, or torrent file."
-        )))
     }
 
     fn read_trimmed_string(raw_value: Option<&serde_json::Value>) -> Option<String> {
@@ -3258,36 +2048,63 @@ impl PrioritizedDownloadClientRouter {
 impl DownloadClient for PrioritizedDownloadClientRouter {
     /// Resolve the release's file without submitting it (D17).
     ///
-    /// The indexer is resolved exactly as the submit path resolves it, so an
-    /// assigned challenge solver or a private tracker's own grab flow still
-    /// owns the fetch. A magnet comes back as-is; refusing it belongs to the
-    /// caller, which knows the release title to name in the message.
+    /// The indexer resolves the artifact exactly as the submit path resolves
+    /// it, so an assigned proxy or a private tracker's own grab flow still
+    /// owns the fetch. A staged NZB is read back and released, because a
+    /// browser download hands the operator bytes rather than a client a file.
+    /// A magnet comes back as-is; refusing it belongs to the caller, which
+    /// knows the release title to name in the message.
     async fn fetch_release_artifact(
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<ResolvedDownloadArtifact> {
-        let indexer_config = self
-            .load_indexer_config_for_submission(request)
-            .await
-            .map_err(AppError::into_download_submit_unavailable)?;
-        let prepared = self
-            .prepare_download_request_with(
-                request,
-                indexer_config.as_ref(),
-                ArtifactFetch::HostSide,
-            )
+        let Some(resolver) = self.indexer_artifact_resolver.as_ref() else {
+            return Err(AppError::Validation(
+                "artifact download is not supported: no indexer artifact resolver is wired"
+                    .to_string(),
+            ));
+        };
+        let source_url = request
+            .source_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|source| !source.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("release has no download artifact to fetch".to_string())
+            })?;
+        let prepared = resolver
+            .resolve_artifact(&IndexerArtifactResolutionRequest {
+                indexer_id: request.indexer_id.clone(),
+                source_url: source_url.to_string(),
+                source_kind: request.source_kind,
+                info_hash_hint: request.info_hash_hint.clone(),
+                title_id: None,
+                search_facet: request.search_facet.clone(),
+                cancellation: tokio_util::sync::CancellationToken::new(),
+            })
             .await?;
-        prepared.resolved_download_artifact.ok_or_else(|| {
-            AppError::Validation("release has no download artifact to fetch".to_string())
-        })
+        match prepared {
+            PreparedIndexerArtifact::Resolved(artifact) => Ok(artifact),
+            PreparedIndexerArtifact::StagedNzb(lease) => {
+                let staged_nzb = lease.staged_nzb().clone();
+                let bytes = read_staged_nzb_bytes(&staged_nzb).await;
+                drop(lease);
+                self.delete_staged_nzb(Some(&staged_nzb), "browser_download_served")
+                    .await;
+                Ok(ResolvedDownloadArtifact::Nzb {
+                    bytes: bytes?,
+                    file_name: None,
+                    content_type: None,
+                })
+            }
+        }
     }
 
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
-        // Load indexer provenance once. The same live config drives proxy
-        // resolution and the current indexer -> download-client mapping.
+        // Load indexer provenance for the current indexer-to-client mapping.
         let indexer_config = match self.load_indexer_config_for_submission(request).await {
             Ok(indexer_config) => indexer_config,
             Err(error) => {
@@ -3332,9 +2149,8 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             }
         };
         let request = &request;
-        // Pillar D1 for NZB bytes Scryer already holds (indexer-proxied
-        // artifacts). URL-sourced NZBs are gated as they stream in, inside
-        // `stage_nzb_from_url`, so no payload is ever fetched twice.
+        // Keep the category gate for callers that supply NZB bytes directly.
+        // Fetched NZBs are validated and staged at the indexer boundary.
         if let Some(ResolvedDownloadArtifact::Nzb { bytes, .. }) =
             request.resolved_download_artifact.as_ref()
         {
@@ -3597,7 +2413,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         }
 
         let mut last_error: Option<AppError> = None;
-        let mut staged_nzb = if let Some(staged_nzb) = request.staged_nzb.clone() {
+        let staged_nzb = if let Some(staged_nzb) = request.staged_nzb.clone() {
             if let Err(error) = self
                 .staged_nzb_store
                 .mark_artifact_active(&staged_nzb.compressed_path)
@@ -3699,123 +2515,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 Ok((mut effective_request, resolved_seed_goals)) => {
                     if Self::is_native_nzb_client_type(&config.client_type)
                         && Self::request_uses_nzb_payload(&effective_request)
+                        && let Some(staged_nzb) = staged_nzb.as_ref()
                     {
-                        if staged_nzb.is_none() {
-                            if let Some(ResolvedDownloadArtifact::Nzb { bytes, .. }) =
-                                effective_request.resolved_download_artifact.clone()
-                            {
-                                let wire_download_id =
-                                    effective_request.download_id.map(|id| id.to_wire());
-                                let source_label = wire_download_id
-                                    .as_deref()
-                                    .or(effective_request.source_title.as_deref())
-                                    .unwrap_or("proxied-nzb");
-                                let staged = stage_nzb_from_bytes(
-                                    &self.staged_nzb_store,
-                                    &self.staged_nzb_pipeline_limit,
-                                    source_label,
-                                    Some(&request.title.id),
-                                    bytes,
-                                )
-                                .await;
-                                staged_nzb = Some(match staged {
-                                    Ok(staged) => staged,
-                                    Err(error) => {
-                                        if matches!(
-                                            &error,
-                                            AppError::Validation(_)
-                                                | AppError::DownloadSubmitRejected(_)
-                                        ) {
-                                            return Err(error);
-                                        }
-                                        if let (Some(indexer), Some(mapped_client_id)) =
-                                            (indexer_config.as_ref(), mapped_client_id)
-                                        {
-                                            return Err(Self::mapped_routing_failure(
-                                                indexer,
-                                                Some(&config),
-                                                mapped_client_id,
-                                                Self::routing_scope_label(
-                                                    selection.routing.as_ref(),
-                                                ),
-                                                format!("NZB staging failed: {error}"),
-                                            ));
-                                        }
-                                        return Err(error.into_download_submit_unavailable());
-                                    }
-                                });
-                            } else {
-                                let source_hint =
-                                    match request_source_hint_for_nzb(&effective_request) {
-                                        Ok(source_hint) => source_hint,
-                                        Err(error) => {
-                                            if matches!(
-                                                &error,
-                                                AppError::Validation(_)
-                                                    | AppError::DownloadSubmitRejected(_)
-                                            ) {
-                                                return Err(error);
-                                            }
-                                            if let (Some(indexer), Some(mapped_client_id)) =
-                                                (indexer_config.as_ref(), mapped_client_id)
-                                            {
-                                                return Err(Self::mapped_routing_failure(
-                                                    indexer,
-                                                    Some(&config),
-                                                    mapped_client_id,
-                                                    Self::routing_scope_label(
-                                                        selection.routing.as_ref(),
-                                                    ),
-                                                    format!(
-                                                        "NZB source could not be resolved: {error}"
-                                                    ),
-                                                ));
-                                            }
-                                            return Err(error.into_download_submit_unavailable());
-                                        }
-                                    };
-                                let staged = stage_nzb_from_url(
-                                    &self.outbound_http,
-                                    &self.staged_nzb_store,
-                                    &self.staged_nzb_pipeline_limit,
-                                    &source_hint,
-                                    Some(&request.title.id),
-                                    request
-                                        .search_facet
-                                        .as_ref()
-                                        .unwrap_or(&request.title.facet),
-                                )
-                                .await;
-                                staged_nzb = Some(match staged {
-                                    Ok(staged) => staged,
-                                    Err(error) => {
-                                        if matches!(
-                                            &error,
-                                            AppError::Validation(_)
-                                                | AppError::DownloadSubmitRejected(_)
-                                        ) {
-                                            return Err(error);
-                                        }
-                                        if let (Some(indexer), Some(mapped_client_id)) =
-                                            (indexer_config.as_ref(), mapped_client_id)
-                                        {
-                                            return Err(Self::mapped_routing_failure(
-                                                indexer,
-                                                Some(&config),
-                                                mapped_client_id,
-                                                Self::routing_scope_label(
-                                                    selection.routing.as_ref(),
-                                                ),
-                                                format!("NZB download or staging failed: {error}"),
-                                            ));
-                                        }
-                                        return Err(error.into_download_submit_unavailable());
-                                    }
-                                });
-                            }
-                        }
-                        effective_request.staged_nzb =
-                            staged_nzb.as_ref().map(|lease| lease.staged_nzb.clone());
+                        effective_request.staged_nzb = Some(staged_nzb.staged_nzb.clone());
                     }
                     (effective_request, resolved_seed_goals)
                 }
@@ -4957,7 +3659,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn history_timestamps_support_seconds_milliseconds_and_rfc3339() {
@@ -5070,6 +3771,14 @@ mod tests {
         }
     }
 
+    fn resolved_nzb_fixture() -> ResolvedDownloadArtifact {
+        ResolvedDownloadArtifact::Nzb {
+            bytes: b"<nzb></nzb>".to_vec(),
+            file_name: Some("fixture.nzb".to_string()),
+            content_type: Some("application/x-nzb".to_string()),
+        }
+    }
+
     #[test]
     fn routing_entry_parses_optional_seeding_profile_id() {
         let camel = PrioritizedDownloadClientRouter::parse_routing_entry(&serde_json::json!({
@@ -5092,1177 +3801,6 @@ mod tests {
         assert_eq!(absent.seeding_profile_id, None);
         assert_eq!(absent.category.as_deref(), Some("Movies"));
         assert!(absent.remove_completed);
-    }
-
-    #[test]
-    fn torrent_metainfo_detection_requires_valid_bencoded_info_dict() {
-        assert!(looks_like_torrent_metainfo(b"d4:infod4:name4:testee"));
-        assert!(!looks_like_torrent_metainfo(b"not a torrent"));
-        assert!(!looks_like_torrent_metainfo(b"d4:name4:testee"));
-    }
-
-    #[test]
-    fn classifier_rejects_invalid_torrent_bytes_before_submission() {
-        let headers = serde_json::json!({
-            "content-type": "application/x-bittorrent",
-        });
-
-        let error = PrioritizedDownloadClientRouter::classify_resolved_download_artifact(
-            "Byparr",
-            Some("https://indexer.example/download/thing.torrent"),
-            Some(&headers),
-            b"not a torrent".to_vec(),
-            None,
-        )
-        .expect_err("invalid torrent bytes must fail");
-
-        assert_eq!(
-            error.to_string(),
-            "validation: Byparr resolved invalid torrent file bytes.",
-        );
-    }
-
-    #[test]
-    fn classifier_accepts_extensionless_torrent_with_plain_content_type() {
-        let artifact = PrioritizedDownloadClientRouter::classify_resolved_download_artifact(
-            "Indexer",
-            Some("https://indexer.example/download?id=1"),
-            Some(&serde_json::json!({"content-type": "text/plain"})),
-            b"d4:infod4:name4:testee".to_vec(),
-            None,
-        )
-        .expect("valid metainfo is sufficient to classify a torrent");
-        let ResolvedDownloadArtifact::TorrentFile { info_hash_hint, .. } = artifact else {
-            panic!("valid metainfo should classify as a torrent");
-        };
-        assert_eq!(
-            info_hash_hint.as_deref(),
-            Some("1ade8a1a581f338e4fce4ce784da3f7d03f81f3a")
-        );
-    }
-
-    fn transport_proxy_config(
-        provider_type: scryer_domain::ProxyProviderType,
-        base_url: String,
-    ) -> ProxyConfig {
-        let now = chrono::Utc::now();
-        ProxyConfig {
-            id: "transport-1".to_string(),
-            name: "House VPN".to_string(),
-            provider_type,
-            protocol: None,
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url,
-            request_timeout_seconds: 30,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        }
-    }
-
-    /// Minimal in-process HTTP proxy built from raw tokio: records the
-    /// absolute-form request line it was handed and answers itself.
-    async fn spawn_recording_artifact_proxy(
-        body: &'static [u8],
-    ) -> (String, Arc<Mutex<Vec<String>>>) {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("proxy double should bind");
-        let address = listener.local_addr().expect("proxy double should be bound");
-        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Arc::clone(&seen);
-        tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
-                let recorder = Arc::clone(&recorder);
-                tokio::spawn(async move {
-                    let mut buffer = vec![0u8; 8192];
-                    let mut received = Vec::new();
-                    loop {
-                        let Ok(read) = stream.read(&mut buffer).await else {
-                            return;
-                        };
-                        if read == 0 {
-                            break;
-                        }
-                        received.extend_from_slice(&buffer[..read]);
-                        if received.windows(4).any(|window| window == b"\r\n\r\n") {
-                            break;
-                        }
-                    }
-                    if let Some(line) = String::from_utf8_lossy(&received).lines().next() {
-                        recorder
-                            .lock()
-                            .expect("proxy recorder lock")
-                            .push(line.to_string());
-                    }
-                    let mut response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/x-bittorrent\r\n\r\n",
-                        body.len()
-                    )
-                    .into_bytes();
-                    response.extend_from_slice(body);
-                    let _ = stream.write_all(&response).await;
-                    let _ = stream.flush().await;
-                });
-            }
-        });
-        (format!("http://{address}"), seen)
-    }
-
-    #[tokio::test]
-    async fn artifact_fetch_egresses_through_an_assigned_transport_proxy() {
-        let (proxy_url, seen) = spawn_recording_artifact_proxy(b"d4:infod4:name4:testee").await;
-        let proxy_config =
-            transport_proxy_config(scryer_domain::ProxyProviderType::Http, proxy_url);
-
-        let artifact = no_client_router()
-            .resolve_download_artifact_via_transport_proxy(
-                &proxy_config,
-                // Deliberately unresolvable: only the proxy can reach it.
-                "http://indexer.example/download?id=1",
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("the proxied artifact fetch should resolve");
-
-        assert!(matches!(
-            artifact,
-            ResolvedDownloadArtifact::TorrentFile { .. }
-        ));
-        let seen = seen.lock().expect("proxy recorder lock").clone();
-        assert_eq!(seen.len(), 1, "expected one proxied fetch: {seen:?}");
-        assert!(
-            seen[0].contains("http://indexer.example/download?id=1"),
-            "expected an absolute-form proxied request line, got {}",
-            seen[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unreachable_transport_proxy_names_itself_rather_than_the_indexer() {
-        let proxy_config = transport_proxy_config(
-            scryer_domain::ProxyProviderType::Socks5,
-            "socks5://127.0.0.1:1".to_string(),
-        );
-
-        let error = no_client_router()
-            .resolve_download_artifact_via_transport_proxy(
-                &proxy_config,
-                "http://indexer.example/download?id=1",
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect_err("an unreachable proxy must fail the fetch");
-
-        let message = error.to_string();
-        assert!(
-            message.contains("proxy House VPN unreachable:"),
-            "the failure must name the proxy, got: {message}"
-        );
-    }
-
-    /// Was `a_tunnel_proxy_fails_closed_on_an_artifact_fetch` while there was
-    /// no engine. The artifact fetch now travels through the tunnel: the SSH
-    /// double records the destination it forwarded, so this proves the grab
-    /// took the tunnel rather than merely that it did not go direct.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_tunnel_proxy_carries_an_artifact_fetch() {
-        let server = scryer_tunnel::test_support::SshServerDouble::start(
-            scryer_tunnel::test_support::SshServerOptions::default(),
-        )
-        .await;
-        let origin = scryer_tunnel::test_support::TunnelledOrigin::start_with_content_type(
-            "application/x-bittorrent",
-            "d4:infod4:name4:testee",
-        )
-        .await;
-
-        let mut proxy_config = transport_proxy_config(
-            scryer_domain::ProxyProviderType::SshTunnel,
-            format!("ssh://{}", server.addr()),
-        );
-        proxy_config.id = "router-tunnel".to_string();
-        proxy_config.username_encrypted = Some("operator".to_string());
-        proxy_config.password_encrypted = Some("s3cret".to_string());
-
-        let resolved = no_client_router()
-            .resolve_download_artifact_via_transport_proxy(
-                &proxy_config,
-                &format!("http://{}/download?id=1", origin.addr()),
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("the tunnel must carry the artifact fetch");
-        assert!(
-            matches!(resolved, ResolvedDownloadArtifact::TorrentFile { .. }),
-            "the artifact must come back classified through the tunnel: {resolved:?}"
-        );
-
-        assert_eq!(
-            server.forwarded_targets(),
-            vec![("127.0.0.1".to_string(), origin.addr().port())],
-            "the artifact must have been fetched through the SSH server"
-        );
-        assert_eq!(origin.request_lines().len(), 1);
-
-        scryer_application::tunnel_proxy::stop_tunnel("router-tunnel");
-    }
-
-    /// The fail-closed half, kept: a tunnel that will not come up fails the
-    /// fetch instead of falling back to a direct one. The destination is a live
-    /// server here, so a dropped assignment would show up as a successful
-    /// download.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_unreachable_tunnel_fails_closed_on_an_artifact_fetch() {
-        use wiremock::matchers::method;
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let origin = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/x-bittorrent")
-                    .set_body_bytes(b"d4:infod4:name4:testee"),
-            )
-            .mount(&origin)
-            .await;
-        let dead_ssh_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-            let port = listener.local_addr().expect("addr").port();
-            drop(listener);
-            port
-        };
-
-        let mut proxy_config = transport_proxy_config(
-            scryer_domain::ProxyProviderType::SshTunnel,
-            format!("ssh://127.0.0.1:{dead_ssh_port}"),
-        );
-        proxy_config.id = "router-tunnel-dead".to_string();
-        proxy_config.username_encrypted = Some("operator".to_string());
-        proxy_config.password_encrypted = Some("s3cret".to_string());
-
-        let error = no_client_router()
-            .resolve_download_artifact_via_transport_proxy(
-                &proxy_config,
-                &format!("{}/download?id=1", origin.uri()),
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect_err("an unreachable tunnel must fail the fetch");
-
-        let message = error.to_string();
-        assert!(
-            message.contains("proxy House VPN unreachable:"),
-            "the failure must name the proxy, got: {message}"
-        );
-        assert!(
-            origin
-                .received_requests()
-                .await
-                .unwrap_or_default()
-                .is_empty(),
-            "the artifact must never be fetched directly when a tunnel is assigned"
-        );
-
-        scryer_application::tunnel_proxy::stop_tunnel("router-tunnel-dead");
-    }
-
-    #[tokio::test]
-    async fn direct_artifact_fetch_follows_relative_redirect_with_same_origin_headers() {
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/start"))
-            .and(header("x-indexer-session", "secret"))
-            .respond_with(ResponseTemplate::new(302).insert_header("location", "/artifact"))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/artifact"))
-            .and(header("x-indexer-session", "secret"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/plain")
-                    .set_body_bytes(b"d4:infod4:name4:testee"),
-            )
-            .mount(&server)
-            .await;
-
-        let fetched = no_client_router()
-            .fetch_download_artifact_direct(
-                "Indexer",
-                &format!("{}/start", server.uri()),
-                &[("x-indexer-session".to_string(), "secret".to_string())],
-                Duration::from_secs(5),
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("relative redirect should resolve");
-        let artifact = PrioritizedDownloadClientRouter::classify_resolved_download_artifact(
-            "Indexer",
-            fetched.final_url.as_deref(),
-            fetched.headers.as_ref(),
-            fetched.bytes,
-            None,
-        )
-        .expect("redirect target should classify as a torrent");
-
-        assert!(matches!(
-            artifact,
-            ResolvedDownloadArtifact::TorrentFile { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn direct_artifact_fetch_strips_headers_after_cross_origin_redirect() {
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let target = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/artifact"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"d4:infod4:name4:testee"))
-            .mount(&target)
-            .await;
-        let origin = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/start"))
-            .and(header("x-indexer-session", "secret"))
-            .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("location", format!("{}/artifact", target.uri())),
-            )
-            .mount(&origin)
-            .await;
-
-        no_client_router()
-            .fetch_download_artifact_direct(
-                "Indexer",
-                &format!("{}/start", origin.uri()),
-                &[("x-indexer-session".to_string(), "secret".to_string())],
-                Duration::from_secs(5),
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("cross-origin redirect should resolve without credentials");
-
-        let requests = target.received_requests().await.expect("recorded requests");
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].headers.get("x-indexer-session").is_none());
-    }
-
-    #[tokio::test]
-    async fn direct_artifact_fetch_resolves_magnet_redirect_and_rejects_loops() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567";
-        Mock::given(method("GET"))
-            .and(path("/magnet"))
-            .respond_with(ResponseTemplate::new(302).insert_header("location", magnet))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/loop"))
-            .respond_with(ResponseTemplate::new(302).insert_header("location", "/loop"))
-            .mount(&server)
-            .await;
-
-        let fetched = no_client_router()
-            .fetch_download_artifact_direct(
-                "Indexer",
-                &format!("{}/magnet", server.uri()),
-                &[],
-                Duration::from_secs(5),
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("magnet redirect should resolve");
-        assert_eq!(fetched.final_url.as_deref(), Some(magnet));
-
-        let error = no_client_router()
-            .fetch_download_artifact_direct(
-                "Indexer",
-                &format!("{}/loop", server.uri()),
-                &[],
-                Duration::from_secs(5),
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect_err("redirect loops must fail");
-        assert!(error.to_string().contains("redirect looped"));
-
-        let uppercase_btih = "MAGNET:?XT=URN:BTIH:0123456789ABCDEF0123456789ABCDEF01234567";
-        let prepared = no_client_router()
-            .prepare_download_request(
-                &test_add_request(uppercase_btih, Some(DownloadSourceKind::MagnetUri)),
-                None,
-            )
-            .await
-            .expect("uppercase btih magnet should resolve");
-        assert!(matches!(
-            prepared.resolved_download_artifact,
-            Some(ResolvedDownloadArtifact::Magnet {
-                info_hash_hint: Some(ref hash),
-                ..
-            }) if hash == "0123456789abcdef0123456789abcdef01234567"
-        ));
-
-        let btmh = format!("magnet:?xt=urn:btmh:1220{}", "ab".repeat(32));
-        let prepared = no_client_router()
-            .prepare_download_request(
-                &test_add_request(&btmh, Some(DownloadSourceKind::MagnetUri)),
-                None,
-            )
-            .await
-            .expect("btmh magnet should resolve");
-        assert!(matches!(
-            prepared.resolved_download_artifact,
-            Some(ResolvedDownloadArtifact::Magnet {
-                info_hash_hint: Some(ref hash),
-                ..
-            }) if hash == &"ab".repeat(32)
-        ));
-    }
-
-    #[tokio::test]
-    async fn fetch_download_artifact_resolves_an_nzb_url_the_submit_path_leaves_alone() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        const NZB: &[u8] =
-            br#"<?xml version="1.0" encoding="UTF-8"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file subject="release"><segments><segment bytes="1" number="1">a@b</segment></segments></file></nzb>"#;
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/release.nzb"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/x-nzb")
-                    .set_body_bytes(NZB),
-            )
-            .mount(&server)
-            .await;
-
-        let router = no_client_router();
-        let request = test_add_request(
-            &format!("{}/release.nzb", server.uri()),
-            Some(DownloadSourceKind::NzbUrl),
-        );
-
-        let artifact = router
-            .fetch_release_artifact(&request)
-            .await
-            .expect("host-side fetch should resolve the NZB");
-        let ResolvedDownloadArtifact::Nzb { bytes, .. } = artifact else {
-            panic!("an application/x-nzb body should classify as an NZB");
-        };
-        assert_eq!(bytes, NZB);
-
-        // The submit path is untouched: the download client still fetches the
-        // URL itself.
-        let prepared = router
-            .prepare_download_request(&request, None)
-            .await
-            .expect("submit preparation should still leave the NZB URL alone");
-        assert!(prepared.resolved_download_artifact.is_none());
-        assert_eq!(prepared.source_hint, request.source_hint);
-    }
-
-    #[tokio::test]
-    async fn direct_preparation_resolves_http_torrent_but_preserves_nzb_url() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/download"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"d4:infod4:name4:testee"))
-            .mount(&server)
-            .await;
-        let router = no_client_router();
-        let mut torrent_request = test_add_request(
-            &format!("{}/download", server.uri()),
-            Some(DownloadSourceKind::MagnetUri),
-        );
-        torrent_request.info_hash_hint =
-            Some("abcdef0123456789abcdef0123456789abcdef01".to_string());
-        let prepared = router
-            .prepare_download_request(&torrent_request, None)
-            .await
-            .expect("HTTP torrent should be resolved even with a known hash");
-        assert!(matches!(
-            prepared.resolved_download_artifact,
-            Some(ResolvedDownloadArtifact::TorrentFile { .. })
-        ));
-        assert_eq!(prepared.source_kind, Some(DownloadSourceKind::TorrentFile));
-        assert_eq!(
-            prepared.info_hash_hint.as_deref(),
-            Some("1ade8a1a581f338e4fce4ce784da3f7d03f81f3a")
-        );
-
-        let derived = router
-            .prepare_download_request(
-                &test_add_request(
-                    &format!("{}/download", server.uri()),
-                    Some(DownloadSourceKind::MagnetUri),
-                ),
-                None,
-            )
-            .await
-            .expect("HTTP torrent should derive its v1 hash when the indexer omitted it");
-        assert_eq!(
-            derived.info_hash_hint.as_deref(),
-            Some("1ade8a1a581f338e4fce4ce784da3f7d03f81f3a")
-        );
-
-        let v2_hint = "ab".repeat(32);
-        let mut v2_request = test_add_request(
-            &format!("{}/download", server.uri()),
-            Some(DownloadSourceKind::TorrentFile),
-        );
-        v2_request.info_hash_hint = Some(v2_hint.clone());
-        let prepared = router
-            .prepare_download_request(&v2_request, None)
-            .await
-            .expect("HTTP torrent should preserve an explicit v2 hint");
-        assert_eq!(prepared.info_hash_hint.as_deref(), Some(v2_hint.as_str()));
-
-        let nzb_request = test_add_request(
-            "http://127.0.0.1:1/release.nzb",
-            Some(DownloadSourceKind::NzbUrl),
-        );
-        let preserved = router
-            .prepare_download_request(&nzb_request, None)
-            .await
-            .expect("direct NZB URLs must not be fetched by torrent normalization");
-        assert_eq!(preserved.source_hint, nzb_request.source_hint);
-        assert!(preserved.resolved_download_artifact.is_none());
-    }
-
-    #[tokio::test]
-    async fn hexadecimal_v1_magnets_override_stale_hints_across_resolution_paths() {
-        const STALE_HASH: &str = "abcdef0123456789abcdef0123456789abcdef01";
-        const CANONICAL_HASH: &str = "0123456789abcdef0123456789abcdef01234567";
-        const MAGNET: &str = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567";
-
-        let router = no_client_router();
-        let mut request = test_add_request(MAGNET, Some(DownloadSourceKind::MagnetUri));
-        request.info_hash_hint = Some(STALE_HASH.to_string());
-
-        let direct = router
-            .prepare_download_request(&request, None)
-            .await
-            .expect("direct hexadecimal btih magnet should resolve");
-        assert_eq!(direct.info_hash_hint.as_deref(), Some(CANONICAL_HASH));
-        assert!(matches!(
-            direct.resolved_download_artifact.as_ref(),
-            Some(ResolvedDownloadArtifact::Magnet {
-                info_hash_hint: Some(hash),
-                ..
-            }) if hash == CANONICAL_HASH
-        ));
-
-        let from_final_url = PrioritizedDownloadClientRouter::classify_resolved_download_artifact(
-            "Indexer",
-            Some(MAGNET),
-            None,
-            Vec::new(),
-            Some(STALE_HASH.to_string()),
-        )
-        .expect("final magnet URL should resolve");
-        let prepared = router
-            .prepare_resolved_request(&request, from_final_url)
-            .expect("final magnet URL should prepare");
-        assert_eq!(prepared.info_hash_hint.as_deref(), Some(CANONICAL_HASH));
-
-        let from_body = PrioritizedDownloadClientRouter::classify_resolved_download_artifact(
-            "Indexer",
-            None,
-            None,
-            MAGNET.as_bytes().to_vec(),
-            Some(STALE_HASH.to_string()),
-        )
-        .expect("magnet response body should resolve");
-        let prepared = router
-            .prepare_resolved_request(&request, from_body)
-            .expect("magnet response body should prepare");
-        assert_eq!(prepared.info_hash_hint.as_deref(), Some(CANONICAL_HASH));
-    }
-
-    #[tokio::test]
-    async fn trawl_resolves_embedded_nzb_with_millisecond_timeout() {
-        use wiremock::matchers::{body_json, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let download_url = format!("{}/download/release.nzb", server.uri());
-        Mock::given(method("POST"))
-            .and(path("/v1"))
-            .and(body_json(serde_json::json!({
-                "cmd": "request.get",
-                "url": download_url,
-                "maxTimeout": 60_000
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok",
-                "solution": {
-                    "url": download_url,
-                    "status": 200,
-                    "headers": { "content-type": "application/x-nzb" },
-                    "cookies": [{ "name": "cf_clearance", "value": "abc" }],
-                    "userAgent": "Trawl",
-                    "response": "<nzb></nzb>"
-                }
-            })))
-            .mount(&server)
-            .await;
-
-        let now = Utc::now();
-        let proxy = ProxyConfig {
-            id: "trawl-1".into(),
-            name: "Trawl".into(),
-            provider_type: scryer_domain::ProxyProviderType::Trawl,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: server.uri(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
-
-        let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(
-                &proxy,
-                &download_url,
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("Trawl should resolve embedded NZB content");
-
-        assert!(matches!(
-            artifact,
-            ResolvedDownloadArtifact::Nzb { bytes, .. } if bytes == b"<nzb></nzb>"
-        ));
-        let requests = server.received_requests().await.expect("recorded requests");
-        let solver_request = requests
-            .iter()
-            .find(|request| request.url.path() == "/v1")
-            .expect("solver request");
-        assert_eq!(
-            solver_request
-                .headers
-                .get("user-agent")
-                .and_then(|value| value.to_str().ok()),
-            Some(scryer_outbound_http::PROXY_USER_AGENT)
-        );
-    }
-
-    #[tokio::test]
-    async fn trawl_artifact_resolution_uses_direct_response_before_solver() {
-        use wiremock::matchers::{method, path, query_param};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let download_path = "/download";
-        let download_url = format!("{}{download_path}?id=direct", server.uri());
-        Mock::given(method("GET"))
-            .and(path(download_path))
-            .and(query_param("id", "direct"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/x-bittorrent")
-                    .set_body_bytes(b"d4:infod4:name6:directee"),
-            )
-            .mount(&server)
-            .await;
-
-        let now = Utc::now();
-        let proxy = ProxyConfig {
-            id: "trawl-direct-first".into(),
-            name: "Trawl".into(),
-            provider_type: scryer_domain::ProxyProviderType::Trawl,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: server.uri(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
-
-        let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(
-                &proxy,
-                &download_url,
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("direct artifact should bypass Trawl");
-
-        assert!(matches!(
-            artifact,
-            ResolvedDownloadArtifact::TorrentFile { bytes, .. }
-                if bytes == b"d4:infod4:name6:directee"
-        ));
-        let requests = server
-            .received_requests()
-            .await
-            .expect("direct request should be captured");
-        assert_eq!(requests.len(), 1, "the solver endpoint must not be called");
-        assert_eq!(requests[0].url.path(), download_path);
-    }
-
-    #[tokio::test]
-    async fn trawl_refetches_opaque_binary_artifact_when_solution_headers_are_empty() {
-        use wiremock::matchers::{body_json, header, method, path, query_param};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let download_path = "/download";
-        let download_url = format!("{}{download_path}?id=release", server.uri());
-        Mock::given(method("POST"))
-            .and(path("/v1"))
-            .and(body_json(serde_json::json!({
-                "cmd": "request.get",
-                "url": download_url,
-                "maxTimeout": 60_000
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok",
-                "solution": {
-                    "url": download_url,
-                    "status": 200,
-                    "headers": {},
-                    "cookies": [],
-                    "userAgent": "Trawl UA",
-                    "response": ""
-                }
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(download_path))
-            .and(query_param("id", "release"))
-            .and(header("user-agent", "Trawl UA"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/x-bittorrent")
-                    .set_body_bytes(b"d4:infod4:name4:testee"),
-            )
-            .mount(&server)
-            .await;
-
-        let now = Utc::now();
-        let proxy = ProxyConfig {
-            id: "trawl-1".into(),
-            name: "Trawl".into(),
-            provider_type: scryer_domain::ProxyProviderType::Trawl,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: server.uri(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
-
-        let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(
-                &proxy,
-                &download_url,
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("Trawl should refetch binary torrent content");
-
-        assert!(matches!(
-            artifact,
-            ResolvedDownloadArtifact::TorrentFile { bytes, .. }
-                if bytes == b"d4:infod4:name4:testee"
-        ));
-    }
-
-    #[tokio::test]
-    async fn byparr_non_success_solution_refetches_download_with_clearance_session() {
-        use wiremock::matchers::{body_json, header, method, path, query_param};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let download_path = "/download";
-        let download_url = format!("{}{download_path}?id=release", server.uri());
-        Mock::given(method("POST"))
-            .and(path("/v1"))
-            .and(body_json(serde_json::json!({
-                "cmd": "request.get",
-                "url": download_url,
-                "maxTimeout": 60
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok",
-                "solution": {
-                    "url": download_url,
-                    "status": 503,
-                    "headers": { "content-type": "text/html" },
-                    "cookies": [{ "name": "e2e_clearance", "value": "solved" }],
-                    "userAgent": "Byparr UA",
-                    "response": "<html>Just a moment</html>"
-                }
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(download_path))
-            .and(query_param("id", "release"))
-            .and(header("cookie", "e2e_clearance=solved"))
-            .and(header("user-agent", "Byparr UA"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/x-nzb")
-                    .set_body_bytes(b"<nzb></nzb>"),
-            )
-            .mount(&server)
-            .await;
-
-        let now = Utc::now();
-        let proxy = ProxyConfig {
-            id: "byparr-refetch".into(),
-            name: "Byparr".into(),
-            provider_type: scryer_domain::ProxyProviderType::Byparr,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: server.uri(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
-
-        let artifact = no_client_router()
-            .resolve_download_artifact_via_proxy(
-                &proxy,
-                &download_url,
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect("Byparr should refetch the NZB with its clearance session");
-
-        assert!(matches!(
-            artifact,
-            ResolvedDownloadArtifact::Nzb { bytes, .. } if bytes == b"<nzb></nzb>"
-        ));
-    }
-
-    #[tokio::test]
-    async fn trawl_server_error_is_classified_as_solver_unavailable() {
-        use wiremock::matchers::{body_json, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let download_url = format!("{}/download?id=release", server.uri());
-        Mock::given(method("POST"))
-            .and(path("/v1"))
-            .and(body_json(serde_json::json!({
-                "cmd": "request.get",
-                "url": download_url,
-                "maxTimeout": 60_000
-            })))
-            .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
-                "status": "error",
-                "message": "Browser pool initializing, retry in a few seconds",
-                "solution": {
-                    "url": download_url,
-                    "status": 0,
-                    "headers": {},
-                    "response": "",
-                    "cookies": [],
-                    "userAgent": ""
-                }
-            })))
-            .mount(&server)
-            .await;
-
-        let now = Utc::now();
-        let proxy = ProxyConfig {
-            id: "trawl-unavailable".into(),
-            name: "Trawl".into(),
-            provider_type: scryer_domain::ProxyProviderType::Trawl,
-            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-            username_encrypted: None,
-            password_encrypted: None,
-            remote_dns: false,
-            base_url: server.uri(),
-            request_timeout_seconds: 60,
-            is_enabled: true,
-            last_health_status: None,
-            last_error_message: None,
-            last_error_at: None,
-            created_at: now,
-            updated_at: now,
-            host_key_fingerprint: None,
-            host_key_pinned_at: None,
-            private_key_encrypted: None,
-            private_key_passphrase_encrypted: None,
-            peer_public_key: None,
-            preshared_key_encrypted: None,
-            tunnel_public_key: None,
-            tunnel_addresses: Vec::new(),
-            tunnel_dns_servers: Vec::new(),
-            tunnel_mtu: None,
-            tunnel_keepalive_seconds: None,
-        };
-
-        let error = no_client_router()
-            .resolve_download_artifact_via_proxy(
-                &proxy,
-                &download_url,
-                None,
-                &PluginEgressPolicy::default(),
-            )
-            .await
-            .expect_err("Trawl server errors must fail as solver unavailable");
-
-        assert!(matches!(
-            error,
-            AppError::DownloadSubmitUnavailable(message)
-                if message == solver::TRAWL_UNAVAILABLE_MESSAGE
-        ));
-    }
-
-    #[test]
-    fn proxied_download_url_requires_the_full_indexer_origin() {
-        let indexer = test_indexer_config("https://indexer.example/api");
-
-        assert!(
-            PrioritizedDownloadClientRouter::download_url_matches_indexer_origin(
-                &indexer,
-                "https://INDEXER.example/download/release.torrent",
-            )
-        );
-        assert!(
-            !PrioritizedDownloadClientRouter::download_url_matches_indexer_origin(
-                &indexer,
-                "http://indexer.example/download/release.torrent",
-            )
-        );
-        assert!(
-            !PrioritizedDownloadClientRouter::download_url_matches_indexer_origin(
-                &indexer,
-                "https://indexer.example:8443/download/release.torrent",
-            )
-        );
-
-        let default_port_indexer = test_indexer_config("http://indexer.example:80/api");
-        assert!(
-            PrioritizedDownloadClientRouter::download_url_matches_indexer_origin(
-                &default_port_indexer,
-                "http://indexer.example/download/release.torrent",
-            )
-        );
-    }
-
-    #[tokio::test]
-    async fn artifact_resolution_blocks_metadata_destinations_before_network_or_solver() {
-        let router = no_client_router();
-        let now = Utc::now();
-        for provider_type in [
-            scryer_domain::ProxyProviderType::Byparr,
-            scryer_domain::ProxyProviderType::Trawl,
-        ] {
-            let proxy = ProxyConfig {
-                id: format!("{}-1", provider_type.as_str()),
-                name: solver::solver_provider_name(provider_type).to_string(),
-                provider_type,
-                protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
-                username_encrypted: None,
-                password_encrypted: None,
-                remote_dns: false,
-                base_url: "http://127.0.0.1:1".to_string(),
-                request_timeout_seconds: 1,
-                is_enabled: true,
-                last_health_status: None,
-                last_error_message: None,
-                last_error_at: None,
-                created_at: now,
-                updated_at: now,
-                host_key_fingerprint: None,
-                host_key_pinned_at: None,
-                private_key_encrypted: None,
-                private_key_passphrase_encrypted: None,
-                peer_public_key: None,
-                preshared_key_encrypted: None,
-                tunnel_public_key: None,
-                tunnel_addresses: Vec::new(),
-                tunnel_dns_servers: Vec::new(),
-                tunnel_mtu: None,
-                tunnel_keepalive_seconds: None,
-            };
-            for target in [
-                "http://169.254.169.254/latest/meta-data/",
-                "http://[::ffff:169.254.169.254]/latest/meta-data/",
-                "http://100.100.100.200/latest/meta-data/",
-            ] {
-                let error = match router
-                    .fetch_download_artifact_direct(
-                        solver::solver_provider_name(provider_type),
-                        target,
-                        &[],
-                        Duration::from_secs(1),
-                        &PluginEgressPolicy::default(),
-                    )
-                    .await
-                {
-                    Ok(_) => panic!("metadata destination must be rejected before fetch"),
-                    Err(error) => error,
-                };
-                assert!(
-                    matches!(&error, AppError::DownloadSubmitUnavailable(message)
-                        if message.contains("unsafe download artifact destination")),
-                    "unexpected error for {target}: {error}"
-                );
-
-                let error = match router
-                    .resolve_download_artifact_via_proxy(
-                        &proxy,
-                        target,
-                        None,
-                        &PluginEgressPolicy::default(),
-                    )
-                    .await
-                {
-                    Ok(_) => panic!("metadata destination must not be delegated to the solver"),
-                    Err(error) => error,
-                };
-                assert!(
-                    matches!(&error, AppError::DownloadSubmitUnavailable(message)
-                        if message.contains("unsafe download artifact destination")),
-                    "unexpected solver error for {target}: {error}"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn bounded_response_reader_rejects_chunked_body_over_limit() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test server");
-        let address = listener.local_addr().expect("test server address");
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("accept request");
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n",
-                )
-                .await
-                .expect("write response");
-        });
-
-        let response = generic_reqwest_client()
-            .get(format!("http://{address}/artifact"))
-            .send()
-            .await
-            .expect("fetch test response");
-        let error = read_response_body_bounded(response, 4)
-            .await
-            .expect_err("five-byte chunked response must exceed four-byte limit");
-
-        assert!(matches!(error, BoundedResponseBodyError::TooLarge));
-        server.await.expect("test server task");
     }
 
     struct MockDownloadClientConfigRepository {
@@ -7309,7 +4847,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -7357,6 +4895,7 @@ mod tests {
             None,
             None,
         );
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
         request.indexer_id = Some("indexer-1".to_string());
         request.is_recent = Some(true);
         router
@@ -7377,7 +4916,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -7413,6 +4952,7 @@ mod tests {
             None,
             None,
         );
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
         request.pinned_download_client_id = Some("secondary".to_string());
         router
             .submit_download(&request)
@@ -7457,6 +4997,7 @@ mod tests {
                 None,
                 None,
             );
+            request.resolved_download_artifact = Some(resolved_nzb_fixture());
             request.pinned_download_client_id = Some(pinned.to_string());
             let error = router
                 .submit_download(&request)
@@ -7482,7 +5023,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -7514,6 +5055,7 @@ mod tests {
             None,
             None,
         );
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
         request.indexer_id = Some("indexer-1".to_string());
         let first_attempt_id = scryer_domain::download_identity::DownloadId::parse(
             "00000000-0000-4000-8000-000000000011",
@@ -7569,7 +5111,7 @@ mod tests {
         let client = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("primary".to_string(), client.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
@@ -7618,7 +5160,7 @@ mod tests {
         let fallback = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("mapped".to_string(), mapped.clone()),
                     ("fallback".to_string(), fallback.clone()),
@@ -7653,6 +5195,7 @@ mod tests {
             None,
             None,
         );
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
         request.indexer_id = Some("indexer-1".to_string());
 
         let error = router
@@ -7679,7 +5222,7 @@ mod tests {
         let fallback = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("mapped".to_string(), mapped.clone()),
                     ("fallback".to_string(), fallback.clone()),
@@ -7713,6 +5256,7 @@ mod tests {
             None,
             None,
         );
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
         request.indexer_id = Some("indexer-1".to_string());
 
         assert!(
@@ -7730,7 +5274,7 @@ mod tests {
         let fallback = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("fallback".to_string(), fallback.clone())],
             });
         let mut indexer = test_indexer_config("https://indexer.example/api");
@@ -7858,7 +5402,7 @@ mod tests {
         let mapped = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("mapped".to_string(), mapped.clone())],
             });
         let mut indexer = test_indexer_config("https://indexer.example/api");
@@ -7924,7 +5468,7 @@ mod tests {
         let fallback = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("mapped".to_string(), mapped.clone()),
                     ("fallback".to_string(), fallback.clone()),
@@ -8038,132 +5582,6 @@ mod tests {
         )
     }
 
-    struct ResolvingIndexerClient {
-        calls: Mutex<Vec<String>>,
-        artifact: Option<ResolvedDownloadArtifact>,
-    }
-
-    #[async_trait]
-    impl scryer_application::IndexerClient for ResolvingIndexerClient {
-        async fn search(
-            &self,
-            _query: String,
-            _ids: HashMap<String, String>,
-            _category: Option<String>,
-            _facet: Option<String>,
-            _id_search_facet: Option<String>,
-            _newznab_categories: Option<Vec<String>>,
-            _indexer_routing: Option<scryer_application::IndexerRoutingPlan>,
-            _mode: scryer_application::SearchMode,
-            _operation: scryer_application::IndexerErrorOperation,
-            _season: Option<u32>,
-            _episode: Option<u32>,
-            _absolute_episode: Option<u32>,
-            _year: Option<i32>,
-            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
-            _learning_context: Option<scryer_application::IndexerSearchLearningContext>,
-            _cancel_token: tokio_util::sync::CancellationToken,
-        ) -> AppResult<scryer_application::IndexerSearchResponse> {
-            Err(AppError::Repository(
-                "search is not used in this test".to_string(),
-            ))
-        }
-
-        async fn resolve_download(
-            &self,
-            download_url: &str,
-        ) -> AppResult<Option<ResolvedDownloadArtifact>> {
-            self.calls.lock().unwrap().push(download_url.to_string());
-            Ok(self.artifact.clone())
-        }
-    }
-
-    struct ResolvingIndexerProvider {
-        client: Arc<dyn scryer_application::IndexerClient>,
-    }
-
-    impl IndexerPluginProvider for ResolvingIndexerProvider {
-        fn client_for_provider(
-            &self,
-            _config: &scryer_domain::IndexerConfig,
-        ) -> Option<Arc<dyn scryer_application::IndexerClient>> {
-            Some(Arc::clone(&self.client))
-        }
-
-        fn available_provider_types(&self) -> Vec<String> {
-            vec!["cardigann".to_string()]
-        }
-
-        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
-            vec![]
-        }
-    }
-
-    fn resolving_router(
-        artifact: Option<ResolvedDownloadArtifact>,
-    ) -> (PrioritizedDownloadClientRouter, Arc<ResolvingIndexerClient>) {
-        let client = Arc::new(ResolvingIndexerClient {
-            calls: Mutex::new(Vec::new()),
-            artifact,
-        });
-        let router =
-            no_client_router().with_indexer_plugin_provider(Arc::new(ResolvingIndexerProvider {
-                client: client.clone(),
-            }));
-        (router, client)
-    }
-
-    #[tokio::test]
-    async fn indexer_owned_download_resolution_runs_before_direct_fallback() {
-        let download_url = "https://indexer.example/download/1";
-        let (router, indexer_client) =
-            resolving_router(Some(ResolvedDownloadArtifact::TorrentFile {
-                bytes: b"torrent bytes".to_vec(),
-                file_name: Some("release.torrent".to_string()),
-                content_type: Some("application/x-bittorrent".to_string()),
-                info_hash_hint: Some("0123456789012345678901234567890123456789".to_string()),
-            }));
-
-        let prepared = router
-            .prepare_download_request(
-                &test_add_request(download_url, Some(DownloadSourceKind::TorrentFile)),
-                Some(&test_indexer_config("https://indexer.example")),
-            )
-            .await
-            .expect("indexer-owned resolution should avoid the direct fallback");
-
-        assert_eq!(
-            indexer_client.calls.lock().unwrap().as_slice(),
-            &[download_url.to_string()]
-        );
-        assert!(matches!(
-            prepared.resolved_download_artifact,
-            Some(ResolvedDownloadArtifact::TorrentFile { ref bytes, .. }) if bytes == b"torrent bytes"
-        ));
-        assert_eq!(prepared.source_kind, Some(DownloadSourceKind::TorrentFile));
-        assert!(prepared.source_hint.is_none());
-    }
-
-    #[tokio::test]
-    async fn a_magnet_source_hint_never_reaches_the_indexer_grab_flow() {
-        let magnet = "magnet:?xt=urn:btih:0123456789012345678901234567890123456789";
-        let (router, indexer_client) = resolving_router(None);
-
-        let prepared = router
-            .prepare_download_request(
-                &test_add_request(magnet, Some(DownloadSourceKind::MagnetUri)),
-                Some(&test_indexer_config("https://indexer.example")),
-            )
-            .await
-            .expect("a magnet needs no resolution at all");
-
-        assert!(indexer_client.calls.lock().unwrap().is_empty());
-        assert!(matches!(
-            prepared.resolved_download_artifact,
-            Some(ResolvedDownloadArtifact::Magnet { .. })
-        ));
-    }
-
     #[tokio::test]
     async fn no_configured_clients_return_empty_feedback_reads() {
         let router = no_client_router();
@@ -8204,6 +5622,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn router_rejects_unresolved_urls_without_fetching_them() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let request = test_add_request(&server.uri(), Some(DownloadSourceKind::NzbUrl));
+        let error = no_client_router()
+            .prepare_download_request(&request, None)
+            .await
+            .expect_err("router must require a resolved artifact");
+        assert!(error.to_string().contains("before client routing"));
+    }
+
+    #[tokio::test]
     async fn no_configured_clients_do_not_submit_or_route_queue_actions() {
         let router = no_client_router();
 
@@ -8215,7 +5649,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -8677,7 +6111,10 @@ mod tests {
                 download_id: None,
                 source_hint: Some("magnet:?xt=urn:btih:abcdef".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(ResolvedDownloadArtifact::Magnet {
+                    uri: "magnet:?xt=urn:btih:abcdef".to_string(),
+                    info_hash_hint: None,
+                }),
                 source_kind: Some(DownloadSourceKind::MagnetUri),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -8715,7 +6152,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -8751,7 +6188,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -8786,7 +6223,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -8832,7 +6269,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/movie.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Movie Release".to_string()),
                 source_password: None,
@@ -8864,7 +6301,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/anime.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Anime Release".to_string()),
                 source_password: None,
@@ -8897,7 +6334,7 @@ mod tests {
         let secondary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("secondary".to_string(), secondary.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
@@ -8930,7 +6367,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -8962,7 +6399,7 @@ mod tests {
         let primary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("primary".to_string(), primary.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
@@ -8996,7 +6433,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -9252,14 +6689,14 @@ mod tests {
         let router = seeding_router(
             primary.clone(),
             "qbittorrent",
-            vec!["nzb_url".to_string()],
+            vec!["nzb_file".to_string()],
             r#"{"primary": {"enabled": true, "seedingProfileId": "routing-profile"}}"#,
         );
 
         let mut request = torrent_add_request(Some("indexer-1"));
-        request.resolved_download_artifact = None;
-        request.source_kind = Some(DownloadSourceKind::NzbUrl);
-        request.source_hint = Some("https://example.invalid/release.nzb".to_string());
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
+        request.source_kind = Some(DownloadSourceKind::NzbFile);
+        request.source_hint = None;
         request.info_hash_hint = None;
 
         let grab = router
@@ -9308,7 +6745,7 @@ mod tests {
         let primary = Arc::new(MockDownloadClient::default());
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("primary".to_string(), primary.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
@@ -9340,7 +6777,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -9388,7 +6825,7 @@ mod tests {
             null_staged_nzb_store(),
             test_pipeline_limit(),
             Some(Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("primary".to_string(), primary.clone())],
             })),
         );
@@ -9401,7 +6838,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -9442,7 +6879,7 @@ mod tests {
         let title = test_title();
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -9487,7 +6924,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -9522,7 +6959,7 @@ mod tests {
         let title = test_title();
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![
                     ("primary".to_string(), primary.clone()),
                     ("secondary".to_string(), secondary.clone()),
@@ -9567,7 +7004,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -9601,7 +7038,7 @@ mod tests {
         let title = test_title();
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
-                accepted_inputs: vec!["nzb_url".to_string()],
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
                 clients: vec![("primary".to_string(), primary.clone())],
             });
         let router = PrioritizedDownloadClientRouter::new(
@@ -9635,7 +7072,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,
@@ -9698,7 +7135,7 @@ mod tests {
                 download_id: None,
                 source_hint: Some("https://example.invalid/release.nzb".to_string()),
                 staged_nzb: None,
-                resolved_download_artifact: None,
+                resolved_download_artifact: Some(resolved_nzb_fixture()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 source_title: Some("Test Release".to_string()),
                 source_password: None,

@@ -84,6 +84,7 @@ pub struct AppIntegrationServices {
     pub(crate) scope_indexer_coverage: Arc<dyn ScopeIndexerCoverageRepository>,
     pub(crate) indexer_caps_refresher: RuntimeFeature<Arc<dyn IndexerCapsSnapshotRefresher>>,
     pub(crate) indexer_client: Arc<dyn IndexerClient>,
+    pub(crate) indexer_artifact_resolver: Option<Arc<dyn IndexerArtifactResolver>>,
     pub(crate) download_client: Arc<dyn DownloadClient>,
     pub(crate) builtin_download_client_connection_tester:
         Arc<dyn BuiltinDownloadClientConnectionTester>,
@@ -362,6 +363,7 @@ impl AppServices {
                 ),
                 indexer_stats: Arc::new(NullIndexerStatsTracker),
                 upstream_scheduler: Arc::new(NullUpstreamScheduler),
+                indexer_artifact_resolver: None,
                 plugin_provider: RuntimeFeature::Disabled,
                 download_client_plugin_provider: RuntimeFeature::Disabled,
                 subtitle_plugin_provider: RuntimeFeature::Disabled,

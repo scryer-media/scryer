@@ -54,6 +54,11 @@ export type QueueTableRowProps = {
   rowActionVisualClass: string;
   virtualIndex?: number;
   measureElement?: (element: HTMLTableRowElement | null) => void;
+  /**
+   * Marks the row as static content that sits above the virtualised rows, so
+   * the activity view can fold its height into the virtualiser scroll margin.
+   */
+  isVirtualPrefix?: boolean;
   t: TranslateFn;
   onToggleImportSelected: () => void;
   onToggleExpanded: () => void;
@@ -126,6 +131,7 @@ function queueTableRowPropsEqual(
     previous.rowActionVisualClass === next.rowActionVisualClass &&
     previous.virtualIndex === next.virtualIndex &&
     previous.measureElement === next.measureElement &&
+    previous.isVirtualPrefix === next.isVirtualPrefix &&
     previous.t === next.t
   );
 }
@@ -146,6 +152,7 @@ export const QueueTableRow = memo(function QueueTableRow({
   rowActionVisualClass,
   virtualIndex,
   measureElement,
+  isVirtualPrefix,
   t,
   onToggleImportSelected,
   onToggleExpanded,
@@ -173,6 +180,7 @@ export const QueueTableRow = memo(function QueueTableRow({
           measureElement?.(element);
         }}
         data-index={virtualIndex}
+        data-activity-virtual-prefix={isVirtualPrefix ? "" : undefined}
         id={selectorId("activity", activeTab, "row", rowSelectorKey)}
         data-ui="activity-row"
         data-activity-tab={activeTab}
@@ -396,7 +404,10 @@ export const QueueTableRow = memo(function QueueTableRow({
         </TableCell>
       </TableRow>
       {row.hasExpandableDetails && isExpanded ? (
-        <TableRow data-virtual-detail-index={virtualIndex}>
+        <TableRow
+          data-virtual-detail-index={virtualIndex}
+          data-activity-virtual-prefix={isVirtualPrefix ? "" : undefined}
+        >
           <TableCell
             colSpan={activeTab === "activity" ? 6 : activeTab === "import" ? 7 : 5}
             className="bg-muted/10 p-3"

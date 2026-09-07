@@ -811,6 +811,14 @@ export function SettingsIndexersSection({
   const proxiesById = React.useMemo(() => {
     return new Map(proxyConfigs.map((proxy) => [proxy.id, proxy]));
   }, [proxyConfigs]);
+  React.useEffect(() => {
+    if (!isManagedSyncProvider || !indexerDraft.proxyConfigId) {
+      return;
+    }
+    setIndexerDraft((previous) =>
+      previous.proxyConfigId ? { ...previous, proxyConfigId: null } : previous,
+    );
+  }, [indexerDraft.proxyConfigId, isManagedSyncProvider, setIndexerDraft]);
   // Protocol families for the provider the editor is currently on: seeding
   // profiles only apply to torrent-capable indexers.
   const draftProtocolFamilies = React.useMemo(
@@ -1326,18 +1334,20 @@ export function SettingsIndexersSection({
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-            <ProxyAssignmentSelect
-              selectId="settings-indexer-proxy-select"
-              label={t("settings.proxyAssignment")}
-              proxies={proxyConfigs}
-              value={indexerDraft.proxyConfigId}
-              onChange={(proxyConfigId) =>
-                setIndexerDraft((prev: IndexerDraft) => ({
-                  ...prev,
-                  proxyConfigId,
-                }))
-              }
-            />
+            {!isManagedSyncProvider ? (
+              <ProxyAssignmentSelect
+                selectId="settings-indexer-proxy-select"
+                label={t("settings.proxyAssignment")}
+                proxies={proxyConfigs}
+                value={indexerDraft.proxyConfigId}
+                onChange={(proxyConfigId) =>
+                  setIndexerDraft((prev: IndexerDraft) => ({
+                    ...prev,
+                    proxyConfigId,
+                  }))
+                }
+              />
+            ) : null}
             {indexerDownloadClientMappingCatalogResource.catalog ? (
               <IndexerDownloadClientSelect
                 model={getIndexerDownloadClientDraftMappingViewModel(

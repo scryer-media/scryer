@@ -6558,6 +6558,232 @@ async fn pending_release_submit_unavailable_records_pending_without_failed_signa
     );
 }
 
+#[derive(Default)]
+struct RssRoutingRecordingIndexerClient {
+    plans: Mutex<Vec<IndexerRoutingPlan>>,
+}
+
+#[async_trait::async_trait]
+impl IndexerClient for RssRoutingRecordingIndexerClient {
+    async fn search(
+        &self,
+        query: String,
+        _ids: HashMap<String, String>,
+        _category: Option<String>,
+        _facet: Option<String>,
+        _id_search_facet: Option<String>,
+        newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
+        _mode: SearchMode,
+        operation: IndexerErrorOperation,
+        _season: Option<u32>,
+        _episode: Option<u32>,
+        _absolute_episode: Option<u32>,
+        _year: Option<i32>,
+        _tagged_aliases: Vec<TaggedAlias>,
+        _learning_context: Option<crate::IndexerSearchLearningContext>,
+        _cancel_token: tokio_util::sync::CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        assert!(query.is_empty());
+        assert_eq!(operation, IndexerErrorOperation::RssSync);
+        assert!(
+            newznab_categories.is_none(),
+            "RSS must not broadcast categories"
+        );
+        self.plans
+            .lock()
+            .await
+            .push(indexer_routing.expect("RSS routing"));
+        Ok(IndexerSearchResponse {
+            results: Vec::new(),
+            completion: crate::IndexerSearchCompletion::Complete,
+            indexer_outcomes: Vec::new(),
+            api_current: None,
+            api_max: None,
+            grab_current: None,
+            grab_max: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn scheduled_rss_passes_per_indexer_categories_and_exclusions_to_search() {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let indexer_client = Arc::new(RssRoutingRecordingIndexerClient::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        indexer_client.clone(),
+    );
+    seed_movie_wanted_for_acquisition(&app, &user, &wanted_items, "RSS Routing Movie", 2024).await;
+    app.add_title(
+        &user,
+        NewTitle {
+            name: "RSS Routing Series".into(),
+            facet: MediaFacet::Series,
+            monitored: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    for (scope, routing) in [
+        (
+            "movie",
+            serde_json::json!({
+                "a": {"enabled": true, "categories": ["2000"], "priority": 1},
+                "b": {"enabled": false, "categories": ["2000"], "priority": 1},
+                "disabled": {"enabled": false, "categories": ["2000"], "priority": 1}
+            }),
+        ),
+        (
+            "series",
+            serde_json::json!({
+                "a": {"enabled": false, "categories": ["5000"], "priority": 1},
+                "b": {"enabled": true, "categories": ["5000", "5070"], "priority": 1},
+                "disabled": {"enabled": false, "categories": ["5000"], "priority": 1}
+            }),
+        ),
+        (
+            "anime",
+            serde_json::json!({
+                "a": {"enabled": false, "categories": [], "priority": 1},
+                "b": {"enabled": true, "categories": ["5070"], "priority": 1},
+                "disabled": {"enabled": false, "categories": ["5070"], "priority": 1}
+            }),
+        ),
+    ] {
+        app.services
+            .config
+            .settings
+            .upsert_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                INDEXER_ROUTING_SETTINGS_KEY,
+                Some(scope.to_string()),
+                routing.to_string(),
+                "test",
+                None,
+            )
+            .await
+            .expect("seed RSS routing");
+    }
+
+    app.run_scheduled_rss_sync().await.expect("RSS sync");
+
+    let plans = indexer_client.plans.lock().await;
+    assert_eq!(plans.len(), 1, "RSS should submit one merged search");
+    let plan = &plans[0];
+    assert_eq!(plan.entries.len(), 3);
+    assert_eq!(plan.entries["a"].categories, ["2000"]);
+    assert_eq!(plan.entries["b"].categories, ["5000", "5070"]);
+    assert!(plan.entries["a"].enabled);
+    assert!(plan.entries["b"].enabled);
+    assert!(!plan.entries["disabled"].enabled);
+    assert!(plan.entries["disabled"].categories.is_empty());
+}
+
+#[tokio::test]
+async fn scheduled_rss_respects_library_enablement_and_category_overrides() {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let indexer_client = Arc::new(RssRoutingRecordingIndexerClient::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        indexer_client.clone(),
+    );
+    let (title, _) = seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &wanted_items,
+        "RSS Library Routing Movie",
+        2024,
+    )
+    .await;
+    for facet_enabled in [false, true] {
+        for scope in ["movie", "series", "anime"] {
+            app.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    INDEXER_ROUTING_SETTINGS_KEY,
+                    Some(scope.to_string()),
+                    serde_json::json!({
+                        "library-only": {"enabled": facet_enabled, "categories": [], "priority": 1}
+                    })
+                    .to_string(),
+                    "test",
+                    None,
+                )
+                .await
+                .expect("disable facet routing");
+        }
+
+        for (routing, enabled, categories) in [
+            (
+                serde_json::json!({
+                    "library-only": {"enabled": true, "categories": ["2040"], "priority": 1}
+                }),
+                true,
+                vec!["2040"],
+            ),
+            (
+                serde_json::json!({
+                    "library-only": {"enabled": true, "categories": [], "priority": 1}
+                }),
+                true,
+                vec!["2000"],
+            ),
+            // Library plans replace facet plans; a missing entry inherits defaults.
+            (
+                serde_json::json!({
+                    "other": {"enabled": false, "categories": [], "priority": 1}
+                }),
+                true,
+                vec!["2000"],
+            ),
+            (
+                serde_json::json!({
+                    "library-only": {"enabled": false, "categories": ["2040"], "priority": 1}
+                }),
+                false,
+                vec![],
+            ),
+        ] {
+            app.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    INDEXER_ROUTING_SETTINGS_KEY,
+                    Some(title.library_id.clone()),
+                    routing.to_string(),
+                    "test",
+                    None,
+                )
+                .await
+                .expect("set library override");
+            app.run_scheduled_rss_sync().await.expect("RSS sync");
+
+            let mut plans = indexer_client.plans.lock().await;
+            assert_eq!(plans.len(), 1);
+            let plan = plans.pop().expect("RSS routing");
+            if let Some(entry) = plan.entries.get("library-only") {
+                assert_eq!(entry.enabled, enabled);
+                assert_eq!(entry.categories, categories);
+            } else {
+                // An omitted indexer inherits defaults at the search boundary.
+                assert!(enabled);
+                assert_eq!(categories, ["2000"]);
+            }
+        }
+    }
+}
+
 struct PendingStatusAssertingIndexerClient {
     pending_releases: Arc<TrackingPendingReleaseRepo>,
     searches: Arc<Mutex<Vec<String>>>,

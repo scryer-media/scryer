@@ -1,7 +1,8 @@
-//! End-to-end upgrade coverage for migrations 0213, 0214 and 0215 (numbered
+//! End-to-end upgrade coverage for migrations 0215, 0216 and 0217 (numbered
 //! 0204-0206 on the feature branch, 0208-0210 on release-NEXT before main's
 //! shipped 0204/0205 were merged in, 0210-0212 after that merge, and
-//! 0213-0215 once 0.19.10's shipped 0206-0208 landed; renumbered each time).
+//! 0213-0215 once 0.19.10's shipped 0206-0208 landed, and 0215-0217 once
+//! 0.19.12's shipped 0209/0210 landed; renumbered each time).
 //!
 //! Each scenario drives the real migration runner over a database the real
 //! catalog built at the pre-upgrade state, because the behaviour worth pinning is

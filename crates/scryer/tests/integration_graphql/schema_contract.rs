@@ -683,6 +683,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // MetadataSearchItemPayload.existingTitleId and
     // ResolvePendingImportInput.attachToExistingTitle. Both hang off existing
     // types, so no census counts change.
+    // Caps-driven routing categories add IndexerConfigPayload.capsCategories
+    // and its IndexerCapsCategoryPayload element type: OBJECT 407->408,
+    // public types 779->780. Root-field, input-object, and enum counts are
+    // unchanged.
     assert_eq!(
         query_field_count, 161,
         "query fields: {query_field_names:?}"
@@ -792,8 +796,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // requiredWhen on a plugin config field) and its operator enum:
     // OBJECT 406->407, ENUM 146->147, public types 777->779. The `advanced`
     // flag is an additive field on the existing config-field payload.
-    assert_eq!(public_types.len(), 779);
-    assert_eq!(kind_count("OBJECT"), 407);
+    assert_eq!(public_types.len(), 780);
+    assert_eq!(kind_count("OBJECT"), 408);
     assert_eq!(kind_count("INPUT_OBJECT"), 213);
     assert_eq!(kind_count("ENUM"), 147);
     assert_eq!(kind_count("SCALAR"), 10);

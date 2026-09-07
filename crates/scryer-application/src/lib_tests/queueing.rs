@@ -1,6 +1,121 @@
 use super::*;
 
 #[tokio::test]
+async fn canonical_submission_holds_artifact_lease_until_client_accepts() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    struct Lease {
+        active: Arc<AtomicBool>,
+        staged: crate::StagedNzbRef,
+    }
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            self.active.store(false, Ordering::SeqCst);
+        }
+    }
+    impl crate::IndexerArtifactLease for Lease {
+        fn staged_nzb(&self) -> &crate::StagedNzbRef {
+            &self.staged
+        }
+    }
+    struct Resolver {
+        active: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+    }
+    #[async_trait::async_trait]
+    impl crate::IndexerArtifactResolver for Resolver {
+        async fn resolve_artifact(
+            &self,
+            request: &crate::IndexerArtifactResolutionRequest,
+        ) -> AppResult<crate::PreparedIndexerArtifact> {
+            assert_eq!(request.indexer_id.as_deref(), Some("lease-indexer"));
+            assert_eq!(request.search_facet, Some(MediaFacet::Series));
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.active.store(true, Ordering::SeqCst);
+            Ok(crate::PreparedIndexerArtifact::StagedNzb(Box::new(Lease {
+                active: self.active.clone(),
+                staged: crate::StagedNzbRef {
+                    id: "lease-test".into(),
+                    compressed_path: "fixture.nzb.gz".into(),
+                    raw_size_bytes: 10,
+                },
+            })))
+        }
+    }
+    struct Client {
+        inner: Arc<dyn DownloadClient>,
+        active: Arc<AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl DownloadClient for Client {
+        async fn submit_download(
+            &self,
+            request: &DownloadClientAddRequest,
+        ) -> AppResult<DownloadGrabResult> {
+            assert!(
+                self.active.load(Ordering::SeqCst),
+                "artifact lease ended before submission"
+            );
+            assert_eq!(
+                request.staged_nzb.as_ref().map(|value| value.id.as_str()),
+                Some("lease-test")
+            );
+            assert!(
+                request.source_hint.is_none(),
+                "download client must receive the artifact"
+            );
+            tokio::task::yield_now().await;
+            assert!(self.active.load(Ordering::SeqCst));
+            self.inner.submit_download(request).await
+        }
+    }
+    let (mut app, user) = bootstrap();
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    app.services.workflow.download_submissions = download_submissions.clone();
+    let active = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    app.services.integrations.indexer_artifact_resolver = Some(Arc::new(Resolver {
+        active: active.clone(),
+        calls: calls.clone(),
+    }));
+    app.services.integrations.download_client = Arc::new(Client {
+        inner: app.services.integrations.download_client.clone(),
+        active: active.clone(),
+    });
+    let (_title, _) = app
+        .add_title_and_queue_download(
+            &user,
+            NewTitle {
+                name: "Artifact Lease Show".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+            QueuedReleaseSelection {
+                indexer_id: Some("lease-indexer".into()),
+                source_hint: Some("https://indexer.test/release.nzb".into()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Artifact.Lease.Show.S01E01.1080p".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        !active.load(Ordering::SeqCst),
+        "completed submission should release artifact"
+    );
+    let submissions = download_submissions.store.lock().await;
+    assert_eq!(submissions.len(), 1);
+    assert_eq!(
+        submissions[0].source_hint.as_deref(),
+        Some("https://indexer.test/release.nzb")
+    );
+    assert_eq!(submissions[0].source_kind, Some(DownloadSourceKind::NzbUrl));
+}
+
+#[tokio::test]
 async fn add_title_and_queue_sends_download_job() {
     let (app, user) = bootstrap();
     let (title, job_id) = app
@@ -3439,6 +3554,7 @@ async fn queue_best_release_reports_auto_eligibility_reason_counts() {
             code: "title_mismatch".to_string(),
             summary: "release title does not match the target title".to_string(),
             count: 2,
+            block_codes: Vec::new(),
         }]
     );
     assert!(
