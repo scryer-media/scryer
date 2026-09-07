@@ -3188,23 +3188,30 @@ fn hyphenated_bracketed_group_stays_out_of_the_title_zone() {
     );
 }
 
-/// The payoff for anime numbering: the series name and the cour subtitle are
-/// offered together as a variant, which is what community-season anchoring
-/// compares against.
+/// Taking the group's tokens out of the title zone has to leave the rest of
+/// the reading intact — the number the release carries, and the combined
+/// series-and-cour name that community-season anchoring later compares against,
+/// with nothing of the group in it.
 #[test]
-fn hyphenated_bracketed_group_release_offers_its_series_and_cour_variant() {
+fn hyphenated_bracketed_group_release_keeps_its_number_and_cour_variant() {
     let analysis = analyze_release_for_target(
         "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
         &context(ContextFacetHint::Anime, "Umbra Vector"),
     );
     let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
     let variants = &candidate.projected.normalized_title_variants;
 
+    assert_eq!(episode.absolute_episode, Some(20));
     assert!(
         variants
             .iter()
             .any(|variant| variant == "LANTERN VERGE FINAL CHORUS"),
         "series-and-cour variant missing: {variants:?}"
+    );
+    assert!(
+        variants.iter().all(|variant| !variant.contains("SCRIBE")),
+        "no variant may carry the group tag: {variants:?}"
     );
 }
 
