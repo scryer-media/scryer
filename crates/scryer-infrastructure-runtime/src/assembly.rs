@@ -1286,15 +1286,17 @@ impl DatastoreAssembly {
     /// run its async `hydrate` at boot; it still coerces to
     /// `Arc<dyn IndexerStatsTracker>` at every consumer.
     ///
-    /// The Postgres arm gets no datastore, so its API hit counts stay
-    /// in-memory and reset on restart. That is a pre-existing gap in quota
-    /// persistence, not something this accessor decides.
+    /// Both arms hand over their datastore: API hit counts have to survive a
+    /// restart the same way whichever database is configured, and the quota SQL
+    /// runs on either dialect.
     pub fn indexer_stats_tracker(&self) -> Arc<InMemoryIndexerStatsTracker> {
         match &self.stores {
             DatastoreStores::Sqlite { db, .. } => {
                 Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
             }
-            DatastoreStores::Postgres { .. } => Arc::new(InMemoryIndexerStatsTracker::new(None)),
+            DatastoreStores::Postgres { db, .. } => {
+                Arc::new(InMemoryIndexerStatsTracker::new(Some(db.datastore())))
+            }
         }
     }
 
