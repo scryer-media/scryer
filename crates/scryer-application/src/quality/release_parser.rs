@@ -10,8 +10,11 @@ pub use scryer_release_parser::{
 };
 
 pub fn parse_release_metadata(raw: &str) -> ParsedReleaseMetadata {
-    let context = synthesize_release_parse_context(raw);
-    project_analysis(raw, &analyze_release_for_target(raw, &context))
+    project_analysis(raw, &neutral_release_analysis(raw))
+}
+
+pub(crate) fn neutral_release_analysis(raw: &str) -> ReleaseParseAnalysis {
+    analyze_release_for_target(raw, &synthesize_release_parse_context(raw))
 }
 
 pub(crate) fn parsed_release_source_type(parsed: &ParsedReleaseMetadata) -> Option<String> {

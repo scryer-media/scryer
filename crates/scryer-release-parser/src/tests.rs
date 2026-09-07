@@ -8,6 +8,49 @@ use crate::{
     analyze_release_against_targets, analyze_release_for_target,
 };
 
+#[test]
+fn multilingual_spelling_preserves_native_letters_and_raw_offsets() {
+    for (name, language) in [
+        ("Майский вечер", "RUSSIAN"),
+        ("ガラスの城", "JAPANESE"),
+        ("한글 이야기", "KOREAN"),
+    ] {
+        let raw = format!("{name}.2019.{language}.1080p.WEB.H265-GRP");
+        let target = context(ContextFacetHint::Movie, name);
+        let analysis = analyze_release_for_target(&raw, &target);
+        let candidate = analysis.best_candidate().expect("candidate");
+        assert!(
+            candidate
+                .context_title_matches
+                .iter()
+                .any(|hit| hit.raw == name),
+            "{name}"
+        );
+        for token in &analysis.tokens {
+            assert_eq!(
+                &analysis.sanitized_input[token.span.start..token.span.end],
+                token.raw
+            );
+        }
+    }
+    assert_ne!(
+        crate::lex::normalize_token("かく"),
+        crate::lex::normalize_token("がく")
+    );
+    assert_ne!(
+        crate::lex::normalize_token("маи"),
+        crate::lex::normalize_token("май")
+    );
+    assert_eq!(
+        crate::lex::normalize_token("ｶﾞﾗｽ"),
+        crate::lex::normalize_token("ガラス")
+    );
+    assert_eq!(
+        crate::lex::normalize_token("한글"),
+        crate::lex::normalize_token("한글")
+    );
+}
+
 fn source_label(source: Option<&ReleaseSource>) -> Option<&str> {
     source.map(ReleaseSource::as_str)
 }

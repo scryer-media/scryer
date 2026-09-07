@@ -508,10 +508,7 @@ pub(super) async fn completed_download_proves_assigned_title(
         }
     };
     let mut evidence = crate::acquisition_release_search::canonical_title_evidence(&title);
-    evidence.ambiguity =
-        crate::acquisition_release_search::TitleIdentityAmbiguity::from_shared_keys(
-            matcher.shared_lookup_keys(title_id, &evidence.lookup_keys),
-        );
+    evidence.ambiguity = matcher.identity_ambiguity(&title);
 
     // A series movie is searched and grabbed under the *movie's* identity —
     // `series_movie_search_title` swaps in the movie's name, facet, year and
@@ -532,10 +529,7 @@ pub(super) async fn completed_download_proves_assigned_title(
                     crate::acquisition_release_search::series_movie_search_title(&title, &link);
                 let mut link_evidence =
                     crate::acquisition_release_search::canonical_title_evidence(&link_title);
-                link_evidence.ambiguity =
-                    crate::acquisition_release_search::TitleIdentityAmbiguity::from_shared_keys(
-                        matcher.shared_lookup_keys(title_id, &link_evidence.lookup_keys),
-                    );
+                link_evidence.ambiguity = matcher.identity_ambiguity(&link_title);
                 proof_subjects.push((link_title, link_evidence));
             }
         }

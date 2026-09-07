@@ -272,13 +272,12 @@ fn build_cst(tokens: &[Token]) -> ReleaseCst {
 }
 
 pub(crate) fn normalize_token(raw: &str) -> String {
-    // Accent-fold so "Kelúne" in a target context matches "Kelune" in a
-    // release name (and vice versa) without needing an ASCII alias: NFKD
-    // splits accents into combining marks, which the alphanumeric filter
-    // drops. A handful of letters have no decomposition and fold manually.
-    // `raw` is untouched, so display-facing fields keep their accents.
+    // Latin accent folding is useful to the technical/context token parser.
+    // Decomposing every script would also erase kana voicing and Cyrillic
+    // breves. Compose native text first and only decompose Latin letters.
+    // Identity comparisons use raw title spans, not these lossy tokens.
     let mut normalized = String::new();
-    for ch in raw.nfkd() {
+    for ch in raw.nfkc() {
         match ch {
             'æ' | 'Æ' => normalized.push_str("AE"),
             'œ' | 'Œ' => normalized.push_str("OE"),
@@ -286,6 +285,15 @@ pub(crate) fn normalize_token(raw: &str) -> String {
             'ł' | 'Ł' => normalized.push('L'),
             'đ' | 'Đ' => normalized.push('D'),
             '+' => normalized.push('+'),
+            _ if matches!(ch as u32, 0xc0..=0x24f | 0x1e00..=0x1eff) => {
+                for letter in ch
+                    .to_string()
+                    .nfkd()
+                    .filter(|letter| letter.is_alphanumeric())
+                {
+                    normalized.extend(letter.to_uppercase());
+                }
+            }
             _ if ch.is_alphanumeric() => normalized.extend(ch.to_uppercase()),
             _ => {}
         }
