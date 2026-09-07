@@ -35,6 +35,29 @@ test("normalizeGraphQlErrorMessage strips plain GraphQL prefixes", () => {
   );
 });
 
+test("expired release candidates show an actionable error toast", () => {
+  const rawMessage = "unauthorized: invalid release candidate token: ExpiredSignature";
+  for (const error of [
+    new Error(rawMessage),
+    new Error(`[GraphQL] ${rawMessage}`),
+    { graphQLErrors: [{ message: rawMessage }] },
+  ]) {
+    const message = userFacingGraphQlErrorMessage(error, "queue failed");
+    assert.equal(message, "Search results expired, please search again");
+    assert.equal(normalizeGraphQlErrorMessage(message), message);
+    assert.equal(classifyStatusToastLevel(message), "ERROR");
+  }
+});
+
+test("other token errors are not described as expired search results", () => {
+  for (const message of [
+    "unauthorized: invalid release candidate token: InvalidSignature",
+    "unauthorized: invalid token: ExpiredSignature",
+  ]) {
+    assert.equal(normalizeGraphQlErrorMessage(message), message);
+  }
+});
+
 test("normalizeGraphQlErrorMessage rewrites config step-up errors", () => {
   assert.equal(
     normalizeGraphQlErrorMessage(

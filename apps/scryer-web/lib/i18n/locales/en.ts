@@ -2365,6 +2365,7 @@ const en: LocaleDictionary = {
     "Renaming in the background; progress appears in Activity.",
   "status.releaseMissingCandidateToken":
     "Selected release is missing a verified candidate token.",
+  "status.searchResultsExpired": "Search results expired, please search again",
   "status.deleteCatalogConfirm":
     "Remove {{name}} from catalog? Use the option below to also remove local files.",
   "status.titleDeleted": "{{name}} removed from catalog.",
