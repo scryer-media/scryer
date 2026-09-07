@@ -64,9 +64,14 @@ impl RateLimitSignal {
     ///
     /// Indexers that publish no `apiCurrent`/`apiMax` announce the wall only
     /// this way, and they do it on HTTP 200, so nothing in [`Self::from_text`]
-    /// can see it. Treating it as a rate-limit signal is what makes the
-    /// indexer back off the way a 429 already does instead of spending the
-    /// rest of the day re-asking a spent account.
+    /// can see it. Recognising it is what lets a spent account read as a rate
+    /// limit rather than as an ordinary failure.
+    ///
+    /// The signal carries no `retry_after` on purpose. The document says
+    /// nothing about when the allotment returns, and an indexer's reset is not
+    /// necessarily UTC midnight, so inventing a deadline here would risk
+    /// sitting out an account that came back hours earlier.
+    /// [`Self::warrants_system_backoff`] is what decides the retry timing.
     ///
     /// Newznab 910 ("API disabled") is deliberately not included: providers
     /// reuse that slot for their own gate messages, so it stays a hard error.
@@ -86,6 +91,26 @@ impl RateLimitSignal {
             status_code: None,
             message: Some(message.to_string()),
         })
+    }
+
+    /// Whether the caller must also escalate the indexer's own system backoff
+    /// instead of leaving the retry timing to the scheduler's cooldown.
+    ///
+    /// Most signals answer `false`, and correctly so: a 429 either carries a
+    /// `Retry-After` or was already recorded by the transport, so its cooldown
+    /// expires on the indexer's own schedule, and stacking a system backoff on
+    /// top would disable an indexer over a transient limit.
+    ///
+    /// A newznab quota wall has neither. It is announced on HTTP 200 with no
+    /// hint of when the allotment returns, so the scheduler can only fall back
+    /// to a flat minute — which on the RSS path means a spent account is
+    /// re-asked about sixty times an hour until the day rolls over. The
+    /// escalating ladder is the only thing here that sizes that wait sensibly,
+    /// and it self-heals: a success de-escalates it, so an account that comes
+    /// back early is picked up again within the step it is already serving.
+    pub fn warrants_system_backoff(&self) -> bool {
+        self.retry_after.is_none()
+            && matches!(self.source, RateLimitSignalSource::NewznabQuotaExhausted)
     }
 
     pub fn from_outbound_http_error(error: &OutboundHttpError) -> Option<Self> {
@@ -291,6 +316,53 @@ mod tests {
         assert_eq!(
             signal.cooldown_action,
             RateLimitCooldownAction::RecordFallback
+        );
+    }
+
+    #[test]
+    fn a_newznab_quota_wall_escalates_the_indexer_system_backoff() {
+        let signal =
+            RateLimitSignal::from_newznab_quota_message("Newznab error 500: Request limit reached")
+                .expect("a spent request quota must back the indexer off");
+
+        assert!(
+            signal.warrants_system_backoff(),
+            "the wall carries no Retry-After, so the flat fallback cooldown would re-ask a \
+             spent account roughly sixty times an hour; the escalating ladder has to own the wait"
+        );
+    }
+
+    #[test]
+    fn a_typed_outbound_rate_limit_leaves_the_system_backoff_alone() {
+        let error = OutboundHttpError::RateLimited(scryer_outbound_http::RateLimitedError {
+            scope: scryer_outbound_http::RateLimitScopeKey::from("plugin:artifact"),
+            retry_after: Some(Duration::from_secs(75)),
+            attempts: 1,
+            retry_after_source: scryer_outbound_http::RetryAfterSource::Seconds,
+            request_label: std::borrow::Cow::Borrowed("plugin artifact"),
+        });
+        let signal = RateLimitSignal::from_outbound_http_error(&error)
+            .expect("typed outbound rate limit should be preserved");
+
+        assert!(
+            !signal.warrants_system_backoff(),
+            "a 429 that names its own Retry-After already expires on the indexer's schedule; \
+             stacking a system backoff on top would disable an indexer over a transient limit"
+        );
+    }
+
+    #[test]
+    fn a_text_derived_retry_after_leaves_the_system_backoff_alone() {
+        let signal = RateLimitSignal::from_text("rate limited, retry after 30 seconds")
+            .expect("a retry-after phrase should still be recognised");
+
+        assert!(
+            signal.retry_after.is_some(),
+            "the phrase carries its own delay"
+        );
+        assert!(
+            !signal.warrants_system_backoff(),
+            "a signal that knows when to come back does not need the ladder to guess"
         );
     }
 
