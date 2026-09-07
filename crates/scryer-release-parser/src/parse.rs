@@ -1334,10 +1334,6 @@ fn family_seed_score(family: ParseFamily) -> i32 {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "beam expansion reads the whole parse environment"
-)]
 fn expand_state(
     state: &ParseState,
     units_by_start: &ParseUnitIndex,
