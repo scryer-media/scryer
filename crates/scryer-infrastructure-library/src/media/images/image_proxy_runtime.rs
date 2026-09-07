@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -63,8 +63,9 @@ pub struct ImageProxyRuntime {
     source_flush: Arc<Mutex<()>>,
     cache_lifecycle: Arc<RwLock<()>>,
     /// Coalesces budget enforcement across concurrent background persists:
-    /// one pass runs at a time and later writers skip rather than queue.
+    /// one pass runs at a time and overlapping writers request another pass.
     budget_gate: Arc<Mutex<()>>,
+    budget_dirty: Arc<AtomicBool>,
 }
 
 impl ImageProxyRuntime {
@@ -87,6 +88,7 @@ impl ImageProxyRuntime {
             source_flush: Arc::new(Mutex::new(())),
             cache_lifecycle: Arc::new(RwLock::new(())),
             budget_gate: Arc::new(Mutex::new(())),
+            budget_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -566,12 +568,7 @@ impl ImageProxyRuntime {
                     .repository
                     .upsert_image_proxy_cache_entry(&entry)
                     .await?;
-                // A pass already in flight will observe this row on its next
-                // batch or the next writer will; never stack enforcement runs.
-                match runtime.budget_gate.clone().try_lock_owned() {
-                    Ok(_gate) => runtime.enforce_budget().await,
-                    Err(_) => Ok(()),
-                }
+                runtime.enforce_budget_after_write().await
             }
             .await;
             if let Err(error) = result {
@@ -583,6 +580,28 @@ impl ImageProxyRuntime {
                 );
             }
         });
+    }
+
+    async fn enforce_budget_after_write(&self) -> AppResult<()> {
+        self.budget_dirty.store(true, Ordering::Release);
+        let mut result = Ok(());
+        loop {
+            let Ok(gate) = self.budget_gate.try_lock() else {
+                return result;
+            };
+            if self.budget_dirty.swap(false, Ordering::AcqRel)
+                && let Err(error) = self.enforce_budget().await
+            {
+                result = Err(error);
+            }
+            // Release before checking for another write. A writer arriving
+            // after this check can then acquire the gate itself; one that
+            // skipped while we held it leaves dirty set for this loop.
+            drop(gate);
+            if !self.budget_dirty.load(Ordering::Acquire) {
+                return result;
+            }
+        }
     }
 
     async fn write_cache_file(&self, token: &str, variant: &str, bytes: &[u8]) -> AppResult<()> {
@@ -781,15 +800,12 @@ fn approved_content_type(value: &str) -> Option<&'static str> {
 
 /// Structural container check only: the bytes are served verbatim to the
 /// browser, so a full decode buys nothing and costs a CPU-bound pass per
-/// fetch. Truncated or foreign payloads still fail on their trailers.
+/// fetch. Walk container boundaries so a complete image may have trailing
+/// bytes without mistaking a marker inside metadata for its actual trailer.
 fn valid_raster_bytes(content_type: &str, bytes: &[u8]) -> bool {
     match content_type {
-        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]) && bytes.ends_with(&[0xff, 0xd9]),
-        "image/png" => {
-            bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-                && bytes.len() >= 20
-                && bytes.ends_with(b"\x00\x00\x00\x00IEND\xaeB`\x82")
-        }
+        "image/jpeg" => complete_jpeg_container(bytes),
+        "image/png" => complete_png_container(bytes),
         "image/webp" => {
             bytes.len() >= 12
                 && bytes.starts_with(b"RIFF")
@@ -806,6 +822,76 @@ fn valid_raster_bytes(content_type: &str, bytes: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+fn complete_jpeg_container(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return false;
+    }
+    let mut offset = 2;
+    let mut in_scan = false;
+    let mut saw_scan = false;
+    while offset < bytes.len() {
+        if in_scan {
+            let Some(next_marker) = bytes[offset..].iter().position(|byte| *byte == 0xff) else {
+                return false;
+            };
+            offset += next_marker;
+        }
+        if bytes.get(offset) != Some(&0xff) {
+            return false;
+        }
+        while bytes.get(offset) == Some(&0xff) {
+            offset += 1;
+        }
+        let Some(&marker) = bytes.get(offset) else {
+            return false;
+        };
+        offset += 1;
+        match marker {
+            0x00 | 0xd0..=0xd7 if in_scan => continue,
+            0xd9 => return saw_scan,
+            0x01 => continue,
+            0x00 | 0xd0..=0xd8 => return false,
+            _ => {}
+        }
+        let Some(length_bytes) = bytes.get(offset..offset + 2) else {
+            return false;
+        };
+        let length = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+        if length < 2 || length > bytes.len() - offset {
+            return false;
+        }
+        offset += length;
+        // DNL can interrupt entropy data without ending the current scan.
+        in_scan = marker == 0xda || (in_scan && marker == 0xdc);
+        saw_scan |= in_scan;
+    }
+    false
+}
+
+fn complete_png_container(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return false;
+    }
+    let mut offset = 8;
+    while let Some(header) = bytes.get(offset..offset + 8) {
+        let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        let Some(end) = offset
+            .checked_add(12)
+            .and_then(|start| start.checked_add(length))
+        else {
+            return false;
+        };
+        if end > bytes.len() {
+            return false;
+        }
+        if &header[4..] == b"IEND" {
+            return length == 0 && &bytes[offset + 8..end] == b"\xaeB`\x82";
+        }
+        offset = end;
+    }
+    false
 }
 
 fn clone_shared_fetch_result(result: &SharedFetchResult) -> AppResult<Option<ImageProxyBlob>> {
@@ -872,6 +958,7 @@ mod tests {
         memory_clears: AtomicUsize,
         full_lru_lists: AtomicUsize,
         usage_reads: AtomicUsize,
+        usage_pause: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
         orphan_sweeps: AtomicUsize,
     }
 
@@ -997,14 +1084,22 @@ mod tests {
 
         async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage> {
             self.usage_reads.fetch_add(1, Ordering::Relaxed);
-            let entries = self.cache_entries.lock().expect("cache entries lock");
-            Ok(ImageProxyCacheUsage {
-                total_bytes: entries
-                    .iter()
-                    .map(|entry| entry.byte_size.max(0) as u64)
-                    .sum(),
-                entry_count: entries.len() as u64,
-            })
+            let usage = {
+                let entries = self.cache_entries.lock().expect("cache entries lock");
+                ImageProxyCacheUsage {
+                    total_bytes: entries
+                        .iter()
+                        .map(|entry| entry.byte_size.max(0) as u64)
+                        .sum(),
+                    entry_count: entries.len() as u64,
+                }
+            };
+            let pause = self.usage_pause.lock().expect("usage pause lock").take();
+            if let Some((started, release)) = pause {
+                started.notify_one();
+                release.notified().await;
+            }
+            Ok(usage)
         }
 
         async fn clear_image_proxy_cache_entries(&self) -> AppResult<()> {
@@ -1125,6 +1220,7 @@ mod tests {
             memory_clears: AtomicUsize::new(0),
             full_lru_lists: AtomicUsize::new(0),
             usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
             orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
@@ -1293,6 +1389,7 @@ mod tests {
             memory_clears: AtomicUsize::new(0),
             full_lru_lists: AtomicUsize::new(0),
             usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
             orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
@@ -1379,6 +1476,7 @@ mod tests {
             memory_clears: AtomicUsize::new(0),
             full_lru_lists: AtomicUsize::new(0),
             usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
             orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
@@ -1485,6 +1583,7 @@ mod tests {
             memory_clears: AtomicUsize::new(0),
             full_lru_lists: AtomicUsize::new(0),
             usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
             orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
@@ -1603,6 +1702,7 @@ mod tests {
             memory_clears: AtomicUsize::new(0),
             full_lru_lists: AtomicUsize::new(0),
             usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
             orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
@@ -1655,8 +1755,24 @@ mod tests {
 
         // Well-formed containers pass without the pixel data being decodable:
         // the bytes are relayed verbatim, never rasterised on the server.
-        let jpeg = [&[0xff, 0xd8, 0xff, 0xe0][..], &[0u8; 16], &[0xff, 0xd9]].concat();
+        let jpeg = [
+            &[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02][..],
+            &[0x01, 0x02, 0x03],
+            &[0xff, 0xd9],
+        ]
+        .concat();
         assert!(valid_raster_bytes("image/jpeg", &jpeg));
+        let mut jpeg_with_trailer = jpeg.clone();
+        jpeg_with_trailer.extend_from_slice(b"trailer");
+        assert!(valid_raster_bytes("image/jpeg", &jpeg_with_trailer));
+        assert!(!valid_raster_bytes("image/jpeg", &jpeg[..jpeg.len() - 2]));
+        let jpeg_with_embedded_eoi = [
+            &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x06][..],
+            &[0xff, 0xd9, 0x00, 0x00],
+            &[0xff, 0xda, 0x00, 0x02, 0x01, 0xff, 0xd9],
+        ]
+        .concat();
+        assert!(valid_raster_bytes("image/jpeg", &jpeg_with_embedded_eoi));
         let png = [
             &b"\x89PNG\r\n\x1a\n"[..],
             &[0u8; 12],
@@ -1664,10 +1780,42 @@ mod tests {
         ]
         .concat();
         assert!(valid_raster_bytes("image/png", &png));
+        let mut png_with_trailer = png.clone();
+        png_with_trailer.extend_from_slice(b"trailer");
+        assert!(valid_raster_bytes("image/png", &png_with_trailer));
+        assert!(!valid_raster_bytes("image/png", &png[..png.len() - 1]));
+        let png_with_embedded_iend = [
+            &b"\x89PNG\r\n\x1a\n"[..],
+            &4u32.to_be_bytes(),
+            b"IDAT",
+            b"IEND",
+            &[0u8; 4],
+        ]
+        .concat();
+        assert!(!valid_raster_bytes("image/png", &png_with_embedded_iend));
         let webp = [&b"RIFF"[..], &12u32.to_le_bytes(), b"WEBPVP8 ", &[0u8; 4]].concat();
         assert!(valid_raster_bytes("image/webp", &webp));
         let avif = [&[0, 0, 0, 0x1c][..], b"ftypavif", &[0u8; 16]].concat();
         assert!(valid_raster_bytes("image/avif", &avif));
+    }
+
+    #[cfg(feature = "image-processing")]
+    #[test]
+    fn raster_validation_accepts_decodable_images_with_trailing_bytes() {
+        let image = image::DynamicImage::new_rgb8(1, 1);
+        for (content_type, format) in [
+            ("image/jpeg", image::ImageFormat::Jpeg),
+            ("image/png", image::ImageFormat::Png),
+        ] {
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image
+                .write_to(&mut encoded, format)
+                .expect("encode fixture image");
+            let mut bytes = encoded.into_inner();
+            assert!(valid_raster_bytes(content_type, &bytes));
+            bytes.extend_from_slice(b"\ntrailer");
+            assert!(valid_raster_bytes(content_type, &bytes));
+        }
     }
 
     #[tokio::test]
@@ -1708,6 +1856,7 @@ mod tests {
             memory_clears: AtomicUsize::new(0),
             full_lru_lists: AtomicUsize::new(0),
             usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
             orphan_sweeps: AtomicUsize::new(0),
         });
         let title_images = Arc::new(TestTitleImageRepository {
@@ -1771,5 +1920,51 @@ mod tests {
         runtime.prune().await.expect("prune image cache");
         assert_eq!(image_repository.orphan_sweeps.load(Ordering::Relaxed), 1);
         assert_eq!(image_repository.full_lru_lists.load(Ordering::Relaxed), 1);
+
+        // A writer that arrives after the active pass read an under-budget
+        // snapshot leaves dirty set; the active owner must take a second pass.
+        ImageProxyCacheControl::set_configured_max_bytes(runtime.as_ref(), 8)
+            .await
+            .expect("restore constrained cache budget");
+        let usage_started = Arc::new(Notify::new());
+        let usage_release = Arc::new(Notify::new());
+        *image_repository
+            .usage_pause
+            .lock()
+            .expect("usage pause lock") = Some((usage_started.clone(), usage_release.clone()));
+        let reads_before = image_repository.usage_reads.load(Ordering::Relaxed);
+        let active_runtime = runtime.clone();
+        let active = tokio::spawn(async move { active_runtime.enforce_budget_after_write().await });
+        usage_started.notified().await;
+        image_repository
+            .cache_entries
+            .lock()
+            .expect("cache entries lock")
+            .push(entry(&tokens[0], 5));
+        tokio::fs::write(runtime.cache_path(&tokens[0], "original"), [1, 2, 3, 4])
+            .await
+            .expect("seed concurrently persisted cache image");
+        runtime
+            .enforce_budget_after_write()
+            .await
+            .expect("request a second budget pass");
+        usage_release.notify_one();
+        active
+            .await
+            .expect("active budget task")
+            .expect("active budget enforcement");
+        assert!(
+            image_repository
+                .image_proxy_cache_usage()
+                .await
+                .expect("read budget after coalesced enforcement")
+                .total_bytes
+                <= 8
+        );
+        assert_eq!(
+            image_repository.usage_reads.load(Ordering::Relaxed),
+            reads_before + 3,
+            "the active owner performs the initial and dirty rerun; the final assertion reads once"
+        );
     }
 }

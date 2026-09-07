@@ -285,7 +285,7 @@ impl ImageProxyRepository for ImageProxyStore {
     async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT COALESCE(SUM(byte_size), 0) AS total_bytes, COUNT(*) AS entry_count
+            "SELECT CAST(COALESCE(SUM(byte_size), 0) AS BIGINT) AS total_bytes, COUNT(*) AS entry_count
                FROM image_proxy_cache_entries",
             &[],
         )
@@ -607,6 +607,13 @@ mod tests {
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
         };
         let store = ImageProxyStore::new(datastore.clone());
+        assert_eq!(
+            store
+                .image_proxy_cache_usage()
+                .await
+                .expect("read empty cache usage"),
+            scryer_application::ImageProxyCacheUsage::default()
+        );
         let route = store.register_image_source(ImageProxyRegistration {
             upstream_url: Some("http://image.tmdb.org/t/p/w500/poster.jpg".to_string()),
             owner_type: Some("title".to_string()),
@@ -929,6 +936,27 @@ mod tests {
                 .await
                 .expect("second sweep is a no-op"),
             0
+        );
+        store
+            .upsert_image_proxy_cache_entry(&ImageProxyCacheEntryRecord {
+                token: title.token.clone(),
+                variant: "original".to_string(),
+                content_type: "image/jpeg".to_string(),
+                byte_size: 2_147_483_648,
+                upstream_etag: None,
+                upstream_last_modified: None,
+                fetched_at: now,
+                last_accessed_at: now,
+            })
+            .await
+            .expect("persist large cache entry");
+        assert_eq!(
+            store
+                .image_proxy_cache_usage()
+                .await
+                .expect("read large cache usage")
+                .total_bytes,
+            2_147_483_823
         );
     }
 
