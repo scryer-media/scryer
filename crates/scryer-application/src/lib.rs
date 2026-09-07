@@ -72,7 +72,11 @@ pub mod persisted_records;
 mod plugins;
 mod polling_worker;
 mod ports;
-pub use ports::{CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord, TitleOptionsPatch};
+pub use acquisition::anime_numbering::{ExactCourTitleMatch, exact_cour_title_match};
+pub use ports::{
+    AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
+    IndexerSearchNumberingContext, TitleOptionsPatch,
+};
 mod quality;
 mod rate_limit_signal;
 mod rules;

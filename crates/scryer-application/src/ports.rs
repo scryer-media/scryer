@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
-    CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot, MonitorSelection,
-    PersistedPluginWasmPayload, title_catalog_name_tie_key, title_catalog_sort_key_for_title,
+    AnimeNumberingBridge, CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
+    MonitorSelection, PersistedPluginWasmPayload, title_catalog_name_tie_key,
+    title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
     ArchivePluginFormat, ArchivePluginProcessRequest, ArchivePluginProcessResponse,
@@ -5775,6 +5776,26 @@ pub trait PluginDescriptorLoader: Send + Sync {
     ) -> AppResult<scryer_plugin_sdk::PluginDescriptor>;
 }
 
+/// The numbering evidence an application search gives the multi-indexer guard.
+///
+/// The core pair set preserves the existing fast-path for conventional
+/// numbered releases. The optional anime portion is deliberately application
+/// context rather than an indexer/plugin request field: only the local guard
+/// uses it to make a narrowly anchored cour reading available.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexerSearchNumberingContext {
+    pub admissible_episode_numberings: Vec<(u32, u32)>,
+    pub anime: Option<AnimeSearchNumberingContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnimeSearchNumberingContext {
+    pub canonical_title: String,
+    pub bridge: AnimeNumberingBridge,
+    pub official_season: u32,
+    pub official_episode: u32,
+}
+
 #[async_trait]
 pub trait IndexerClient: Send + Sync {
     async fn resolve_download(
@@ -5903,11 +5924,9 @@ pub trait IndexerClient: Send + Sync {
         operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
-        // Alternative `(season, episode)` numberings that denote the same
-        // wanted episode. Only the multi-indexer client, which owns the
-        // numbering guard, reads them; a single-indexer adapter searches on
-        // `season`/`episode` exactly as before.
-        _admissible_episode_numberings: Vec<(u32, u32)>,
+        // Application-only guard context. Single-indexer adapters ignore it;
+        // it must never alter the external plugin search protocol.
+        _numbering_context: IndexerSearchNumberingContext,
         absolute_episode: Option<u32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,

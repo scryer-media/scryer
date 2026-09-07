@@ -335,6 +335,12 @@ fn title_anchored_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandida
 /// the first cour of a series is usually catalogued under the bare franchise
 /// name, so without it any release naming the franchise would anchor there.
 fn anchored_community_season<'a>(input: &NumberingInput<'a>) -> Option<&'a AnimeCommunitySeason> {
+    match exact_cour_title_match(&input.title.name, input.bridge, input.parsed_title_variants) {
+        ExactCourTitleMatch::Unique(season) => return Some(season),
+        ExactCourTitleMatch::Ambiguous => return None,
+        ExactCourTitleMatch::None => {}
+    }
+
     let parsed_titles = normalized_parsed_titles(input.parsed_title_variants);
     if parsed_titles.is_empty() {
         return None;
@@ -349,7 +355,7 @@ fn anchored_community_season<'a>(input: &NumberingInput<'a>) -> Option<&'a Anime
     }
 
     // A cour catalogued under the series' own name is the franchise, not a
-    // season within it, and it is dropped before either rule sees it.
+    // season within it, and it is dropped before the fuzzy rule sees it.
     let cours = input
         .bridge
         .seasons
@@ -366,25 +372,64 @@ fn anchored_community_season<'a>(input: &NumberingInput<'a>) -> Option<&'a Anime
         .filter(|(_, season_titles)| !season_titles.contains(&canonical))
         .collect::<Vec<_>>();
 
-    let mut matched: Option<&AnimeCommunitySeason> = None;
-    for (season, season_titles) in &cours {
-        if !season_titles
+    fuzzy_anchored_community_season(input, &distinguishing, &canonical, &cours)
+}
+
+/// Return the only community cour whose own title the parsed release names
+/// exactly. Parser-projected canonical titles are ignored, but a different
+/// cour title remains competing evidence: shared aliases never pin a cour.
+///
+/// This deliberately has no fuzzy fallback. Search admission can only make a
+/// preliminary exception for the exact rule; canonical translation continues
+/// to own its more conservative fuzzy interpretation.
+pub enum ExactCourTitleMatch<'a> {
+    None,
+    Unique(&'a AnimeCommunitySeason),
+    Ambiguous,
+}
+
+/// Distinguish an absent exact cour title from one that names multiple bridge
+/// entries. The latter is blocking evidence: it must not be weakened into a
+/// fuzzy match or a whole-series fallback.
+pub fn exact_cour_title_match<'a>(
+    canonical_title: &str,
+    bridge: &'a AnimeNumberingBridge,
+    parsed_title_variants: &[String],
+) -> ExactCourTitleMatch<'a> {
+    let parsed_titles = normalized_parsed_titles(parsed_title_variants);
+    if parsed_titles.is_empty() {
+        return ExactCourTitleMatch::None;
+    }
+    let canonical = crate::app_usecase_rss::normalize_for_matching(canonical_title);
+    let distinguishing = parsed_titles
+        .iter()
+        .filter(|parsed| **parsed != canonical)
+        .collect::<Vec<_>>();
+    if distinguishing.is_empty() {
+        return ExactCourTitleMatch::None;
+    }
+
+    let mut matched = None;
+    for season in &bridge.seasons {
+        let season_titles = season
+            .titles
             .iter()
-            .any(|season_title| distinguishing.contains(&season_title))
+            .map(|title| crate::app_usecase_rss::normalize_for_matching(title))
+            .filter(|title| !title.is_empty())
+            .collect::<Vec<_>>();
+        if season_titles.contains(&canonical)
+            || !season_titles
+                .iter()
+                .any(|season_title| distinguishing.contains(&season_title))
         {
             continue;
         }
         if matched.is_some() {
-            // Two community seasons answer to the same name; that pins nothing.
-            return None;
+            return ExactCourTitleMatch::Ambiguous;
         }
         matched = Some(season);
     }
-    if matched.is_some() {
-        return matched;
-    }
-
-    fuzzy_anchored_community_season(input, &distinguishing, &canonical, &cours)
+    matched.map_or(ExactCourTitleMatch::None, ExactCourTitleMatch::Unique)
 }
 
 /// A cour title has to be long enough that a few edits cannot carry it to a

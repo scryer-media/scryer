@@ -1,4 +1,7 @@
-use crate::{AcquisitionScopeState, FacetRegistry};
+use crate::{
+    AcquisitionScopeState, AnimeSearchNumberingContext, FacetRegistry,
+    IndexerSearchNumberingContext,
+};
 use scryer_domain::{AnimeNumberingBridge, Episode, EpisodeType, ExternalId, Title};
 
 pub(crate) struct SearchQueryResult {
@@ -11,10 +14,7 @@ pub(crate) struct SearchQueryResult {
     pub(crate) category: String,
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
-    /// Every `(season, episode)` numbering that denotes the wanted episode —
-    /// see [`community_numbering_admissible_pairs`]. Empty unless the community
-    /// layout disagrees with TVDB's.
-    pub(crate) admissible_episode_numberings: Vec<(u32, u32)>,
+    pub(crate) numbering_context: IndexerSearchNumberingContext,
 }
 
 /// Build the text queries and id parameters for one wanted item.
@@ -47,7 +47,7 @@ pub(crate) fn build_search_queries(
             let mut queries = Vec::new();
             let mut season_param: Option<u32> = None;
             let mut episode_param: Option<u32> = None;
-            let mut admissible_episode_numberings = Vec::new();
+            let mut numbering_context = IndexerSearchNumberingContext::default();
 
             if let Some(episode) = episode {
                 // Season 0 is a real season — the specials season — so it is
@@ -125,7 +125,7 @@ pub(crate) fn build_search_queries(
                     episode_num as i32,
                     anime_numbering_bridge,
                 ));
-                admissible_episode_numberings = community_numbering_admissible_pairs(
+                numbering_context = community_numbering_context(
                     title,
                     season_num as i32,
                     episode_num as i32,
@@ -152,7 +152,7 @@ pub(crate) fn build_search_queries(
                 category,
                 season: season_param,
                 episode: episode_param,
-                admissible_episode_numberings,
+                numbering_context,
             }
         }
         _ => SearchQueryResult {
@@ -165,7 +165,7 @@ pub(crate) fn build_search_queries(
             category,
             season: None,
             episode: None,
-            admissible_episode_numberings: Vec::new(),
+            numbering_context: IndexerSearchNumberingContext::default(),
         },
     }
 }
@@ -271,6 +271,33 @@ pub(crate) fn community_numbering_queries(
 ///
 /// Empty for a non-anime title, a title with no bridge, and an episode no
 /// community season covers — the guard then keeps its single-pair behaviour.
+/// The application-only search-guard context for one official anime episode.
+/// Both automatic and interactive search call this constructor so neither can
+/// widen the accepted numbering forms without the bridge snapshot and exact
+/// cour-title evidence the infrastructure guard requires.
+pub(crate) fn community_numbering_context(
+    title: &Title,
+    season_num: i32,
+    episode_num: i32,
+    bridge: Option<&AnimeNumberingBridge>,
+) -> IndexerSearchNumberingContext {
+    let admissible_episode_numberings =
+        community_numbering_admissible_pairs(title, season_num, episode_num, bridge);
+    if community_numbering_scope(title, season_num, episode_num, bridge).is_none() {
+        return IndexerSearchNumberingContext::default();
+    }
+
+    IndexerSearchNumberingContext {
+        admissible_episode_numberings,
+        anime: bridge.cloned().map(|bridge| AnimeSearchNumberingContext {
+            canonical_title: title.name.clone(),
+            bridge,
+            official_season: season_num as u32,
+            official_episode: episode_num as u32,
+        }),
+    }
+}
+
 pub(crate) fn community_numbering_admissible_pairs(
     title: &Title,
     season_num: i32,
@@ -337,7 +364,7 @@ pub(crate) fn build_movie_search_queries(
         category,
         season: None,
         episode: None,
-        admissible_episode_numberings: Vec::new(),
+        numbering_context: IndexerSearchNumberingContext::default(),
     }
 }
 
@@ -658,6 +685,31 @@ mod tests {
         let pairs = community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge()));
 
         assert_eq!(pairs, vec![(1, 56), (4, 20)]);
+
+        let context = community_numbering_context(&anime_title(), 1, 56, Some(&bridge()));
+        assert_eq!(context.admissible_episode_numberings, pairs);
+        let anime = context
+            .anime
+            .expect("community pairs carry their guard context");
+        assert_eq!(anime.canonical_title, SERIES_NAME);
+        assert_eq!((anime.official_season, anime.official_episode), (1, 56));
+        assert_eq!(anime.bridge, bridge());
+    }
+
+    #[test]
+    fn matching_official_and_community_pairs_still_carry_cour_title_context() {
+        let mut bridge = bridge();
+        let cour = &mut bridge.seasons[2];
+        cour.ranges[0].tvdb_season = 3;
+        cour.ranges[0].tvdb_episode_start = 1;
+        cour.ranges[0].tvdb_episode_end = Some(10);
+        let context = community_numbering_context(&anime_title(), 3, 8, Some(&bridge));
+        assert!(context.admissible_episode_numberings.is_empty());
+        let anime = context
+            .anime
+            .expect("local S01 still needs exact cour evidence");
+        assert_eq!((anime.official_season, anime.official_episode), (3, 8));
+        assert_eq!(anime.bridge, bridge);
     }
 
     /// Nothing to widen: the wanted episode has exactly one numbering, so the

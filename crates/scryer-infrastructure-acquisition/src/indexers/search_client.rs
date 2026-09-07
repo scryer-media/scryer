@@ -13,11 +13,11 @@ use scryer_application::{
     IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCandidateWrite,
     IndexerSearchCompletion, IndexerSearchEligibility, IndexerSearchIncompleteReason,
     IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
-    IndexerSearchLearningRepository, IndexerSearchOutcome, IndexerSearchPageSink,
-    IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult, IndexerSearchRunWrite,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
-    NullIndexerErrorRepository, NullIndexerProxyConfigRepository,
+    IndexerSearchLearningRepository, IndexerSearchNumberingContext, IndexerSearchOutcome,
+    IndexerSearchPageSink, IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult,
+    IndexerSearchRunWrite, IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink,
+    IndexerSearchStrategyRequest, IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError,
+    NormalizedIndexerSearchCandidate, NullIndexerErrorRepository, NullIndexerProxyConfigRepository,
     NullIndexerSearchLearningRepository, NullUpstreamScheduler, RateLimitCooldownAction,
     RateLimitSignal, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
     ReusableIndexerSearchCandidate, RssFreshnessContext, SchedulerAdmission, SchedulerBatchRequest,
@@ -452,9 +452,7 @@ struct FilterStrategyContext<'a> {
     query: &'a str,
     season: Option<u32>,
     episode: Option<u32>,
-    /// Alternative `(season, episode)` numberings that denote the same wanted
-    /// episode as `season`/`episode`. Empty means there is only the one pair.
-    admissible_episode_numberings: &'a [(u32, u32)],
+    numbering_context: &'a IndexerSearchNumberingContext,
     tagged_aliases: &'a [scryer_domain::TaggedAlias],
     title_guard_mode: TitleGuardMode,
     strategy_label: &'a str,
@@ -3282,9 +3280,8 @@ impl IndexerClient for MultiIndexerSearchClient {
             operation,
             season,
             episode,
-            // A single-query call carries no subject-level numbering context;
-            // the batch entry point is where the alternatives arrive.
-            Vec::new(),
+            // A single-query call carries no subject-level numbering context.
+            IndexerSearchNumberingContext::default(),
             absolute_episode,
             tagged_aliases,
             learning_context,
@@ -3307,7 +3304,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
-        admissible_episode_numberings: Vec<(u32, u32)>,
+        numbering_context: IndexerSearchNumberingContext,
         absolute_episode: Option<u32>,
         tagged_aliases: Vec<scryer_domain::TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
@@ -4387,7 +4384,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let search_query = query.clone();
             let category_for_indexer = category.clone();
             let tagged_aliases_for_indexer = tagged_aliases.clone();
-            let admissible_numberings_for_indexer = admissible_episode_numberings.clone();
+            let numbering_context_for_indexer = numbering_context.clone();
             let stats_tracker = self.stats_tracker.clone();
             let search_learning = self.search_learning.clone();
             let learning_context = learning_context.clone();
@@ -4595,8 +4592,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     query: &search_query,
                                     season,
                                     episode,
-                                    admissible_episode_numberings:
-                                        &admissible_numberings_for_indexer,
+                                    numbering_context: &numbering_context_for_indexer,
                                     tagged_aliases: &tagged_aliases_for_indexer,
                                     title_guard_mode: outcome.title_guard_mode,
                                     strategy_label: &outcome.label,
@@ -4911,8 +4907,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         query: &search_query,
                                         season,
                                         episode,
-                                        admissible_episode_numberings:
-                                            &admissible_numberings_for_indexer,
+                                        numbering_context: &numbering_context_for_indexer,
                                         tagged_aliases: &tagged_aliases_for_indexer,
                                         title_guard_mode: outcome.title_guard_mode,
                                         strategy_label: &outcome.label,
@@ -5883,6 +5878,90 @@ fn parsed_title_candidates(parsed: &scryer_application::ParsedReleaseMetadata) -
     normalized
 }
 
+/// The search guard is normally limited to the dispatched official/community
+/// pairs. Its only narrower exception is a release that explicitly names one
+/// unambiguous cour and whose complete, bounded episode list maps through that
+/// cour to the requested official episode. Translation and coverage still make
+/// the authoritative decision after this preliminary filter.
+fn exact_cour_mapping_covers_requested_episode(
+    parsed: &scryer_application::ParsedReleaseMetadata,
+    context: &FilterStrategyContext<'_>,
+) -> bool {
+    let Some(anime) = context.numbering_context.anime.as_ref() else {
+        return false;
+    };
+    let Some(parsed_episode) = parsed.episode.as_ref() else {
+        return false;
+    };
+    if parsed_episode.episode_numbers.is_empty() {
+        return false;
+    }
+
+    let variants = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.clone()]
+    } else {
+        parsed.normalized_title_variants.clone()
+    };
+    let scryer_application::ExactCourTitleMatch::Unique(cour) =
+        scryer_application::exact_cour_title_match(
+            &anime.canonical_title,
+            &anime.bridge,
+            &variants,
+        )
+    else {
+        return false;
+    };
+    let Ok(cour_index) = u32::try_from(cour.index) else {
+        return false;
+    };
+    if cour_index == 0
+        || parsed_episode
+            .season
+            .into_iter()
+            .chain(parsed_episode.season_numbers.iter().copied())
+            .any(|season| season != 1 && season != cour_index)
+    {
+        return false;
+    }
+    let (Ok(season), Ok(episode)) = (
+        i32::try_from(anime.official_season),
+        i32::try_from(anime.official_episode),
+    ) else {
+        return false;
+    };
+    let requested = (season, episode);
+    let mapped = parsed_episode
+        .episode_numbers
+        .iter()
+        .map(|episode| {
+            let episode = i32::try_from(*episode).ok()?;
+            if episode <= 0 || cour.episode_count.is_some_and(|count| episode > count) {
+                return None;
+            }
+            let mut ranges = cour.ranges.iter().filter(|range| {
+                episode >= range.community_episode_start
+                    && range.community_episode_end.is_none_or(|end| episode <= end)
+            });
+            let range = ranges.next()?;
+            if ranges.next().is_some()
+                || range.community_episode_start <= 0
+                || range.tvdb_season <= 0
+                || range.tvdb_episode_start <= 0
+            {
+                return None;
+            }
+            let mapped = range
+                .tvdb_episode_start
+                .checked_add(episode.checked_sub(range.community_episode_start)?)?;
+            if range.tvdb_episode_end.is_some_and(|end| mapped > end) {
+                return None;
+            }
+            Some((range.tvdb_season, mapped))
+        })
+        .collect::<Option<Vec<_>>>();
+    mapped.is_some_and(|mapped| mapped.contains(&requested))
+}
+
 fn filter_strategy_results(
     results: &mut Vec<IndexerSearchResult>,
     context: &FilterStrategyContext<'_>,
@@ -5944,7 +6023,7 @@ fn filter_strategy_results(
                     .iter()
                     .any(|expected| expected == release_title)
             });
-            if !title_ok {
+            if !title_ok && !exact_cour_mapping_covers_requested_episode(parsed, context) {
                 tracing::debug!(
                     strategy = context.strategy_label,
                     query = %context.query,
@@ -5960,11 +6039,13 @@ fn filter_strategy_results(
         // numbering the wanted episode goes by. With a single numbering — which
         // is everything except anime whose community layout disagrees with
         // TVDB's — that is exactly the two scalar tests below, unchanged.
-        if context.admissible_episode_numberings.is_empty() {
+        let pairs = &context.numbering_context.admissible_episode_numberings;
+        if pairs.is_empty() {
             if let Some(expected_s) = context.season
                 && let Some(ref res_ep) = parsed.episode
                 && let Some(rs) = res_ep.season
                 && rs != expected_s
+                && !exact_cour_mapping_covers_requested_episode(parsed, context)
             {
                 tracing::debug!(
                     strategy = context.strategy_label,
@@ -5980,6 +6061,7 @@ fn filter_strategy_results(
                 && let Some(ref res_ep) = parsed.episode
                 && !res_ep.episode_numbers.is_empty()
                 && !res_ep.episode_numbers.contains(&expected_e)
+                && !exact_cour_mapping_covers_requested_episode(parsed, context)
             {
                 tracing::debug!(
                     strategy = context.strategy_label,
@@ -5991,7 +6073,6 @@ fn filter_strategy_results(
                 return false;
             }
         } else if let Some(ref res_ep) = parsed.episode {
-            let pairs = context.admissible_episode_numberings;
             let admissible = match (res_ep.season, res_ep.episode_numbers.is_empty()) {
                 // Labelled with both: they have to come from the same
                 // numbering, or together they mean a different episode.
@@ -6011,7 +6092,7 @@ fn filter_strategy_results(
                 // decide those, as they always have.
                 (None, true) => true,
             };
-            if !admissible {
+            if !admissible && !exact_cour_mapping_covers_requested_episode(parsed, context) {
                 tracing::debug!(
                     strategy = context.strategy_label,
                     query = %context.query,
@@ -11903,13 +11984,13 @@ mod tests {
 
     fn numbering_guard_context<'a>(
         query: &'a str,
-        admissible: &'a [(u32, u32)],
+        numbering_context: &'a IndexerSearchNumberingContext,
     ) -> FilterStrategyContext<'a> {
         FilterStrategyContext {
             query,
             season: Some(1),
             episode: Some(53),
-            admissible_episode_numberings: admissible,
+            numbering_context,
             tagged_aliases: &[],
             // The numbering tests are what this exercises; the title guard has
             // its own coverage.
@@ -11950,7 +12031,11 @@ mod tests {
     #[test]
     fn numbering_guard_keeps_every_admissible_form_of_the_wanted_episode() {
         let admissible = [(1u32, 53u32), (4u32, 17u32)];
-        let context = numbering_guard_context("Lantern Verge S04E17", &admissible);
+        let numbering_context = IndexerSearchNumberingContext {
+            admissible_episode_numberings: admissible.to_vec(),
+            anime: None,
+        };
+        let context = numbering_guard_context("Lantern Verge S04E17", &numbering_context);
 
         let kept = surviving_titles(
             &[
@@ -11981,7 +12066,11 @@ mod tests {
     #[test]
     fn numbering_guard_holds_a_season_less_episode_to_the_dispatched_number() {
         let admissible = [(1u32, 53u32), (4u32, 17u32)];
-        let context = numbering_guard_context("Lantern Verge S04E17", &admissible);
+        let numbering_context = IndexerSearchNumberingContext {
+            admissible_episode_numberings: admissible.to_vec(),
+            anime: None,
+        };
+        let context = numbering_guard_context("Lantern Verge S04E17", &numbering_context);
         let mut results = vec![
             numbered_result("Lantern Verge dispatched", None, &[53]),
             numbered_result("Lantern Verge official seventeen", None, &[17]),
@@ -11998,7 +12087,8 @@ mod tests {
     /// pair exactly as it always has.
     #[test]
     fn numbering_guard_without_alternatives_tests_the_dispatched_pair() {
-        let context = numbering_guard_context("Lantern Verge S01E53", &[]);
+        let numbering_context = IndexerSearchNumberingContext::default();
+        let context = numbering_guard_context("Lantern Verge S01E53", &numbering_context);
 
         let kept = surviving_titles(
             &[
@@ -12010,5 +12100,193 @@ mod tests {
         );
 
         assert_eq!(kept, vec!["Lantern Verge S01E53 1080p WEB-DL".to_string()]);
+    }
+
+    fn lantern_verge_cour_context() -> IndexerSearchNumberingContext {
+        let cour_titles = [
+            "Lantern Verge",
+            "Lantern Verge: Ember Circuit",
+            "Lantern Verge: Glass Meridian",
+            "Lantern Verge: Final Chorus",
+        ];
+        let cour_lengths = [14_i32, 12, 10, 24];
+        let mut official_start = 1_i32;
+        let seasons = cour_titles
+            .into_iter()
+            .zip(cour_lengths)
+            .enumerate()
+            .map(|(offset, (title, length))| {
+                let index = i32::try_from(offset + 1).expect("small fixture index");
+                let season = scryer_domain::AnimeCommunitySeason {
+                    index,
+                    titles: vec![title.to_string()],
+                    ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                        community_episode_start: 1,
+                        community_episode_end: Some(length),
+                        tvdb_season: 1,
+                        tvdb_episode_start: official_start,
+                        tvdb_episode_end: Some(official_start + length - 1),
+                    }],
+                    absolute_start: Some(official_start),
+                    episode_count: Some(length),
+                    ..Default::default()
+                };
+                official_start += length;
+                season
+            })
+            .collect();
+        let bridge = scryer_domain::AnimeNumberingBridge {
+            generated_on: "2026-09-07".to_string(),
+            corroborating_order: None,
+            seasons,
+        };
+
+        IndexerSearchNumberingContext {
+            admissible_episode_numberings: vec![(1, 34), (3, 8)],
+            anime: Some(scryer_application::AnimeSearchNumberingContext {
+                canonical_title: "Lantern Verge".to_string(),
+                bridge,
+                official_season: 1,
+                official_episode: 34,
+            }),
+        }
+    }
+
+    #[test]
+    fn exact_cour_title_admits_only_the_bounded_community_mapping() {
+        let numbering_context = lantern_verge_cour_context();
+        for (title_guard_mode, query) in [
+            (TitleGuardMode::SkipTitleMatch, "Lantern Verge"),
+            (
+                TitleGuardMode::ExactTitleMatch,
+                "Lantern Verge Glass Meridian",
+            ),
+        ] {
+            let mut results = [
+                "Lantern Verge Glass Meridian S01E08 1080p WEB-DL",
+                "Lantern Verge Glass Meridian - 08 1080p WEB-DL",
+                "Lantern Verge S01E08 1080p WEB-DL",
+                "Lantern Verge - 08 1080p WEB-DL",
+                "Lantern Verge Ember Circuit S01E08 1080p WEB-DL",
+                "Lantern Verge Glass Meridian S01E11 1080p WEB-DL",
+            ]
+            .into_iter()
+            .map(search_result)
+            .collect::<Vec<_>>();
+            assert!(
+                results
+                    .iter()
+                    .all(|result| result.parsed_release_metadata.is_none())
+            );
+
+            filter_strategy_results(
+                &mut results,
+                &FilterStrategyContext {
+                    query,
+                    season: Some(1),
+                    episode: Some(34),
+                    numbering_context: &numbering_context,
+                    tagged_aliases: &[],
+                    title_guard_mode,
+                    strategy_label: "freetext",
+                    is_rss_request: false,
+                },
+            );
+
+            let mut expected = vec![
+                "Lantern Verge Glass Meridian S01E08 1080p WEB-DL".to_string(),
+                "Lantern Verge Glass Meridian - 08 1080p WEB-DL".to_string(),
+            ];
+            if title_guard_mode == TitleGuardMode::SkipTitleMatch {
+                // Bare absolute numbers remain deferred to application coverage;
+                // they are distinct from seasonless episode-number lists.
+                expected.push("Lantern Verge - 08 1080p WEB-DL".to_string());
+            }
+            assert_eq!(
+                results
+                    .into_iter()
+                    .map(|result| result.title)
+                    .collect::<Vec<_>>(),
+                expected,
+                "{title_guard_mode:?} must use parser-produced metadata and exact cour evidence"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_cour_guard_admits_seasonless_lists_and_matching_numbering_layouts() {
+        let mut numbering_context = lantern_verge_cour_context();
+        let mut context = numbering_guard_context("Lantern Verge", &numbering_context);
+        context.season = Some(1);
+        context.episode = Some(34);
+        let mut results = vec![
+            numbered_result("Lantern Verge Glass Meridian", None, &[8]),
+            numbered_result("Lantern Verge", None, &[8]),
+        ];
+        filter_strategy_results(&mut results, &context);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Lantern Verge Glass Meridian");
+
+        numbering_context.admissible_episode_numberings.clear();
+        let anime = numbering_context.anime.as_mut().unwrap();
+        anime.official_season = 3;
+        anime.official_episode = 8;
+        let range = &mut anime.bridge.seasons[2].ranges[0];
+        range.tvdb_season = 3;
+        range.tvdb_episode_start = 1;
+        range.tvdb_episode_end = Some(10);
+        let mut context = numbering_guard_context("Lantern Verge", &numbering_context);
+        context.season = Some(3);
+        context.episode = Some(8);
+        let mut results = vec![search_result("Lantern Verge Glass Meridian S01E08 1080p")];
+        filter_strategy_results(&mut results, &context);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn exact_cour_guard_never_maps_through_another_entry_with_the_same_index() {
+        let mut numbering_context = lantern_verge_cour_context();
+        numbering_context.admissible_episode_numberings = vec![(1, 22), (3, 8)];
+        let anime = numbering_context.anime.as_mut().unwrap();
+        anime.official_episode = 22;
+        anime.bridge.seasons[1].index = 3;
+        let parsed =
+            scryer_application::parse_release_metadata("Lantern Verge Glass Meridian S01E08 1080p");
+        let context = numbering_guard_context("Lantern Verge", &numbering_context);
+        assert!(!exact_cour_mapping_covers_requested_episode(
+            &parsed, &context
+        ));
+    }
+
+    #[test]
+    fn duplicate_cour_aliases_cannot_admit_a_numbered_release() {
+        let mut numbering_context = lantern_verge_cour_context();
+        numbering_context
+            .anime
+            .as_mut()
+            .expect("fixture anime context")
+            .bridge
+            .seasons[3]
+            .titles
+            .push("Lantern Verge: Glass Meridian".to_string());
+        let mut results = vec![search_result(
+            "Lantern Verge Glass Meridian S01E08 1080p WEB-DL",
+        )];
+
+        filter_strategy_results(
+            &mut results,
+            &FilterStrategyContext {
+                query: "Lantern Verge",
+                season: Some(1),
+                episode: Some(34),
+                numbering_context: &numbering_context,
+                tagged_aliases: &[],
+                title_guard_mode: TitleGuardMode::SkipTitleMatch,
+                strategy_label: "freetext",
+                is_rss_request: false,
+            },
+        );
+
+        assert!(results.is_empty());
     }
 }
