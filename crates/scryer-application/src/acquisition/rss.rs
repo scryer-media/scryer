@@ -324,6 +324,51 @@ fn rss_categories_for_routing_entry(scope_id: &str, entry: &IndexerRoutingEntry)
     }
 }
 
+fn merge_rss_indexer_routing<'a>(
+    plans: impl IntoIterator<Item = (&'a str, Option<IndexerRoutingPlan>)>,
+) -> Option<IndexerRoutingPlan> {
+    let plans: Vec<_> = plans.into_iter().collect();
+    if plans.iter().all(|(_, plan)| plan.is_none()) {
+        return None;
+    }
+    let indexer_ids: HashSet<_> = plans
+        .iter()
+        .filter_map(|(_, plan)| plan.as_ref())
+        .flat_map(|plan| plan.entries.keys())
+        .collect();
+    let mut entries = HashMap::new();
+    for indexer_id in indexer_ids {
+        let mut target = IndexerRoutingEntry {
+            enabled: false,
+            categories: Vec::new(),
+            priority: 0,
+        };
+        for (scope, plan) in &plans {
+            let entry = plan.as_ref().and_then(|plan| plan.entries.get(indexer_id));
+            // Only an explicit exclusion disables this scope. Missing plans and
+            // entries inherit its defaults, even if another scope excludes it.
+            if entry.is_some_and(|entry| !entry.enabled) {
+                continue;
+            }
+            let priority = entry.map_or(0, |entry| entry.priority);
+            target.priority = if target.enabled {
+                target.priority.min(priority)
+            } else {
+                priority
+            };
+            target.enabled = true;
+            target.categories.extend(entry.map_or_else(
+                || default_indexer_routing_categories_for_scope(scope),
+                |entry| rss_categories_for_routing_entry(scope, entry),
+            ));
+        }
+        target.categories.sort();
+        target.categories.dedup();
+        entries.insert(indexer_id.clone(), target);
+    }
+    Some(IndexerRoutingPlan { entries })
+}
+
 /// Normalize a title string for fuzzy matching: lowercase, strip non-alphanumeric,
 /// collapse whitespace.
 pub(crate) fn normalize_for_matching(title: &str) -> String {
@@ -703,33 +748,26 @@ impl AppUseCase {
             return Ok(RssSyncReport::default());
         }
 
-        // Collect Newznab categories from indexer routing config across all facets.
-        // These tell Newznab plugins which categories to fetch in RSS mode.
-        let rss_categories = {
-            let mut cats: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for scope in &["movie", "series", "anime"] {
-                if let Some(plan) = self.resolve_indexer_routing(None, Some(scope)).await {
-                    for entry in plan.entries.values() {
-                        if entry.enabled {
-                            for cat in rss_categories_for_routing_entry(scope, entry) {
-                                cats.insert(cat);
-                            }
-                        }
-                    }
-                }
-            }
-            if cats.is_empty() {
-                None
-            } else {
-                let sorted: Vec<String> = {
-                    let mut v: Vec<_> = cats.into_iter().collect();
-                    v.sort();
-                    v
-                };
-                debug!(categories = ?sorted, "RSS sync: resolved categories from routing config");
-                Some(sorted)
-            }
-        };
+        // Union facet categories within each indexer, retaining scope exclusions.
+        let mut rss_plans = Vec::new();
+        for scope in ["movie", "series", "anime"] {
+            rss_plans.push((scope, self.resolve_indexer_routing(None, Some(scope)).await));
+        }
+        // Library overrides can enable indexers or categories excluded by the
+        // facet defaults. Fetch their feeds before scoring against each library.
+        let library_scopes: std::collections::BTreeSet<_> = titles
+            .iter()
+            .filter(|title| title.monitored)
+            .map(|title| (title.library_id.as_str(), title.facet.as_str()))
+            .collect();
+        for (library_id, scope) in library_scopes {
+            rss_plans.push((
+                scope,
+                self.resolve_indexer_routing(Some(library_id), Some(scope))
+                    .await,
+            ));
+        }
+        let rss_routing = merge_rss_indexer_routing(rss_plans);
 
         // Fetch RSS feed (empty query = latest releases) from all indexers
         let rss_results = self
@@ -742,8 +780,8 @@ impl AppUseCase {
                 None, // no category filter
                 None, // no facet hint
                 None, // no ID-search facet override
-                rss_categories,
-                None, // no routing filter
+                None, // categories are owned by each indexer's routing entry
+                rss_routing,
                 SearchMode::Auto,
                 IndexerErrorOperation::RssSync,
                 None,
@@ -2928,6 +2966,134 @@ mod tests {
         let mut t = make_title(id, name, None);
         t.monitored = false;
         t
+    }
+
+    fn rss_routing_plan(entries: &[(&str, bool, &[&str], i64)]) -> Option<IndexerRoutingPlan> {
+        Some(IndexerRoutingPlan {
+            entries: entries
+                .iter()
+                .map(|(id, enabled, categories, priority)| {
+                    (
+                        (*id).to_string(),
+                        IndexerRoutingEntry {
+                            enabled: *enabled,
+                            categories: categories.iter().map(|cat| (*cat).to_string()).collect(),
+                            priority: *priority,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn rss_routing_preserves_category_ownership_and_scope_exclusions() {
+        let plan = merge_rss_indexer_routing([
+            (
+                "movie",
+                rss_routing_plan(&[
+                    ("a", true, &["2000"], 2),
+                    ("b", false, &["2000"], 1),
+                    ("disabled", false, &["2000"], 1),
+                ]),
+            ),
+            (
+                "series",
+                rss_routing_plan(&[
+                    ("a", false, &["5000"], 1),
+                    ("b", true, &["5070", "5000", "5000"], 3),
+                    ("disabled", false, &[], 1),
+                ]),
+            ),
+            (
+                "anime",
+                rss_routing_plan(&[
+                    ("a", false, &[], 1),
+                    ("b", true, &["5070"], 2),
+                    ("disabled", false, &[], 1),
+                ]),
+            ),
+        ])
+        .expect("configured RSS routing");
+
+        assert_eq!(plan.entries["a"].categories, ["2000"]);
+        assert_eq!(plan.entries["b"].categories, ["5000", "5070"]);
+        assert!(plan.entries["a"].enabled);
+        assert!(plan.entries["b"].enabled);
+        assert_eq!(plan.entries["a"].priority, 2);
+        assert_eq!(plan.entries["b"].priority, 2);
+        assert!(!plan.entries["disabled"].enabled);
+        assert!(plan.entries["disabled"].categories.is_empty());
+        assert_eq!(
+            crate::indexer_search_eligibility(Some(&plan), None, "disabled"),
+            crate::IndexerSearchEligibility::DisabledForScope,
+        );
+        assert_eq!(
+            crate::indexer_search_eligibility(Some(&plan), None, "unconfigured"),
+            crate::IndexerSearchEligibility::Eligible,
+        );
+    }
+
+    #[test]
+    fn rss_routing_expands_defaults_only_for_the_owning_indexer() {
+        let plan = merge_rss_indexer_routing([
+            (
+                "movie",
+                rss_routing_plan(&[("a", true, &[], 1), ("b", false, &[], 1)]),
+            ),
+            (
+                "series",
+                rss_routing_plan(&[("a", false, &[], 1), ("b", true, &[], 1)]),
+            ),
+            (
+                "anime",
+                rss_routing_plan(&[("a", false, &[], 1), ("b", true, &[], 1)]),
+            ),
+        ])
+        .expect("configured RSS routing");
+
+        assert_eq!(plan.entries["a"].categories, ["2000"]);
+        assert_eq!(plan.entries["b"].categories, ["5000", "5070"]);
+    }
+
+    #[test]
+    fn rss_routing_retains_an_all_disabled_plan() {
+        let plan = merge_rss_indexer_routing([
+            ("movie", rss_routing_plan(&[("a", false, &[], 1)])),
+            ("series", rss_routing_plan(&[("a", false, &[], 1)])),
+            ("anime", rss_routing_plan(&[("a", false, &[], 1)])),
+        ])
+        .expect("explicit exclusion must survive");
+
+        assert!(!plan.entries["a"].enabled);
+        assert!(plan.entries["a"].categories.is_empty());
+    }
+
+    #[test]
+    fn rss_routing_without_configuration_preserves_default_search() {
+        assert!(
+            merge_rss_indexer_routing([("movie", None), ("series", None), ("anime", None),])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rss_routing_inherits_defaults_from_missing_plans_and_entries() {
+        for series_plan in [None, rss_routing_plan(&[("other", false, &[], 1)])] {
+            let plan = merge_rss_indexer_routing([
+                ("movie", rss_routing_plan(&[("a", false, &[], 1)])),
+                ("series", series_plan),
+                ("anime", rss_routing_plan(&[("a", false, &[], 1)])),
+            ])
+            .expect("configured RSS routing");
+
+            assert!(plan.entries["a"].enabled);
+            assert_eq!(plan.entries["a"].categories, ["5000"]);
+            assert_eq!(
+                crate::indexer_search_eligibility(Some(&plan), None, "a"),
+                crate::IndexerSearchEligibility::Eligible,
+            );
+        }
     }
 
     #[test]
