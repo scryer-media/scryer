@@ -2947,8 +2947,7 @@ fn parses_fused_episode_label_in_fansub_shape_for_anime_target() {
 fn parses_fused_episode_label_variants_for_series_target() {
     let target = context(ContextFacetHint::Series, "Umbra Vector");
 
-    let analysis =
-        analyze_release_for_target("Umbra.Vector.S01EP04.1080p.AMZN.WEB-DL", &target);
+    let analysis = analyze_release_for_target("Umbra.Vector.S01EP04.1080p.AMZN.WEB-DL", &target);
     let episode = analysis
         .best_candidate()
         .expect("best candidate")
@@ -3044,7 +3043,6 @@ fn fused_episode_label_is_not_read_on_movie_target() {
     }
 }
 
-
 /// A movie target that cannot seed an episode family must not mint episode or
 /// season role candidates either. Those roles still bound the title zone and
 /// drive the identity-unit rules even when no episode family survives scoring,
@@ -3062,14 +3060,17 @@ fn movie_target_without_episode_context_mints_no_episode_roles() {
             !analysis.annotations.iter().any(|annotation| {
                 annotation.primary_role == TokenRole::EpisodeMarker
                     || annotation.primary_role == TokenRole::SeasonMarker
-                    || annotation.alternate_roles.contains(&TokenRole::EpisodeMarker)
-                    || annotation.alternate_roles.contains(&TokenRole::SeasonMarker)
+                    || annotation
+                        .alternate_roles
+                        .contains(&TokenRole::EpisodeMarker)
+                    || annotation
+                        .alternate_roles
+                        .contains(&TokenRole::SeasonMarker)
             }),
             "{raw} still minted an episode or season role on a movie target"
         );
 
-        let analysis =
-            analyze_release_for_target(raw, &context(ContextFacetHint::Series, raw));
+        let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Series, raw));
         assert!(
             analysis.annotations.iter().any(|annotation| {
                 annotation.primary_role == TokenRole::EpisodeMarker
@@ -3110,7 +3111,11 @@ fn movie_target_keeps_episode_shaped_tokens_in_its_title() {
 #[test]
 fn series_target_still_reads_episode_shaped_tokens_as_episodes() {
     for (raw, season, number) in [
-        ("Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay", 1u32, 4u32),
+        (
+            "Umbra.Vector.E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
+            1u32,
+            4u32,
+        ),
         (
             "Umbra.Vector.S01E04.A.Synthetic.Subtitle.1977.1080p.BluRay",
             1,
@@ -3143,8 +3148,7 @@ fn movie_target_with_episode_context_still_mints_episode_roles() {
         ..Default::default()
     });
 
-    let analysis =
-        analyze_release_for_target("Umbra.Vector.S01E04.1080p.WEB-DL", &target);
+    let analysis = analyze_release_for_target("Umbra.Vector.S01E04.1080p.WEB-DL", &target);
     let candidate = analysis.best_candidate().expect("best candidate");
     let episode = candidate.projected.episode.as_ref().expect("episode");
 
@@ -3152,3 +3156,100 @@ fn movie_target_with_episode_context_still_mints_episode_roles() {
     assert_eq!(episode.episode_numbers, vec![4]);
 }
 
+/// The fansub convention `[Group] Title - NN [res][subs][CRC]` with a
+/// hyphenated group name used to file the group's own tokens as title words:
+/// the group was reported correctly *and* left glued to the front of the title.
+#[test]
+fn hyphenated_bracketed_group_stays_out_of_the_title_zone() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        // Deliberately unrelated, so nothing in the context can pull the title
+        // zone straight — this is the context-free reading.
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumen-scribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+    assert!(
+        !candidate
+            .projected
+            .normalized_title_variants
+            .iter()
+            .any(|variant| variant.contains("LUMEN")),
+        "no variant may carry the group tag: {:?}",
+        candidate.projected.normalized_title_variants
+    );
+}
+
+/// Taking the group's tokens out of the title zone has to leave the rest of
+/// the reading intact — the number the release carries, and the combined
+/// series-and-cour name that community-season anchoring later compares against,
+/// with nothing of the group in it.
+#[test]
+fn hyphenated_bracketed_group_release_keeps_its_number_and_cour_variant() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let episode = candidate.projected.episode.as_ref().expect("episode");
+    let variants = &candidate.projected.normalized_title_variants;
+
+    assert_eq!(episode.absolute_episode, Some(20));
+    assert!(
+        variants
+            .iter()
+            .any(|variant| variant == "LANTERN VERGE FINAL CHORUS"),
+        "series-and-cour variant missing: {variants:?}"
+    );
+    assert!(
+        variants.iter().all(|variant| !variant.contains("SCRIBE")),
+        "no variant may carry the group tag: {variants:?}"
+    );
+}
+
+/// Guard against over-correcting: one trailing bracket group with a
+/// multi-token tag parsed correctly before and must still.
+#[test]
+fn hyphenated_bracketed_group_with_one_trailing_bracket_is_unchanged() {
+    let analysis = analyze_release_for_target(
+        "[Lumen-scribe] Lantern Verge - Final Chorus - 20 [1080p]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumen-scribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+}
+
+/// The same, for a single-token tag with many trailing brackets.
+#[test]
+fn single_token_bracketed_group_with_many_trailing_brackets_is_unchanged() {
+    let analysis = analyze_release_for_target(
+        "[Lumenscribe] Lantern Verge - Final Chorus - 20 [1080p][Multiple Subtitle][ABCD1234]",
+        &context(ContextFacetHint::Anime, "Umbra Vector"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+
+    assert_eq!(
+        candidate.projected.release_group.as_deref(),
+        Some("Lumenscribe")
+    );
+    assert_eq!(
+        candidate.projected.normalized_title,
+        "LANTERN VERGE FINAL CHORUS"
+    );
+}

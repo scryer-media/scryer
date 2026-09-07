@@ -1294,39 +1294,8 @@ fn normalized_episode_title_matches_or_is_near_match(candidate: &str, expected: 
         13..=24 => 2,
         _ => 3,
     };
-    bounded_levenshtein_distance(candidate, expected, max_distance).is_some()
-}
-
-fn bounded_levenshtein_distance(left: &str, right: &str, max_distance: usize) -> Option<usize> {
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
-    if left.len().abs_diff(right.len()) > max_distance {
-        return None;
-    }
-
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    for (left_index, left_char) in left.iter().enumerate() {
-        let mut current = Vec::with_capacity(right.len() + 1);
-        current.push(left_index + 1);
-        let mut row_min = left_index + 1;
-        for (right_index, right_char) in right.iter().enumerate() {
-            let cost = usize::from(left_char != right_char);
-            let distance = (previous[right_index + 1] + 1)
-                .min(current[right_index] + 1)
-                .min(previous[right_index] + cost);
-            row_min = row_min.min(distance);
-            current.push(distance);
-        }
-        if row_min > max_distance {
-            return None;
-        }
-        previous = current;
-    }
-
-    previous
-        .last()
-        .copied()
-        .filter(|distance| *distance <= max_distance)
+    crate::library::title_matching::bounded_levenshtein_distance(candidate, expected, max_distance)
+        .is_some()
 }
 
 #[cfg(test)]

@@ -670,3 +670,295 @@ fn a_wanted_tvdb_episode_translates_back_into_community_numbering() {
     assert!(community_coordinates_for_tvdb_episode(&bridge, 2, 1).is_none());
     assert!(community_coordinates_for_tvdb_episode(&bridge, 1, 99).is_none());
 }
+
+// ── fuzzy title anchoring ─────────────────────────────────────────────────
+
+/// The bridge's own romanisation of each cour, long enough that a group's
+/// spelling of the same name is a handful of letters away rather than a
+/// different string.
+const LONG_COUR_TITLES: [&str; 4] = [
+    "Rantan Kyoukai Monogatari Hajimari no Akari wo Motomete Tabi no Uta",
+    "Rantan Kyoukai Monogatari Kagayaku Yoru no Kioku to Tomo ni Ayumu Uta",
+    "Rantan Kyoukai Monogatari Garasu no Shigosen wo Koete Susumu Michi no Uta",
+    "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta",
+];
+
+fn bridge_with_cour_titles(titles: &[&str]) -> AnimeNumberingBridge {
+    let mut bridge = bridge();
+    for (season, title) in bridge.seasons.iter_mut().zip(titles) {
+        season.titles = vec![(*title).to_string()];
+    }
+    bridge
+}
+
+/// Long enough to be fuzzed at all, short enough that the tolerance it earns
+/// is two edits rather than the ceiling.
+const MID_LENGTH_COUR_TITLE: &str = "Rantan Kyoukai Monogatari Hikari no Utagoe";
+/// Past the point where length alone would buy a fifth edit of tolerance.
+const OVERLONG_COUR_TITLE: &str = concat!(
+    "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Uta ",
+    "Owari naki Yoake no Shou"
+);
+/// The series' own long romanisation, and a cour catalogued one letter away
+/// from it — the drift a written-out macron leaves behind.
+const LONG_SERIES_NAME: &str = "Rantan Kyoukai Monogatari Honzuki no Gekokujou";
+const COUR_TITLED_ALMOST_LIKE_THE_SERIES: &str = "Rantan Kyoukai Monogatari Honzuki no Gekokujo";
+
+fn bridge_with_cour_title_lists(titles: &[&[&str]]) -> AnimeNumberingBridge {
+    let mut bridge = bridge();
+    for (season, season_titles) in bridge.seasons.iter_mut().zip(titles) {
+        season.titles = season_titles
+            .iter()
+            .map(|title| (*title).to_string())
+            .collect();
+    }
+    bridge
+}
+
+/// The case the whole cour-aware chain exists for: the group romanises the
+/// cour's long title its own way — three letters apart from the bridge's — and
+/// numbers the release within that cour. Nothing else names it, so the near
+/// miss is allowed to anchor.
+#[test]
+fn a_romanised_cour_title_anchors_within_tolerance() {
+    let resolution = resolve(
+        &bridge_with_cour_titles(&LONG_COUR_TITLES),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        &[
+            "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
+                .to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("title-anchored candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::TitleAnchored);
+    // Community episode 5 of cour 4, which starts at TVDB 37.
+    assert_eq!(candidate.episode_numbers, vec![41]);
+}
+
+/// Sibling cours differ by a single character when they are numbered, so
+/// letter distance alone would anchor a release to the cour next door. The
+/// numbers a title carries have to agree before any of its letters are
+/// compared.
+#[test]
+fn an_adjacent_cour_number_anchors_nothing() {
+    let numbered: Vec<String> = LONG_COUR_TITLES
+        .iter()
+        .enumerate()
+        .map(|(offset, title)| format!("{title} S{}", offset + 1))
+        .collect();
+    let numbered: Vec<&str> = numbered.iter().map(String::as_str).collect();
+
+    let resolution = resolve(
+        &bridge_with_cour_titles(&numbered),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        // One character from cour 4's title, and that character is its number.
+        &[format!("{} S3", LONG_COUR_TITLES[3])],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// A release naming a cour but leaving its number off cannot be read as that
+/// cour: carrying no number where the catalogued title carries one is itself a
+/// disagreement, whatever the letters do. This is what stops the series' own
+/// romanisation — which never carries a cour number — from anchoring anywhere.
+#[test]
+fn an_unnumbered_title_never_matches_a_numbered_cour() {
+    let numbered: Vec<String> = LONG_COUR_TITLES
+        .iter()
+        .enumerate()
+        .map(|(offset, title)| format!("{title} S{}", offset + 1))
+        .collect();
+    let numbered: Vec<&str> = numbered.iter().map(String::as_str).collect();
+
+    let resolution = resolve(
+        &bridge_with_cour_titles(&numbered),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        &[LONG_COUR_TITLES[3].to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// A release that already says which season it belongs to needs no anchoring,
+/// so the near-miss tier never runs for it: the community reading of its own
+/// season token stands.
+#[test]
+fn a_season_numbered_parse_never_reaches_the_fuzzy_tier() {
+    let resolution = resolve(
+        &bridge_with_cour_titles(&LONG_COUR_TITLES),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &parsed(Some(4), &[20]),
+        &[
+            "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
+                .to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("community candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Community);
+    assert_eq!(candidate.episode_numbers, vec![56]);
+}
+
+/// Two cours near enough to the same name pin nothing. A romanisation that
+/// could plausibly be either is evidence for neither.
+#[test]
+fn two_cours_within_tolerance_anchor_nothing() {
+    let mut near_twins: Vec<&str> = LONG_COUR_TITLES.to_vec();
+    // Cour 3 restated as a one-letter variation of cour 4's title.
+    near_twins[2] =
+        "Rantan Kyoukai Monogatari Saigo no Gasshou wo Utau Toki no Hikari to Kage no Ute";
+
+    let resolution = resolve(
+        &bridge_with_cour_titles(&near_twins),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        &[
+            "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
+                .to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// Below the length floor a single edit is most of the difference between two
+/// cours, so nothing fuzzes at all — the short catalogued forms stay exact-only.
+#[test]
+fn a_cour_title_below_the_length_floor_anchors_nothing() {
+    let resolution = resolve(
+        &bridge(),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        // One letter from cour 4's catalogued title, which is 26 characters.
+        &["Lantern Verge: Final Chorum".to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// Tolerance is proportional to length, so a 42-character title allows two
+/// edits and a third is one too many.
+#[test]
+fn a_romanisation_past_the_tolerance_anchors_nothing() {
+    let resolution = resolve(
+        &bridge_with_cour_titles(&[
+            LONG_COUR_TITLES[0],
+            LONG_COUR_TITLES[1],
+            LONG_COUR_TITLES[2],
+            MID_LENGTH_COUR_TITLE,
+        ]),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        // Three edits from cour 4's title, which earns two.
+        &["Rantan Kyokai Monogatari Hikaru no Utagoo".to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// The tolerance belongs to the two names actually being compared. A cour that
+/// also answers to a much longer name must not lend that name's larger
+/// allowance to its shorter one.
+#[test]
+fn the_tolerance_is_earned_by_the_pair_not_by_the_cours_longest_title() {
+    let resolution = resolve(
+        &bridge_with_cour_title_lists(&[
+            &[LONG_COUR_TITLES[0]],
+            &[LONG_COUR_TITLES[1]],
+            &[LONG_COUR_TITLES[2]],
+            // The long form would earn four edits; the short one earns two.
+            &[MID_LENGTH_COUR_TITLE, OVERLONG_COUR_TITLE],
+        ]),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        &["Rantan Kyokai Monogatari Hikaru no Utagoo".to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// Length buys tolerance only up to a ceiling: a 105-character title would
+/// otherwise earn five edits, and five edits is a different name.
+#[test]
+fn a_very_long_title_still_caps_its_tolerance() {
+    let resolution = resolve(
+        &bridge_with_cour_titles(&[
+            LONG_COUR_TITLES[0],
+            LONG_COUR_TITLES[1],
+            LONG_COUR_TITLES[2],
+            OVERLONG_COUR_TITLE,
+        ]),
+        &title(SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        &[
+            "Rantan Kyokai Monogatari Saigo no Gassho o Utau Toki no Hikari to Kaje no Uta \
+             Owari naki Yoake no Sho"
+                .to_string(),
+        ],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}
+
+/// The series' own name competes with the cours. A cour catalogued one letter
+/// from the franchise name slips past the exact test that drops franchise-named
+/// cours, and would otherwise collect every release that names the series.
+#[test]
+fn a_cour_titled_almost_like_the_series_anchors_nothing() {
+    let resolution = resolve(
+        &bridge_with_cour_titles(&[
+            COUR_TITLED_ALMOST_LIKE_THE_SERIES,
+            LONG_COUR_TITLES[1],
+            LONG_COUR_TITLES[2],
+            LONG_COUR_TITLES[3],
+        ]),
+        &title(LONG_SERIES_NAME),
+        &official_episodes(true),
+        &absolute_only_parse(5),
+        // A group's romanisation of the series name: one edit from the series,
+        // two from the cour catalogued under almost the same name.
+        &["Rantan Kyokai Monogatari Honzuki no Gekokujou".to_string()],
+        None,
+    );
+
+    let candidate = resolution.resolved().expect("absolute candidate");
+    assert_eq!(candidate.kind, NumberingCandidateKind::Absolute);
+    assert_eq!(candidate.episode_numbers, vec![5]);
+}

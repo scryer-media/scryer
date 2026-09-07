@@ -918,6 +918,10 @@ fn score_candidates(
     parser_version: &'static str,
 ) -> Vec<ReleaseParseCandidate> {
     let unit_index = build_parse_unit_index(lexed.tokens.as_slice(), &lexed.cst, annotations);
+    // A leading bracketed group tag is decided by token shape alone, so it is
+    // settled before the search rather than left for projection to notice after
+    // the winning candidate has already filed the tag's tokens as title words.
+    let leading_release_group = leading_release_group_token_range(lexed.tokens.as_slice());
     let mut beam = seed_beam(context_index, lexed.tokens.len());
     let mut completed = Vec::<ParseState>::new();
 
@@ -939,6 +943,7 @@ fn score_candidates(
                 annotations,
                 context_index,
                 alias_oracle,
+                leading_release_group,
             );
             if expanded.is_empty() {
                 let mut stalled = state.clone();
@@ -1336,6 +1341,7 @@ fn expand_state(
     annotations: &[TokenAnnotations],
     context: &ContextIndex,
     alias_oracle: &AliasOracle,
+    leading_release_group: Option<TokenRange>,
 ) -> Vec<ParseState> {
     let Some(units) = units_by_start.get(state.cursor) else {
         return Vec::new();
@@ -1374,6 +1380,7 @@ fn expand_state(
             && !unit_is_metadata_like(unit)
             && !unit_is_explicit_identity_unit(unit, annotations, context)
             && !unit_is_prefix_release_group_candidate(state, unit, tokens, context)
+            && !unit_overlaps_leading_release_group(unit, leading_release_group)
             && !unit_is_foreign_alt_title_group(unit, context)
         {
             next.push(branch_title(state, unit, context));
@@ -1598,6 +1605,24 @@ fn unit_is_prefix_release_group_candidate(
             .is_some_and(|token| token.group_id.is_some() && token.bracket_depth > 0),
         _ => false,
     }
+}
+
+/// The leading bracketed group tag is never part of the title, whatever unit
+/// shape happens to cover it.
+///
+/// [`unit_is_prefix_release_group_candidate`] only recognises the tag as a
+/// bracket group or a lone token, so the hyphen group inside `[Lumen-scribe]`
+/// slipped past it and the tag ended up glued to the front of the title — while
+/// still being reported as the release group. Testing the settled token range
+/// covers every unit shape that can span it.
+fn unit_overlaps_leading_release_group(
+    unit: &ParseUnit,
+    leading_release_group: Option<TokenRange>,
+) -> bool {
+    leading_release_group.is_some_and(|range| {
+        unit.token_range.start_token < range.end_token
+            && range.start_token < unit.token_range.end_token
+    })
 }
 
 fn unit_is_foreign_alt_title_group(unit: &ParseUnit, context: &ContextIndex) -> bool {
@@ -2142,7 +2167,13 @@ fn is_compound_metadata_suffix(tokens: &[Token], index: usize) -> bool {
             && (token.normalized == "X" || token.normalized.starts_with("HD"))))
 }
 
-fn infer_leading_release_group(tokens: &[Token]) -> Option<String> {
+/// The token span of a leading bracketed release-group tag — `[Lumen-scribe]`
+/// in `[Lumen-scribe] Title - 20 [1080p]`.
+///
+/// A pure function of token shape, so it can be answered before the beam search
+/// runs. The search uses it to keep the tag out of the title zone; projection
+/// uses it to render the group's name.
+fn leading_release_group_token_range(tokens: &[Token]) -> Option<TokenRange> {
     let first = tokens.first()?;
     let group_id = first.group_id?;
     if first.bracket_depth == 0 {
@@ -2169,13 +2200,15 @@ fn infer_leading_release_group(tokens: &[Token]) -> Option<String> {
         return None;
     }
 
-    Some(render_token_range_preserving_separators(
-        tokens,
-        TokenRange {
-            start_token,
-            end_token,
-        },
-    ))
+    Some(TokenRange {
+        start_token,
+        end_token,
+    })
+}
+
+fn infer_leading_release_group(tokens: &[Token]) -> Option<String> {
+    leading_release_group_token_range(tokens)
+        .map(|range| render_token_range_preserving_separators(tokens, range))
 }
 
 fn infer_release_group_for_candidate(state: &ParseState, tokens: &[Token]) -> Option<String> {
