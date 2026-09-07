@@ -5,6 +5,10 @@
 //! 14 / 12 / 10 / 24. Every show, season and group name here is invented.
 
 use super::*;
+use super::super::coverage::{
+    ReleaseCoverage, parsed_numbering_contradicts_episode,
+    parsed_release_contradicts_requested_episode, resolve_release_coverage,
+};
 use chrono::NaiveDate;
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, Episode, EpisodeType,
@@ -192,6 +196,135 @@ fn a_community_season_token_maps_onto_the_official_order() {
     assert_eq!(candidate.episode_numbers, vec![56]);
     assert_eq!(candidate.episode_ids, vec!["ep-56".to_string()]);
     assert!(candidate.covers_episode_id("ep-56"));
+}
+
+#[test]
+fn translated_parser_metadata_resolves_coverage_and_vetoes_against_official_coordinates() {
+    let series = title(SERIES_NAME);
+    let episodes = official_episodes(true);
+    let mut release =
+        crate::parse_release_metadata("Lantern.Verge.S04E20.1080p.WEB-DL-GROUP");
+    let raw_title = release.raw_title.clone();
+    let original = release.episode.as_ref().expect("parser-produced episode");
+    let raw_episode = original.raw.clone();
+    assert_eq!(original.season, Some(4));
+    assert_eq!(original.episode_numbers, vec![20]);
+
+    let resolution = translate_release_numbering(
+        Some(&bridge()),
+        &series,
+        &episodes,
+        &mut release,
+        None,
+    );
+
+    assert_eq!(
+        resolution.resolved().expect("community candidate").episode_ids,
+        vec!["ep-56".to_string()]
+    );
+    assert_eq!(release.raw_title, raw_title);
+    let translated = release.episode.as_ref().expect("translated episode");
+    assert_eq!(translated.raw, raw_episode);
+    assert_eq!(translated.season, Some(1));
+    assert_eq!(translated.season_numbers, vec![1]);
+    assert_eq!(translated.episode_numbers, vec![56]);
+    assert_eq!(translated.absolute_episode, Some(56));
+    assert_eq!(translated.absolute_episode_numbers, vec![56]);
+    assert_eq!(
+        resolve_release_coverage(&release, &episodes, &[], Some(&episodes[55])),
+        ReleaseCoverage::SingleEpisode("ep-56".to_string())
+    );
+    assert!(!parsed_numbering_contradicts_episode(
+        Some(1),
+        Some(56),
+        Some(56),
+        translated,
+    ));
+    assert!(parsed_numbering_contradicts_episode(
+        Some(1),
+        Some(55),
+        Some(55),
+        translated,
+    ));
+    assert!(!parsed_release_contradicts_requested_episode(
+        &release,
+        &episodes[55],
+    ));
+    assert!(parsed_release_contradicts_requested_episode(
+        &release,
+        &episodes[54],
+    ));
+}
+
+#[test]
+fn translation_rebuilds_complete_absolute_coordinates() {
+    let episodes = official_episodes(true);
+    let mut parsed = parsed(Some(4), &[20, 19]);
+
+    translate_parsed_episode_numbering(
+        &bridge(),
+        &title(SERIES_NAME),
+        &episodes,
+        &mut parsed,
+        &[],
+        None,
+    );
+
+    assert_eq!(parsed.season, Some(1));
+    assert_eq!(parsed.season_numbers, vec![1]);
+    assert_eq!(parsed.episode_numbers, vec![55, 56]);
+    assert_eq!(parsed.absolute_episode, Some(55));
+    assert_eq!(parsed.absolute_episode_numbers, vec![55, 56]);
+    assert!(parsed.special_absolute_episode_numbers.is_empty());
+}
+
+#[test]
+fn translation_clears_incomplete_absolute_coordinates() {
+    let mut episodes = official_episodes(true);
+    episodes[55].absolute_number = None;
+    let mut parsed = parsed(Some(4), &[20, 19]);
+    parsed.absolute_episode = Some(20);
+    parsed.absolute_episode_numbers = vec![20, 19];
+    parsed.special_absolute_episode_numbers = vec![20];
+
+    translate_parsed_episode_numbering(
+        &bridge(),
+        &title(SERIES_NAME),
+        &episodes,
+        &mut parsed,
+        &[],
+        None,
+    );
+
+    assert_eq!(parsed.season, Some(1));
+    assert_eq!(parsed.season_numbers, vec![1]);
+    assert_eq!(parsed.episode_numbers, vec![55, 56]);
+    assert_eq!(parsed.absolute_episode, None);
+    assert!(parsed.absolute_episode_numbers.is_empty());
+    assert!(parsed.special_absolute_episode_numbers.is_empty());
+}
+
+#[test]
+fn translation_clears_inconsistent_absolute_coordinates() {
+    let mut episodes = official_episodes(true);
+    episodes[55].absolute_number = Some("55".to_string());
+    let mut parsed = parsed(Some(4), &[20, 19]);
+
+    translate_parsed_episode_numbering(
+        &bridge(),
+        &title(SERIES_NAME),
+        &episodes,
+        &mut parsed,
+        &[],
+        None,
+    );
+
+    assert_eq!(parsed.season, Some(1));
+    assert_eq!(parsed.season_numbers, vec![1]);
+    assert_eq!(parsed.episode_numbers, vec![55, 56]);
+    assert_eq!(parsed.absolute_episode, None);
+    assert!(parsed.absolute_episode_numbers.is_empty());
+    assert!(parsed.special_absolute_episode_numbers.is_empty());
 }
 
 /// Community season 1 is TVDB season 1 episodes 1-14, so an `S01E05` release

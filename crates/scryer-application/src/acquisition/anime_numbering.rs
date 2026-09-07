@@ -892,10 +892,53 @@ pub(crate) fn translate_parsed_episode_numbering(
     });
 
     if let NumberingResolution::Resolved(candidate) = &resolution {
-        parsed.season = Some(candidate.season);
-        parsed.episode_numbers = candidate.episode_numbers.clone();
+        apply_resolved_catalog_coordinates(parsed, candidate, episodes);
     }
     resolution
+}
+
+/// Project a resolved catalog interpretation onto the parser fields every
+/// downstream admission check reads. Absolute coordinates are trustworthy only
+/// when every resolved catalog episode supplies one positive, distinct value;
+/// the parser's raw evidence remains untouched.
+fn apply_resolved_catalog_coordinates(
+    parsed: &mut ParsedEpisodeMetadata,
+    candidate: &NumberingCandidate,
+    episodes: &[Episode],
+) {
+    parsed.season = Some(candidate.season);
+    parsed.season_numbers = vec![candidate.season];
+    parsed.episode_numbers = sorted(&candidate.episode_numbers);
+
+    let absolute_numbers = candidate
+        .episode_ids
+        .iter()
+        .zip(&parsed.episode_numbers)
+        .map(|(episode_id, expected_number)| {
+            let episode = episodes.iter().find(|episode| episode.id == *episode_id)?;
+            (parse_u32(episode.season_number.as_deref()) == Some(candidate.season)
+                && parse_u32(episode.episode_number.as_deref()) == Some(*expected_number))
+            .then(|| parse_u32(episode.absolute_number.as_deref()))?
+            .filter(|absolute| *absolute > 0)
+        })
+        .collect::<Option<Vec<_>>>()
+        .filter(|numbers| {
+            candidate.episode_ids.len() == parsed.episode_numbers.len()
+                && sorted(numbers).len() == numbers.len()
+        })
+        .map(|numbers| sorted(&numbers));
+
+    match absolute_numbers {
+        Some(numbers) => {
+            parsed.absolute_episode = numbers.first().copied();
+            parsed.absolute_episode_numbers = numbers;
+        }
+        None => {
+            parsed.absolute_episode = None;
+            parsed.absolute_episode_numbers.clear();
+        }
+    }
+    parsed.special_absolute_episode_numbers.clear();
 }
 
 // ── search-side translation (phase 3) ─────────────────────────────────────
