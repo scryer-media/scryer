@@ -64,6 +64,15 @@ test("conflicting scores can be resolved without disabling the format", () => {
 });
 
 test("inspection bounds pasted bytes and batch size", () => {
-  assert.equal(inspectCustomFormats(" ".repeat(1_000_001), "sonarr").diagnostics[0]?.code, "arr.json.too_large");
+  const limit = 16 * 1024 * 1024;
+  const format = JSON.stringify({ name: "Format", specifications: [{ implementation: "SourceSpecification", fields: { value: 7 } }] });
+  const atLimit = format + " ".repeat(limit - Buffer.byteLength(format));
+  assert.equal(inspectCustomFormats(atLimit, "sonarr").fatal, false);
+  assert.equal(inspectCustomFormats(atLimit + " ", "sonarr").diagnostics[0]?.code, "arr.json.too_large");
+  // Count UTF-8 bytes, including multi-byte characters inside valid JSON.
+  const unicodeFormat = format.replace("Format", "é");
+  const unicodeAtLimit = unicodeFormat + " ".repeat(limit - Buffer.byteLength(unicodeFormat));
+  assert.equal(inspectCustomFormats(unicodeAtLimit, "sonarr").fatal, false);
+  assert.equal(inspectCustomFormats(unicodeAtLimit + " ", "sonarr").diagnostics[0]?.code, "arr.json.too_large");
   assert.equal(inspectCustomFormats(Array(1_001).fill({}), "sonarr").diagnostics[0]?.code, "arr.formats.too_many");
 });

@@ -9,7 +9,7 @@ import type {
 export type { ArrSource, ArrSpecification, Diagnostic, ImportedCustomFormat, InspectionResult } from "./types";
 
 type JsonRecord = Record<string, unknown>;
-const MAX_PASTED_JSON_BYTES = 1_000_000;
+const MAX_PASTED_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_FORMATS = 1_000;
 const MAX_SPECIFICATIONS = 1_000;
 
