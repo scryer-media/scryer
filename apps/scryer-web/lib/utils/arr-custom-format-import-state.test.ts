@@ -57,6 +57,28 @@ test("clear preference and penalty names get conservative editable starting scor
   assert.deepEqual(collectFormatScores([imported], { [imported.id]: "250" }), { scores: { [imported.id]: 250 } });
 });
 
+test("clearly named surround audio formats get an editable preference recommendation", () => {
+  for (const name of ["5.1 Surround", "7.1 Surround"] as const) {
+    const recommendation = recommendScore(format({ name }), []);
+    assert.deepEqual(recommendation, { value: 100, reasonKey: "settings.arrImportScoreReasonPreference" }, name);
+    assert.equal(defaultScore(format({ name }), []), "100", name);
+  }
+  assert.deepEqual(
+    recommendScore(format({ name: "5.1 Surround", suggestedScores: { default: 250 } }), []),
+    { value: 250, reasonKey: "settings.arrImportScoreReasonExported" },
+  );
+  const [positive] = format().specifications;
+  const mixedSurroundConditions = [
+    { ...positive!, name: "5.1 Surround", negate: false },
+    { ...positive!, name: "Not 6.1 Surround", negate: true },
+    { ...positive!, name: "Not 7.1 Surround", negate: true },
+  ];
+  assert.equal(recommendScore(format({ name: "5.1 Surround", specifications: mixedSurroundConditions }), [])?.value, 100);
+  const negated = format().specifications.map((spec) => ({ ...spec, negate: true }));
+  assert.equal(recommendScore(format({ name: "5.1 Surround", specifications: negated }), []), null);
+  assert.equal(recommendScore(format({ name: "5.1 Audio" }), []), null);
+});
+
 test("neutral names, ambiguous exports, and malformed conditions do not invent scores", () => {
   for (const name of ["HEVC", "HDR", "1080p", "Release group", "No extras", "Not low quality", "LQless"]) {
     assert.equal(recommendScore(format({ name }), []), null, name);
