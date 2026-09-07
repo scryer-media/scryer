@@ -12829,7 +12829,7 @@ async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title
         .add_title(
             &user,
             NewTitle {
-                name: "PSYCHO-PASS".into(),
+                name: "TITLEA-TITLEB".into(),
                 facet: MediaFacet::Anime,
                 monitored: false,
                 ..Default::default()
@@ -12839,7 +12839,7 @@ async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title
         .unwrap();
     let episode =
         create_pack_episode_in_season(&app, &user, &title.id, 1, 3, Some(3), "standard").await;
-    let movie_title = "Psycho-Pass: Sinners of the System - Case.3 In the Realm Beyond Is ____";
+    let movie_title = "Titlea-Titleb: Titlec Titled Titlee Titlef - Case.3 Titleg Titleh Titlei Titlej Titlek ____";
     let link = app
         .services
         .catalog
@@ -12853,15 +12853,15 @@ async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title
         ))
         .await
         .unwrap();
-    let filename = "Psycho-Pass.Sinners.of.the.System.Case.3.In.the.Realm.Beyond.Is.2019.720p.WEB-DL.AV1.AAC2.0-NTb.mkv";
+    let filename = "Titlea-Titleb.Titlec.Titled.Titlee.Titlef.Case.3.Titleg.Titleh.Titlei.Titlej.Titlek.2019.720p.WEB-DL.AV1.AAC2.0-Groupa.mkv";
     for (name, expected) in [
         (filename.to_string(), (None, Some(link.id.clone()))),
         (
-            "Psycho-Pass.S01E03.720p.WEB-DL.mkv".into(),
+            "Titlea-Titleb.S01E03.720p.WEB-DL.mkv".into(),
             (Some(episode.id.clone()), None),
         ),
         (
-            format!("Psycho-Pass.S01E03.{filename}"),
+            format!("Titlea-Titleb.S01E03.{filename}"),
             (Some(episode.id.clone()), None),
         ),
     ] {
@@ -12870,7 +12870,7 @@ async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title
         let completed = series_pack_completed_download(
             "foreign-movie",
             &title.id,
-            "Psycho-Pass.Sinners.Case3.Foreign.Weaver",
+            "Titlea-Titleb.Titlec.Case3.Foreign.Weaver",
             source_dir.path(),
         );
         let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
@@ -12901,7 +12901,7 @@ async fn manual_import_preview_matches_foreign_series_movie_before_numeric_title
     assert!(matches!(
         matcher(
             std::slice::from_ref(&link),
-            "Psycho-Pass.Case.3.2019.mkv",
+            "Titlea-Titleb.Case.3.2019.mkv",
             Some(2019)
         ),
         SeriesMovieFilenameMatch::NoMatch

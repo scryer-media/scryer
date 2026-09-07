@@ -1,10 +1,9 @@
 # Sourced release-name corpus
 
-This offline corpus contains 1,500 distinct source names, collected on
-2026-09-07 and anonymized before inclusion: 500 movies and 500 series from
-[srrDB's public API](https://api.srrdb.com/v1/docs), and 500 anime releases from
-[Nyaa's public anime listings](https://nyaa.si/?f=0&c=1_2).
-Nyaa names are uploader release names; they are not necessarily scene releases.
+This offline corpus contains 1,500 anonymized release-shaped fixtures:
+500 movies, 500 series and 500 anime releases. It retains varied filename
+syntax and independently reviewed expectations, without collection-site
+references or original-name provenance.
 
 Anime coverage consists of 100 episodic releases, 143 unseasoned episode packs,
 93 ranges within named seasons, 18 single-season packs, 106 multi-season packs,
@@ -14,32 +13,28 @@ Generic `Complete` or `Batch` markers are not evidence of an entire series.
 The source selection was deliberately varied rather than randomly sampled.
 It is a regression corpus, not a population accuracy estimate.
 
-## Anonymization and provenance
+## Anonymization
 
-The committed fixtures replace title, alternate-title, cour-title,
-episode-title and release-group words with alphabetic sentinels. Movie/series
-inputs also mask unknown text outside their initial annotations. The reviewed
-anime identity offsets in `anime_annotations.json` preserve every character
-outside those spans, including fused Chinese range labels, language tags, pack
-markers, punctuation, source names, quality and codecs.
-Numeric title words use numeric sentinels; checksum tags use a hexadecimal
-sentinel. Consequently some different source names become identical anonymous
-inputs; each original still has its own assertions and fingerprint.
+Title, alternate-title, cour-title, episode-title, contributor and release-group
+words use alphabetic sentinels. Unknown descriptive text uses `Text` sentinels.
+Numeric identity words use numeric sentinels and checksum tags use one fixed
+hexadecimal sentinel. Scope words that also occur inside titles, punctuation,
+Unicode range/language labels and technical metadata remain to exercise parser
+boundaries. No original names, source domains, source IDs, URLs, original-name
+hashes, original string lengths or original identity offsets are retained.
 
-Only source domains and SHA-256 fingerprints of the original names are stored
-in the fixtures. Original names, source IDs, source URLs containing names,
-retrieval timestamps, raw response caches and original collector annotations
-remain in the private collection directory and are not inputs to tests. The
-reviewed anime annotations retain only numeric identity offsets, independent
-expected facts and review notes. No media, torrent,
-magnet, SRR or NFO content is included.
+Case IDs preserve the 1,500-case denominator and link reviewed annotations to
+the frozen mismatch baseline. Some cases have identical anonymized inputs;
+they remain separate cases with their independent expected facts. The reviewed
+anime annotations retain expected facts, evidence, shapes and review notes.
+The Rust harness checks those facts and frozen case IDs. Sanitization is
+reviewed alongside fixture changes; no name or source-site list is embedded
+in the test code.
 
-The collection and initial annotations were produced with deterministic syntax
-rules. A subsequent source-by-source review inspected all 500 anime names,
-identity spans, contexts and expectations. It corrected expected values in
-340 cases, anonymous inputs in 189, and contexts in 148; these counts overlap.
-Reviewed anime facts are stored explicitly and are checked against the
-annotations, fingerprints, evidence, and contexts by the Rust corpus harness.
+The earlier assertion review corrected expected values in 340 anime cases,
+anonymous inputs in 189, and contexts in 148; these counts overlap. The later
+privacy pass removed residual nontechnical words from four inputs without
+changing any expected facts, accepted mismatches or frozen baseline mismatches.
 Sentinels change vocabulary and script,
 so this corpus does not establish correctness of original title matching or
 all Unicode title behavior.
@@ -140,9 +135,8 @@ multi-season identities, complete-series markers, and technical metadata
 around multiple aliases. Episodic anime passed 96/100; packs passed 216/400.
 Failures among ranges within named seasons predominantly lost explicit episode
 coverage or claimed a whole season. Both explicitly partial season packs passed.
-The 500 source names produce 459 distinct anonymous
-inputs; repeats after anonymization remain represented by separate source
-fingerprints. Failures identify behavior to investigate and do not
+The 500 anime cases produce 459 distinct anonymous
+inputs; repeats after anonymization remain represented by separate case IDs. Failures identify behavior to investigate and do not
 establish that every mismatch is a regression introduced in one release.
 
 Validation results are reported by the Rust corpus harness, including accepted,

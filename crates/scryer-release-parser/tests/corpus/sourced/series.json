@@ -1,11 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "category": "series",
   "cases": [
     {
       "id": "series-0001",
-      "source": "srrdb.com",
-      "source_fingerprint": "5b84e23e828f17c593021b56a9d223f0d2b262ae97b02039d4bc7ae53004f5d0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E09.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -49,8 +47,6 @@
     },
     {
       "id": "series-0002",
-      "source": "srrdb.com",
-      "source_fingerprint": "4b0fbf45efc63fde7e78fa4140d929d3fc67a19738404d29c91e7bbdb0dc218e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E08.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -94,8 +90,6 @@
     },
     {
       "id": "series-0003",
-      "source": "srrdb.com",
-      "source_fingerprint": "8285620e9c622e06e684d8560320c119f9ed903eaf4a0701484e976a39225359",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E10.FiNAL.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -139,8 +133,6 @@
     },
     {
       "id": "series-0004",
-      "source": "srrdb.com",
-      "source_fingerprint": "f7f2be6af0be53f56ad7347f5302c91b93e2319268b860f0139f6fc45a737823",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E05.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -184,8 +176,6 @@
     },
     {
       "id": "series-0005",
-      "source": "srrdb.com",
-      "source_fingerprint": "f171b075ee1237f15968d8fd737e734c3a0e668239b3c94583176a5227c12561",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E07.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -229,8 +219,6 @@
     },
     {
       "id": "series-0006",
-      "source": "srrdb.com",
-      "source_fingerprint": "f51b8367584484c1c059d9182c1c6ec036edc48d041a5ba3bf49e8670a3af2c3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E06.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -274,8 +262,6 @@
     },
     {
       "id": "series-0007",
-      "source": "srrdb.com",
-      "source_fingerprint": "b79e7c2002327fa8bd327a9c0e7cede592809a49b499f090ecae0eac0b1408e2",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E04.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -319,8 +305,6 @@
     },
     {
       "id": "series-0008",
-      "source": "srrdb.com",
-      "source_fingerprint": "426b17723de86467e789d18368bafa57be3bc39f294deea6b4995677293eb7cf",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E03.MULTi.1080p.WEB.x264-Groupf",
       "context": {
@@ -364,8 +348,6 @@
     },
     {
       "id": "series-0009",
-      "source": "srrdb.com",
-      "source_fingerprint": "8e711aa75a7202cc3f47a36efec371e21c4c3e325eb0a70a6a69e358e23363a7",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E08.iTALiAN.iNTERNAL.720p.WEB.H264-Groupc",
       "context": {
@@ -409,8 +391,6 @@
     },
     {
       "id": "series-0010",
-      "source": "srrdb.com",
-      "source_fingerprint": "379a638a3725adf9b2f85e66f54253cc11540362be2999a6432e5dbabaa9ac40",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E07.iTALiAN.iNTERNAL.720p.WEB.H264-Groupc",
       "context": {
@@ -454,8 +434,6 @@
     },
     {
       "id": "series-0011",
-      "source": "srrdb.com",
-      "source_fingerprint": "8affae515b8df06eed89d2c5665600bacf0a2422a2f729e7daa5fb2aed491cf2",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E06.iTALiAN.iNTERNAL.720p.WEB.H264-Groupc",
       "context": {
@@ -499,8 +477,6 @@
     },
     {
       "id": "series-0012",
-      "source": "srrdb.com",
-      "source_fingerprint": "fe4557bf76b4a3d96b0fe0f55bd35bb9e7fcb1921ba8c043839ab37d1c4de013",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E05.iTALiAN.iNTERNAL.720p.WEB.H264-Groupc",
       "context": {
@@ -544,8 +520,6 @@
     },
     {
       "id": "series-0013",
-      "source": "srrdb.com",
-      "source_fingerprint": "d6abf0bcc656aa461b601fb18448788e7d5be825b12780865aa552bb7bd39515",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E04.iTALiAN.iNTERNAL.720p.WEB.H264-Groupc",
       "context": {
@@ -589,8 +563,6 @@
     },
     {
       "id": "series-0014",
-      "source": "srrdb.com",
-      "source_fingerprint": "f62bfef788f004681157f47687bc83204797d453532c92d739f1d9dadc29edfc",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S05E10.POLISH.WEB.H264-Groupd",
       "context": {
@@ -632,8 +604,6 @@
     },
     {
       "id": "series-0015",
-      "source": "srrdb.com",
-      "source_fingerprint": "8623a6f70f94c3bc705823fc1b57d0ec359c3bfb29ca2ccf956fc16c1e6e8ee1",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S05E10.POLISH.720p.WEB.H264-Groupd",
       "context": {
@@ -677,8 +647,6 @@
     },
     {
       "id": "series-0016",
-      "source": "srrdb.com",
-      "source_fingerprint": "5fe6fcad19dd13c2ebf897f59919d3764f0f335d247cb651d4ea47b39a89e030",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E08.POLISH.720p.WEB.H264-Groupd",
       "context": {
@@ -722,8 +690,6 @@
     },
     {
       "id": "series-0017",
-      "source": "srrdb.com",
-      "source_fingerprint": "b5647a905366178fbd057e702a90651c3a845d40f042030c4b693c05df616483",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E10.POLISH.WEB.H264-Groupd",
       "context": {
@@ -765,8 +731,6 @@
     },
     {
       "id": "series-0018",
-      "source": "srrdb.com",
-      "source_fingerprint": "be28782107bf89eb28af6553a76f3d028005800f06c2c14763bc85c7b8b4dd00",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E10.POLISH.720p.WEB.H264-Groupd",
       "context": {
@@ -810,8 +774,6 @@
     },
     {
       "id": "series-0019",
-      "source": "srrdb.com",
-      "source_fingerprint": "5383bd4bb6cbb07dcc7668eff70b3ebf7a216884abb7707683f10378e0d59c61",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E10.POLISH.1080p.WEB.H264-Groupd",
       "context": {
@@ -855,8 +817,6 @@
     },
     {
       "id": "series-0020",
-      "source": "srrdb.com",
-      "source_fingerprint": "02c31660365c42abbaf32a08bcafdbd09238bbe77a3389c18cd004c7c835d882",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E09.POLISH.WEB.H264-Groupd",
       "context": {
@@ -898,8 +858,6 @@
     },
     {
       "id": "series-0021",
-      "source": "srrdb.com",
-      "source_fingerprint": "04031567fd135c1b1d55f9483bfdabb9c4e9295a239f240a1728820dddf2a716",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E09.POLISH.720p.WEB.H264-Groupd",
       "context": {
@@ -943,8 +901,6 @@
     },
     {
       "id": "series-0022",
-      "source": "srrdb.com",
-      "source_fingerprint": "d13ff3f43eebeeec190f6fff8d3d824764623a5d5a79fd1143ab145eb6cadd7d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E01.GERMAN.DL.Episodee.1080p.WEB.H264-Groupf",
       "context": {
@@ -988,8 +944,6 @@
     },
     {
       "id": "series-0023",
-      "source": "srrdb.com",
-      "source_fingerprint": "a566ed8a960403c06e8367bddb65748c78f16776f01375ffa4435d0bd4b89355",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E09.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1031,8 +985,6 @@
     },
     {
       "id": "series-0024",
-      "source": "srrdb.com",
-      "source_fingerprint": "d7b092f37af5fdc92a7e9f190be06b2d943ba96d033134c17b7d396d7c708cdb",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E03.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1074,8 +1026,6 @@
     },
     {
       "id": "series-0025",
-      "source": "srrdb.com",
-      "source_fingerprint": "e78f006982eedc5b9419b8d41dbdf0ef36028093914aed870947c748b147ef77",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E03.GERMAN.DL.Episodee.720p.WEB.H264-Groupf",
       "context": {
@@ -1119,8 +1069,6 @@
     },
     {
       "id": "series-0026",
-      "source": "srrdb.com",
-      "source_fingerprint": "81d93e54f37b6213f6775d6498a4347b986c0a96e0cb105ab7d6dc7a72b34c74",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E03.GERMAN.DL.Episodee.1080p.WEB.H264-Groupf",
       "context": {
@@ -1164,8 +1112,6 @@
     },
     {
       "id": "series-0027",
-      "source": "srrdb.com",
-      "source_fingerprint": "d488a3dd7154bcac6e5878d95c4adfe4af6edc6ebaf84598ec3324fe7712593c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E02.GERMAN.DL.Episodee.1080p.WEB.H264-Groupf",
       "context": {
@@ -1209,8 +1155,6 @@
     },
     {
       "id": "series-0028",
-      "source": "srrdb.com",
-      "source_fingerprint": "45b0b5c0e00aeaa732ffaf86fff2fff872a3ddb4b155eba58c9713932416daaa",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E02.GERMAN.DL.Episodee.720p.WEB.H264-Groupf",
       "context": {
@@ -1254,8 +1198,6 @@
     },
     {
       "id": "series-0029",
-      "source": "srrdb.com",
-      "source_fingerprint": "a35fb495dec08ee7a060bb86ec792f33c2579264fe8302b76ab4aa7af6c1c629",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E01.GERMAN.DL.Episodee.720p.WEB.H264-Groupf",
       "context": {
@@ -1299,8 +1241,6 @@
     },
     {
       "id": "series-0030",
-      "source": "srrdb.com",
-      "source_fingerprint": "26041225f721a983fa4faac64ce3a76230a3f35b68f86b48554db6c18f2cbce6",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E10.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1342,8 +1282,6 @@
     },
     {
       "id": "series-0031",
-      "source": "srrdb.com",
-      "source_fingerprint": "d9f1bc5a085b5b62d005b4db82f36e8782967e74dd3ccfcb6c5ef7d600813733",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E08.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1385,8 +1323,6 @@
     },
     {
       "id": "series-0032",
-      "source": "srrdb.com",
-      "source_fingerprint": "7af7f5f4940cd90069f50e6e10796a94ffe1dc838ec53458c599e5f840351f4e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E07.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1428,8 +1364,6 @@
     },
     {
       "id": "series-0033",
-      "source": "srrdb.com",
-      "source_fingerprint": "00e7712dd3d051989780298851c9e8d15a0dd6546bccebc31406d244037594fe",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E06.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1471,8 +1405,6 @@
     },
     {
       "id": "series-0034",
-      "source": "srrdb.com",
-      "source_fingerprint": "a7882f1cfb5602b52174f3ba48f6268daa4d17595b26120ee432faaf9a42959d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E05.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1514,8 +1446,6 @@
     },
     {
       "id": "series-0035",
-      "source": "srrdb.com",
-      "source_fingerprint": "001d90bebb3727621d7bf0441b5c514fb25bb1ef63a8fb6123a178bf3aefd678",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E04.SPANiSH.iNTERNAL.DVDRip.x264-Groupd",
       "context": {
@@ -1557,8 +1487,6 @@
     },
     {
       "id": "series-0036",
-      "source": "srrdb.com",
-      "source_fingerprint": "46e18a2523927c1e603c12838663e015febf71a8d34de4e5a29abfb8226dca66",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.FINAL.MULTI.2160p.WEB.H265-Groupe",
       "context": {
@@ -1602,8 +1530,6 @@
     },
     {
       "id": "series-0037",
-      "source": "srrdb.com",
-      "source_fingerprint": "095948fe5c860fcc2c7b502c45611dadaa44d209af580071139a4ef96f0add7b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E05.FRENCH.720p.WEB.H264-Groupe",
       "context": {
@@ -1647,8 +1573,6 @@
     },
     {
       "id": "series-0038",
-      "source": "srrdb.com",
-      "source_fingerprint": "688e39e99cd45e93fc30f25ac9a12c8b0c5454fe861381d072fe260f167f5dea",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.GERMAN.WEBRiP.x264-Groupe",
       "context": {
@@ -1690,8 +1614,6 @@
     },
     {
       "id": "series-0039",
-      "source": "srrdb.com",
-      "source_fingerprint": "6ca135b75e9fd2a55d902ae3047094f35bbb1bfdbbf209659fdc747a610f3ec4",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E08.FiNAL.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -1735,8 +1657,6 @@
     },
     {
       "id": "series-0040",
-      "source": "srrdb.com",
-      "source_fingerprint": "fb2286e8cedce48d475f40238e04ba7365647a68aa1adc4bc0109886ced32856",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E07.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -1780,8 +1700,6 @@
     },
     {
       "id": "series-0041",
-      "source": "srrdb.com",
-      "source_fingerprint": "a0ada0425575aafeb007825e6ae94e01b75f598564b935f406e8e952ab3c4504",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E06.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -1825,8 +1743,6 @@
     },
     {
       "id": "series-0042",
-      "source": "srrdb.com",
-      "source_fingerprint": "23bd783ff6182f2e631c47d165445e738ef30a8780b0e8c45a510de6fbc36ce4",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E05.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -1870,8 +1786,6 @@
     },
     {
       "id": "series-0043",
-      "source": "srrdb.com",
-      "source_fingerprint": "a12c5d6d2f5a95b92ba85ee9d9b4961f9d5e0d2e7669d01af42a34897fb1981b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E04.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -1915,8 +1829,6 @@
     },
     {
       "id": "series-0044",
-      "source": "srrdb.com",
-      "source_fingerprint": "ebb129e6300d061edc637b288c8ecdb510ba4ec48a5f2e2a4dccd7a34efee7d5",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E03.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -1960,8 +1872,6 @@
     },
     {
       "id": "series-0045",
-      "source": "srrdb.com",
-      "source_fingerprint": "be9ffdf7587b6e989d97fcea5d7cd8d66c62bcd816ded924bb9e02ecd157befe",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E02.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -2005,8 +1915,6 @@
     },
     {
       "id": "series-0046",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e1258a25b451a1b976ebc4f6ef7d4c54401782d6f7034a3f66230a8a257f045",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E01.Episodef.SUBFRENCH.1080p.WEB.x264-Groupg",
       "context": {
@@ -2050,8 +1958,6 @@
     },
     {
       "id": "series-0047",
-      "source": "srrdb.com",
-      "source_fingerprint": "3189cf7de9ddaf245b0b66ec5187e37628dfd9049908ef1cb5cbc96aa2896755",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.720p.WEB.H264-Groupe",
       "context": {
@@ -2095,8 +2001,6 @@
     },
     {
       "id": "series-0048",
-      "source": "srrdb.com",
-      "source_fingerprint": "6208e5fbe73bef8d060fadbb1d48194cd7d03c72fb79d4744bbcd4f69ccbb368",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.German.DL.HDR.2160p.WEB.h265.INTERNAL-Groupe",
       "context": {
@@ -2140,8 +2044,6 @@
     },
     {
       "id": "series-0049",
-      "source": "srrdb.com",
-      "source_fingerprint": "aa1d8267e4c75c17705bd2a9c9ffa4cd3ad59321150593a3b7a3c00e1bf91a96",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.German.DL.720p.WEB.h264-Groupe",
       "context": {
@@ -2185,8 +2087,6 @@
     },
     {
       "id": "series-0050",
-      "source": "srrdb.com",
-      "source_fingerprint": "c61c6b7c1932e366afe69a44965f1d70448b23d0a297ef9b4f9a64876011ffe0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.POLISH.WEB.H264-Groupe",
       "context": {
@@ -2228,8 +2128,6 @@
     },
     {
       "id": "series-0051",
-      "source": "srrdb.com",
-      "source_fingerprint": "c4b7f3a748d8cd6515b13f3ce55b70d7f63db6715dcd547d47d6b5d16fc1f61e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S03E08.POLISH.DV.HDR.2160p.WEB.H265-Groupe",
       "context": {
@@ -2273,8 +2171,6 @@
     },
     {
       "id": "series-0052",
-      "source": "srrdb.com",
-      "source_fingerprint": "91e77cc71cc3a5664aa0b16ba3f5d7ba0207a62701b10d64883e6f26e704abd2",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.Titlef.Titlec.Titleg.S03E14.1080p.WEB.h264-Grouph",
       "context": {
@@ -2318,8 +2214,6 @@
     },
     {
       "id": "series-0053",
-      "source": "srrdb.com",
-      "source_fingerprint": "c4350248cf1c7d707e3d162bd0af4f0e48410db133731aeb7396902bd60c5492",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E07.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2363,8 +2257,6 @@
     },
     {
       "id": "series-0054",
-      "source": "srrdb.com",
-      "source_fingerprint": "7c7392fc41d6135fa5260ed2d3fb22ef946a71c779eb7327b7a7017fa6b66692",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E05.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2408,8 +2300,6 @@
     },
     {
       "id": "series-0055",
-      "source": "srrdb.com",
-      "source_fingerprint": "bfdb86dc30ea7363e98a1476c9f489dcaef6e29c09ccac0d7b44157e6f8f7336",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E03.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2453,8 +2343,6 @@
     },
     {
       "id": "series-0056",
-      "source": "srrdb.com",
-      "source_fingerprint": "8ca8101680bf5385f31ee6ab46fb90966a096b48a5a9cd1495fb75d23f7c7f41",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.S03E14.1080p.WEB.h264-Groupf",
       "context": {
@@ -2498,8 +2386,6 @@
     },
     {
       "id": "series-0057",
-      "source": "srrdb.com",
-      "source_fingerprint": "92c95f837caa16eac82ec41cfadf6af400e9729dbaf02674f930a7ad44b7bd4f",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.Titlef.Titlec.Titleg.S03E13.1080p.WEB.h264-Grouph",
       "context": {
@@ -2543,8 +2429,6 @@
     },
     {
       "id": "series-0058",
-      "source": "srrdb.com",
-      "source_fingerprint": "23417dfc5a6bd15012770aaa874d6d70e79c88df52cbc645d08d17f03c158925",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.S03E13.1080p.WEB.h264-Groupf",
       "context": {
@@ -2588,8 +2472,6 @@
     },
     {
       "id": "series-0059",
-      "source": "srrdb.com",
-      "source_fingerprint": "4e9aba56e66e1c4915569203e09fbca468fdedde25b1df52c48c5367000a409d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E02.GERMAN.DL.Episoded.1080p.WEB.H264-Groupe",
       "context": {
@@ -2633,8 +2515,6 @@
     },
     {
       "id": "series-0060",
-      "source": "srrdb.com",
-      "source_fingerprint": "8ff1304c138ebc3af8cfcd8903eb55a240a69fa0bd03969077a5e3ac1d88a1ed",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E02.GERMAN.DL.Episoded.720p.WEB.H264-Groupe",
       "context": {
@@ -2678,8 +2558,6 @@
     },
     {
       "id": "series-0061",
-      "source": "srrdb.com",
-      "source_fingerprint": "a5ae74ac7b854818afbf28d807ac633b8500c2f736e0e4fb55c162a4d23e1631",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E01.GERMAN.DL.Episoded.1080p.WEB.H264-Groupe",
       "context": {
@@ -2723,8 +2601,6 @@
     },
     {
       "id": "series-0062",
-      "source": "srrdb.com",
-      "source_fingerprint": "f0bd717ddf2ca904391b718f34ff048192cc683261d673f3e219047d27a94a02",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E01.GERMAN.DL.Episoded.720p.WEB.H264-Groupe",
       "context": {
@@ -2768,8 +2644,6 @@
     },
     {
       "id": "series-0063",
-      "source": "srrdb.com",
-      "source_fingerprint": "10eb22ee3ac79b7c4e3e4ec6fb51914ddada48c7a1b68f058c66e1d942c66664",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E10.FINAL.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2813,8 +2687,6 @@
     },
     {
       "id": "series-0064",
-      "source": "srrdb.com",
-      "source_fingerprint": "d8c215acb3d5f1706f8f67d53d076e8b395c711c319caa4425a8a4d3bd49361a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E09.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2858,8 +2730,6 @@
     },
     {
       "id": "series-0065",
-      "source": "srrdb.com",
-      "source_fingerprint": "75b38c81ea8719b1b2452fb063ee65b9a9404675f29c0de7d98547b482e2696a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E08.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2903,8 +2773,6 @@
     },
     {
       "id": "series-0066",
-      "source": "srrdb.com",
-      "source_fingerprint": "0f5cb9fc15c62d6d625f2bf90e750904a4ebce2ce9ad1563a7b53b8a906a9459",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E06.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2948,8 +2816,6 @@
     },
     {
       "id": "series-0067",
-      "source": "srrdb.com",
-      "source_fingerprint": "805eef188df1ddfc594f6e58ce342ae9739f841070292b217c64768fd2f426d7",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E04.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -2993,8 +2859,6 @@
     },
     {
       "id": "series-0068",
-      "source": "srrdb.com",
-      "source_fingerprint": "72f5d4c316568f1b7359d732e4081fc917dcaec707e2ecbc760a91efac342e0f",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.Titlef.Titlec.Titleg.S03E12.1080p.WEB.h264-Grouph",
       "context": {
@@ -3038,8 +2902,6 @@
     },
     {
       "id": "series-0069",
-      "source": "srrdb.com",
-      "source_fingerprint": "07fc6fe529a016f419b70e3efedd467bc93a14c1b8575509ba7785c6a7cf8a56",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.S03E12.1080p.WEB.h264-Groupf",
       "context": {
@@ -3083,8 +2945,6 @@
     },
     {
       "id": "series-0070",
-      "source": "srrdb.com",
-      "source_fingerprint": "dcec38d256331318e5b58338a13d7e66bbb73055e831c0e98fcc9d1631175951",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.Titlef.Titlec.Titleg.S03E11.1080p.WEB.h264-Grouph",
       "context": {
@@ -3128,8 +2988,6 @@
     },
     {
       "id": "series-0071",
-      "source": "srrdb.com",
-      "source_fingerprint": "0700c7fe44bc701672e8ec1efdeacc89239bcf6cc56687127a38700ce19f4fe0",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.S03E11.1080p.WEB.h264-Groupf",
       "context": {
@@ -3173,8 +3031,6 @@
     },
     {
       "id": "series-0072",
-      "source": "srrdb.com",
-      "source_fingerprint": "f056ab2865b5b2c83110cbd981b7a7327aa67363562442693795a3e1ea51d5c2",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S14E03.Episoded.Episodee.Episodef.1080p.WEBRip.x264-Groupg",
       "context": {
@@ -3218,8 +3074,6 @@
     },
     {
       "id": "series-0073",
-      "source": "srrdb.com",
-      "source_fingerprint": "223c06e55c139d9da175d60fad86dda15f69c638c6a6bd8da7140e9c2ad80f08",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.Titlef.Titlec.Titleg.S03E10.1080p.WEB.h264-Grouph",
       "context": {
@@ -3263,8 +3117,6 @@
     },
     {
       "id": "series-0074",
-      "source": "srrdb.com",
-      "source_fingerprint": "59550156921d367f21580511215ed26b5580f4fc01b4fac95968000b657e4568",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.S03E10.1080p.WEB.h264-Groupf",
       "context": {
@@ -3308,8 +3160,6 @@
     },
     {
       "id": "series-0075",
-      "source": "srrdb.com",
-      "source_fingerprint": "f9144e6d354776f14074c8ea7d48cd2ccd6d21ea3c86e9da838796bb85a76519",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E08.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3353,8 +3203,6 @@
     },
     {
       "id": "series-0076",
-      "source": "srrdb.com",
-      "source_fingerprint": "57ba41e595b05451ccbbb2496058a804c26613b6a96ef5a2ba49524f96364302",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E06.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3398,8 +3246,6 @@
     },
     {
       "id": "series-0077",
-      "source": "srrdb.com",
-      "source_fingerprint": "b09744bdfa71c0b49c0d9e521a896ad007c74614aac542025153fa6bafe14b86",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E07.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3443,8 +3289,6 @@
     },
     {
       "id": "series-0078",
-      "source": "srrdb.com",
-      "source_fingerprint": "13d1deca15ba6557e5fccc8920ad63a67959d57420edcf9774ed6d5182656047",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E04.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3488,8 +3332,6 @@
     },
     {
       "id": "series-0079",
-      "source": "srrdb.com",
-      "source_fingerprint": "db31708bf918609c2c00e34aa393dfcebe9366601d8d705af03555a88fafe4d5",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E05.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3533,8 +3375,6 @@
     },
     {
       "id": "series-0080",
-      "source": "srrdb.com",
-      "source_fingerprint": "bfb3c2c87074a67f8bc975f3b3f7f84e3211a7ce4e3eaeb95efcda1b564041f4",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E03.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3578,8 +3418,6 @@
     },
     {
       "id": "series-0081",
-      "source": "srrdb.com",
-      "source_fingerprint": "906ddf2a0b7094ba42bb9e73e159adb9676a94d926538fdb0211e2178ce9b112",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E02.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3623,8 +3461,6 @@
     },
     {
       "id": "series-0082",
-      "source": "srrdb.com",
-      "source_fingerprint": "ff963ad3fe681441e335b247f91eb087213ed713f7476ddcd97cadc891527475",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E01.iTALiAN.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -3668,8 +3504,6 @@
     },
     {
       "id": "series-0083",
-      "source": "srrdb.com",
-      "source_fingerprint": "499b2d4351f670e65eed24e1da2fa5d37eab6bd21ea80574a57f1247c6727f15",
       "shape": "episodic",
       "release": "Titlea.S02E10.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -3711,8 +3545,6 @@
     },
     {
       "id": "series-0084",
-      "source": "srrdb.com",
-      "source_fingerprint": "df6ad4e6f5ee110313cb8cc22c16a029f462c5b0ffb8494adb236f1bd4db63ec",
       "shape": "episodic",
       "release": "Titlea.S02E09.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -3754,8 +3586,6 @@
     },
     {
       "id": "series-0085",
-      "source": "srrdb.com",
-      "source_fingerprint": "2259f18850c8b410ae2131da9ff13b1f4c63c9c3890d6da29b14510afe02ada3",
       "shape": "episodic",
       "release": "Titlea.S02E08.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -3797,8 +3627,6 @@
     },
     {
       "id": "series-0086",
-      "source": "srrdb.com",
-      "source_fingerprint": "78481fa8d48170f748fa80ac3e0bd31864c69791ffe69965692bfc6aaa0635fc",
       "shape": "episodic",
       "release": "Titlea.S02E07.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -3840,8 +3668,6 @@
     },
     {
       "id": "series-0087",
-      "source": "srrdb.com",
-      "source_fingerprint": "611569fb3e80a239db5a940941fab1596dbfe002c8abfdb7608b9fe6937f146e",
       "shape": "episodic",
       "release": "Titlea.S02E06.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -3883,8 +3709,6 @@
     },
     {
       "id": "series-0088",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e9e0ef31dda9b211b7a591ae94151ed9fc744f05e34bb3ec7d66d4762d05267",
       "shape": "episodic",
       "release": "Titlea.S02E05.Episodeb.Episodec.Episoded.German.DL.720p.Texte.H264-Groupf",
       "context": {
@@ -3926,8 +3750,6 @@
     },
     {
       "id": "series-0089",
-      "source": "srrdb.com",
-      "source_fingerprint": "a98e87c8ac0da1c4324da98f9d2b3779f0d0cd22a91bb344d701dbccc9099524",
       "shape": "episodic",
       "release": "Titlea.S02E04.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -3969,8 +3791,6 @@
     },
     {
       "id": "series-0090",
-      "source": "srrdb.com",
-      "source_fingerprint": "9abec93163b4bd20681f4b5be35aefe2e6fc5bfc1ec8cabece8d7606bf74a661",
       "shape": "episodic",
       "release": "Titlea.S02E03.Episodeb.German.DL.720p.Textc.H264-Groupd",
       "context": {
@@ -4012,8 +3832,6 @@
     },
     {
       "id": "series-0091",
-      "source": "srrdb.com",
-      "source_fingerprint": "97bcbd69485bdcc490b84e3ea471db890e95784e80f4036d3cc8d4e36f8db4b6",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E00.Episodec.GERMAN.DL.HDR.2160p.WEB.h265-Groupd",
       "context": {
@@ -4057,8 +3875,6 @@
     },
     {
       "id": "series-0092",
-      "source": "srrdb.com",
-      "source_fingerprint": "b06f7a7daf2e362102cb5be44e05fbd3895482818c9b14ab0015daed1dd9050e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E00.Episodec.GERMAN.DL.DV.2160p.WEB.h265-Groupd",
       "context": {
@@ -4102,8 +3918,6 @@
     },
     {
       "id": "series-0093",
-      "source": "srrdb.com",
-      "source_fingerprint": "027878d64c369f31f88fb910bfb54c71ff2dbcbf738b1d31e36e2da9a3ebd215",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E00.Episodec.GERMAN.DL.720p.WEB.h264-Groupd",
       "context": {
@@ -4147,8 +3961,6 @@
     },
     {
       "id": "series-0094",
-      "source": "srrdb.com",
-      "source_fingerprint": "a168fd8a89b10d399d5ba39104caefe10a72698dea964637a2cc0c14b1f4f6be",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E00.Episodec.GERMAN.DL.1080p.WEB.h264-Groupd",
       "context": {
@@ -4192,8 +4004,6 @@
     },
     {
       "id": "series-0095",
-      "source": "srrdb.com",
-      "source_fingerprint": "442c97e60438e8e70b1a5e1c7542edee75755190ccee3b19f8f1344e62a6d3c6",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E07.GERMAN.WEBRiP.x264-Groupc",
       "context": {
@@ -4235,8 +4045,6 @@
     },
     {
       "id": "series-0096",
-      "source": "srrdb.com",
-      "source_fingerprint": "dafd16bee2e0e9e6b0c490c11aa40feb6372b9febfa958a736091389afc710d6",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E08.GERMAN.WEBRiP.x264-Groupc",
       "context": {
@@ -4278,8 +4086,6 @@
     },
     {
       "id": "series-0097",
-      "source": "srrdb.com",
-      "source_fingerprint": "ff217b897628f7ad8117c47427dfa87da8d8d7b6e060d714f7f7dfa153b3082b",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E02.GERMAN.WEBRiP.x264-Groupc",
       "context": {
@@ -4321,8 +4127,6 @@
     },
     {
       "id": "series-0098",
-      "source": "srrdb.com",
-      "source_fingerprint": "8000b077963807959f647144b1c672675f1bac03640396ce795a619053a50cf7",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E01.GERMAN.WEBRiP.x264-Groupc",
       "context": {
@@ -4364,8 +4168,6 @@
     },
     {
       "id": "series-0099",
-      "source": "srrdb.com",
-      "source_fingerprint": "cc3ed9b41a16b93c0a643f0c59c2b55649eb5b642b180da2e2cca5c0ae5bb224",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E04.2160p.WEB.H265-Grouph",
       "context": {
@@ -4409,8 +4211,6 @@
     },
     {
       "id": "series-0100",
-      "source": "srrdb.com",
-      "source_fingerprint": "462188b71692337890dc0565791cc1444d9969c5ec57b854a2c11793d37c7801",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E06.1080p.WEB.h264-Grouph",
       "context": {
@@ -4454,8 +4254,6 @@
     },
     {
       "id": "series-0101",
-      "source": "srrdb.com",
-      "source_fingerprint": "398cbce51ac78b69745bffc0cd7f8bb853a58d8b5e2743416345e05980975320",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E02.2160p.WEB.H265-Grouph",
       "context": {
@@ -4499,8 +4297,6 @@
     },
     {
       "id": "series-0102",
-      "source": "srrdb.com",
-      "source_fingerprint": "9b73607a7d74896e18069da96a69f53c6d7f8484f9db18bfb57d209fc246fc59",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E03.2160p.WEB.H265-Grouph",
       "context": {
@@ -4544,8 +4340,6 @@
     },
     {
       "id": "series-0103",
-      "source": "srrdb.com",
-      "source_fingerprint": "422d179906fc81f7e3a3ce2483fc1b0073bc8680cc5239785b4671de364a7e9e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E06.2160p.WEB.H265-Grouph",
       "context": {
@@ -4589,8 +4383,6 @@
     },
     {
       "id": "series-0104",
-      "source": "srrdb.com",
-      "source_fingerprint": "85c5e6e5367339d0c318496b549a95296a4d1c92cc8a08963ec9676cbf85b749",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E01.2160p.WEB.H265-Grouph",
       "context": {
@@ -4634,8 +4426,6 @@
     },
     {
       "id": "series-0105",
-      "source": "srrdb.com",
-      "source_fingerprint": "0b36ebad09c09977e485a18a92c0e1ac4115e5bde9d387f161134d5c2a6ad0d9",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E05.2160p.WEB.H265-Grouph",
       "context": {
@@ -4679,8 +4469,6 @@
     },
     {
       "id": "series-0106",
-      "source": "srrdb.com",
-      "source_fingerprint": "0b62d2d2e44882651ac3d3dfe652a02b4515925ba64be8282c576116ef9bda7e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titlea.Titled.Titlee.Titlef.Titleg.S01E01.1080p.WEB.h264-Grouph",
       "context": {
@@ -4724,8 +4512,6 @@
     },
     {
       "id": "series-0107",
-      "source": "srrdb.com",
-      "source_fingerprint": "494219c757e5aa4870aba0edf6f6a0b0d013946e69c56c20973a59d234fb454f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E17.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -4767,8 +4553,6 @@
     },
     {
       "id": "series-0108",
-      "source": "srrdb.com",
-      "source_fingerprint": "9337d8e6b47e4813a48ecae5eb1fee6c068dc612f0f1cc65d80ca8acc730a0bb",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E16.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -4810,8 +4594,6 @@
     },
     {
       "id": "series-0109",
-      "source": "srrdb.com",
-      "source_fingerprint": "5537c3b172195a9b8f578702f5cf8350f7fff9adbd75fa140791df00d6c089eb",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E15.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -4853,8 +4635,6 @@
     },
     {
       "id": "series-0110",
-      "source": "srrdb.com",
-      "source_fingerprint": "d368ed0781e65ad34bf05632701f70317fee97524842f5f9d25a31a26535e41f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E14.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -4896,8 +4676,6 @@
     },
     {
       "id": "series-0111",
-      "source": "srrdb.com",
-      "source_fingerprint": "70bd5783130a8150a41bb51e8be39ee7f4963724d350d50480a298d05196592c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E13.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -4939,8 +4717,6 @@
     },
     {
       "id": "series-0112",
-      "source": "srrdb.com",
-      "source_fingerprint": "dd051ee4e9d008753b2ba641457552c69750a4eddbaaa25e8ef37c4479e751c3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E12.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -4982,8 +4758,6 @@
     },
     {
       "id": "series-0113",
-      "source": "srrdb.com",
-      "source_fingerprint": "75ce4ee035f12d8815ee3c553d222ecdec5f15410f7dafb880b273cd15144945",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E11.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -5025,8 +4799,6 @@
     },
     {
       "id": "series-0114",
-      "source": "srrdb.com",
-      "source_fingerprint": "1426c29532c33152ec4e15888b3479aeae7fd784ea57107cb1c37ac3634b088f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S06E10.FRENCH.WEB.H264-Groupg",
       "context": {
@@ -5068,8 +4840,6 @@
     },
     {
       "id": "series-0115",
-      "source": "srrdb.com",
-      "source_fingerprint": "69d79a9822808289c3c8d9602048f9e48e3e4fbda5b9909bf66e09e9c815b1bf",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E02.FRENCH.720p.WEB.H264-Groupd",
       "context": {
@@ -5113,8 +4883,6 @@
     },
     {
       "id": "series-0116",
-      "source": "srrdb.com",
-      "source_fingerprint": "6fc601cebd364a0de8b5c355b01b077cde6d650670f91fb414ad3b9568ede9d0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E06.FRENCH.WEB.H264-Groupd",
       "context": {
@@ -5156,8 +4924,6 @@
     },
     {
       "id": "series-0117",
-      "source": "srrdb.com",
-      "source_fingerprint": "b9ada53219e81f265f28ad23586137b218362bdd03a4a3995461935a0be8e113",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E06.FRENCH.720p.WEB.H264-Groupd",
       "context": {
@@ -5201,8 +4967,6 @@
     },
     {
       "id": "series-0118",
-      "source": "srrdb.com",
-      "source_fingerprint": "a727bb9d8e1220aafd3c337ce104b2459544881a30da337144c75ffba9006713",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E06.MULTI.1080p.WEB.H264-Groupd",
       "context": {
@@ -5246,8 +5010,6 @@
     },
     {
       "id": "series-0119",
-      "source": "srrdb.com",
-      "source_fingerprint": "163a32b296e449106e16864ad0b11f3a88661d8e11e9b38d448e3b5ab627e8df",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E06.MULTI.2160p.WEB.H265-Groupd",
       "context": {
@@ -5291,8 +5053,6 @@
     },
     {
       "id": "series-0120",
-      "source": "srrdb.com",
-      "source_fingerprint": "5aa48ee16034c580e6c1bb4ce499c1457b2f24a9480920181a720fb7c560964c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E05.FRENCH.WEB.H264-Groupd",
       "context": {
@@ -5334,8 +5094,6 @@
     },
     {
       "id": "series-0121",
-      "source": "srrdb.com",
-      "source_fingerprint": "39c610907b8389dbc68c9853347317e22d048fadfee25d827efbc2bf300fc61c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E05.FRENCH.720p.WEB.H264-Groupd",
       "context": {
@@ -5379,8 +5137,6 @@
     },
     {
       "id": "series-0122",
-      "source": "srrdb.com",
-      "source_fingerprint": "7ba5e513a06303ec000a9795cdfebd7c4b58172c5b468f9aac3a7def2a908537",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E05.MULTI.1080p.WEB.H264-Groupd",
       "context": {
@@ -5424,8 +5180,6 @@
     },
     {
       "id": "series-0123",
-      "source": "srrdb.com",
-      "source_fingerprint": "a894546955626323d6deeca8cfb24921067e3cdc0b163d9ce2ad1cef67ab6a0e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E06.1080p.WEB.h264-Groupe",
       "context": {
@@ -5469,8 +5223,6 @@
     },
     {
       "id": "series-0124",
-      "source": "srrdb.com",
-      "source_fingerprint": "4bbe4a623418d069bf25d4bb5e38a939f3c47023980575710ab16f2fd5c19691",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E05.1080p.WEB.h264-Groupe",
       "context": {
@@ -5514,8 +5266,6 @@
     },
     {
       "id": "series-0125",
-      "source": "srrdb.com",
-      "source_fingerprint": "914c7d9d69d4ddcf86d9b34c39646d6feeca870384c6a79b2bcc3b8b69cb88fe",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E04.1080p.WEB.h264-Groupe",
       "context": {
@@ -5559,8 +5309,6 @@
     },
     {
       "id": "series-0126",
-      "source": "srrdb.com",
-      "source_fingerprint": "99b3563d2e9c48a038abf7e107c7b06d07a3dc6162afa3a96e68d750c871ffbc",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E03.1080p.WEB.h264-Groupe",
       "context": {
@@ -5604,8 +5352,6 @@
     },
     {
       "id": "series-0127",
-      "source": "srrdb.com",
-      "source_fingerprint": "b14fc399f75750924f17c8878cedd7526b94cd469342ef4b545f20f008848c14",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E08.MULTI.DV.2160p.WEB.H265-Groupe",
       "context": {
@@ -5649,8 +5395,6 @@
     },
     {
       "id": "series-0128",
-      "source": "srrdb.com",
-      "source_fingerprint": "364dec3edaf3662d943bea6b0599af2c7ce86dc444691ddd89f90d3da65d659a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E02.1080p.WEB.h264-Groupe",
       "context": {
@@ -5694,8 +5438,6 @@
     },
     {
       "id": "series-0129",
-      "source": "srrdb.com",
-      "source_fingerprint": "2525629062426986b659b07870d16e5dc345fcfbef4002e2228a71ceb6cadc2c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E01.1080p.WEB.h264-Groupe",
       "context": {
@@ -5739,8 +5481,6 @@
     },
     {
       "id": "series-0130",
-      "source": "srrdb.com",
-      "source_fingerprint": "d237d3b08da46f9cae122c27bcad1bed77fdd9d3a3da37ae25470a8d9ec1b5d5",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.MULTI.HDR.2160p.WEB.H265-Groupe",
       "context": {
@@ -5784,8 +5524,6 @@
     },
     {
       "id": "series-0131",
-      "source": "srrdb.com",
-      "source_fingerprint": "097083b0f79f6fb9da445257da43714017295f1c11a289622c8eea62eb70f3e9",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.MULTI.DV.2160p.WEB.H265-Groupe",
       "context": {
@@ -5829,8 +5567,6 @@
     },
     {
       "id": "series-0132",
-      "source": "srrdb.com",
-      "source_fingerprint": "955ca18d6c750f4c83ee473db34bb8446b026ec8ab8e1dca213f6800e8edd5e2",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.MULTI.2160p.WEB.H265-Groupe",
       "context": {
@@ -5874,8 +5610,6 @@
     },
     {
       "id": "series-0133",
-      "source": "srrdb.com",
-      "source_fingerprint": "489382e9fc92de0d57adc9c0e11e41c9bf6ebe7eb63bbcd7eaa7137fea945801",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.GERMAN.DL.HDR.2160p.WEB.h265-Groupe",
       "context": {
@@ -5919,8 +5653,6 @@
     },
     {
       "id": "series-0134",
-      "source": "srrdb.com",
-      "source_fingerprint": "0d4abdd6f1f38e1f3495430b70d41dc00592ac692f0c70fcb15101ec7b09333f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.GERMAN.DL.DV.2160p.WEB.h265-Groupe",
       "context": {
@@ -5964,8 +5696,6 @@
     },
     {
       "id": "series-0135",
-      "source": "srrdb.com",
-      "source_fingerprint": "0b5db6766feaf15e6b3d8b9dde80076994104744328cad03b1320ec9fd50b176",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.GERMAN.DL.720p.WEB.h264-Groupe",
       "context": {
@@ -6009,8 +5739,6 @@
     },
     {
       "id": "series-0136",
-      "source": "srrdb.com",
-      "source_fingerprint": "fc439bab46f1d397e7607c988495a4c56bdd2792cf16ef102504b1f8709460cb",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E09.GERMAN.DL.2160P.WEB.H265-Groupe",
       "context": {
@@ -6054,8 +5782,6 @@
     },
     {
       "id": "series-0137",
-      "source": "srrdb.com",
-      "source_fingerprint": "d68388a8ee34892e568227918e85f5c135d569b4881c50a7ada732b6faa7113f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E30.POLISH.WEB.H264-Groupf",
       "context": {
@@ -6097,8 +5823,6 @@
     },
     {
       "id": "series-0138",
-      "source": "srrdb.com",
-      "source_fingerprint": "5e5510410d67f3c5294b63526cd0626723d4e7f3a110de474df144da7dad703d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E30.POLISH.720p.WEB.H264-Groupf",
       "context": {
@@ -6142,8 +5866,6 @@
     },
     {
       "id": "series-0139",
-      "source": "srrdb.com",
-      "source_fingerprint": "787524580ef4392e80e18da3d85d78263f22b9437ef8e2b1bdd02f456589e0fe",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E29.POLISH.WEB.H264-Groupf",
       "context": {
@@ -6185,8 +5907,6 @@
     },
     {
       "id": "series-0140",
-      "source": "srrdb.com",
-      "source_fingerprint": "f2c533d07e30c12cd4a40433238981db18d5be74daa0bc3242b6cc4b71abd3a6",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E29.POLISH.720p.WEB.H264-Groupf",
       "context": {
@@ -6230,8 +5950,6 @@
     },
     {
       "id": "series-0141",
-      "source": "srrdb.com",
-      "source_fingerprint": "4672765e38ff5e23f2f1a60b37fdfaf95b47b1d05f11da8c769549cff9444203",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E28.POLISH.WEB.H264-Groupf",
       "context": {
@@ -6273,8 +5991,6 @@
     },
     {
       "id": "series-0142",
-      "source": "srrdb.com",
-      "source_fingerprint": "f5c93a277da2a2a5356bf3a1325db3ed2c501adeb0f15c522a9db8c8ee4b6bdc",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E28.POLISH.720p.WEB.H264-Groupf",
       "context": {
@@ -6318,8 +6034,6 @@
     },
     {
       "id": "series-0143",
-      "source": "srrdb.com",
-      "source_fingerprint": "c27cf10d4892042864840a06978bee197ffcf903ae0e7e5355a39876afd90a7b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E27.POLISH.WEB.H264-Groupf",
       "context": {
@@ -6361,8 +6075,6 @@
     },
     {
       "id": "series-0144",
-      "source": "srrdb.com",
-      "source_fingerprint": "404659499a097880bbe5beb38f88c43d51d84a6834f4a6e23064c1fa40be801b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S03E27.POLISH.720p.WEB.H264-Groupf",
       "context": {
@@ -6406,8 +6118,6 @@
     },
     {
       "id": "series-0145",
-      "source": "srrdb.com",
-      "source_fingerprint": "3bb418ce7f9d82ab5cd582ec82e3fd3bbdca0c9bf3f1a99cae689ecfc6f0f980",
       "shape": "episodic",
       "release": "Titlea.S09E22.Episodeb.1.Episodec.2.German.DL.WEB.h264.iNTERNAL-Groupd",
       "context": {
@@ -6449,8 +6159,6 @@
     },
     {
       "id": "series-0146",
-      "source": "srrdb.com",
-      "source_fingerprint": "f21538fac1fbec78cbba77fcd908ff5a73fb9173bc2b4855f0c60e915c154c98",
       "shape": "episodic",
       "release": "Titlea.S09E21.Episodeb.Episodec.Episoded.1.Episodee.2.German.DL.WEB.h264.iNTERNAL-Groupf",
       "context": {
@@ -6492,8 +6200,6 @@
     },
     {
       "id": "series-0147",
-      "source": "srrdb.com",
-      "source_fingerprint": "b876d0f93201d54b2c79057205c8b953449d094cdc4de1fa8d34e02bdceb1836",
       "shape": "episodic",
       "release": "Titlea.S09E20.Episodeb.Episodec.Episoded.German.DL.WEB.h264.iNTERNAL-Groupe",
       "context": {
@@ -6535,8 +6241,6 @@
     },
     {
       "id": "series-0148",
-      "source": "srrdb.com",
-      "source_fingerprint": "2c5ffa0221688aa19e1df000cdf77d17c036bc1bc63766fb390da30908a3e5b0",
       "shape": "episodic",
       "release": "Titlea.S09E19.Episodeb.Episodec.German.DL.WEB.h264.iNTERNAL-Groupd",
       "context": {
@@ -6578,8 +6282,6 @@
     },
     {
       "id": "series-0149",
-      "source": "srrdb.com",
-      "source_fingerprint": "0fbf9b2fde4e10de4519927d319f716dda5a56c085e84d504470a1c3a46e78ac",
       "shape": "episodic",
       "release": "Titlea.S09E18.Episodeb.Episodec.German.DL.WEB.h264.iNTERNAL-Groupd",
       "context": {
@@ -6621,8 +6323,6 @@
     },
     {
       "id": "series-0150",
-      "source": "srrdb.com",
-      "source_fingerprint": "8129e1e4b2bcc07fdeea92cc617f7ec408725c1d0b1658f6832adc53b55e6b58",
       "shape": "episodic",
       "release": "Titlea.S09E17.Episodeb.Episodec.German.DL.WEB.h264.iNTERNAL-Groupd",
       "context": {
@@ -6664,8 +6364,6 @@
     },
     {
       "id": "series-0151",
-      "source": "srrdb.com",
-      "source_fingerprint": "48a90dbc95e218a5fbee307cd4d1a741c825c33e9b7da6efac9d3dac4b3b2a3f",
       "shape": "episodic",
       "release": "Titlea.S09E16.Episodeb.Episodec.Episoded.German.DL.WEB.h264.iNTERNAL-Groupe",
       "context": {
@@ -6707,8 +6405,6 @@
     },
     {
       "id": "series-0152",
-      "source": "srrdb.com",
-      "source_fingerprint": "a853e832b4b7287029c899958097d77ebf105b9ec3342c8d88a7796f7043095c",
       "shape": "episodic",
       "release": "Titlea.S09E15.Episodeb.Episodec.German.DL.WEB.h264.iNTERNAL-Groupd",
       "context": {
@@ -6750,8 +6446,6 @@
     },
     {
       "id": "series-0153",
-      "source": "srrdb.com",
-      "source_fingerprint": "c7952083cbf12a68a61a144378cc80303ef990a1497297c9933fb804fc962373",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.S01E02.FiNAL.Episodeh.MULTi.1080p.WEB.x264-Groupi",
       "context": {
@@ -6795,8 +6489,6 @@
     },
     {
       "id": "series-0154",
-      "source": "srrdb.com",
-      "source_fingerprint": "96694bdae5b98cac15e160b58f7689cbe7cee717f802ef43f02fc07c9da9ad1c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.S01E01.Episodeh.MULTi.1080p.WEB.x264-Groupi",
       "context": {
@@ -6840,8 +6532,6 @@
     },
     {
       "id": "series-0155",
-      "source": "srrdb.com",
-      "source_fingerprint": "f86e35287f3fc660cb4606b2ec38e1860a43f6b224909e0c08fd298ad76a6ef2",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E15.Episodec.HDTV.XviD-Groupd",
       "context": {
@@ -6883,8 +6573,6 @@
     },
     {
       "id": "series-0156",
-      "source": "srrdb.com",
-      "source_fingerprint": "1c2eed20468dc95937cb5a4c1f9bc65b649c6d7e95490d74a0507500380a9adf",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E05.Episodec.HDTV.AC3.5.1.XviD-Groupd",
       "context": {
@@ -6926,8 +6614,6 @@
     },
     {
       "id": "series-0157",
-      "source": "srrdb.com",
-      "source_fingerprint": "b6febdddff9d1ee1023ed14ab4092d4b5b9eaeee02b4b54154e2c02197777750",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E07.Episodec.HDTV.AC3.5.1.XviD-Groupd",
       "context": {
@@ -6969,8 +6655,6 @@
     },
     {
       "id": "series-0158",
-      "source": "srrdb.com",
-      "source_fingerprint": "4e13bc5d21c85db2fcf9e0312dcb40bbc9f491bd585d7f2652e6dd25d971ff7e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E14.Episodec.HDTV.XviD-Groupd",
       "context": {
@@ -7012,8 +6696,6 @@
     },
     {
       "id": "series-0159",
-      "source": "srrdb.com",
-      "source_fingerprint": "59acd2fb4ed4399cf16a8301a6f80186ced7d50cb2befe9959b19dc2c5575e68",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E11.Episodec.HDTV.AC3.5.1.XviD-Groupd",
       "context": {
@@ -7055,8 +6737,6 @@
     },
     {
       "id": "series-0160",
-      "source": "srrdb.com",
-      "source_fingerprint": "1f7c681008faac7240be3ca618ff5850e49c3e13d373eaf85db2491f8ce993cb",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E20.Episodec.HDTV.XviD-Groupd",
       "context": {
@@ -7098,8 +6778,6 @@
     },
     {
       "id": "series-0161",
-      "source": "srrdb.com",
-      "source_fingerprint": "e2956d759ddaf8bbdcb79d0afd39e65103208ace8264ee3242aaaf98fa3e3575",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E13.Episodec.HDTV.XviD-Groupd",
       "context": {
@@ -7141,8 +6819,6 @@
     },
     {
       "id": "series-0162",
-      "source": "srrdb.com",
-      "source_fingerprint": "6b7cba92955d552047c4b86afa26609f6d9236d87b745698394dab73adddc4ad",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E17.Episodec.HDTV.XviD-Groupd",
       "context": {
@@ -7184,8 +6860,6 @@
     },
     {
       "id": "series-0163",
-      "source": "srrdb.com",
-      "source_fingerprint": "d40448d4c0c73ef3cdc0e3a6dabdc43bb7b34094f49eb18fc290a0c144f2ab2d",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E12.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7229,8 +6903,6 @@
     },
     {
       "id": "series-0164",
-      "source": "srrdb.com",
-      "source_fingerprint": "210d9cc8a8d7101931495335bb91e16538d63c3f1527ff0d464d1337772ca96e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E11.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7274,8 +6946,6 @@
     },
     {
       "id": "series-0165",
-      "source": "srrdb.com",
-      "source_fingerprint": "d581b47f8e9215287302c371dabe68443aa723241aa023c99a3f7c875a0d6ec7",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E10.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7319,8 +6989,6 @@
     },
     {
       "id": "series-0166",
-      "source": "srrdb.com",
-      "source_fingerprint": "d64f8a98a55f52176d5b1ad1099347c829bd729d973b5114715c7880dbd2ac33",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E09.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7364,8 +7032,6 @@
     },
     {
       "id": "series-0167",
-      "source": "srrdb.com",
-      "source_fingerprint": "517767ba04942586c4c9a9fcc51ffc602df5945c6e4aedfa02ebf32fcd45a3b3",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E08.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7409,8 +7075,6 @@
     },
     {
       "id": "series-0168",
-      "source": "srrdb.com",
-      "source_fingerprint": "11803a0e4706b34b4b3850c628a02bac5bc717232ebc833ef60c42b012224f71",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E07.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7454,8 +7118,6 @@
     },
     {
       "id": "series-0169",
-      "source": "srrdb.com",
-      "source_fingerprint": "682160a67e9848373786a091851f0569bc6ecf3be57a5894316529d0f55908ed",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E07.POLISH.1080p.WEB.H264-Groupc",
       "context": {
@@ -7499,8 +7161,6 @@
     },
     {
       "id": "series-0170",
-      "source": "srrdb.com",
-      "source_fingerprint": "fdee782db560cabfd6bd30cf641ccbc94d29e411951fcb676f9082a614823071",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E06.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7544,8 +7204,6 @@
     },
     {
       "id": "series-0171",
-      "source": "srrdb.com",
-      "source_fingerprint": "3b44f34604f186dfe2f2ddae6208988cfc848b23109ec7cdd519a8dc1909ac03",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E13.POLISH.2160p.WEB.H265-Groupc",
       "context": {
@@ -7589,8 +7247,6 @@
     },
     {
       "id": "series-0172",
-      "source": "srrdb.com",
-      "source_fingerprint": "f062a1c9375ec2a6680f8e29d75d75d7a29565a23ea371432374fec8094ee283",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E13.INTERNAL.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7634,8 +7290,6 @@
     },
     {
       "id": "series-0173",
-      "source": "srrdb.com",
-      "source_fingerprint": "72baad0bb60554b4969430ecda0c7dd85e1c0d99ecd145a11db56fc1065d74d1",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E13.INTERNAL.POLISH.1080p.WEB.H264-Groupc",
       "context": {
@@ -7679,8 +7333,6 @@
     },
     {
       "id": "series-0174",
-      "source": "srrdb.com",
-      "source_fingerprint": "45883ec6f19301e429a7ef5f2f5779ddd69a7f2f70b59e9f1153bb9503a1d258",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E12.POLISH.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -7724,8 +7376,6 @@
     },
     {
       "id": "series-0175",
-      "source": "srrdb.com",
-      "source_fingerprint": "cfb8be756eb274beb85e7d8c193baa9726bddd1413cd543bd1a6d7096de86265",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E12.POLISH.2160p.WEB.H265-Groupc",
       "context": {
@@ -7769,8 +7419,6 @@
     },
     {
       "id": "series-0176",
-      "source": "srrdb.com",
-      "source_fingerprint": "dd27c19a3121e03e00d6d1c7adc43ab562ce97d91e68ac66a27324385c4c0f84",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E12.INTERNAL.POLISH.720p.WEB.H264-Groupc",
       "context": {
@@ -7814,8 +7462,6 @@
     },
     {
       "id": "series-0177",
-      "source": "srrdb.com",
-      "source_fingerprint": "5b4be9d562fa403adc679b39d25d41f95a0f3ba46193729cf4e2fddc7e57cf81",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E12.INTERNAL.POLISH.1080p.WEB.H264-Groupc",
       "context": {
@@ -7859,8 +7505,6 @@
     },
     {
       "id": "series-0178",
-      "source": "srrdb.com",
-      "source_fingerprint": "3026f4bc61bc609ecf2bbc7adf69854b0d14e6ebf8354b4d51c1e0d5cd587c75",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E11.POLISH.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -7904,8 +7548,6 @@
     },
     {
       "id": "series-0179",
-      "source": "srrdb.com",
-      "source_fingerprint": "02871c1ba94d9e30a18ce3158a37f313d9440f49c1672bf7adec62aa19183bec",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S16E01.1080p.HDTV.H264-Groupd",
       "context": {
@@ -7949,8 +7591,6 @@
     },
     {
       "id": "series-0180",
-      "source": "srrdb.com",
-      "source_fingerprint": "735944654220d8044a64b2b548bd4352924b2df3935d39db33f64b6a0eda4fc5",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S08E04.1080p.HDTV.H264-Groupg",
       "context": {
@@ -7994,8 +7634,6 @@
     },
     {
       "id": "series-0181",
-      "source": "srrdb.com",
-      "source_fingerprint": "0daec88f3412357cac5fbcc43c7f6c637a046f5035825e97aac07e04c743b13f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S08E00.Episodeg.Episodeh.Episodei.1080p.WEB.h264-Groupj",
       "context": {
@@ -8039,8 +7677,6 @@
     },
     {
       "id": "series-0182",
-      "source": "srrdb.com",
-      "source_fingerprint": "5980e4b210c98e8ee2f98c50cd32c0c9c32c594c2ee9161503b69e604d6dc029",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.S01E02.1080p.WEB.h264-Grouph",
       "context": {
@@ -8084,8 +7720,6 @@
     },
     {
       "id": "series-0183",
-      "source": "srrdb.com",
-      "source_fingerprint": "8dfb3068545c413467d1024f3165e2ec713b39003cb68bad4021616dc438bef1",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S08E03.1080p.HDTV.H264-Groupg",
       "context": {
@@ -8129,8 +7763,6 @@
     },
     {
       "id": "series-0184",
-      "source": "srrdb.com",
-      "source_fingerprint": "ce56297d437699c4e4cbaf110ab24c913ab203ebdbfefe8e4aeeb70317f05890",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E13.FiNAL.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8174,8 +7806,6 @@
     },
     {
       "id": "series-0185",
-      "source": "srrdb.com",
-      "source_fingerprint": "55074ffe28af5a1808af644f89646de4b725d41e33843fa0f10d39d2fd6edbf9",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E12.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8219,8 +7849,6 @@
     },
     {
       "id": "series-0186",
-      "source": "srrdb.com",
-      "source_fingerprint": "56bd71f2ee7ac5f8aa49a75b10412594865ab6e9361b1c328efc85d60f63cc20",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E11.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8264,8 +7892,6 @@
     },
     {
       "id": "series-0187",
-      "source": "srrdb.com",
-      "source_fingerprint": "b7fb8938637b8c260cbae7bb4b053579a6545b9f857daa82ca1a66b789a6e905",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E10.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8309,8 +7935,6 @@
     },
     {
       "id": "series-0188",
-      "source": "srrdb.com",
-      "source_fingerprint": "681e0d561c72d426af4ee1baf1c7cc4ac05d5bbf917905031a5cfe377000bc18",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E09.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8354,8 +7978,6 @@
     },
     {
       "id": "series-0189",
-      "source": "srrdb.com",
-      "source_fingerprint": "5aa736c35a9e3d63a6955b5a353d22be8676a1274eee159e9e3537a464851fd0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E08.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8399,8 +8021,6 @@
     },
     {
       "id": "series-0190",
-      "source": "srrdb.com",
-      "source_fingerprint": "3374d0b2fa19e1c64013b8913d8b011268bf40b876ba4e5ce6ea9649ee41fd15",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E07.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8444,8 +8064,6 @@
     },
     {
       "id": "series-0191",
-      "source": "srrdb.com",
-      "source_fingerprint": "46e8552018abf5d3811f821e6fce29c163a0f324efa61f17a686333deec09c7d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S02E06.MULTi.1080p.WEB.H264-Groupf",
       "context": {
@@ -8489,8 +8107,6 @@
     },
     {
       "id": "series-0192",
-      "source": "srrdb.com",
-      "source_fingerprint": "7ecc56344860ac6ddd0d78b71f9d748b8c0453f99afb58196f69a8e1599e1558",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E02.1080p.HDTV.H264-Groupe",
       "context": {
@@ -8534,8 +8150,6 @@
     },
     {
       "id": "series-0193",
-      "source": "srrdb.com",
-      "source_fingerprint": "255e59df81d11dd84bf4eafd933edb641e95c39fcd4ff07bf1f6f3de1adca598",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S01E01.1080p.HDTV.H264-Groupf",
       "context": {
@@ -8579,8 +8193,6 @@
     },
     {
       "id": "series-0194",
-      "source": "srrdb.com",
-      "source_fingerprint": "1d0c3ac621bbf41509fae2c626d16178a3fe54012abef393dc49ce5d3b983511",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S04E03.1080p.WEB.h264-Groupg",
       "context": {
@@ -8624,8 +8236,6 @@
     },
     {
       "id": "series-0195",
-      "source": "srrdb.com",
-      "source_fingerprint": "1f09b6904935ae6a8a28a5ab25728f1cd69a9c87eaea081e977dd919ebd45042",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S04E02.1080p.WEB.h264-Groupg",
       "context": {
@@ -8669,8 +8279,6 @@
     },
     {
       "id": "series-0196",
-      "source": "srrdb.com",
-      "source_fingerprint": "1078693f0fecb6879d81d0b9e3dc56b5c2e67d9bd0c927d31f1e0e22453121bb",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S04E01.1080p.WEB.h264-Groupg",
       "context": {
@@ -8714,8 +8322,6 @@
     },
     {
       "id": "series-0197",
-      "source": "srrdb.com",
-      "source_fingerprint": "08225335ca0ad6974ee9b6e39cda2e4f47bbe75a23ec733220cf0667d434c1ae",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S08E02.1080p.HDTV.H264-Groupg",
       "context": {
@@ -8759,8 +8365,6 @@
     },
     {
       "id": "series-0198",
-      "source": "srrdb.com",
-      "source_fingerprint": "247dfddd0d23faad04859b23d8f55b5ef661eedd032399a6c963a1c01a9ecfde",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S08E02.1080p.WEB.h264-Groupg",
       "context": {
@@ -8804,8 +8408,6 @@
     },
     {
       "id": "series-0199",
-      "source": "srrdb.com",
-      "source_fingerprint": "7bd54adac6398982fa81b54df0b22d5d6e75c3d331bdce079d5d49655451ea33",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E01.Episodee.Episodef.Episodeg.1080p.HDTV.H264-Grouph",
       "context": {
@@ -8849,8 +8451,6 @@
     },
     {
       "id": "series-0200",
-      "source": "srrdb.com",
-      "source_fingerprint": "57438d7656a8d1b5bc59908e0131cc01388f96eb173e3947f5244b44d847eca0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.S01E01.1080p.WEB.h264-Grouph",
       "context": {
@@ -8894,8 +8494,6 @@
     },
     {
       "id": "series-0201",
-      "source": "srrdb.com",
-      "source_fingerprint": "78920e32babfe2f0aeb05f7f34fa449bad5cf9dc90ab8e1b0d6fe59ea9af1339",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S01E06.1080p.WEB.h264-Groupf",
       "context": {
@@ -8939,8 +8537,6 @@
     },
     {
       "id": "series-0202",
-      "source": "srrdb.com",
-      "source_fingerprint": "43783c15200c1c77a02e3a4c12da499c65d57e95ac026fe48ca8cfac3ba13e05",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S01E05.1080p.WEB.h264-Groupf",
       "context": {
@@ -8984,8 +8580,6 @@
     },
     {
       "id": "series-0203",
-      "source": "srrdb.com",
-      "source_fingerprint": "1f93d7fcaf6f9118fca7a234d0516010744247fa67879411c4634802bca5b5ab",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S01E04.1080p.WEB.h264-Groupf",
       "context": {
@@ -9029,8 +8623,6 @@
     },
     {
       "id": "series-0204",
-      "source": "srrdb.com",
-      "source_fingerprint": "3181b812f8dc8a70b45c6699eecb28e20084bd866e4662b225a4571852ef6ded",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E02.MULTi.1080p.WEB.x264-Groupc",
       "context": {
@@ -9074,8 +8666,6 @@
     },
     {
       "id": "series-0205",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e49bb3a5df7209ad5913d271027a031f06645d403d00b483226fb673739e276",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E02.READNFO.FRENCH.WEB.x264-Groupc",
       "context": {
@@ -9117,8 +8707,6 @@
     },
     {
       "id": "series-0206",
-      "source": "srrdb.com",
-      "source_fingerprint": "6c3477808ba56f8cfb80a0feaa6761892aa2865326ec75e3169e78728c5815ef",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E01.READNFO.FRENCH.WEB.x264-Groupc",
       "context": {
@@ -9160,8 +8748,6 @@
     },
     {
       "id": "series-0207",
-      "source": "srrdb.com",
-      "source_fingerprint": "fe2ed84a5f176f3e0a08f9b4955e2cb044848b64b1c2aab9437f9f0386d34889",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E01.MULTi.1080p.WEB.x264-Groupc",
       "context": {
@@ -9205,8 +8791,6 @@
     },
     {
       "id": "series-0208",
-      "source": "srrdb.com",
-      "source_fingerprint": "222cc439b169ac7e41c023a5c098f5707ca6a0fc64b1a9c7753cc3cadd1a85b4",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E10.FiNAL.MULTi.1080p.BluRay.x264-Groupc",
       "context": {
@@ -9250,8 +8834,6 @@
     },
     {
       "id": "series-0209",
-      "source": "srrdb.com",
-      "source_fingerprint": "e01e9178dbd27e37d16f45bfe5952f1ce1c656e7e54119de023d8ce28eab6002",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E10.FiNAL.FRENCH.BDRip.x264-Groupc",
       "context": {
@@ -9293,8 +8875,6 @@
     },
     {
       "id": "series-0210",
-      "source": "srrdb.com",
-      "source_fingerprint": "ed084c0252b5f87e08ae37c8da1560ff8e71d88ee577c04754a6f6d3f53a3ac6",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E10.FiNAL.FRENCH.720p.BluRay.x264-Groupc",
       "context": {
@@ -9338,8 +8918,6 @@
     },
     {
       "id": "series-0211",
-      "source": "srrdb.com",
-      "source_fingerprint": "ad04fa0c9d7da3f30d2d6ca98c977944d6841a0d9f34f4950de46ba007d34102",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E09.MULTi.1080p.BluRay.x264-Groupc",
       "context": {
@@ -9383,8 +8961,6 @@
     },
     {
       "id": "series-0212",
-      "source": "srrdb.com",
-      "source_fingerprint": "27f76ded4888b9a754a17ee21ca9d90f1242e44ab50ef2bd1fd0a32b22e832a4",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S04E18.Episoded.Episodee.Episodef.German.DL.FS.WEB.h264.iNTERNAL-Groupg",
       "context": {
@@ -9426,8 +9002,6 @@
     },
     {
       "id": "series-0213",
-      "source": "srrdb.com",
-      "source_fingerprint": "070b2d2e7fbced78af98984bc526f1aa765be11987cc664c5168e068ac67506c",
       "shape": "episodic",
       "release": "Titlea.S03E13.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9471,8 +9045,6 @@
     },
     {
       "id": "series-0214",
-      "source": "srrdb.com",
-      "source_fingerprint": "f7c9328b946427f3e31aea23e0a0a321b81b20cb13ccfb569271d49e92cf1a6f",
       "shape": "episodic",
       "release": "Titlea.S03E12.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9516,8 +9088,6 @@
     },
     {
       "id": "series-0215",
-      "source": "srrdb.com",
-      "source_fingerprint": "75a5f43f1501d422df7749715167bb069c1e71ff2a5c68b421829a5105f348aa",
       "shape": "episodic",
       "release": "Titlea.S03E11.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9561,8 +9131,6 @@
     },
     {
       "id": "series-0216",
-      "source": "srrdb.com",
-      "source_fingerprint": "6ef5f377aab77bf0d068b332e9fdd93284569f830da24736f8e6202d8daf04b8",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9606,8 +9174,6 @@
     },
     {
       "id": "series-0217",
-      "source": "srrdb.com",
-      "source_fingerprint": "e44119064a084dbb6713eccbeb2f1bb2fbccd0140906336357bda70da2d95b96",
       "shape": "episodic",
       "release": "Titlea.S03E09.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9651,8 +9217,6 @@
     },
     {
       "id": "series-0218",
-      "source": "srrdb.com",
-      "source_fingerprint": "8c868c7be7259312df065ea46a56715bd97e610e5e1232b7ae09b2e673970eec",
       "shape": "episodic",
       "release": "Titlea.S03E08.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9696,8 +9260,6 @@
     },
     {
       "id": "series-0219",
-      "source": "srrdb.com",
-      "source_fingerprint": "c892265340b69cb77f3799633430ab82183f1f59c53ccce981ce300c819332c8",
       "shape": "episodic",
       "release": "Titlea.S03E07.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9741,8 +9303,6 @@
     },
     {
       "id": "series-0220",
-      "source": "srrdb.com",
-      "source_fingerprint": "2132067b249712adb1bc03e22d51903e16745ec362817a0111f80f0f1d116983",
       "shape": "episodic",
       "release": "Titlea.S03E06.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -9786,8 +9346,6 @@
     },
     {
       "id": "series-0221",
-      "source": "srrdb.com",
-      "source_fingerprint": "a63b14c8ef91e7ee00788bc69f484bd711af72b531aadd5d0629f643e547de2e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S04E18.Episoded.Episodee.Episodef.German.DL.FS.720p.Textg.H264-Grouph",
       "context": {
@@ -9829,8 +9387,6 @@
     },
     {
       "id": "series-0222",
-      "source": "srrdb.com",
-      "source_fingerprint": "385024ba229f51f799cc1e1795e05bbe3809934ed44745f86ae9b8616c1a7ce8",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S04E18.Episoded.Episodee.Episodef.German.DL.1080p.Textg.H264-Grouph",
       "context": {
@@ -9872,8 +9428,6 @@
     },
     {
       "id": "series-0223",
-      "source": "srrdb.com",
-      "source_fingerprint": "c8205be9a57d3089145cbee5b102da468923faec812dfbb5b71ec550e99bf49f",
       "shape": "episodic",
       "release": "Titlea.S05E08.GERMAN.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -9917,8 +9471,6 @@
     },
     {
       "id": "series-0224",
-      "source": "srrdb.com",
-      "source_fingerprint": "557084764c567d2ed212aa26c6e81e26d6c055ce9fe2c397c9c0bbe7133b588a",
       "shape": "episodic",
       "release": "Titlea.S05E10.GERMAN.DL.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -9962,8 +9514,6 @@
     },
     {
       "id": "series-0225",
-      "source": "srrdb.com",
-      "source_fingerprint": "78567633e78867c3029f04c51235cacb4a112df95e5e819f4b17c38df941c433",
       "shape": "episodic",
       "release": "Titlea.S05E10.GERMAN.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -10007,8 +9557,6 @@
     },
     {
       "id": "series-0226",
-      "source": "srrdb.com",
-      "source_fingerprint": "978c3a0f1b8e0d68ae59ce10876898b3158291c807631f607eed20ffa590f11b",
       "shape": "episodic",
       "release": "Titlea.S05E09.GERMAN.DL.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -10052,8 +9600,6 @@
     },
     {
       "id": "series-0227",
-      "source": "srrdb.com",
-      "source_fingerprint": "742cc99f53ed0ef6d3ce6611e3e210758859324e69e132f3992de185f6dd924f",
       "shape": "episodic",
       "release": "Titlea.S05E09.GERMAN.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -10097,8 +9643,6 @@
     },
     {
       "id": "series-0228",
-      "source": "srrdb.com",
-      "source_fingerprint": "175b5fe3be19a38740498487fb21915826930036d77bd14063e1c6c5279e402b",
       "shape": "episodic",
       "release": "Titlea.S05E08.GERMAN.DL.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -10142,8 +9686,6 @@
     },
     {
       "id": "series-0229",
-      "source": "srrdb.com",
-      "source_fingerprint": "970b9de53943139558f0d382b69a651daf9f790a614ddc441f6d697623534d0c",
       "shape": "episodic",
       "release": "Titlea.S05E07.GERMAN.DL.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -10187,8 +9729,6 @@
     },
     {
       "id": "series-0230",
-      "source": "srrdb.com",
-      "source_fingerprint": "66cb17332efde7468ffedc981239d409be9446ba91f0a0583064571d1fb705fa",
       "shape": "episodic",
       "release": "Titlea.S05E07.GERMAN.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -10232,8 +9772,6 @@
     },
     {
       "id": "series-0231",
-      "source": "srrdb.com",
-      "source_fingerprint": "7f8861ad23541ce8706088fc670441a7b06a4049a61a48c12ef398b890754101",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E06.German.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -10277,8 +9815,6 @@
     },
     {
       "id": "series-0232",
-      "source": "srrdb.com",
-      "source_fingerprint": "346c4a9b9e6fca758d52e71d8746886c7ddfef3690fc78f39f4713833276a11c",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E05.German.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -10322,8 +9858,6 @@
     },
     {
       "id": "series-0233",
-      "source": "srrdb.com",
-      "source_fingerprint": "415019c884c2311f86a08b5541a04f8b5e7b0aeb083d32a84a971a8d4933df6e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E04.German.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -10367,8 +9901,6 @@
     },
     {
       "id": "series-0234",
-      "source": "srrdb.com",
-      "source_fingerprint": "74756de2f908edad85d5d98f52688915c8d08d84bf0e4a718e0cf85fe565ee8c",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E03.German.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -10412,8 +9944,6 @@
     },
     {
       "id": "series-0235",
-      "source": "srrdb.com",
-      "source_fingerprint": "b23505849cc7afc5f01227230fa4bd0940c41c4c73add7b6ae5abd96ec29c481",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E02.German.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -10457,8 +9987,6 @@
     },
     {
       "id": "series-0236",
-      "source": "srrdb.com",
-      "source_fingerprint": "22f1bee4ca8b59409e10fdf188b9cf4a58dea391b31f8e7525a29aa37d22c294",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E06.GERMAN.DL.DV.2160P.WEB.H265-Groupc",
       "context": {
@@ -10502,8 +10030,6 @@
     },
     {
       "id": "series-0237",
-      "source": "srrdb.com",
-      "source_fingerprint": "7738d08228b332dcd0a07d3540072c2d46bf85f64cbca6142c7423ada928b4bd",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E06.GERMAN.DL.2160P.WEB.H265-Groupc",
       "context": {
@@ -10547,8 +10073,6 @@
     },
     {
       "id": "series-0238",
-      "source": "srrdb.com",
-      "source_fingerprint": "c26b15262f03e518bc494c4447d85ef8d68c9aec5b195718c56f08d210869f38",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E05.GERMAN.DL.DV.2160P.WEB.H265-Groupc",
       "context": {
@@ -10592,8 +10116,6 @@
     },
     {
       "id": "series-0239",
-      "source": "srrdb.com",
-      "source_fingerprint": "221635d517fe914d8f1cebeabe4fb840a7f10ec8afaeb93323afa194be006d2d",
       "shape": "episodic",
       "release": "Titlea.S03E06.SUBFRENCH.HDTV.x264-Groupb",
       "context": {
@@ -10635,8 +10157,6 @@
     },
     {
       "id": "series-0240",
-      "source": "srrdb.com",
-      "source_fingerprint": "b61ea6fbea7528a1a13e86745746fa4ab81ba73caff1d4193992f9eb3a245f1f",
       "shape": "episodic",
       "release": "Titlea.S01E08.iNTERNAL.720p.HDTV.x264-Groupb",
       "context": {
@@ -10680,8 +10200,6 @@
     },
     {
       "id": "series-0241",
-      "source": "srrdb.com",
-      "source_fingerprint": "c8e6fd836ef66763b3eca34de63afe6b57a9c694b2c44b743adebe429d02e210",
       "shape": "episodic",
       "release": "Titlea.S01E07.iNTERNAL.720p.HDTV.x264-Groupb",
       "context": {
@@ -10725,8 +10243,6 @@
     },
     {
       "id": "series-0242",
-      "source": "srrdb.com",
-      "source_fingerprint": "8beb04f6fd1d7bb14eafaf09e4eac7c774435733ce8d3e6f0f931f4b0cbdb867",
       "shape": "episodic",
       "release": "Titlea.S03E08.BDRip.x264-Groupb",
       "context": {
@@ -10768,8 +10284,6 @@
     },
     {
       "id": "series-0243",
-      "source": "srrdb.com",
-      "source_fingerprint": "a892bf49dec8b265ed2c88c1b2d5db9667b882f85a7ae619da3888a26b843cf9",
       "shape": "episodic",
       "release": "Titlea.S03E07.BDRip.x264-Groupb",
       "context": {
@@ -10811,8 +10325,6 @@
     },
     {
       "id": "series-0244",
-      "source": "srrdb.com",
-      "source_fingerprint": "6bab20127f18e222c5f76696050444232cc2820ff42a200c2aed0aef05b06366",
       "shape": "episodic",
       "release": "Titlea.S03E06.BDRip.x264-Groupb",
       "context": {
@@ -10854,8 +10366,6 @@
     },
     {
       "id": "series-0245",
-      "source": "srrdb.com",
-      "source_fingerprint": "6d7ffb991291e411ff14f46d7a9cae3045404d7259692bdfa0276cadc95b547c",
       "shape": "episodic",
       "release": "Titlea.S03E05.BDRip.x264-Groupb",
       "context": {
@@ -10897,8 +10407,6 @@
     },
     {
       "id": "series-0246",
-      "source": "srrdb.com",
-      "source_fingerprint": "f80790d2e8eae1a2cee8486e047cfb88a9da04db86907941a4b0e17b031baaf0",
       "shape": "episodic",
       "release": "Titlea.S03E04.BDRip.x264-Groupb",
       "context": {
@@ -10940,8 +10448,6 @@
     },
     {
       "id": "series-0247",
-      "source": "srrdb.com",
-      "source_fingerprint": "e364ea7c021b85677d11b645335e92b7cf20c05cc6815784246fbadf1c13cc55",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E01.Episodee.DUTCH.1080p.WEB.h264-Groupf",
       "context": {
@@ -10985,10 +10491,8 @@
     },
     {
       "id": "series-0248",
-      "source": "srrdb.com",
-      "source_fingerprint": "ddea7669cc96bc0243707313bde7afb536a6181ca37c0f3c53a986e653c0fd95",
       "shape": "episodic",
-      "release": "Titlea.Titleb.Titlec.S09E02.De.Episoded.Episodee.720p.WEB.H264-Groupf",
+      "release": "Titlea.Titleb.Titlec.S09E02.Episodez.Episoded.Episodee.720p.WEB.H264-Groupf",
       "context": {
         "facet_hint": "series",
         "title": {
@@ -11030,8 +10534,6 @@
     },
     {
       "id": "series-0249",
-      "source": "srrdb.com",
-      "source_fingerprint": "2120bb1c929f30515a452055b2de7c37c0436fa776cec11e748a93cad1778044",
       "shape": "episodic",
       "release": "Titlea.2026.03.02.Textb.Textc.Textd.Texte.Textf.1080p.HDTV.H264-Groupg",
       "context": {
@@ -11065,8 +10567,6 @@
     },
     {
       "id": "series-0250",
-      "source": "srrdb.com",
-      "source_fingerprint": "1fd37ea2a75e35d20798c103e34ddc7c9e88f7687fae7292184cc679ae16d634",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E08.Episodec.Episoded.Episodee.Episodef.German.DL.FS.WEB.H264-Groupg",
       "context": {
@@ -11108,8 +10608,6 @@
     },
     {
       "id": "series-0251",
-      "source": "srrdb.com",
-      "source_fingerprint": "6b980e87fbcc8231724be35cee0336764c4ef327a5a9b589ddf60fe1654b05fd",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E18.Episodec.Episoded.German.DL.FS.WEB.H264.iNTERNAL-Groupe",
       "context": {
@@ -11151,8 +10649,6 @@
     },
     {
       "id": "series-0252",
-      "source": "srrdb.com",
-      "source_fingerprint": "b218de5cb289be84b809c53413cb58882ecf1c35b2f439b0f44d5f950042b79f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E10.POLISH.HDR.1080p.WEB.H265-Groupe",
       "context": {
@@ -11196,8 +10692,6 @@
     },
     {
       "id": "series-0253",
-      "source": "srrdb.com",
-      "source_fingerprint": "fc3940cbe43d16f47d26b2116120865c4c5e52d09c0e4ea906e1d7b72c4d3184",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E10.POLISH.DV.1080p.WEB.H265-Groupe",
       "context": {
@@ -11241,8 +10735,6 @@
     },
     {
       "id": "series-0254",
-      "source": "srrdb.com",
-      "source_fingerprint": "b2fd7d42910d43d8851516c9d1a31362e9d66377f42eb067d76431f3f1fa6820",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E09.POLISH.HDR.1080p.WEB.H265-Groupe",
       "context": {
@@ -11286,8 +10778,6 @@
     },
     {
       "id": "series-0255",
-      "source": "srrdb.com",
-      "source_fingerprint": "9e1aa5858122008914ff0455eb4e41877449e9b5c06756e5f91c7bb83f0fa76d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E09.POLISH.DV.1080p.WEB.H265-Groupe",
       "context": {
@@ -11331,8 +10821,6 @@
     },
     {
       "id": "series-0256",
-      "source": "srrdb.com",
-      "source_fingerprint": "6f1aacf9dcc1e6565063ace6e1e674d00340c9802a917d11a612211ae8cc0bef",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E08.POLISH.HDR.1080p.WEB.H265-Groupe",
       "context": {
@@ -11376,8 +10864,6 @@
     },
     {
       "id": "series-0257",
-      "source": "srrdb.com",
-      "source_fingerprint": "a6bfc623e9b8115e9e6084e4a8c4cb50d69770157f0d3d77ff1a65455ddf1d38",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E08.POLISH.DV.1080p.WEB.H265-Groupe",
       "context": {
@@ -11421,8 +10907,6 @@
     },
     {
       "id": "series-0258",
-      "source": "srrdb.com",
-      "source_fingerprint": "09e743e9229604addd357a846593c88649de086b50a6b9ff7add0dd53c2106df",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E07.POLISH.HDR.1080p.WEB.H265-Groupe",
       "context": {
@@ -11466,8 +10950,6 @@
     },
     {
       "id": "series-0259",
-      "source": "srrdb.com",
-      "source_fingerprint": "cbc4f48f848bbac24d6a055b9049ec05a4a27dbb4d04da152d6d85864f1f10f9",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S04E07.POLISH.DV.1080p.WEB.H265-Groupe",
       "context": {
@@ -11511,8 +10993,6 @@
     },
     {
       "id": "series-0260",
-      "source": "srrdb.com",
-      "source_fingerprint": "5557c54dc5bd87e79e4465d364c0e013a1348eb49398e39caf1f0d309ba53704",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S03E05.Episodeg-Episodeh.1080p.HDTV.H264-Groupi",
       "context": {
@@ -11556,8 +11036,6 @@
     },
     {
       "id": "series-0261",
-      "source": "srrdb.com",
-      "source_fingerprint": "3979c714defdc34a3fdaea2f903b7f79ad7ab50ffd1cb45b455ffde4543bb7a9",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E03.1080p.HDTV.H264-Groupc",
       "context": {
@@ -11601,14 +11079,12 @@
     },
     {
       "id": "series-0262",
-      "source": "srrdb.com",
-      "source_fingerprint": "64c452ef745e9cd4959da9c07681f1705ed9d8b044f1162ceac7018531575200",
       "shape": "episodic",
       "release": "Titlea.Titleb.2022.S04E03.1080p.HDTV.H264-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -11648,8 +11124,6 @@
     },
     {
       "id": "series-0263",
-      "source": "srrdb.com",
-      "source_fingerprint": "58009c5c2735d954edc8b34933d4531dc988bd30e045b61cdf5939b82489aada",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S38E11.1080p.HDTV.H264-Groupf",
       "context": {
@@ -11693,14 +11167,12 @@
     },
     {
       "id": "series-0264",
-      "source": "srrdb.com",
-      "source_fingerprint": "31878377be40d20d56ca791c3a44f951bbfb38948454645ce387088987798ba9",
       "shape": "episodic",
       "release": "Titlea.Titleb.2026.S01E02.Episodec.Episoded.Episodee.Episodef.1080p.HDTV.H264-Groupg",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -11740,8 +11212,6 @@
     },
     {
       "id": "series-0265",
-      "source": "srrdb.com",
-      "source_fingerprint": "e8cdebc8732983bb3a00da282be6b59a94d45134feec6793857e47ef6f79d2ff",
       "shape": "episodic",
       "release": "77.Titleb.Titlec.Titled.Titlee.S19E07.Episodef.Episodeg.Part.2.1080p.HDTV.H264-Grouph",
       "context": {
@@ -11785,8 +11255,6 @@
     },
     {
       "id": "series-0266",
-      "source": "srrdb.com",
-      "source_fingerprint": "f62ef74426f06dc56f7993ee0802dfa14d7d9c6549a403d41396e203d8899be3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S04E01.Episoded.Episodee.Cut.1080p.HDTV.H264-Groupf",
       "context": {
@@ -11830,8 +11298,6 @@
     },
     {
       "id": "series-0267",
-      "source": "srrdb.com",
-      "source_fingerprint": "66900cc8be6a8d3825337d84332bbb8c8e48d57e404dce8401db6162767dd472",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E02.Episoded.Episodee.Episodef.Episodeg.1080p.HDTV.H264-Grouph",
       "context": {
@@ -11875,8 +11341,6 @@
     },
     {
       "id": "series-0268",
-      "source": "srrdb.com",
-      "source_fingerprint": "67a266d73646187b551954dbb724b1dc420fd5afb323f36d5a2db81cb403661e",
       "shape": "episodic",
       "release": "Titlea.S01E08.Episodeb.1080p.HDTV.H264-Groupc",
       "context": {
@@ -11920,8 +11384,6 @@
     },
     {
       "id": "series-0269",
-      "source": "srrdb.com",
-      "source_fingerprint": "351c01c22cc7cf444a50688336625a9caf1da5a36792f69914d39395284e9420",
       "shape": "episodic",
       "release": "Titlea.2026.09.06.Textb.Textc.Textd.1080p.HDTV.H264-Groupe",
       "context": {
@@ -11955,8 +11417,6 @@
     },
     {
       "id": "series-0270",
-      "source": "srrdb.com",
-      "source_fingerprint": "31de734bbb0d11ca7be4906dbed740d8ce8b16901d1540f529ffe9441158435c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S07E01.Episodee.Episodef.1080p.HDTV.H264-Groupg",
       "context": {
@@ -12000,8 +11460,6 @@
     },
     {
       "id": "series-0271",
-      "source": "srrdb.com",
-      "source_fingerprint": "b269105160057b69ac79c16945828ceda2d892077790d4d987f6c4e0752ebf34",
       "shape": "episodic",
       "release": "Titlea.Titleb.S37E22.1080p.HDTV.H264-Groupc",
       "context": {
@@ -12045,8 +11503,6 @@
     },
     {
       "id": "series-0272",
-      "source": "srrdb.com",
-      "source_fingerprint": "5fa53c9eb94480d8d32165af981f51f6608ab0c3629f3c95ab5138110a6c14e7",
       "shape": "episodic",
       "release": "Titlea.Titleb.S12E15.1080p.HDTV.H264-Groupc",
       "context": {
@@ -12090,8 +11546,6 @@
     },
     {
       "id": "series-0273",
-      "source": "srrdb.com",
-      "source_fingerprint": "d87c0ee4b08aadb44031052c8d358cc0e5376568125e390c2c622d10e97733ce",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S14E03.1080p.HDTV.H264-Groupd",
       "context": {
@@ -12135,14 +11589,12 @@
     },
     {
       "id": "series-0274",
-      "source": "srrdb.com",
-      "source_fingerprint": "8fb447372f59212a63aa1999a2143462c6301a4737a06863040612b5aff6dbb8",
       "shape": "episodic",
       "release": "Titlea.Titleb.2026.S01E01.Episodec.Episoded.Episodee.Episodef.Episodeg.1080p.HDTV.H264-Grouph",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -12182,8 +11634,6 @@
     },
     {
       "id": "series-0275",
-      "source": "srrdb.com",
-      "source_fingerprint": "4d7da40ea8006ecd93d6d33118cb8cfa439bb7a5d0ef236dea84960717b8e6ec",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E20.Episodec.Episoded.Episodee.Episodef.Episodeg.Episodeh.Episodei.1080p.HDTV.H264-Groupj",
       "context": {
@@ -12227,8 +11677,6 @@
     },
     {
       "id": "series-0276",
-      "source": "srrdb.com",
-      "source_fingerprint": "958450bb49d79c3da283c2f1c6c8ad82fef48f03e398fb26ee1312c57aae0d79",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E19.Episodec.Episoded.Episodee.Episodef.Episodeg.Episodeh.1080p.HDTV.H264-Groupi",
       "context": {
@@ -12272,8 +11720,6 @@
     },
     {
       "id": "series-0277",
-      "source": "srrdb.com",
-      "source_fingerprint": "849bb6bb9bf5baac92d37a086efe381f788810d8e82f0afa30f9420aedd2b77e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E17.Episodec.Episoded.Episodee.1080p.HDTV.H264-Groupf",
       "context": {
@@ -12317,8 +11763,6 @@
     },
     {
       "id": "series-0278",
-      "source": "srrdb.com",
-      "source_fingerprint": "aa8a8b05163926229c772a118e0d09d4b271bf05b4c5a9a7ba0a33087b26612c",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E10.Episodec.Episoded.Episodee.1080p.HDTV.H264-Groupf",
       "context": {
@@ -12362,8 +11806,6 @@
     },
     {
       "id": "series-0279",
-      "source": "srrdb.com",
-      "source_fingerprint": "0414331bbc26e83bc4e0446a4db3b6ed4498835964eee7099885c5a9f4f2b0af",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S05E04.Episoded.Episodee.1080p.HDTV.H264-Groupf",
       "context": {
@@ -12407,8 +11849,6 @@
     },
     {
       "id": "series-0280",
-      "source": "srrdb.com",
-      "source_fingerprint": "99f17734ddc630d3644eac5147ba3801bb66e0260e3185cf9bc3cd3d50fb8db0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.S01E01.1080p.HDTV.H264-Groupf",
       "context": {
@@ -12452,8 +11892,6 @@
     },
     {
       "id": "series-0281",
-      "source": "srrdb.com",
-      "source_fingerprint": "d2eed0b139ad605f557d1cb96f7af3d32022b8e5ef6273d99b88a781fc3a16d0",
       "shape": "episodic",
       "release": "Titlea.S28E01.1080p.HDTV.H264-Groupb",
       "context": {
@@ -12497,8 +11935,6 @@
     },
     {
       "id": "series-0282",
-      "source": "srrdb.com",
-      "source_fingerprint": "18a2de998eb99617802ee9c7f244acf2fceab6ba5c6ef2bcf1bd5669d95bfea6",
       "shape": "episodic",
       "release": "Titlea.Titleb.S21E09.1080p.HDTV.H264-Groupc",
       "context": {
@@ -12542,8 +11978,6 @@
     },
     {
       "id": "series-0283",
-      "source": "srrdb.com",
-      "source_fingerprint": "7baab3db5d71ad8faa916255c2a6d0e3a82f9da7b61f7a6df86b8a16360ab811",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E01.Episoded.Episodee.Episodef.Episodeg.Episodeh.Episodei.1080p.HDTV.H264-Groupj",
       "context": {
@@ -12587,8 +12021,6 @@
     },
     {
       "id": "series-0284",
-      "source": "srrdb.com",
-      "source_fingerprint": "8b0623c502314b3c926a3e8b4a978ae11af01aedacbba55273a27ee0475cfab4",
       "shape": "episodic",
       "release": "Titlea.Titleb.2026.09.04.1080p.HDTV.H264-Groupc",
       "context": {
@@ -12622,8 +12054,6 @@
     },
     {
       "id": "series-0285",
-      "source": "srrdb.com",
-      "source_fingerprint": "b73c6836db4d11dddf1bc3778aab786ebc3fe5571cc6d92744fb1a2d06aa722b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S03E08.Episoded.Episodee.Episodef.1080p.HDTV.H264-Groupg",
       "context": {
@@ -12667,8 +12097,6 @@
     },
     {
       "id": "series-0286",
-      "source": "srrdb.com",
-      "source_fingerprint": "50368d3afd4100f0e89a3950ba68a1cbf12086ae3eee61421df7bc5814ee7b41",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E02.German.DL.HDR.2160p.WEB.h265-Groupe",
       "context": {
@@ -12712,8 +12140,6 @@
     },
     {
       "id": "series-0287",
-      "source": "srrdb.com",
-      "source_fingerprint": "e758fd014f4020c19fb8d9d25a1aeabc419c673e269fea5292cb1873ed2180b7",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E02.German.DL.720p.WEB.h264-Groupe",
       "context": {
@@ -12757,8 +12183,6 @@
     },
     {
       "id": "series-0288",
-      "source": "srrdb.com",
-      "source_fingerprint": "3cd2ddf0be712c6ea9738312a6fb411b80bc32d9c283e0a273f706b5310b32a7",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E02.GERMAN.DL.DV.2160P.WEB.H265-Groupe",
       "context": {
@@ -12802,8 +12226,6 @@
     },
     {
       "id": "series-0289",
-      "source": "srrdb.com",
-      "source_fingerprint": "65db77b6dee24bdb6cb3ef29c30d8997cbd82c49281d356581def004286dfdda",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E02.GERMAN.DL.2160P.WEB.H265-Groupe",
       "context": {
@@ -12847,8 +12269,6 @@
     },
     {
       "id": "series-0290",
-      "source": "srrdb.com",
-      "source_fingerprint": "60755d57f2fecea7c751b40a87bba8bd5998cc73e824234fb7ebf59fe97092f7",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S02E02.GERMAN.DL.1080P.WEB.H264-Groupe",
       "context": {
@@ -12892,8 +12312,6 @@
     },
     {
       "id": "series-0291",
-      "source": "srrdb.com",
-      "source_fingerprint": "9e1ae13aee16f726572b6545b2b38320b5a9308828d4c9b62cdff5d8f063d181",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E02.iTALiAN.MULTi.1080p.WEB.H264-Groupc",
       "context": {
@@ -12937,8 +12355,6 @@
     },
     {
       "id": "series-0292",
-      "source": "srrdb.com",
-      "source_fingerprint": "5579f5e14ededee5ead9d1526bff71c53dd13dcb3586cb1e10e4ca619b66cffa",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E02.iTALiAN.MULTi.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -12982,8 +12398,6 @@
     },
     {
       "id": "series-0293",
-      "source": "srrdb.com",
-      "source_fingerprint": "5e9ddf85a1418a3d5326ef53a291765e905a09e3f80e418c424eb77046e31bda",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E02.iTALiAN.MULTi.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -13027,14 +12441,12 @@
     },
     {
       "id": "series-0294",
-      "source": "srrdb.com",
-      "source_fingerprint": "cd9547bbc6e19d307caa53936d05ef897c38d86f19e36aeac11503c77910278e",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.MULTI.HDR.2160p.WEB.H265-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13074,14 +12486,12 @@
     },
     {
       "id": "series-0295",
-      "source": "srrdb.com",
-      "source_fingerprint": "ce5e2e83bb86f15c32d03910437542b485b140daf6aa8c1373f21759d70a4ca8",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.MULTI.DV.2160p.WEB.H265-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13121,14 +12531,12 @@
     },
     {
       "id": "series-0296",
-      "source": "srrdb.com",
-      "source_fingerprint": "58ba65ffe9b1feb5ebfce38b47640ebcf968ea5b7fd8fa01949e71467727e1ac",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.FRENCH.720p.WEB.H264-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13168,14 +12576,12 @@
     },
     {
       "id": "series-0297",
-      "source": "srrdb.com",
-      "source_fingerprint": "588f37b137a0395b9f4d5be0932c36244a1a8014458db7f6d1ce6f483715456b",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.MULTI.1080p.WEB.H264-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13215,14 +12621,12 @@
     },
     {
       "id": "series-0298",
-      "source": "srrdb.com",
-      "source_fingerprint": "b1440c5fb07a689ce12ed568280fd7d8d141148b7a30dc958216c3d3d5ec8ab6",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.DV.2160p.WEB.h265-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13262,14 +12666,12 @@
     },
     {
       "id": "series-0299",
-      "source": "srrdb.com",
-      "source_fingerprint": "8afc2d8f4cf9eaa63f5d2ca98d3c4bc893f5345c5f3e0f77a1701dab6b9d5402",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.2160p.WEB.H265-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13309,14 +12711,12 @@
     },
     {
       "id": "series-0300",
-      "source": "srrdb.com",
-      "source_fingerprint": "a795f5d5bf110999bce920cc023eb06bba9a77a5251c3bd71ded85b292f7e155",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.HDR.2160p.WEB.H265-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13356,14 +12756,12 @@
     },
     {
       "id": "series-0301",
-      "source": "srrdb.com",
-      "source_fingerprint": "ca2610b83029917490c232006fb2929b9dd68b29099b5cbad98c6e2ca9162c60",
       "shape": "episodic",
       "release": "Titlea.Titleb.2024.S02E02.1080p.WEB.H264-Groupc",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea.Titleb"
+          "name": "Titlea.Titleb"
         },
         "aliases": [],
         "known_years": [],
@@ -13403,8 +12801,6 @@
     },
     {
       "id": "series-0302",
-      "source": "srrdb.com",
-      "source_fingerprint": "d3e8b788d3b51dc0ca36587daccf9f51976dd1ddb4e51bca23ad449b58070754",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S23E04.1080p.HDTV.H264-Groupd",
       "context": {
@@ -13448,8 +12844,6 @@
     },
     {
       "id": "series-0303",
-      "source": "srrdb.com",
-      "source_fingerprint": "34ee347c1c4dbbddff2b6521a509f05791c9d46244913b72b75394c66b87f835",
       "shape": "episodic",
       "release": "Titlea.S22E01.Episodeb.Episodec.Episoded.Episodee.Episodef.Episodeg.1080p.HDTV.H264-Grouph",
       "context": {
@@ -13493,8 +12887,6 @@
     },
     {
       "id": "series-0304",
-      "source": "srrdb.com",
-      "source_fingerprint": "a1f7e4e6f42d321bac812a42a3449cd8412189e424aee79a039b1a30b4db0b1f",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E06.1080p.HDTV.H264-Groupc",
       "context": {
@@ -13538,8 +12930,6 @@
     },
     {
       "id": "series-0305",
-      "source": "srrdb.com",
-      "source_fingerprint": "fcdab1730fa360487102208a461ab2d48ce834b3f99df367bb802bb67cd73fe1",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Special.Titled.S01E07.POLISH.WEB.H264-Groupe",
       "context": {
@@ -13581,8 +12971,6 @@
     },
     {
       "id": "series-0306",
-      "source": "srrdb.com",
-      "source_fingerprint": "e2862464a86c8058436f3e945607b989b501300df5ed897eb2e66ea7f163866d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Special.Titled.S01E06.POLISH.720p.WEB.H264-Groupe",
       "context": {
@@ -13626,8 +13014,6 @@
     },
     {
       "id": "series-0307",
-      "source": "srrdb.com",
-      "source_fingerprint": "af4128bc330565535ddd2bc0fc5446048acab004c2530122a9bbc355a5814a8d",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Special.Titled.S01E04.POLISH.720p.WEB.H264-Groupe",
       "context": {
@@ -13671,8 +13057,6 @@
     },
     {
       "id": "series-0308",
-      "source": "srrdb.com",
-      "source_fingerprint": "2509c6f7309cbc9d556fec87f071f42b72af198d3385a2a045e9a69b142e9f95",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Special.Titled.S01E07.POLISH.1080p.WEB.H264-Groupe",
       "context": {
@@ -13716,8 +13100,6 @@
     },
     {
       "id": "series-0309",
-      "source": "srrdb.com",
-      "source_fingerprint": "c20226d57b0d63db011156515a74a5d7b7d4c0f85ca15628d2441d1bb43c1f74",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Special.Titled.S01E05.POLISH.1080p.WEB.H264-Groupe",
       "context": {
@@ -13761,8 +13143,6 @@
     },
     {
       "id": "series-0310",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e5b2f15ab0def077c7dafac5fd849acf2723d89f9138e4fb4e454d20c2da782",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Special.Titled.S01E04.POLISH.1080p.WEB.H264-Groupe",
       "context": {
@@ -13806,8 +13186,6 @@
     },
     {
       "id": "series-0311",
-      "source": "srrdb.com",
-      "source_fingerprint": "8adffa60b9d5a6b50eceb1c77d9409a74cc7f29157f9fe5cdd372ad24be3513e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E09.BDRip.x264-Groupc",
       "context": {
@@ -13849,8 +13227,6 @@
     },
     {
       "id": "series-0312",
-      "source": "srrdb.com",
-      "source_fingerprint": "cc7f10a1befc83febd3284086a89b904a7590d9dfc9f7e46e05f3778941a7346",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E08.BDRip.x264-Groupc",
       "context": {
@@ -13892,8 +13268,6 @@
     },
     {
       "id": "series-0313",
-      "source": "srrdb.com",
-      "source_fingerprint": "621d08c5c53871d518928fdad8ae872f8af5a62e28aeb3bd0a4b624d1313714b",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E07.BDRip.x264-Groupc",
       "context": {
@@ -13935,8 +13309,6 @@
     },
     {
       "id": "series-0314",
-      "source": "srrdb.com",
-      "source_fingerprint": "fff54e464281a7fd3766f486f19e030085c14dd104499d7d6e99fea9bad4fdf0",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E06.BDRip.x264-Groupc",
       "context": {
@@ -13978,8 +13350,6 @@
     },
     {
       "id": "series-0315",
-      "source": "srrdb.com",
-      "source_fingerprint": "8fbbebf81d53d8d58f97e73ee043917c46d6af5c49fe58f27e4d210075de560f",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E05.BDRip.x264-Groupc",
       "context": {
@@ -14021,8 +13391,6 @@
     },
     {
       "id": "series-0316",
-      "source": "srrdb.com",
-      "source_fingerprint": "7f7b45ece382dca0fd0dd136aea7b0876f012f34d1dbd05a1f9d27758071c76b",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E04.BDRip.x264-Groupc",
       "context": {
@@ -14064,8 +13432,6 @@
     },
     {
       "id": "series-0317",
-      "source": "srrdb.com",
-      "source_fingerprint": "381d02df2eb114ed23ab322b3011469c1650587d1c0fcf48e85f33519e8adc82",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E03.BDRip.x264-Groupc",
       "context": {
@@ -14107,8 +13473,6 @@
     },
     {
       "id": "series-0318",
-      "source": "srrdb.com",
-      "source_fingerprint": "8eebd33662f136c5dea572e40fb4892cff55ae995d892cb1d654ad4750fc3a60",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E02.BDRip.x264-Groupc",
       "context": {
@@ -14150,8 +13514,6 @@
     },
     {
       "id": "series-0319",
-      "source": "srrdb.com",
-      "source_fingerprint": "69d9d3edf3750dafdf7543c84482e4e65d6338338a99d4b7a47ccb2234ab018b",
       "shape": "episodic",
       "release": "Titlea.S01E05.MULTI.2160p.WEB.H265-Groupb",
       "context": {
@@ -14195,8 +13557,6 @@
     },
     {
       "id": "series-0320",
-      "source": "srrdb.com",
-      "source_fingerprint": "f39cd5a381b093ad48678ce532cf681df79713b522debf410e791c97c56834fd",
       "shape": "episodic",
       "release": "Titlea.S02E08.FINAL.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14240,8 +13600,6 @@
     },
     {
       "id": "series-0321",
-      "source": "srrdb.com",
-      "source_fingerprint": "f455c929461a886f9e4a5063e18fea3958e615fec6e4affd3a5c48f247d564d6",
       "shape": "episodic",
       "release": "Titlea.S02E07.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14285,8 +13643,6 @@
     },
     {
       "id": "series-0322",
-      "source": "srrdb.com",
-      "source_fingerprint": "531331934679f529e11505f894cd66968788b90e1ccc8ae0aff4daaebf32a814",
       "shape": "episodic",
       "release": "Titlea.S02E05.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14330,8 +13686,6 @@
     },
     {
       "id": "series-0323",
-      "source": "srrdb.com",
-      "source_fingerprint": "ff95fb33be5d5d0ce663ef60e42cd4242c0b517d1545297c373f47525647eea5",
       "shape": "episodic",
       "release": "Titlea.S02E06.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14375,8 +13729,6 @@
     },
     {
       "id": "series-0324",
-      "source": "srrdb.com",
-      "source_fingerprint": "be86b0f580838ce650051ad77be31c37c00771f10cf7684d9b2009aa03726c83",
       "shape": "episodic",
       "release": "Titlea.S02E01.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14420,8 +13772,6 @@
     },
     {
       "id": "series-0325",
-      "source": "srrdb.com",
-      "source_fingerprint": "46c6e815caf50ef551089523da495d92d37c000a383c94500ebdd8983ebca873",
       "shape": "episodic",
       "release": "Titlea.S01E05.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14465,8 +13815,6 @@
     },
     {
       "id": "series-0326",
-      "source": "srrdb.com",
-      "source_fingerprint": "b1948d7ac2fa0109e57515eed71e91f3dfa8723c08e93d3ab1b307f7cbde105d",
       "shape": "episodic",
       "release": "Titlea.S01E04.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -14510,8 +13858,6 @@
     },
     {
       "id": "series-0327",
-      "source": "srrdb.com",
-      "source_fingerprint": "23ecbba0c8b30880abb21d6e8bb6fd8e43c1ceb4171d03e0f0039bfbf444b037",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S03E10.FINAL.MULTI.HDR.2160p.WEB.H265-Groupg",
       "context": {
@@ -14555,8 +13901,6 @@
     },
     {
       "id": "series-0328",
-      "source": "srrdb.com",
-      "source_fingerprint": "63915591e943a5507a9b60955197d32c210a91ed16123388ae19bfc3dbdf479b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S03E03.MULTI.2160p.WEB.H265-Groupg",
       "context": {
@@ -14600,8 +13944,6 @@
     },
     {
       "id": "series-0329",
-      "source": "srrdb.com",
-      "source_fingerprint": "2cd586004dc5eb6df00b64d532593642f8df19f55c041c2419062fd8f4c6c7e3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S03E02.MULTI.HDR.2160p.WEB.H265-Groupg",
       "context": {
@@ -14645,8 +13987,6 @@
     },
     {
       "id": "series-0330",
-      "source": "srrdb.com",
-      "source_fingerprint": "ff4920a6aaf94a7b27d233ad47f3ad4834989a3ae315cff27591a307058538f2",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S03E10.POLISH.720p.WEB.H264-Groupg",
       "context": {
@@ -14690,8 +14030,6 @@
     },
     {
       "id": "series-0331",
-      "source": "srrdb.com",
-      "source_fingerprint": "b9be4318e1191e66c0ca358f8b97607278fa750ec767400275fe689c4fa28729",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S03E07.POLISH.720p.WEB.H264-Groupg",
       "context": {
@@ -14735,8 +14073,6 @@
     },
     {
       "id": "series-0332",
-      "source": "srrdb.com",
-      "source_fingerprint": "8c788e77eb796c5212ba48eea8e63ccaf11b891f8fffb945578e8276b8b7ae92",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E10.DV.2160p.WEB.h265-Groupg",
       "context": {
@@ -14780,8 +14116,6 @@
     },
     {
       "id": "series-0333",
-      "source": "srrdb.com",
-      "source_fingerprint": "e327c7b1969875c019c4c75979ecd1d6cb81c39c45d5afac43fc88e5da8fb6cd",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E10.2160p.WEB.h265-Groupg",
       "context": {
@@ -14825,8 +14159,6 @@
     },
     {
       "id": "series-0334",
-      "source": "srrdb.com",
-      "source_fingerprint": "2caf5c7c3816d095f0709d9a371d26ec24d3536e33c569a94712012c5a5acb80",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E09.DV.2160p.WEB.h265-Groupg",
       "context": {
@@ -14870,8 +14202,6 @@
     },
     {
       "id": "series-0335",
-      "source": "srrdb.com",
-      "source_fingerprint": "8b98f7da8118dfb86d4f74d178142c96e5d3c581e5f5b86b106b4645536662e7",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E11.FRENCH.720p.WEB.H264-Groupc",
       "context": {
@@ -14915,8 +14245,6 @@
     },
     {
       "id": "series-0336",
-      "source": "srrdb.com",
-      "source_fingerprint": "5c506e9259113f0d5dc4b44650b61aadb4a9769262b028192eaa8321aa83ff8d",
       "shape": "episodic",
       "release": "Titlea-Titleb.Titlec.Titled.Titlee.S01E22.GERMAN.Episodef.WEBRiP.x264-Groupg",
       "context": {
@@ -14958,8 +14286,6 @@
     },
     {
       "id": "series-0337",
-      "source": "srrdb.com",
-      "source_fingerprint": "5eebd24e733fdb4050bbfd9355bfa9ed2d82ae5e4d58de1884e9a9104e4b8780",
       "shape": "episodic",
       "release": "Titlea-Titleb.Titlec.Titled.Titlee.S01E25.GERMAN.Episodef.WEBRiP.x264-Groupg",
       "context": {
@@ -15001,8 +14327,6 @@
     },
     {
       "id": "series-0338",
-      "source": "srrdb.com",
-      "source_fingerprint": "dcee54d4f3e58f0a4760eb1a75f79ad21dab50e80046e9e117bb7789453ecfe7",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E09.FRENCH.720p.WEB.H264-Groupc",
       "context": {
@@ -15046,8 +14370,6 @@
     },
     {
       "id": "series-0339",
-      "source": "srrdb.com",
-      "source_fingerprint": "6c639c3ec0ccda3d0fad13dc7b1bbe48e3e7ea8172b100547e2b8903831a981e",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E08.FiNAL.FRENCH.720p.WEB.H264-Groupc",
       "context": {
@@ -15091,8 +14413,6 @@
     },
     {
       "id": "series-0340",
-      "source": "srrdb.com",
-      "source_fingerprint": "3bc390827f584dee457038f9ae6fe5ac00a43ad82a16271fb31c8d0aa81c48f9",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E05.FRENCH.720p.WEB.H264-Groupc",
       "context": {
@@ -15136,8 +14456,6 @@
     },
     {
       "id": "series-0341",
-      "source": "srrdb.com",
-      "source_fingerprint": "df75c61f4d0ee515d226f12e42105012217cfb96dff0afa02a5c8991b1e61b99",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E05.FRENCH.1080p.WEB.H264-Groupc",
       "context": {
@@ -15181,8 +14499,6 @@
     },
     {
       "id": "series-0342",
-      "source": "srrdb.com",
-      "source_fingerprint": "680114619ca216ea1720bfbd2290037e6190d73f153fa38f11b036d418c76b99",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E04.FRENCH.720p.WEB.H264-Groupc",
       "context": {
@@ -15226,8 +14542,6 @@
     },
     {
       "id": "series-0343",
-      "source": "srrdb.com",
-      "source_fingerprint": "d9f23dc8394036d9bd2a037f9907388119a22e0f23c6b8ebe649cdc233d97354",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E04.FRENCH.1080p.WEB.H264-Groupc",
       "context": {
@@ -15271,8 +14585,6 @@
     },
     {
       "id": "series-0344",
-      "source": "srrdb.com",
-      "source_fingerprint": "196010e24364ec09da0e7b27adb241548c94bb9f21c6dff30c18416b0bf8f746",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E03.FRENCH.720p.WEB.H264-Groupc",
       "context": {
@@ -15316,8 +14628,6 @@
     },
     {
       "id": "series-0345",
-      "source": "srrdb.com",
-      "source_fingerprint": "ed552b3f76f15e1fe71944034812a3c37c2a18fa4121e6548940e83bb45f36df",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E08.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15361,8 +14671,6 @@
     },
     {
       "id": "series-0346",
-      "source": "srrdb.com",
-      "source_fingerprint": "3ac0d6ba9e34b6d3a290fff31da4c0540b8ab4568784d1e12574257834a85065",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E07.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15406,8 +14714,6 @@
     },
     {
       "id": "series-0347",
-      "source": "srrdb.com",
-      "source_fingerprint": "5009b8e6893772b7e48e5aad28616928bda2874dbbe2da924a08cb4b524239da",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E06.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15451,8 +14757,6 @@
     },
     {
       "id": "series-0348",
-      "source": "srrdb.com",
-      "source_fingerprint": "25a4f41d589390a17a726361bc78646061fc9fbf3b4eff5ec5ef291de2276823",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E05.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15496,8 +14800,6 @@
     },
     {
       "id": "series-0349",
-      "source": "srrdb.com",
-      "source_fingerprint": "0615b58ac7e17f043b95f5f5abcdb30ea60eb7f38ad147b3c15889f2268a9082",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E04.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15541,8 +14843,6 @@
     },
     {
       "id": "series-0350",
-      "source": "srrdb.com",
-      "source_fingerprint": "dfc2179f31c3c7b27a4fdd523ca19dfb8f87d36b276efaf090811153b75e2195",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E03.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15586,8 +14886,6 @@
     },
     {
       "id": "series-0351",
-      "source": "srrdb.com",
-      "source_fingerprint": "7f8ae1fa973a028492c6d33fd062d71aa6e730f130bd872964a5eb1a784bbb38",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E02.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15631,8 +14929,6 @@
     },
     {
       "id": "series-0352",
-      "source": "srrdb.com",
-      "source_fingerprint": "1e19f1e6f8d67db5318c7695898d3d8d06a22aeeb2e1bd296aef9462c4791e95",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E01.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -15676,8 +14972,6 @@
     },
     {
       "id": "series-0353",
-      "source": "srrdb.com",
-      "source_fingerprint": "35064915eb3ec080bdb46de73bbe17d9952bc156d427173f0576da13b87d099a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E01.POLISH.DV.2160p.WEB.H265-Groupe",
       "context": {
@@ -15721,8 +15015,6 @@
     },
     {
       "id": "series-0354",
-      "source": "srrdb.com",
-      "source_fingerprint": "591ed34f60f874bbe549a795f55bfe66a9e6c4c5352910dad5fc2fb2a35fd75c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E03.FiNAL.Episodee.FRENCH.HDR.2160p.WEB.H265-Groupf",
       "context": {
@@ -15766,8 +15058,6 @@
     },
     {
       "id": "series-0355",
-      "source": "srrdb.com",
-      "source_fingerprint": "6ca1763aa58bb0bbd74db57b7e9d07751972e847c5531e3c1b406ab9c4a9721a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E03.FiNAL.Episodee.FRENCH.DV.2160p.WEB.H265-Groupf",
       "context": {
@@ -15811,8 +15101,6 @@
     },
     {
       "id": "series-0356",
-      "source": "srrdb.com",
-      "source_fingerprint": "0af08003fb8fd7789154e351c9328829949f2c58f5451c4a44834ed35fa9447e",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E02.Episodee.FRENCH.HDR.2160p.WEB.H265-Groupf",
       "context": {
@@ -15856,8 +15144,6 @@
     },
     {
       "id": "series-0357",
-      "source": "srrdb.com",
-      "source_fingerprint": "ddf833d869dadf09993738a702fdb0f9cfbbada635019d4a6d4ed900944ebfa0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E02.Episodee.FRENCH.DV.2160p.WEB.H265-Groupf",
       "context": {
@@ -15901,8 +15187,6 @@
     },
     {
       "id": "series-0358",
-      "source": "srrdb.com",
-      "source_fingerprint": "e1e08bc2cb3b8283ee9f4ceb2dc3913e64376334c5cb236f9ae705de73d7b504",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E01.Episodee.FRENCH.HDR.2160p.WEB.H265-Groupf",
       "context": {
@@ -15946,8 +15230,6 @@
     },
     {
       "id": "series-0359",
-      "source": "srrdb.com",
-      "source_fingerprint": "cf1e445842e8fa71f5b47c8dec4705e1e854df2a721db22e2e9529a1c39daf47",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E01.Episodee.FRENCH.DV.2160p.WEB.H265-Groupf",
       "context": {
@@ -15991,8 +15273,6 @@
     },
     {
       "id": "series-0360",
-      "source": "srrdb.com",
-      "source_fingerprint": "d5942bdda6d739ed09d2cba8a20c6cfc99580679e7f64d4862093235ed5a8dc0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E02.Episodee.FRENCH.1080p.WEB.H264-Groupf",
       "context": {
@@ -16036,8 +15316,6 @@
     },
     {
       "id": "series-0361",
-      "source": "srrdb.com",
-      "source_fingerprint": "68de94399a6497236b74c1d41c3f026af1b1e995eccb93649723bc86f7eb72c9",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E07.POLISH.WEB.H264-Groupd",
       "context": {
@@ -16079,8 +15357,6 @@
     },
     {
       "id": "series-0362",
-      "source": "srrdb.com",
-      "source_fingerprint": "2c1d7949ebcfca8c020d3b780526f9d35a92e7fc08e1c9d2f24f08ac0a7c42d4",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E07.POLISH.720p.WEB.H264-Groupd",
       "context": {
@@ -16124,8 +15400,6 @@
     },
     {
       "id": "series-0363",
-      "source": "srrdb.com",
-      "source_fingerprint": "639c87925cbbb4735c507cbf427a209b0b83ce0e748a89a3483ec55d692984ad",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E07.MULTI.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -16169,8 +15443,6 @@
     },
     {
       "id": "series-0364",
-      "source": "srrdb.com",
-      "source_fingerprint": "916dd69d54868932508ef8aa896651b6d6e7249ef24ba9358809bbe31db87746",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E07.MULTI.DV.2160p.WEB.H265-Groupd",
       "context": {
@@ -16214,8 +15486,6 @@
     },
     {
       "id": "series-0365",
-      "source": "srrdb.com",
-      "source_fingerprint": "7ef35660d8305a046b37215f4445df708ce07f7799406d9fff42593f1611bbd7",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E07.FRENCH.720p.WEB.H264-Groupd",
       "context": {
@@ -16259,8 +15529,6 @@
     },
     {
       "id": "series-0366",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e3d9fddb6e53a33275508a82992797e1fce1b0fb71e4df06067f872b02ce7b3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E08.iTALiAN.MULTi.DV.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -16304,8 +15572,6 @@
     },
     {
       "id": "series-0367",
-      "source": "srrdb.com",
-      "source_fingerprint": "9d9833e27b003c2b82ccf400e3fef50650be9ff65de2e221c6f45e05bd82b5fa",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E08.iTALiAN.720p.WEB.H264-Groupd",
       "context": {
@@ -16349,8 +15615,6 @@
     },
     {
       "id": "series-0368",
-      "source": "srrdb.com",
-      "source_fingerprint": "fcd30358d4a4bc2ac992b72a16fe2ac07776c3549f101f8490c8b041adbdb19a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E08.iTALiAN.1080p.WEB.H264-Groupd",
       "context": {
@@ -16394,8 +15658,6 @@
     },
     {
       "id": "series-0369",
-      "source": "srrdb.com",
-      "source_fingerprint": "b19463ce1c511b6da037553ca6ec1605e7a489b71e3ce7a320449e5d6f1cca7b",
       "shape": "episodic",
       "release": "Titlea.S02E12.Episodeb.Episodec.Episoded.German.DL.WEB.h264-Groupe",
       "context": {
@@ -16437,8 +15699,6 @@
     },
     {
       "id": "series-0370",
-      "source": "srrdb.com",
-      "source_fingerprint": "63ea69dd0c2acfdad832dddb0f1d7900346a0391b0e6ba6b3b14b1e30eb50918",
       "shape": "episodic",
       "release": "Titlea.S02E11.Episodeb.Episodec.Episoded.Episodee.German.DL.WEB.h264-Groupf",
       "context": {
@@ -16480,10 +15740,8 @@
     },
     {
       "id": "series-0371",
-      "source": "srrdb.com",
-      "source_fingerprint": "388c26ebec91c7641a098d65eed2b1bd55c880fbedc869c5c3ee4c8bb0eb1608",
       "shape": "episodic",
-      "release": "Titlea.S02E10.Episodeb.Episodec.es.Episoded.German.DL.WEB.h264-Groupe",
+      "release": "Titlea.S02E10.Episodeb.Episodec.Episodez.Episoded.German.DL.WEB.h264-Groupe",
       "context": {
         "facet_hint": "series",
         "title": {
@@ -16523,8 +15781,6 @@
     },
     {
       "id": "series-0372",
-      "source": "srrdb.com",
-      "source_fingerprint": "10d488f998456854621538fd49179d03fd573771e3d99a2c151c388c640758fe",
       "shape": "episodic",
       "release": "Titlea.S02E09.Episodeb.Episodec.Episoded.Episodee.German.DL.WEB.h264-Groupf",
       "context": {
@@ -16566,8 +15822,6 @@
     },
     {
       "id": "series-0373",
-      "source": "srrdb.com",
-      "source_fingerprint": "29474c7e2c47d7529487b808526c49ec9012e62cd0b0fed550a3993dd67f6bce",
       "shape": "episodic",
       "release": "Titlea.S02E08.Episodeb.Episodec.Episoded.German.DL.WEB.h264-Groupe",
       "context": {
@@ -16609,8 +15863,6 @@
     },
     {
       "id": "series-0374",
-      "source": "srrdb.com",
-      "source_fingerprint": "768a4cb454634d4988e4ca65b2c10c3d162b2c549eb6ae4d459612ff8163328a",
       "shape": "episodic",
       "release": "Titlea.S02E07.Episodeb.German.DL.WEB.h264-Groupc",
       "context": {
@@ -16652,8 +15904,6 @@
     },
     {
       "id": "series-0375",
-      "source": "srrdb.com",
-      "source_fingerprint": "5bc5353efc67e159afe591966162686c07caddb66a461835565a07b97b476ace",
       "shape": "episodic",
       "release": "Titlea.S02E06.Episodeb.Episodec.Episoded.Episodee.Episodef.German.DL.WEB.h264-Groupg",
       "context": {
@@ -16695,8 +15945,6 @@
     },
     {
       "id": "series-0376",
-      "source": "srrdb.com",
-      "source_fingerprint": "39bb7b34c22faac4789f54f0ca90a4914267be37d5fed23acdd2e776eddabe0f",
       "shape": "episodic",
       "release": "Titlea.S02E05.Episodeb.Episodec.Episoded.Episodee.German.DL.WEB.h264-Groupf",
       "context": {
@@ -16738,8 +15986,6 @@
     },
     {
       "id": "series-0377",
-      "source": "srrdb.com",
-      "source_fingerprint": "4c3fba6d3a3264b8007c5f7d1c6a16ef309b88445884df2f9c95d3da0820480b",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.2026.Titled.Titlee.2025.09.06.Textf.Textg.Texth.Texti.Textj.1080p.HDTV.H264-Groupk",
       "context": {
@@ -16773,8 +16019,6 @@
     },
     {
       "id": "series-0378",
-      "source": "srrdb.com",
-      "source_fingerprint": "516f640fcf5ab58d9686818507c97aabae996c78d9d41c1051820d0667024495",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.2026.Titled.Titlee.2025.06.07.Textf.Textg.Texth.Texti.Textj.Textk.1080p.HDTV.H264-Groupl",
       "context": {
@@ -16808,8 +16052,6 @@
     },
     {
       "id": "series-0379",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e4269593c52807d90dd2330b639c3140203dbb69e2c3d1460c9f3b7fbcaf4df",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E09.POLISH.1080p.WEB.H264-Groupd",
       "context": {
@@ -16853,8 +16095,6 @@
     },
     {
       "id": "series-0380",
-      "source": "srrdb.com",
-      "source_fingerprint": "ff4856370495a444284f58e50083fd9277e3a45ec456b8e6e2f1435ac3484662",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E12.POLISH.DV.2160p.WEB.H265-Groupd",
       "context": {
@@ -16898,8 +16138,6 @@
     },
     {
       "id": "series-0381",
-      "source": "srrdb.com",
-      "source_fingerprint": "e32ed0ff45179655625e5ff7247762a3b93118f6aa47aa41c1b6bd8f9490dfba",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E12.POLISH.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -16943,8 +16181,6 @@
     },
     {
       "id": "series-0382",
-      "source": "srrdb.com",
-      "source_fingerprint": "ae68902d7776237ee8e9e22c41b8315b79bd3552f94c7cfa71e2f78a266761f6",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E12.POLISH.WEB.H264-Groupd",
       "context": {
@@ -16986,8 +16222,6 @@
     },
     {
       "id": "series-0383",
-      "source": "srrdb.com",
-      "source_fingerprint": "849975d1704177beed37ef4c1087b96e5e652f0cc7d7d37f6050f12fc9c57775",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E11.POLISH.WEB.H264-Groupd",
       "context": {
@@ -17029,8 +16263,6 @@
     },
     {
       "id": "series-0384",
-      "source": "srrdb.com",
-      "source_fingerprint": "c33bc901d7b734f3f2a8d43b4c3a84cad860ab4ac8d084bd0a673004394d84fd",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E11.POLISH.HDR.2160p.WEB.H265-Groupd",
       "context": {
@@ -17074,8 +16306,6 @@
     },
     {
       "id": "series-0385",
-      "source": "srrdb.com",
-      "source_fingerprint": "0d4df695225580ce012c8c175d910d27dc169a8f6463119cf7bc2d4677775847",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E11.POLISH.DV.2160p.WEB.H265-Groupd",
       "context": {
@@ -17119,8 +16349,6 @@
     },
     {
       "id": "series-0386",
-      "source": "srrdb.com",
-      "source_fingerprint": "ced3c62a0892eb16f051288f91b26b07210e55a53e9f22f2b1473dd77641ce0c",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S02E10.POLISH.WEB.H264-Groupd",
       "context": {
@@ -17162,8 +16390,6 @@
     },
     {
       "id": "series-0387",
-      "source": "srrdb.com",
-      "source_fingerprint": "d128ece254dd56d698ab80dbf459afa51a433fa8c3d9d1db6228ab0cd9f15390",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E04.POLISH.WEB.H264-Groupi",
       "context": {
@@ -17205,8 +16431,6 @@
     },
     {
       "id": "series-0388",
-      "source": "srrdb.com",
-      "source_fingerprint": "751891fc008be16f351fa2adcbd82d956476f24a5a82d6dac36d7c4a54def393",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E04.POLISH.720p.WEB.H264-Groupi",
       "context": {
@@ -17250,8 +16474,6 @@
     },
     {
       "id": "series-0389",
-      "source": "srrdb.com",
-      "source_fingerprint": "40f3c8877a7e744c357700b859239ae5c4b7550d7db51750a352ebcb2d4742da",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E04.POLISH.1080p.WEB.H264-Groupi",
       "context": {
@@ -17295,8 +16517,6 @@
     },
     {
       "id": "series-0390",
-      "source": "srrdb.com",
-      "source_fingerprint": "5a280d11b029231f7e84e4a3ca1a50fe605f8d2eacf63f866afc2d03292ed7c6",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E03.POLISH.WEB.H264-Groupi",
       "context": {
@@ -17338,8 +16558,6 @@
     },
     {
       "id": "series-0391",
-      "source": "srrdb.com",
-      "source_fingerprint": "3320d7b936e71d7bf02e37cb004f2950df8cb4a7b473dda0a8c556ca4553455f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E03.POLISH.720p.WEB.H264-Groupi",
       "context": {
@@ -17383,8 +16601,6 @@
     },
     {
       "id": "series-0392",
-      "source": "srrdb.com",
-      "source_fingerprint": "b5c47c533617f71f942d63adf129ecbf895dd51d9ec1c892dab6c65a7d4f47c9",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E03.POLISH.1080p.WEB.H264-Groupi",
       "context": {
@@ -17428,8 +16644,6 @@
     },
     {
       "id": "series-0393",
-      "source": "srrdb.com",
-      "source_fingerprint": "c3b47e4e6670db1e97cb5e510184b8c15a5aa384d4333a68a074d90deebae088",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E02.POLISH.WEB.H264-Groupi",
       "context": {
@@ -17471,8 +16685,6 @@
     },
     {
       "id": "series-0394",
-      "source": "srrdb.com",
-      "source_fingerprint": "b41478528a9a1a8dfb6f8ba0e0289f6ac7bdeafdeaf2f9d82e0bd84866174145",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.Titleg.Special.Titleh.S01E02.POLISH.720p.WEB.H264-Groupi",
       "context": {
@@ -17516,8 +16728,6 @@
     },
     {
       "id": "series-0395",
-      "source": "srrdb.com",
-      "source_fingerprint": "bfcdaeb9a926e99c28a148dc6537cc53bfa8cbfadca260f949096650d77f72a3",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E07.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17561,8 +16771,6 @@
     },
     {
       "id": "series-0396",
-      "source": "srrdb.com",
-      "source_fingerprint": "bdd9f284a0b580ff1f261cafa8d1068de690890c1ca8a0edabf7d97ff3d4cb94",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E08.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17606,8 +16814,6 @@
     },
     {
       "id": "series-0397",
-      "source": "srrdb.com",
-      "source_fingerprint": "94bf223cf003a931fb1be569b36e6970448abb4a333ec2cbd92534cced48c36f",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E06.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17651,8 +16857,6 @@
     },
     {
       "id": "series-0398",
-      "source": "srrdb.com",
-      "source_fingerprint": "20e0b9c85b4dc0953aa109b8f4842e118ecca7dacb4b529d4c67c30030c65bb3",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E05.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17696,8 +16900,6 @@
     },
     {
       "id": "series-0399",
-      "source": "srrdb.com",
-      "source_fingerprint": "eefa4ad5f7018cff75efa90bb2ca663467039a0fa7cd8a5b2db51bb5f1b8dd62",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E04.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17741,8 +16943,6 @@
     },
     {
       "id": "series-0400",
-      "source": "srrdb.com",
-      "source_fingerprint": "05214ae9cf83bb2bd7b5cb67be9e1cc337d614dee304f47c144fdbf7ae3480f4",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E03.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17786,8 +16986,6 @@
     },
     {
       "id": "series-0401",
-      "source": "srrdb.com",
-      "source_fingerprint": "8a7ffcf3636f0db25ede8afb92150af8c26fcc0fe47bbeeef03492c31e20ec09",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E02.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17831,8 +17029,6 @@
     },
     {
       "id": "series-0402",
-      "source": "srrdb.com",
-      "source_fingerprint": "0b28dbdb5a92c250b77b786b3110451ed4a74e4a0121d49cd61f4f1768633efc",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E01.German.DL.DV.2160p.WEB.H265-Groupc",
       "context": {
@@ -17876,8 +17072,6 @@
     },
     {
       "id": "series-0403",
-      "source": "srrdb.com",
-      "source_fingerprint": "316b37c92f14dc58279ec6568fccaf4cb4270288e353b256e7c8552aae599a0f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E02.POLISH.HDR.2160p.WEB.H265-Groupg",
       "context": {
@@ -17921,8 +17115,6 @@
     },
     {
       "id": "series-0404",
-      "source": "srrdb.com",
-      "source_fingerprint": "6f0ecd2604b4b7b2a8f682c7fb38f8098d036a35706be807553f6f4c8fc3862a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E02.POLISH.DV.2160p.WEB.H265-Groupg",
       "context": {
@@ -17966,8 +17158,6 @@
     },
     {
       "id": "series-0405",
-      "source": "srrdb.com",
-      "source_fingerprint": "c1f9b0758ba3407dbaa7630ef361b94f59a9f85c9f69320be59c6378f919238f",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E01.POLISH.DV.2160p.WEB.H265-Groupg",
       "context": {
@@ -18011,8 +17201,6 @@
     },
     {
       "id": "series-0406",
-      "source": "srrdb.com",
-      "source_fingerprint": "2b957ffc2b1003c4888eb857953c40c0863c543b60709d0e6c6e6f30d3940bd3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E01.POLISH.HDR.2160p.WEB.H265-Groupg",
       "context": {
@@ -18056,8 +17244,6 @@
     },
     {
       "id": "series-0407",
-      "source": "srrdb.com",
-      "source_fingerprint": "f5484423ebde1210d398063ac48b9000c446315d3673e30833ec2315feb57bb3",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E02.POLISH.1080p.WEB.H264-Groupg",
       "context": {
@@ -18101,8 +17287,6 @@
     },
     {
       "id": "series-0408",
-      "source": "srrdb.com",
-      "source_fingerprint": "4914b71f09f3304bd847da3bdd4055d31c4df5f2188c1de1eefed6358286437a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E01.POLISH.1080p.WEB.H264-Groupg",
       "context": {
@@ -18146,8 +17330,6 @@
     },
     {
       "id": "series-0409",
-      "source": "srrdb.com",
-      "source_fingerprint": "41f449dbc49da72202d714d4e61c4ffaa133a3de48f81db0c9cdc430791966cd",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E02.POLISH.720p.WEB.H264-Groupg",
       "context": {
@@ -18191,8 +17373,6 @@
     },
     {
       "id": "series-0410",
-      "source": "srrdb.com",
-      "source_fingerprint": "c94132843342cac21bba42fd29ef054ec747b017cb9750cc9e34aca064473967",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.Titlee.Titlef.S02E01.POLISH.720p.WEB.H264-Groupg",
       "context": {
@@ -18236,8 +17416,6 @@
     },
     {
       "id": "series-0411",
-      "source": "srrdb.com",
-      "source_fingerprint": "b9637395a248959c2544c2c3810d9fc8d5b7f1a44a78fcb79361fd5a06f88c7a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E09.Episodee.Episodef.GERMAN.Episodeg.720p.WEB.x264-Grouph",
       "context": {
@@ -18281,8 +17459,6 @@
     },
     {
       "id": "series-0412",
-      "source": "srrdb.com",
-      "source_fingerprint": "5932d369cafc089e7bdb7d83be3cea91816eefc980e27076c636955981fba35a",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S01E04.Episodee.Episodef.GERMAN.Episodeg.720p.WEB.x264-Grouph",
       "context": {
@@ -18326,8 +17502,6 @@
     },
     {
       "id": "series-0413",
-      "source": "srrdb.com",
-      "source_fingerprint": "0ddcef9da4ac17549c6df8bd223cb486b56652dfdc4fed460433c715486e8fd0",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.S01E07.Episoded.German.DL.1080p.Texte.H264-Groupf",
       "context": {
@@ -18369,8 +17543,6 @@
     },
     {
       "id": "series-0414",
-      "source": "srrdb.com",
-      "source_fingerprint": "3ec1efcd5a7713dca971fba9dcbe1911b51977193c298ac00e95c250c5e52163",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E03.DSR.PROPER.XviD-Groupc",
       "context": {
@@ -18412,8 +17584,6 @@
     },
     {
       "id": "series-0415",
-      "source": "srrdb.com",
-      "source_fingerprint": "81d2d36f5d62d548aa77f222ac6d6c61d691baceac733d373e8825f8131788af",
       "shape": "episodic",
       "release": "Titlea.S05E19.WS.DSR.XviD-Groupb",
       "context": {
@@ -18453,8 +17623,6 @@
     },
     {
       "id": "series-0416",
-      "source": "srrdb.com",
-      "source_fingerprint": "f92012f8d1f12a5cc52b2755687a72b8eca34b5fbfd15fdc5e656fa062066e25",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E11.WS.DSR.XviD-Groupc",
       "context": {
@@ -18494,8 +17662,6 @@
     },
     {
       "id": "series-0417",
-      "source": "srrdb.com",
-      "source_fingerprint": "b77828850782de09c0ea936eec16e7dca5dd24e86686f654dccb44d34e9829c2",
       "shape": "episodic",
       "release": "Titlea.Titleb.S02E06.DSR.XviD-Groupc",
       "context": {
@@ -18535,8 +17701,6 @@
     },
     {
       "id": "series-0418",
-      "source": "srrdb.com",
-      "source_fingerprint": "c79b6274b23a47e4a475c6728bcdcce43b1131f09c64a999662ea171f1a59e5d",
       "shape": "episodic",
       "release": "Titlea.S05E21.WS.DSR.REPACK.XviD-Groupb",
       "context": {
@@ -18578,8 +17742,6 @@
     },
     {
       "id": "series-0419",
-      "source": "srrdb.com",
-      "source_fingerprint": "01e551ab040cbfadf6e6699f920d01d11eadd80169156c2b319efd6357c55edd",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E04.DSR.PROPER.Textc.NFO.XviD-Groupd",
       "context": {
@@ -18621,8 +17783,6 @@
     },
     {
       "id": "series-0420",
-      "source": "srrdb.com",
-      "source_fingerprint": "0c6798c8ae8051fb04552b8484d2c12493573d91c2865b013cd5e431514561b2",
       "shape": "episodic",
       "release": "Titlea.S01E05.WS.DSR.XviD-Groupb",
       "context": {
@@ -18662,8 +17822,6 @@
     },
     {
       "id": "series-0421",
-      "source": "srrdb.com",
-      "source_fingerprint": "e6edc84a6500e1c2e65e092411849228df0afbbd8d9fa6d2eb8fea84baa438a0",
       "shape": "episodic",
       "release": "Titlea.S02E06.Episodeb.SPANiSH.BDRip.x264-Groupc",
       "context": {
@@ -18705,8 +17863,6 @@
     },
     {
       "id": "series-0422",
-      "source": "srrdb.com",
-      "source_fingerprint": "72a3592ef07d8c80b264dec432344e855a78148206978f9b8a60ab5b0390c105",
       "shape": "episodic",
       "release": "Titlea.S02E04.Episodeb.SPANiSH.BDRip.x264-Groupc",
       "context": {
@@ -18748,8 +17904,6 @@
     },
     {
       "id": "series-0423",
-      "source": "srrdb.com",
-      "source_fingerprint": "5b25059092005cd32e4c61d9e6534de6702e997e723f82d70fe3307eb4129b20",
       "shape": "episodic",
       "release": "Titlea.S02E05.Episodeb.SPANiSH.BDRip.x264-Groupc",
       "context": {
@@ -18791,8 +17945,6 @@
     },
     {
       "id": "series-0424",
-      "source": "srrdb.com",
-      "source_fingerprint": "7392ac59aa57b93db65b9869a89984e99d8ebdfd23927d31bf8144404e92d169",
       "shape": "episodic",
       "release": "Titlea.S02E01.Episodeb.SPANiSH.BDRip.x264-Groupc",
       "context": {
@@ -18834,8 +17986,6 @@
     },
     {
       "id": "series-0425",
-      "source": "srrdb.com",
-      "source_fingerprint": "4e6112d5d590df7f28fffa9bab41ff74ec43732c5a92baad3b06c2e7b07957c3",
       "shape": "episodic",
       "release": "Titlea.S02E03.Episodeb.SPANiSH.BDRip.x264-Groupc",
       "context": {
@@ -18877,8 +18027,6 @@
     },
     {
       "id": "series-0426",
-      "source": "srrdb.com",
-      "source_fingerprint": "34a37be3711810ad127930536264f9d206b9afc1734d0d7a2f3a1e4ed81914f2",
       "shape": "episodic",
       "release": "Titlea.S02E02.Episodeb.SPANiSH.BDRip.x264-Groupc",
       "context": {
@@ -18920,8 +18068,6 @@
     },
     {
       "id": "series-0427",
-      "source": "srrdb.com",
-      "source_fingerprint": "b9ff6204962d3d1e0cedd4db3193b8fba88681bdd069af92669af0457475baca",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E13.DSR.XviD-Groupc",
       "context": {
@@ -18961,8 +18107,6 @@
     },
     {
       "id": "series-0428",
-      "source": "srrdb.com",
-      "source_fingerprint": "a32436e8e530f672e67bcf9ebc3724bcf7ec71a02eba0e561c5491a36f11aca9",
       "shape": "episodic",
       "release": "Titlea.Titleb.S04E05.DSR.XviD-Groupc",
       "context": {
@@ -19002,8 +18146,6 @@
     },
     {
       "id": "series-0429",
-      "source": "srrdb.com",
-      "source_fingerprint": "c3696f7ffe7df40f5f64ca9f653467cfece195946d28a98b796920e04ed68c2f",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E14.REPACK.DSR.XviD-Groupc",
       "context": {
@@ -19045,8 +18187,6 @@
     },
     {
       "id": "series-0430",
-      "source": "srrdb.com",
-      "source_fingerprint": "9afb1c03aabc268c4d9ec624a2a977a1620f91c9cc107c08cd80b754a0d49841",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E19.DSR.XviD-Groupc",
       "context": {
@@ -19086,8 +18226,6 @@
     },
     {
       "id": "series-0431",
-      "source": "srrdb.com",
-      "source_fingerprint": "cb86276f0a8e8ad8137552130bfb5329d1b33bf55141cf8753fc6706c1cdaadd",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E20.DSR.XviD-Groupc",
       "context": {
@@ -19127,8 +18265,6 @@
     },
     {
       "id": "series-0432",
-      "source": "srrdb.com",
-      "source_fingerprint": "29da9da68b89471fdb5a42481ee87c8edffcb552079fe86bcae1ea3b7d19ebf8",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E16.DSR.XviD-Groupc",
       "context": {
@@ -19168,8 +18304,6 @@
     },
     {
       "id": "series-0433",
-      "source": "srrdb.com",
-      "source_fingerprint": "fb36faf14d2f62316af29deb4a717ce96fac38467ea0a5cfb3e36f29a4a7d737",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E18.DSR.XviD-Groupc",
       "context": {
@@ -19209,8 +18343,6 @@
     },
     {
       "id": "series-0434",
-      "source": "srrdb.com",
-      "source_fingerprint": "3918208d900cc6a5a477195bc29df440386dbe5dd3638911e4072de2ac7785b8",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E15.DSR.XviD-Groupc",
       "context": {
@@ -19250,8 +18382,6 @@
     },
     {
       "id": "series-0435",
-      "source": "srrdb.com",
-      "source_fingerprint": "eda3052cb3d65f1d7c67f725de81959994b01245d721ecbd811fb249db64cb60",
       "shape": "episodic",
       "release": "Titlea.Titleb.S01E17.DSR.XviD-Groupc",
       "context": {
@@ -19291,8 +18421,6 @@
     },
     {
       "id": "series-0436",
-      "source": "srrdb.com",
-      "source_fingerprint": "1ee1217a6abbd0c26fa70d762fdc97b0e72ef6fb31edbfd3cea387e98a4e3bd9",
       "shape": "episodic",
       "release": "Titlea.S02E06.JAPANESE.720p.BluRay.x264-Groupb",
       "context": {
@@ -19336,8 +18464,6 @@
     },
     {
       "id": "series-0437",
-      "source": "srrdb.com",
-      "source_fingerprint": "1daee04ca8df72b5d4bda334b804d3c1dd252cce8bb0047bd4961a379f200b5b",
       "shape": "episodic",
       "release": "Titlea.S01E06.POLISH.720p.WEB.H264-Groupb",
       "context": {
@@ -19381,8 +18507,6 @@
     },
     {
       "id": "series-0438",
-      "source": "srrdb.com",
-      "source_fingerprint": "760c65d3e3fc5d0957ea5c20823ef337bd42e4bf25aa9d199dfdce22b6e50a7f",
       "shape": "episodic",
       "release": "Titlea.S01E09.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19426,8 +18550,6 @@
     },
     {
       "id": "series-0439",
-      "source": "srrdb.com",
-      "source_fingerprint": "ada287706eda5393bbd9ba3fa50eebffa3957baf19dfd3d205ce4cafd10f49c6",
       "shape": "episodic",
       "release": "Titlea.S01E08.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19471,8 +18593,6 @@
     },
     {
       "id": "series-0440",
-      "source": "srrdb.com",
-      "source_fingerprint": "c603c9f793bba366b2ea2e768f510312075881bd001ae558d41c6e047ab80ddf",
       "shape": "episodic",
       "release": "Titlea.S01E07.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19516,8 +18636,6 @@
     },
     {
       "id": "series-0441",
-      "source": "srrdb.com",
-      "source_fingerprint": "cb130f286ca2e201d46b50cd8f163bf9b6aa4f153bbb7953ca3c5b077a38f7ca",
       "shape": "episodic",
       "release": "Titlea.S01E06.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19561,8 +18679,6 @@
     },
     {
       "id": "series-0442",
-      "source": "srrdb.com",
-      "source_fingerprint": "3635fa72164fa2694308883982a68c0b0e08d70b39cd0c2f40b87fdc14421ed2",
       "shape": "episodic",
       "release": "Titlea.S01E05.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19606,8 +18722,6 @@
     },
     {
       "id": "series-0443",
-      "source": "srrdb.com",
-      "source_fingerprint": "f006286199102570852e876e7fb506ddaab7d3f7da6716fcf5ad682a09b3a9ea",
       "shape": "episodic",
       "release": "Titlea.S01E04.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19651,8 +18765,6 @@
     },
     {
       "id": "series-0444",
-      "source": "srrdb.com",
-      "source_fingerprint": "4a4053b4031703936ed1e470032f543ecb47d7f014c5a257b906d25f66c571cf",
       "shape": "episodic",
       "release": "Titlea.S01E03.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19696,8 +18808,6 @@
     },
     {
       "id": "series-0445",
-      "source": "srrdb.com",
-      "source_fingerprint": "2e1da4b83e97891d5fb7792301d8921ef1019e6c9928365162034a38386e9a38",
       "shape": "episodic",
       "release": "Titlea.S01E02.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -19741,8 +18851,6 @@
     },
     {
       "id": "series-0446",
-      "source": "srrdb.com",
-      "source_fingerprint": "ec71b5a634e259958a4a185fa1d38a339a5d9d0916f405f0f61f968b0e1f6831",
       "shape": "episodic",
       "release": "Titlea.S02E08.REPACK.2160p.UHD.BluRay.x265-Groupb",
       "context": {
@@ -19788,8 +18896,6 @@
     },
     {
       "id": "series-0447",
-      "source": "srrdb.com",
-      "source_fingerprint": "55edba9c126f81be9139d0a2a0629acd1c22052330310d0cf3108ea183296f2f",
       "shape": "episodic",
       "release": "Titlea.S02E07.REPACK.2160p.UHD.BluRay.x265-Groupb",
       "context": {
@@ -19835,14 +18941,12 @@
     },
     {
       "id": "series-0448",
-      "source": "srrdb.com",
-      "source_fingerprint": "277b02e580ff626f7fab4a5eca00daa3de099e532602d77a9f353b311d34691b",
       "shape": "episodic",
       "release": "Titlea.2024.S02E08.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -19882,14 +18986,12 @@
     },
     {
       "id": "series-0449",
-      "source": "srrdb.com",
-      "source_fingerprint": "68d4159f91e29cb619321c3f39e462a97bf6f49030e825722ed81e937123eb5c",
       "shape": "episodic",
       "release": "Titlea.2024.S02E07.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -19929,14 +19031,12 @@
     },
     {
       "id": "series-0450",
-      "source": "srrdb.com",
-      "source_fingerprint": "f008f5206420a2444c530fa1165b2a2f010c4af5ff95c15fd0a204ce544236ba",
       "shape": "episodic",
       "release": "Titlea.2024.S02E06.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -19976,14 +19076,12 @@
     },
     {
       "id": "series-0451",
-      "source": "srrdb.com",
-      "source_fingerprint": "c7b677dd33a0f5b04134b01ebb9e361adf8eb2eefb8b72e41868898d1fc99bbf",
       "shape": "episodic",
       "release": "Titlea.2024.S02E05.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -20023,14 +19121,12 @@
     },
     {
       "id": "series-0452",
-      "source": "srrdb.com",
-      "source_fingerprint": "ee2a86d7eb88940488d01df20d839badaa81fd21336db9f4a5f2f59c759967aa",
       "shape": "episodic",
       "release": "Titlea.2024.S02E04.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -20070,14 +19166,12 @@
     },
     {
       "id": "series-0453",
-      "source": "srrdb.com",
-      "source_fingerprint": "ccad77d377ad1080252396cd020a4bec62bb5c73391b49312a4c3d452600a756",
       "shape": "episodic",
       "release": "Titlea.2024.S02E03.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -20117,14 +19211,12 @@
     },
     {
       "id": "series-0454",
-      "source": "srrdb.com",
-      "source_fingerprint": "8dd41f3328e3ddc159cf4c0fa8a974d7577bce97d3ecb1fd95d31f0f7f0f6794",
       "shape": "episodic",
       "release": "Titlea.2024.S02E02.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -20164,14 +19256,12 @@
     },
     {
       "id": "series-0455",
-      "source": "srrdb.com",
-      "source_fingerprint": "a6d745f26ba1712d549b10197436fabf11087850c0a10dbd7e03e795d1925852",
       "shape": "episodic",
       "release": "Titlea.2024.S02E01.INTERNAL.POLISH.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -20211,8 +19301,6 @@
     },
     {
       "id": "series-0456",
-      "source": "srrdb.com",
-      "source_fingerprint": "56ce9ad657b0bc1d4fe750423ac4179bc426364c49ac8f701ae4244e7d453f14",
       "shape": "episodic",
       "release": "Titlea.S03E10.GERMAN.DL.DV.2160P.WEB.H265-Groupb",
       "context": {
@@ -20256,8 +19344,6 @@
     },
     {
       "id": "series-0457",
-      "source": "srrdb.com",
-      "source_fingerprint": "de35d09c0f066ae34a45317dc5848a7c56c50fa303c1996a7493edebda47b63f",
       "shape": "episodic",
       "release": "Titlea.S03E10.720p.WEB.H264-Groupb",
       "context": {
@@ -20301,8 +19387,6 @@
     },
     {
       "id": "series-0458",
-      "source": "srrdb.com",
-      "source_fingerprint": "61bd69f721b19c972512a7647920e2536960b0295aafb35b58ed52b0a7c90987",
       "shape": "episodic",
       "release": "Titlea.S03E09.720p.WEB.H264-Groupb",
       "context": {
@@ -20346,8 +19430,6 @@
     },
     {
       "id": "series-0459",
-      "source": "srrdb.com",
-      "source_fingerprint": "8eadd6e8343ace98d6a031999b7ad9bbb2a83ee697ef169173d859b53549aaa9",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.720p.WEB.H264-Groupb",
       "context": {
@@ -20391,8 +19473,6 @@
     },
     {
       "id": "series-0460",
-      "source": "srrdb.com",
-      "source_fingerprint": "cb6c2bc475458036a3f5197bb25c4299dc419d61479fa67fe328f64d61171017",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.MULTi.1080p.WEB.H264-Groupb",
       "context": {
@@ -20436,8 +19516,6 @@
     },
     {
       "id": "series-0461",
-      "source": "srrdb.com",
-      "source_fingerprint": "85937497a37a758fdbdd971eedd7e43aea1272168f9fc92cf9bd14c8c831eb59",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.MULTi.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -20481,8 +19559,6 @@
     },
     {
       "id": "series-0462",
-      "source": "srrdb.com",
-      "source_fingerprint": "42446ddc808b1f2f012a50c355d2fda8e02da4cd8d6734c9e637df48ed39501f",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.MULTi.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20526,8 +19602,6 @@
     },
     {
       "id": "series-0463",
-      "source": "srrdb.com",
-      "source_fingerprint": "9c3a6cbcc69abdf0a944b62e1d855fc8662c20bd9a74b199655f329582b09349",
       "shape": "episodic",
       "release": "Titlea.S03E10.GERMAN.DL.HDR.2160p.WEB.h265-Groupb",
       "context": {
@@ -20571,8 +19645,6 @@
     },
     {
       "id": "series-0464",
-      "source": "srrdb.com",
-      "source_fingerprint": "d8ff2fe6dfe9fd51503f3d78898533b4d645c59e3045cc0eaeac32ae49eb8859",
       "shape": "episodic",
       "release": "Titlea.S01E09.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20616,8 +19688,6 @@
     },
     {
       "id": "series-0465",
-      "source": "srrdb.com",
-      "source_fingerprint": "6f964d4a328600a5c2bd07a0e69adf256c719f01f6da7f2ae03b060038ba3b68",
       "shape": "episodic",
       "release": "Titlea.S01E08.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20661,8 +19731,6 @@
     },
     {
       "id": "series-0466",
-      "source": "srrdb.com",
-      "source_fingerprint": "0ba1e14d42835cd07ef7bf823b885aa31a1c95d0d24c1131d34245c22e76b3f1",
       "shape": "episodic",
       "release": "Titlea.S01E07.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20706,8 +19774,6 @@
     },
     {
       "id": "series-0467",
-      "source": "srrdb.com",
-      "source_fingerprint": "fc77ae39086634c41eb59e19df174db3ce0ac88612f71d0b7b407f3dead5b96e",
       "shape": "episodic",
       "release": "Titlea.S01E06.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20751,8 +19817,6 @@
     },
     {
       "id": "series-0468",
-      "source": "srrdb.com",
-      "source_fingerprint": "10fd878b908cce59e04ce0f7aa0a67d18a40a65c1c52765b58e0cae2e93181cc",
       "shape": "episodic",
       "release": "Titlea.S01E05.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20796,8 +19860,6 @@
     },
     {
       "id": "series-0469",
-      "source": "srrdb.com",
-      "source_fingerprint": "5a9b7cadc296252aa383de1c21140a94b2c5d0cfa322ca49e6324afab82e9f95",
       "shape": "episodic",
       "release": "Titlea.S01E04.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20841,8 +19903,6 @@
     },
     {
       "id": "series-0470",
-      "source": "srrdb.com",
-      "source_fingerprint": "46c7380f32e07af493950d33f81e219f65e2fb23e44320df99ea8e04c87a6a62",
       "shape": "episodic",
       "release": "Titlea.S01E03.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20886,8 +19946,6 @@
     },
     {
       "id": "series-0471",
-      "source": "srrdb.com",
-      "source_fingerprint": "4a2a55254bf29868403a04ce0b5ddcfe305cd4df8fbe7848d1c09a8bcf853dfd",
       "shape": "episodic",
       "release": "Titlea.S01E02.German.DL.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -20931,14 +19989,12 @@
     },
     {
       "id": "series-0472",
-      "source": "srrdb.com",
-      "source_fingerprint": "73faf3e369cb9877b6e7fa8c2f4041a7a66eb66d400d3db26fd8b79dd1b7d10c",
       "shape": "episodic",
       "release": "Titlea.2022.S02E10.FINAL.MULTI.HDR.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -20978,14 +20034,12 @@
     },
     {
       "id": "series-0473",
-      "source": "srrdb.com",
-      "source_fingerprint": "0a4965d5799a8d328567719304317e9a049e7496dcfad491d8cb151e87534d21",
       "shape": "episodic",
       "release": "Titlea.2022.S02E10.FINAL.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21025,14 +20079,12 @@
     },
     {
       "id": "series-0474",
-      "source": "srrdb.com",
-      "source_fingerprint": "0b0b98bcb27011c7e1f293a73dc0057badd34271576e6350213c854db48ef07e",
       "shape": "episodic",
       "release": "Titlea.2022.S02E10.FINAL.MULTI.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21072,14 +20124,12 @@
     },
     {
       "id": "series-0475",
-      "source": "srrdb.com",
-      "source_fingerprint": "923c1957889e4843362d0fdfd7c4c7ae7f580bc72407df0585c75c105843da2e",
       "shape": "episodic",
       "release": "Titlea.2022.S02E10.FINAL.FRENCH.720p.WEB.H264-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21119,14 +20169,12 @@
     },
     {
       "id": "series-0476",
-      "source": "srrdb.com",
-      "source_fingerprint": "de27c55f547adbc3795e8fd01b0fe106f114e1daddafd86a032c9939f15758d7",
       "shape": "episodic",
       "release": "Titlea.2022.S02E10.FINAL.MULTI.1080p.WEB.H264-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21166,14 +20214,12 @@
     },
     {
       "id": "series-0477",
-      "source": "srrdb.com",
-      "source_fingerprint": "33b1eb15ff1cefed0a620fe119339034869151e89e703ae2754615309ab36198",
       "shape": "episodic",
       "release": "Titlea.2022.S02E09.MULTI.HDR.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21213,14 +20259,12 @@
     },
     {
       "id": "series-0478",
-      "source": "srrdb.com",
-      "source_fingerprint": "8ddbf63bd326bede263618e6c53ecd9e744d874f4b4cb6762851e4d65380f702",
       "shape": "episodic",
       "release": "Titlea.2022.S02E09.MULTI.DV.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21260,14 +20304,12 @@
     },
     {
       "id": "series-0479",
-      "source": "srrdb.com",
-      "source_fingerprint": "0822c3450a63391cdf5141dab4ee39ace407f708509aff4eef418290267373dc",
       "shape": "episodic",
       "release": "Titlea.2022.S02E09.MULTI.2160p.WEB.H265-Groupb",
       "context": {
         "facet_hint": "series",
         "title": {
-      "name": "Titlea"
+          "name": "Titlea"
         },
         "aliases": [],
         "known_years": [],
@@ -21307,8 +20349,6 @@
     },
     {
       "id": "series-0480",
-      "source": "srrdb.com",
-      "source_fingerprint": "50ad32495a0bc5e0da765fd512abee462ea4341abd705e1e1191cf482629c348",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E10.GERMAN.WEBRiP.x264-Groupc",
       "context": {
@@ -21350,8 +20390,6 @@
     },
     {
       "id": "series-0481",
-      "source": "srrdb.com",
-      "source_fingerprint": "dcef6781505ee293cad0837841574051285820bea67eff8c6b9883c28664e8fe",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E09.GERMAN.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -21395,8 +20433,6 @@
     },
     {
       "id": "series-0482",
-      "source": "srrdb.com",
-      "source_fingerprint": "0e712c445911a9d0800f3d9836233930b72f39eebfbadacee326c34fe2ec6635",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E09.GERMAN.DL.DV.2160p.WEB.h265-Groupc",
       "context": {
@@ -21440,8 +20476,6 @@
     },
     {
       "id": "series-0483",
-      "source": "srrdb.com",
-      "source_fingerprint": "1b3f8c4e95d9311c4d4a096f2e5f6f476702d4ed544bf9330768400fe4d6fd94",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E10.GERMAN.DL.HDR.2160p.WEB.h265-Groupc",
       "context": {
@@ -21485,8 +20519,6 @@
     },
     {
       "id": "series-0484",
-      "source": "srrdb.com",
-      "source_fingerprint": "f380dda26f8baf5ae6714eca620e70d1b502da9e4b0c17253d198260c0c5f5f5",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E10.GERMAN.DL.DV.2160p.WEB.h265-Groupc",
       "context": {
@@ -21530,8 +20562,6 @@
     },
     {
       "id": "series-0485",
-      "source": "srrdb.com",
-      "source_fingerprint": "0008c8480266e4dc12f7f45f99cf9ff683475edf6471b29c98a07d0ae3551213",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E10.German.DL.720p.WEB.h264-Groupc",
       "context": {
@@ -21575,8 +20605,6 @@
     },
     {
       "id": "series-0486",
-      "source": "srrdb.com",
-      "source_fingerprint": "8b2863c30a1b560e707b6f92afff9da452ec1b96b5deb80c65ac1d4369a2a026",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E10.GERMAN.DL.2160P.WEB.H265-Groupc",
       "context": {
@@ -21620,8 +20648,6 @@
     },
     {
       "id": "series-0487",
-      "source": "srrdb.com",
-      "source_fingerprint": "5d7ebfce7e4008d437e2229bbe8bfddd6f5fc7ff2a7939f7afbaa232e8896287",
       "shape": "episodic",
       "release": "Titlea.All.Titleb.S05E10.FINAL.MULTI.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -21665,8 +20691,6 @@
     },
     {
       "id": "series-0488",
-      "source": "srrdb.com",
-      "source_fingerprint": "08666717c1c9e8ef2bfbf89c057351610b1576488bc6b82978b10e842b94b5fc",
       "shape": "episodic",
       "release": "Titlea.S03E01.MULTi.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -21710,8 +20734,6 @@
     },
     {
       "id": "series-0489",
-      "source": "srrdb.com",
-      "source_fingerprint": "af75528525d2da6fe8a5e2e65a41adf0e6fd7a6d35794758f6199582047e38e8",
       "shape": "episodic",
       "release": "Titlea.S03E01.MULTi.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -21755,8 +20777,6 @@
     },
     {
       "id": "series-0490",
-      "source": "srrdb.com",
-      "source_fingerprint": "6e9b252ec95db1e7ea3e93c1a76086f923a70b06d04ae5b96c5818c76bd92d20",
       "shape": "episodic",
       "release": "Titlea.S03E01.MULTi.1080p.WEB.H264-Groupb",
       "context": {
@@ -21800,8 +20820,6 @@
     },
     {
       "id": "series-0491",
-      "source": "srrdb.com",
-      "source_fingerprint": "7844cab1fb3e8dbad244c357727a674997850299fd8791f43925bd465218e7c5",
       "shape": "episodic",
       "release": "Titlea.Titleb.Titlec.Titled.S10E16.Episodee.Episodef.Episodeg.1080p.WEB.H264-77",
       "context": {
@@ -21845,8 +20863,6 @@
     },
     {
       "id": "series-0492",
-      "source": "srrdb.com",
-      "source_fingerprint": "bcef3119a5f52717c7a05960db583e2888830ec361c4f99ff2961b11cdf14e9e",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.HDR.2160p.WEB.H265-Groupb",
       "context": {
@@ -21890,8 +20906,6 @@
     },
     {
       "id": "series-0493",
-      "source": "srrdb.com",
-      "source_fingerprint": "81033997b6bdbd60cee2e1addf5b6f6b89b03f41c8e55352c006e4904a4ba483",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.DV.2160p.WEB.H265-Groupb",
       "context": {
@@ -21935,8 +20949,6 @@
     },
     {
       "id": "series-0494",
-      "source": "srrdb.com",
-      "source_fingerprint": "65a2fed28eee782452e565017b7fbf2c35a49dc9e667029ec44c4219d55bfea1",
       "shape": "episodic",
       "release": "Titlea.S03E10.iTALiAN.1080p.WEB.H264-Groupb",
       "context": {
@@ -21980,8 +20992,6 @@
     },
     {
       "id": "series-0495",
-      "source": "srrdb.com",
-      "source_fingerprint": "354c27b23d08c011aa9d10eb1d688ccf137632b16fb1423ad3c098ff5fbc73a5",
       "shape": "episodic",
       "release": "Titlea.S03E10.GERMAN.DL.2160P.WEB.H265-Groupb",
       "context": {
@@ -22025,8 +21035,6 @@
     },
     {
       "id": "series-0496",
-      "source": "srrdb.com",
-      "source_fingerprint": "ec2a8e0a694c3a6305548b2ec992ddc41bf6feb7187d2dea5f83dd1bfc439082",
       "shape": "episodic",
       "release": "Titlea.S03E10.GERMAN.WEBRiP.x264-Groupb",
       "context": {
@@ -22068,8 +21076,6 @@
     },
     {
       "id": "series-0497",
-      "source": "srrdb.com",
-      "source_fingerprint": "ec6c9ca0be0e689fefb65889c6180d5af0cfb34378a66e86a8c3d2799297f690",
       "shape": "episodic",
       "release": "Titlea.Titleb.S06E04.INTERNAL.POLISH.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -22113,8 +21119,6 @@
     },
     {
       "id": "series-0498",
-      "source": "srrdb.com",
-      "source_fingerprint": "832730e15b052f26ecb5205997e57896ef68e2ec77207025608aa4225ffe3d37",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E09.INTERNAL.POLISH.HDR.2160p.WEB.H265-Groupc",
       "context": {
@@ -22158,8 +21162,6 @@
     },
     {
       "id": "series-0499",
-      "source": "srrdb.com",
-      "source_fingerprint": "3492aafe33f5fff20fbcd95fff13a2f02cdd70a0cc6371436971984a55148182",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E08.INTERNAL.POLISH.2160p.WEB.H265-Groupc",
       "context": {
@@ -22203,8 +21205,6 @@
     },
     {
       "id": "series-0500",
-      "source": "srrdb.com",
-      "source_fingerprint": "f7894e97ec6a5a344c2f99a4c55c6d949d8decc378e642e967513f8ea3005568",
       "shape": "episodic",
       "release": "Titlea.Titleb.S05E07.INTERNAL.POLISH.2160p.WEB.H265-Groupc",
       "context": {

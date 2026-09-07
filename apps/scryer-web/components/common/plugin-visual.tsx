@@ -52,7 +52,6 @@ const PLUGIN_LOGO_AVIF_SLUGS = [
   "hadouken",
   "jimaku",
   "join",
-  "nyaa",
   "nzbgeek",
   "nzbvortex",
   "opensubtitles",

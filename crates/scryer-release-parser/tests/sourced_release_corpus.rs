@@ -22,8 +22,6 @@ struct Corpus {
 #[serde(deny_unknown_fields)]
 struct Case {
     id: String,
-    source: String,
-    source_fingerprint: String,
     shape: String,
     release: String,
     context: ReleaseParseContext,
@@ -134,7 +132,7 @@ fn assertion_count(value: &Value) -> usize {
 
 fn run_corpus(category: &str, source: &str) {
     let corpus: Corpus = serde_json::from_str(source).expect("valid sourced corpus JSON");
-    assert_eq!(corpus.schema_version, 1);
+    assert_eq!(corpus.schema_version, 2);
     assert_eq!(corpus.category, category);
     assert_eq!(
         corpus.cases.len(),
@@ -143,7 +141,6 @@ fn run_corpus(category: &str, source: &str) {
     );
 
     let mut ids = HashSet::new();
-    let mut fingerprints = HashSet::new();
     let mut shapes = BTreeMap::<&str, usize>::new();
     let mut accepted_failed = Vec::new();
     let mut unexpected_failed = Vec::new();
@@ -154,23 +151,6 @@ fn run_corpus(category: &str, source: &str) {
     let mut failed_fields = 0;
     for case in &corpus.cases {
         assert!(ids.insert(&case.id), "duplicate fixture id: {}", case.id);
-        assert!(
-            fingerprints.insert(&case.source_fingerprint),
-            "duplicate source: {}",
-            case.id
-        );
-        assert!(matches!(case.source.as_str(), "srrdb.com" | "nyaa.si"));
-        assert_eq!(
-            case.source_fingerprint.len(),
-            64,
-            "{}: SHA-256 fingerprint",
-            case.id
-        );
-        assert!(
-            case.source_fingerprint
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-        );
         assert!(
             !case.context.title.name.is_empty(),
             "{}: target title",
@@ -365,13 +345,13 @@ fn reviewed_anime_annotations_match_the_committed_oracle() {
         .expect("anime audit JSON");
     let cases = corpus["cases"].as_array().expect("anime cases");
     let annotations = audit["cases"].as_array().expect("anime annotations");
+    assert_eq!(audit["schema_version"], 2);
     assert_eq!(cases.len(), 500);
     assert_eq!(annotations.len(), 500);
     for (index, (case, annotation)) in cases.iter().zip(annotations).enumerate() {
         assert_eq!(case["id"], format!("anime-{:04}", index + 1));
         assert_eq!(annotation["id"], case["id"]);
         assert_eq!(annotation["reviewed"], Value::Bool(true));
-        assert_eq!(annotation["source_fingerprint"], case["source_fingerprint"]);
         let mut expected = case["expected"].clone();
         expected
             .as_object_mut()
@@ -406,6 +386,7 @@ fn reviewed_anime_annotations_match_the_committed_oracle() {
 fn sourced_fixture_identities_match_the_frozen_baseline() {
     let baseline: Value =
         serde_json::from_str(include_str!("corpus/sourced/baseline.json")).expect("baseline JSON");
+    assert_eq!(baseline["schema_version"], 3);
     for (category, source) in [
         ("movie", include_str!("corpus/sourced/movie.json")),
         ("series", include_str!("corpus/sourced/series.json")),
@@ -425,11 +406,6 @@ fn sourced_fixture_identities_match_the_frozen_baseline() {
         assert_eq!(frozen.len(), 500, "{category}: frozen cases");
         for (case, frozen_case) in current.iter().zip(frozen) {
             assert_eq!(case["id"], frozen_case["id"], "{category}: case id");
-            assert_eq!(
-                case["source_fingerprint"], frozen_case["source_fingerprint"],
-                "{category}: {} fingerprint",
-                case["id"]
-            );
         }
     }
 }
