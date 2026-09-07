@@ -748,13 +748,9 @@ impl AppUseCase {
             return Ok(RssSyncReport::default());
         }
 
-        // Union facet categories within each indexer, retaining scope exclusions.
+        // Union each monitored library's effective routing. Its overrides have
+        // already replaced facet defaults and must not be re-enabled by them.
         let mut rss_plans = Vec::new();
-        for scope in ["movie", "series", "anime"] {
-            rss_plans.push((scope, self.resolve_indexer_routing(None, Some(scope)).await));
-        }
-        // Library overrides can enable indexers or categories excluded by the
-        // facet defaults. Fetch their feeds before scoring against each library.
         let library_scopes: std::collections::BTreeSet<_> = titles
             .iter()
             .filter(|title| title.monitored)

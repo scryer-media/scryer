@@ -35,8 +35,13 @@ impl Drop for PartialArtifactCleanup {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shares the streaming staging context, plus optional HTTP request accounting"
+)]
 pub async fn stage_or_buffer_nzb_response(
     response: reqwest::Response,
+    tally: Option<&scryer_application::IndexerRequestTally>,
     store: &Arc<dyn StagedNzbStore>,
     pipeline_limit: &Arc<Semaphore>,
     source_label: &str,
@@ -44,66 +49,103 @@ pub async fn stage_or_buffer_nzb_response(
     expected_facet: Option<&MediaFacet>,
     cancellation: &CancellationToken,
 ) -> AppResult<BufferedOrStagedNzb> {
-    let status = response.status();
-    if !status.is_success() {
-        return Err(AppError::Repository(format!(
-            "nzb download failed with status {status}"
-        )));
-    }
-    let mut stream = response.bytes_stream();
-    let first = tokio::select! {
-        _ = cancellation.cancelled() => return cancellation_error(),
-        next = stream.next() => next,
+    let mut captured = scryer_application::CapturedIndexerHttpResponse {
+        status: response.status().as_u16(),
+        headers: response
+            .headers()
+            .iter()
+            .map(
+                |(key, value)| scryer_application::CapturedIndexerHttpHeader {
+                    name: key.to_string(),
+                    value: value.as_bytes().to_vec(),
+                },
+            )
+            .collect(),
+        body: Vec::new(),
     };
-    let Some(first) = first else {
-        return Err(AppError::Repository(
-            "nzb download response body was empty".into(),
-        ));
-    };
-    let first = first
-        .map_err(|error| AppError::Repository(format!("nzb download body read failed: {error}")))?;
-    if first.len() > MAX_NZB_BYTES as usize {
-        return Err(AppError::Repository(format!(
-            "download artifact payload exceeded {} bytes",
-            MAX_NZB_BYTES
-        )));
-    }
-    if first
-        .iter()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .is_some_and(|byte| matches!(*byte, b'd' | b'm'))
-    {
-        let mut bytes = first.to_vec();
-        while let Some(chunk) = tokio::select! {
+    let mut body_failed = false;
+    let result = async {
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AppError::Repository(format!(
+                "nzb download failed with status {status}"
+            )));
+        }
+        let mut stream = response.bytes_stream().inspect(|chunk| match chunk {
+            Ok(bytes) => {
+                let remaining = (64 * 1024usize).saturating_sub(captured.body.len());
+                captured
+                    .body
+                    .extend_from_slice(&bytes[..remaining.min(bytes.len())]);
+            }
+            Err(_) => body_failed = true,
+        });
+        let first = tokio::select! {
             _ = cancellation.cancelled() => return cancellation_error(),
             next = stream.next() => next,
-        } {
-            let chunk = chunk.map_err(|error| {
-                AppError::Repository(format!("nzb download body read failed: {error}"))
-            })?;
-            if bytes.len().saturating_add(chunk.len()) > MAX_NZB_BYTES as usize {
-                return Err(AppError::Repository(format!(
-                    "download artifact payload exceeded {} bytes",
-                    MAX_NZB_BYTES
-                )));
-            }
-            bytes.extend_from_slice(&chunk);
+        };
+        let Some(first) = first else {
+            return Err(AppError::Repository(
+                "nzb download response body was empty".into(),
+            ));
+        };
+        let first = first.map_err(|error| {
+            AppError::Repository(format!("nzb download body read failed: {error}"))
+        })?;
+        if first.len() > MAX_NZB_BYTES as usize {
+            return Err(AppError::Repository(format!(
+                "download artifact payload exceeded {} bytes",
+                MAX_NZB_BYTES
+            )));
         }
-        return Ok(BufferedOrStagedNzb::Buffered(bytes));
+        if first
+            .iter()
+            .find(|byte| !byte.is_ascii_whitespace())
+            .is_some_and(|byte| matches!(*byte, b'd' | b'm'))
+        {
+            let mut bytes = first.to_vec();
+            while let Some(chunk) = tokio::select! {
+                _ = cancellation.cancelled() => return cancellation_error(),
+                next = stream.next() => next,
+            } {
+                let chunk = chunk.map_err(|error| {
+                    AppError::Repository(format!("nzb download body read failed: {error}"))
+                })?;
+                if bytes.len().saturating_add(chunk.len()) > MAX_NZB_BYTES as usize {
+                    return Err(AppError::Repository(format!(
+                        "download artifact payload exceeded {} bytes",
+                        MAX_NZB_BYTES
+                    )));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            return Ok(BufferedOrStagedNzb::Buffered(bytes));
+        }
+        let stream = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(first)]).chain(stream);
+        Ok(BufferedOrStagedNzb::Staged(
+            stage_nzb_from_stream(
+                stream,
+                store,
+                pipeline_limit,
+                source_label,
+                title_id,
+                expected_facet,
+                cancellation,
+            )
+            .await?,
+        ))
     }
-    let stream = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(first)]).chain(stream);
-    Ok(BufferedOrStagedNzb::Staged(
-        stage_nzb_from_stream(
-            stream,
-            store,
-            pipeline_limit,
-            source_label,
-            title_id,
-            expected_facet,
-            cancellation,
-        )
-        .await?,
-    ))
+    .await;
+    if let Some(tally) = tally {
+        if cancellation.is_cancelled() {
+            tally.note_result(scryer_application::IndexerRequestResult::Cancelled);
+        } else if body_failed {
+            tally.note_result(scryer_application::IndexerRequestResult::NoResponse);
+        } else {
+            tally.note_response(&captured);
+        }
+    }
+    result
 }
 
 pub async fn stage_nzb_from_bytes(
@@ -441,16 +483,16 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
     let mut depth = 0usize;
     loop {
         match reader.read_event_into(&mut event_buf) {
-            Ok(Event::Decl(_))
-            | Ok(Event::Comment(_))
-            | Ok(Event::PI(_))
-            | Ok(Event::DocType(_)) => {}
-            Ok(Event::Text(text)) if !saw_root => {
+            Ok(Event::Comment(_)) | Ok(Event::PI(_)) => {}
+            Ok(Event::Decl(_)) | Ok(Event::DocType(_)) if !saw_root => {}
+            Ok(Event::Text(text)) if depth == 0 => {
                 let text = quick_xml::escape::unescape(text.as_ref()).map_err(|error| {
                     AppError::Validation(format!("nzb XML text decode failed: {error}"))
                 })?;
                 if !text
-                    .trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+                    .trim_matches(|ch: char| {
+                        matches!(ch, ' ' | '\t' | '\r' | '\n') || (!saw_root && ch == '\u{feff}')
+                    })
                     .is_empty()
                 {
                     return Err(AppError::Validation(
@@ -475,8 +517,8 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
                 }
                 saw_root = true;
             }
-            Ok(Event::Start(_)) if saw_root => depth += 1,
-            Ok(Event::End(_)) if saw_root => depth = depth.saturating_sub(1),
+            Ok(Event::Start(_)) if depth > 0 => depth += 1,
+            Ok(Event::End(_)) if depth > 0 => depth -= 1,
             Ok(Event::Eof) => {
                 if !saw_root {
                     return Err(AppError::Validation(
@@ -489,6 +531,11 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
                     ));
                 }
                 return Ok(reader);
+            }
+            Ok(_) if depth == 0 => {
+                return Err(AppError::Validation(
+                    "nzb download payload contains content outside its root element".into(),
+                ));
             }
             Ok(_) => {}
             Err(error) => {
@@ -529,6 +576,44 @@ mod tests {
             .to_vec()
     }
 
+    #[tokio::test]
+    async fn rejects_content_after_closed_nzb_root_in_streams_and_buffers() {
+        for root in ["<nzb/>", "<nzb></nzb>"] {
+            for suffix in [
+                "garbage",
+                "<nzb/>",
+                "<extra></extra>",
+                "<![CDATA[text]]>",
+                "&#65;",
+                "<?xml version=\"1.0\"?>",
+            ] {
+                let tempdir = TempDir::new().unwrap();
+                let store = store(&tempdir).await;
+                let limit = Arc::new(Semaphore::new(1));
+                let cancel = CancellationToken::new();
+                let bytes = format!("{root}{suffix}").into_bytes();
+                assert!(
+                    stage_nzb_from_bytes(&store, &limit, "fixture", None, None, &cancel, bytes)
+                        .await
+                        .is_err()
+                );
+                let chunks = stream::iter(vec![
+                    Ok::<_, std::io::Error>(root.as_bytes()),
+                    Ok(suffix.as_bytes()),
+                ]);
+                assert!(
+                    stage_nzb_from_stream(chunks, &store, &limit, "fixture", None, None, &cancel)
+                        .await
+                        .is_err()
+                );
+                assert!(!contains_partial(tempdir.path()));
+            }
+            let xml = format!("{root} \n<!-- trailing comment --><?done ok?>");
+            let reader = quick_xml::Reader::from_str(&xml);
+            assert!(super::validate_nzb_reader(reader).is_ok());
+        }
+    }
+
     fn contains_partial(path: &std::path::Path) -> bool {
         std::fs::read_dir(path)
             .expect("staging directory")
@@ -563,6 +648,7 @@ mod tests {
                 .unwrap();
             let result = super::stage_or_buffer_nzb_response(
                 response,
+                None,
                 &store,
                 &Arc::new(Semaphore::new(1)),
                 "generic",

@@ -60,12 +60,14 @@ impl AcquisitionIndexerArtifactResolver {
     ) -> AppResult<PreparedIndexerArtifact> {
         let ArtifactHttpResponse {
             response,
+            tally,
             final_url,
             headers,
         } = response;
         let final_url = final_url.unwrap_or_else(|| source.to_string());
         match stage_or_buffer_nzb_response(
             response,
+            Some(&tally),
             &self.staged_nzb_store,
             &self.staged_nzb_pipeline_limit,
             &final_url,

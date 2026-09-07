@@ -365,7 +365,9 @@ export function usePluginManagement({
             }
             clearPluginProgress(plugin.id);
             endPluginMutation(plugin.id);
-            void loadPlugins(false).catch(() => undefined);
+            void Promise.all([loadPlugins(false), refreshProviderOptions()]).catch((error) => {
+              setPluginsError(error instanceof Error ? error.message : t("status.failedToLoad"));
+            });
           },
         },
       );

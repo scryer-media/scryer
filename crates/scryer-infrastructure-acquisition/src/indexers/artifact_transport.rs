@@ -25,6 +25,7 @@ const SOLVER_RESPONSE_MAX_BYTES: usize = ARTIFACT_MAX_BYTES * 2;
 /// A successful artifact HTTP response whose body has not been buffered.
 pub struct ArtifactHttpResponse {
     pub response: reqwest::Response,
+    pub tally: Box<IndexerRequestTally>,
     pub final_url: Option<String>,
     pub headers: Option<serde_json::Value>,
 }
@@ -123,7 +124,7 @@ impl IndexerArtifactTransport {
                         &PluginEgressPolicy::default(),
                         None,
                         None,
-                        &tally,
+                        tally,
                     )
                     .await
                     .map(Some);
@@ -145,7 +146,7 @@ impl IndexerArtifactTransport {
             &policy,
             Some(&config.base_url),
             Some(destination_cooldown_key),
-            &tally,
+            tally,
         )
         .await
         .map(Some)
@@ -680,7 +681,7 @@ impl IndexerArtifactTransport {
         policy: &PluginEgressPolicy,
         indexer_base_url: Option<&str>,
         destination_cooldown_key: Option<DestinationKey>,
-        tally: &IndexerRequestTally,
+        tally: IndexerRequestTally,
     ) -> AppResult<ArtifactFetchResponse> {
         let mut current = url::Url::parse(raw)
             .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
@@ -752,9 +753,17 @@ impl IndexerArtifactTransport {
             )
             .await
             .map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
             })?
-            .map_err(|error| map_artifact_outbound_error(name, tally, error))?;
+            .map_err(|error| map_artifact_outbound_error(name, &tally, error))?;
+            if !response.status().is_success() {
+                tally.note_response(&CapturedIndexerHttpResponse {
+                    status: response.status().as_u16(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                });
+            }
             if response.status().is_redirection() {
                 if hops == 5 {
                     return Err(AppError::Validation(
@@ -814,6 +823,7 @@ impl IndexerArtifactTransport {
             let headers = selected_headers(&response);
             return Ok(ArtifactFetchResponse::Http(ArtifactHttpResponse {
                 response,
+                tally: Box::new(tally),
                 final_url,
                 headers,
             }));
@@ -1001,10 +1011,11 @@ pub(crate) fn classify(
     }
     let torrent = torrent_hash(&bytes);
     if torrent.is_some() {
-        let info_hash_hint = if hint
-            .as_deref()
-            .and_then(|h| normalize_torrent_info_hash(Some(h)))
-            .is_some_and(|h| h.len() == 64)
+        let info_hash_hint = if torrent.as_ref().is_some_and(|hash| hash.len() == 40)
+            && hint
+                .as_deref()
+                .and_then(|h| normalize_torrent_info_hash(Some(h)))
+                .is_some_and(|h| h.len() == 64)
         {
             hint
         } else {
@@ -1040,10 +1051,36 @@ fn torrent_hash(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let (start, end) = info?;
-    let digest = aws_lc_rs::digest::digest(
-        &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY,
-        &bytes[start..end],
-    );
+    let mut cursor = start + 1;
+    let mut meta_version = None;
+    let mut has_v1_pieces = false;
+    while cursor < end - 1 {
+        let (value_start, key_start, key_end) = parse_bencode_string(bytes, cursor).ok()?;
+        let value_end = parse_bencode_value(bytes, value_start, 1).ok()?;
+        match &bytes[key_start..key_end] {
+            b"meta version" => {
+                if meta_version
+                    .replace(&bytes[value_start..value_end])
+                    .is_some()
+                {
+                    return None;
+                }
+            }
+            b"pieces" => has_v1_pieces = true,
+            _ => {}
+        }
+        cursor = value_end;
+    }
+    if meta_version.is_some_and(|version| version != b"i2e") {
+        return None;
+    }
+    // Hybrids retain their v1 identity; pure v2 metadata has no v1 piece list.
+    let algorithm = if meta_version.is_some() && !has_v1_pieces {
+        &aws_lc_rs::digest::SHA256
+    } else {
+        &aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY
+    };
+    let digest = aws_lc_rs::digest::digest(algorithm, &bytes[start..end]);
     Some(digest.as_ref().iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -1052,11 +1089,23 @@ fn parse_bencode_value(bytes: &[u8], offset: usize, depth: usize) -> Result<usiz
         return Err(());
     }
     match bytes[offset] {
-        b'i' => bytes[offset + 1..]
-            .iter()
-            .position(|b| *b == b'e')
-            .map(|p| offset + p + 2)
-            .ok_or(()),
+        b'i' => {
+            let end = bytes[offset + 1..]
+                .iter()
+                .position(|b| *b == b'e')
+                .map(|p| offset + p + 1)
+                .ok_or(())?;
+            let integer = &bytes[offset + 1..end];
+            let digits = integer.strip_prefix(b"-").unwrap_or(integer);
+            if digits.is_empty()
+                || !digits.iter().all(u8::is_ascii_digit)
+                || (digits.len() > 1 && digits[0] == b'0')
+                || integer == b"-0"
+            {
+                return Err(());
+            }
+            Ok(end + 1)
+        }
         b'l' => {
             let mut cursor = offset + 1;
             while bytes.get(cursor) != Some(&b'e') {
@@ -1193,6 +1242,177 @@ mod tests {
         }
         fn all_stats(&self) -> Vec<IndexerQueryStats> {
             Vec::new()
+        }
+    }
+
+    #[derive(Default)]
+    struct ResultRecorder(std::sync::Mutex<Vec<(String, Arc<std::sync::atomic::AtomicU64>)>>);
+
+    struct RecordedCounter(Arc<std::sync::atomic::AtomicU64>);
+    impl metrics::CounterFn for RecordedCounter {
+        fn increment(&self, value: u64) {
+            self.0
+                .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn absolute(&self, value: u64) {
+            self.0
+                .fetch_max(value, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    impl metrics::Recorder for ResultRecorder {
+        fn describe_counter(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_gauge(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_histogram(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn register_counter(
+            &self,
+            key: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            if key.name() != scryer_application::INDEXER_API_REQUESTS_METRIC {
+                return metrics::Counter::noop();
+            }
+            let result = key
+                .labels()
+                .find(|label| label.key() == "result")
+                .unwrap()
+                .value()
+                .to_string();
+            let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            self.0.lock().unwrap().push((result, counter.clone()));
+            metrics::Counter::from_arc(Arc::new(RecordedCounter(counter)))
+        }
+        fn register_gauge(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+        fn register_histogram(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn streaming_artifact_timeout_records_no_response() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+            .mount(&server)
+            .await;
+        let stats = Arc::new(CountingStats::default());
+        let transport = transport(stats.clone());
+        let tally = IndexerRequestTally::new(
+            "id".into(),
+            "fixture".into(),
+            IndexerErrorOperation::IndexerAction,
+            stats,
+        );
+        let result = transport
+            .fetch_response_direct(
+                "fixture",
+                &server.uri(),
+                Duration::from_millis(100),
+                &PluginEgressPolicy::default(),
+                None,
+                None,
+                tally,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(AppError::DownloadSubmitUnavailable(_))
+        ));
+        let recorded = recorder.0.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "no_response");
+        assert_eq!(recorded[0].1.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn streaming_artifact_tally_survives_handoff_and_classifies_body() {
+        for (body, outcome, succeeds) in [
+            ("<nzb/>", "success", true),
+            ("d4:infod4:name6:Titleaee", "success", true),
+            (
+                "<error code=\"500\" description=\"limit\"/>",
+                "newznab_request_limit_reached",
+                false,
+            ),
+        ] {
+            let recorder = ResultRecorder::default();
+            let _recording = metrics::set_default_local_recorder(&recorder);
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let stats = Arc::new(CountingStats::default());
+            let response = transport(stats)
+                .fetch_response(None, &server.uri())
+                .await
+                .unwrap()
+                .unwrap();
+            let super::ArtifactFetchResponse::Http(response) = response else {
+                panic!("HTTP response");
+            };
+            assert!(
+                recorder.0.lock().unwrap().is_empty(),
+                "tally must stay pending through handoff"
+            );
+            let temp = tempfile::tempdir().unwrap();
+            let store: Arc<dyn scryer_application::StagedNzbStore> = Arc::new(
+                crate::downloads::staged_nzb_store::FileSystemStagedNzbStore::new(temp.path())
+                    .await
+                    .unwrap(),
+            );
+            let result = crate::indexers::artifact_staging::stage_or_buffer_nzb_response(
+                response.response,
+                Some(&response.tally),
+                &store,
+                &Arc::new(tokio::sync::Semaphore::new(1)),
+                "fixture",
+                None,
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await;
+            assert_eq!(result.is_ok(), succeeds);
+            drop(response.tally);
+            let recorded: Vec<_> = recorder
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(label, count)| {
+                    (
+                        label.clone(),
+                        count.load(std::sync::atomic::Ordering::Relaxed),
+                    )
+                })
+                .collect();
+            assert_eq!(recorded, vec![(outcome.to_string(), 1)]);
         }
     }
 
@@ -1457,7 +1677,7 @@ mod tests {
                 &PluginEgressPolicy::for_operator_configured_url(&server.uri()),
                 Some(&server.uri()),
                 None,
-                &tally,
+                tally,
             )
             .await
             .expect("redirect fetch");
@@ -1495,7 +1715,7 @@ mod tests {
                 &PluginEgressPolicy::default(),
                 None,
                 None,
-                &tally,
+                tally,
             )
             .await;
         let Err(error) = result else {
@@ -1531,7 +1751,7 @@ mod tests {
             "id".into(),
             "fixture".into(),
             IndexerErrorOperation::IndexerAction,
-            stats,
+            stats.clone(),
         );
         let resolved = transport
             .fetch_response_direct(
@@ -1541,7 +1761,7 @@ mod tests {
                 &PluginEgressPolicy::default(),
                 None,
                 None,
-                &tally,
+                tally,
             )
             .await
             .expect("magnet redirect");
@@ -1549,6 +1769,12 @@ mod tests {
             resolved,
             ArtifactFetchResponse::Resolved(ResolvedDownloadArtifact::Magnet { .. })
         ));
+        let tally = IndexerRequestTally::new(
+            "id".into(),
+            "fixture".into(),
+            IndexerErrorOperation::IndexerAction,
+            stats,
+        );
         let loop_result = transport
             .fetch_response_direct(
                 "fixture",
@@ -1557,7 +1783,7 @@ mod tests {
                 &PluginEgressPolicy::default(),
                 None,
                 None,
-                &tally,
+                tally,
             )
             .await;
         let Err(error) = loop_result else {
@@ -1950,5 +2176,51 @@ mod tests {
             info_hash_hint.as_deref(),
             Some("6d2262126feb6ec7bd3464935025c8c609c0119d")
         );
+    }
+
+    #[test]
+    fn torrent_classification_hashes_pure_v2_and_preserves_hybrid_v1_identity() {
+        for (info, expected) in [
+            (
+                "d9:file treed10:Titlea.bind0:d6:lengthi0eeee12:meta versioni2e4:name6:Titlea12:piece lengthi16384ee",
+                "9049909a59fbd17feba71152334e41bbe9dcb75d3421130d0de9dcedd7c2d011",
+            ),
+            (
+                "d6:lengthi0e12:meta versioni2e4:name6:Titlea12:piece lengthi16384e6:pieces0:e",
+                "e72f7c79ef4428064ae525a67227bddd68d60e83",
+            ),
+        ] {
+            let bytes = format!("d4:info{info}e").into_bytes();
+            let artifact = classify("fixture", None, None, bytes, None).unwrap();
+            let ResolvedDownloadArtifact::TorrentFile { info_hash_hint, .. } = artifact else {
+                panic!("expected torrent");
+            };
+            assert_eq!(info_hash_hint.as_deref(), Some(expected));
+        }
+        // A similarly named nested field or opaque string is not the version.
+        assert_eq!(
+            super::torrent_hash(b"d4:infod4:metad12:meta versioni2eeee")
+                .unwrap()
+                .len(),
+            40
+        );
+    }
+
+    #[test]
+    fn torrent_classification_rejects_noncanonical_integers() {
+        for integer in ["", "abc", "-", "+1", "01", "-01", "-0", "1.0", "1 2", " 1"] {
+            for value in [format!("i{integer}e"), format!("li{integer}ee")] {
+                let bytes = format!("d4:infod6:length{value}ee").into_bytes();
+                assert!(
+                    classify("fixture", None, None, bytes, None).is_err(),
+                    "{integer}"
+                );
+            }
+        }
+        // Bencode integers have no fixed-width limit; their lexical form does.
+        for integer in ["0", "1", "-1", "999999999999999999999999999999999999"] {
+            let bytes = format!("d4:infod6:lengthi{integer}eee").into_bytes();
+            assert!(super::torrent_hash(&bytes).is_some(), "{integer}");
+        }
     }
 }

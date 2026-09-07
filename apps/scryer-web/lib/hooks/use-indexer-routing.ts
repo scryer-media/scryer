@@ -29,10 +29,6 @@ import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
 const DEFAULT_SCOPE_ROUTING_ORDER = getDefaultRoutingOrder();
 
-// A save that changes nothing emits no `settingsChanged`, so an echo we expect
-// but never receive has to expire rather than swallow the next external change.
-const SELF_ROUTING_ECHO_SETTLE_MS = 5_000;
-
 type Direction = "up" | "down";
 
 type IndexerRoutingHookArgs = {
@@ -84,41 +80,6 @@ export function useIndexerRouting({
   const [indexerRoutingLoading, setIndexerRoutingLoading] =
     React.useState(false);
 
-  // Saving routing makes the server broadcast `settingsChanged` for our own key,
-  // and this hook subscribes to it. Refetching on that echo replaces every
-  // indexer record, which remounts the portalled category picker and drops the
-  // reader back at the top of the list mid-selection. It also buys nothing: the
-  // mutation response already carries the server-normalized routing we wrote.
-  // Swallow the echoes we caused; let genuinely external edits refresh as before.
-  const pendingSelfEchoesRef = React.useRef(0);
-  const selfEchoResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-
-  const expectSelfRoutingEcho = React.useCallback(() => {
-    pendingSelfEchoesRef.current += 1;
-    if (selfEchoResetRef.current) {
-      clearTimeout(selfEchoResetRef.current);
-    }
-    selfEchoResetRef.current = setTimeout(() => {
-      pendingSelfEchoesRef.current = 0;
-      selfEchoResetRef.current = null;
-    }, SELF_ROUTING_ECHO_SETTLE_MS);
-  }, []);
-
-  const releaseSelfRoutingEcho = React.useCallback(() => {
-    pendingSelfEchoesRef.current = Math.max(0, pendingSelfEchoesRef.current - 1);
-  }, []);
-
-  React.useEffect(
-    () => () => {
-      if (selfEchoResetRef.current) {
-        clearTimeout(selfEchoResetRef.current);
-      }
-    },
-    [],
-  );
-
   const activeScopeRouting = indexerRoutingByScope[activeQualityScopeId] ?? {};
   const activeScopeRoutingOrder =
     indexerRoutingOrderByScope[activeQualityScopeId] ?? [];
@@ -136,7 +97,10 @@ export function useIndexerRouting({
         ]),
       ) as IndexerRoutingSettingsByIndexer;
 
-      setIndexers(indexerList);
+      // Preserve picker state when an invalidation returns identical records.
+      setIndexers((previous) =>
+        JSON.stringify(previous) === JSON.stringify(indexerList) ? previous : indexerList,
+      );
 
       const scopeDefaults = getDefaultIndexerRouting(activeQualityScopeId);
       const scopeRouting: IndexerRoutingSettingsByIndexer = {};
@@ -219,10 +183,6 @@ export function useIndexerRouting({
         ...previous,
         [scopeId]: true,
       }));
-      // Claimed before the mutation goes out: the echo can arrive over the open
-      // socket before the mutation promise resolves.
-      expectSelfRoutingEcho();
-
       try {
         const payload = buildIndexerRoutingPayload(
           scopeId,
@@ -297,7 +257,6 @@ export function useIndexerRouting({
         });
         setGlobalStatus(t("settings.qualitySettingsSaved"));
       } catch (error) {
-        releaseSelfRoutingEcho();
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
         );
@@ -311,19 +270,17 @@ export function useIndexerRouting({
     [
       buildIndexerRoutingPayload,
       client,
-      expectSelfRoutingEcho,
       indexers,
-      releaseSelfRoutingEcho,
       setGlobalStatus,
       t,
     ],
   );
 
-  const refreshIndexerRouting = React.useCallback(async () => {
-    setIndexerRoutingLoading(true);
+  const refreshIndexerRouting = React.useCallback(async (background = false) => {
+    if (!background) setIndexerRoutingLoading(true);
     try {
       const { data, error } = await client
-        .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId })
+        .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId }, { requestPolicy: "network-only" })
         .toPromise();
       if (error) throw error;
       hydrateIndexerRouting(data.indexers || [], data.indexerRouting || []);
@@ -332,7 +289,7 @@ export function useIndexerRouting({
         error instanceof Error ? error.message : t("status.failedToLoad"),
       );
     } finally {
-      setIndexerRoutingLoading(false);
+      if (!background) setIndexerRoutingLoading(false);
     }
   }, [activeQualityScopeId, client, hydrateIndexerRouting, setGlobalStatus, t]);
 
@@ -446,11 +403,8 @@ export function useIndexerRouting({
         if (!keys.includes(INDEXER_ROUTING_SETTINGS_KEY)) {
           return;
         }
-        if (pendingSelfEchoesRef.current > 0) {
-          pendingSelfEchoesRef.current -= 1;
-          return;
-        }
-        void refreshIndexerRouting();
+        // Events carry no mutation identity, so every routing change invalidates.
+        void refreshIndexerRouting(true);
       },
       [refreshIndexerRouting],
     ),

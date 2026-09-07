@@ -256,12 +256,9 @@ impl ApplicationMigrator {
                     }
                 }
                 "0013_indexer_request_accounting" => {
-                    let datastore = self.ledger.datastore.clone();
-                    self.run_retryable(
-                        spec,
-                        async move { migration_0013::migrate(&datastore).await },
-                    )
-                    .await;
+                    let started = Instant::now();
+                    migration_0013::migrate(&self.ledger.datastore).await?;
+                    self.record_success(spec, started).await?;
                 }
                 _ => unreachable!("early migration registry and dispatcher must agree"),
             }
@@ -522,6 +519,62 @@ mod tests {
             .await
             .expect("reload application migrator");
         assert!(restarted.applied.contains(spec.id));
+    }
+
+    #[tokio::test]
+    async fn accounting_epoch_failure_aborts_early_startup_and_remains_retryable() {
+        let (_temp, _, mut migrator) = test_migrator().await;
+        let datastore = migrator.ledger.datastore.clone();
+        let indexers = Arc::new(
+            scryer_infrastructure_acquisition::indexers::config_store::IndexerConfigStore::new(
+                datastore.clone(),
+                Arc::new(std::sync::RwLock::new(None)),
+            ),
+        );
+        let plugins = DatastoreCustomizationStore::new(datastore.clone());
+        // A failed update must stop the runner, not just leave a ledger hole.
+        SqlRuntime::execute_write(
+            &datastore,
+            "inject_accounting_failure",
+            "CREATE TRIGGER reject_accounting_epoch BEFORE INSERT ON settings_values
+             BEGIN SELECT RAISE(ABORT, 'synthetic epoch failure'); END",
+            vec![],
+        )
+        .await
+        .unwrap();
+        let error = migrator
+            .run_early(indexers.clone(), &plugins)
+            .await
+            .expect_err("required epoch failure");
+        assert!(error.contains("accounting epoch"), "{error}");
+        assert!(
+            !migrator
+                .ledger
+                .applied_ids()
+                .await
+                .unwrap()
+                .contains("0013_indexer_request_accounting")
+        );
+        SqlRuntime::execute_write(
+            &datastore,
+            "clear_accounting_failure",
+            "DROP TRIGGER reject_accounting_epoch",
+            vec![],
+        )
+        .await
+        .unwrap();
+        migrator
+            .run_early(indexers, &plugins)
+            .await
+            .expect("retry required epoch");
+        assert!(
+            migrator
+                .ledger
+                .applied_ids()
+                .await
+                .unwrap()
+                .contains("0013_indexer_request_accounting")
+        );
     }
 
     #[tokio::test]

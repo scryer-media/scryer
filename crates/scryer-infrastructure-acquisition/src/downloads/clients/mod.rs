@@ -877,6 +877,7 @@ mod tests {
         );
         match crate::indexers::artifact_staging::stage_or_buffer_nzb_response(
             response,
+            None,
             &store,
             &std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             "category-gate-test",

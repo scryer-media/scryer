@@ -6612,6 +6612,17 @@ async fn scheduled_rss_passes_per_indexer_categories_and_exclusions_to_search() 
         indexer_client.clone(),
     );
     seed_movie_wanted_for_acquisition(&app, &user, &wanted_items, "RSS Routing Movie", 2024).await;
+    app.add_title(
+        &user,
+        NewTitle {
+            name: "RSS Routing Series".into(),
+            facet: MediaFacet::Series,
+            monitored: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     for (scope, routing) in [
         (
             "movie",
@@ -6686,76 +6697,84 @@ async fn scheduled_rss_respects_library_enablement_and_category_overrides() {
         2024,
     )
     .await;
-    for scope in ["movie", "series", "anime"] {
-        app.services
-            .config
-            .settings
-            .upsert_setting_json(
-                SETTINGS_SCOPE_SYSTEM,
-                INDEXER_ROUTING_SETTINGS_KEY,
-                Some(scope.to_string()),
+    for facet_enabled in [false, true] {
+        for scope in ["movie", "series", "anime"] {
+            app.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    INDEXER_ROUTING_SETTINGS_KEY,
+                    Some(scope.to_string()),
+                    serde_json::json!({
+                        "library-only": {"enabled": facet_enabled, "categories": [], "priority": 1}
+                    })
+                    .to_string(),
+                    "test",
+                    None,
+                )
+                .await
+                .expect("disable facet routing");
+        }
+
+        for (routing, enabled, categories) in [
+            (
                 serde_json::json!({
-                    "library-only": {"enabled": false, "categories": [], "priority": 1}
-                })
-                .to_string(),
-                "test",
-                None,
-            )
-            .await
-            .expect("disable facet routing");
-    }
+                    "library-only": {"enabled": true, "categories": ["2040"], "priority": 1}
+                }),
+                true,
+                vec!["2040"],
+            ),
+            (
+                serde_json::json!({
+                    "library-only": {"enabled": true, "categories": [], "priority": 1}
+                }),
+                true,
+                vec!["2000"],
+            ),
+            // Library plans replace facet plans; a missing entry inherits defaults.
+            (
+                serde_json::json!({
+                    "other": {"enabled": false, "categories": [], "priority": 1}
+                }),
+                true,
+                vec!["2000"],
+            ),
+            (
+                serde_json::json!({
+                    "library-only": {"enabled": false, "categories": ["2040"], "priority": 1}
+                }),
+                false,
+                vec![],
+            ),
+        ] {
+            app.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    INDEXER_ROUTING_SETTINGS_KEY,
+                    Some(title.library_id.clone()),
+                    routing.to_string(),
+                    "test",
+                    None,
+                )
+                .await
+                .expect("set library override");
+            app.run_scheduled_rss_sync().await.expect("RSS sync");
 
-    for (routing, enabled, categories) in [
-        (
-            serde_json::json!({
-                "library-only": {"enabled": true, "categories": ["2040"], "priority": 1}
-            }),
-            true,
-            vec!["2040"],
-        ),
-        (
-            serde_json::json!({
-                "library-only": {"enabled": true, "categories": [], "priority": 1}
-            }),
-            true,
-            vec!["2000"],
-        ),
-        // Library plans replace facet plans; a missing entry inherits defaults.
-        (
-            serde_json::json!({
-                "other": {"enabled": false, "categories": [], "priority": 1}
-            }),
-            true,
-            vec!["2000"],
-        ),
-        (
-            serde_json::json!({
-                "library-only": {"enabled": false, "categories": ["2040"], "priority": 1}
-            }),
-            false,
-            vec![],
-        ),
-    ] {
-        app.services
-            .config
-            .settings
-            .upsert_setting_json(
-                SETTINGS_SCOPE_SYSTEM,
-                INDEXER_ROUTING_SETTINGS_KEY,
-                Some(title.library_id.clone()),
-                routing.to_string(),
-                "test",
-                None,
-            )
-            .await
-            .expect("set library override");
-        app.run_scheduled_rss_sync().await.expect("RSS sync");
-
-        let mut plans = indexer_client.plans.lock().await;
-        assert_eq!(plans.len(), 1);
-        let plan = plans.pop().expect("RSS routing");
-        assert_eq!(plan.entries["library-only"].enabled, enabled);
-        assert_eq!(plan.entries["library-only"].categories, categories);
+            let mut plans = indexer_client.plans.lock().await;
+            assert_eq!(plans.len(), 1);
+            let plan = plans.pop().expect("RSS routing");
+            if let Some(entry) = plan.entries.get("library-only") {
+                assert_eq!(entry.enabled, enabled);
+                assert_eq!(entry.categories, categories);
+            } else {
+                // An omitted indexer inherits defaults at the search boundary.
+                assert!(enabled);
+                assert_eq!(categories, ["2000"]);
+            }
+        }
     }
 }
 
