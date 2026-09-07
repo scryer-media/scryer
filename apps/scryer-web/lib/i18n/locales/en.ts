@@ -1659,6 +1659,33 @@ const en: LocaleDictionary = {
   "settings.ruleLibraryAll": "All",
   "settings.ruleLibraryCommunityEmpty":
     "No community rule packs available. Refresh the plugin registry to check for new packs.",
+  "settings.arrImportAction": "Import Arr custom format",
+  "settings.arrImportTitle": "Import Arr custom formats",
+  "settings.arrImportDescription":
+    "Paste a Sonarr or Radarr custom-format export to create a new Rego rule draft.",
+  "settings.arrImportSource": "Source application",
+  "settings.arrImportJson": "Custom-format JSON",
+  "settings.arrImportJsonPlaceholder": "Paste one custom format or an array of custom formats.",
+  "settings.arrImportReviewAction": "Review formats",
+  "settings.arrImportReview": "{{count}} custom format(s) ready to translate",
+  "settings.arrImportNoFormats": "No valid custom formats were found in this JSON.",
+  "settings.arrImportInvalidJson": "Paste valid JSON exported by Sonarr or Radarr.",
+  "settings.arrImportReviewFailed": "Unable to review these custom formats.",
+  "settings.arrImportScore": "Score",
+  "settings.arrImportScoreRequired": "Enter an integer score for {{name}} before translating.",
+  "settings.arrImportAmbiguousScore":
+    "This format has more than one suggested score. Choose the score you want to apply.",
+  "settings.arrImportBlockScoreHelp":
+    "Scores at or below -9000 hard-block a release.",
+  "settings.arrImportTranslate": "Translate into Rego",
+  "settings.arrImportTranslationFailed":
+    "Translation failed. Your pasted JSON is still available to review or retry.",
+  "settings.arrImportResultSummary":
+    "{{translated}} translated; {{disabled}} disabled for manual repair.",
+  "settings.arrImportDraftName": "Imported Arr custom formats",
+  "settings.arrImportDraftDescription": "Imported from Arr custom-format JSON.",
+  "settings.arrImportDiagnostics": "Translation notes",
+  "settings.arrImportApply": "Use imported draft",
 
   "settings.refTitle": "Input Context Reference",
   "settings.refSubtitle":
