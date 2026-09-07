@@ -30,8 +30,9 @@ use super::acquisition::{
 use super::*;
 use crate::acquisition_search_queries::{
     anidb_id_from_external_ids, build_movie_search_queries, build_search_queries,
-    community_numbering_queries, imdb_id_from_title, mal_id_from_external_ids,
-    movie_text_search_query, tmdb_id_from_external_ids, tvdb_id_from_external_ids,
+    community_numbering_admissible_pairs, community_numbering_queries, imdb_id_from_title,
+    mal_id_from_external_ids, movie_text_search_query, tmdb_id_from_external_ids,
+    tvdb_id_from_external_ids,
 };
 use crate::delay_profile::DelayProfile;
 use crate::quality::release_parser::ParseDisposition;
@@ -150,6 +151,11 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     pub(crate) runtime_minutes: Option<i32>,
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
+    /// Every `(season, episode)` numbering that denotes the wanted episode: the
+    /// official pair above plus the community pair the anime numbering bridge
+    /// projects onto it. Empty for everything else, and the search guard then
+    /// keeps testing results against `season`/`episode` alone.
+    pub(crate) admissible_episode_numberings: Vec<(u32, u32)>,
     pub(crate) absolute_episode: Option<u32>,
     pub(crate) subject_kind: ReleaseSearchSubjectKind,
     pub(crate) last_search_at: Option<String>,
@@ -2218,6 +2224,7 @@ impl AppUseCase {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
@@ -2314,6 +2321,7 @@ impl AppUseCase {
 
         let category = self.release_search_category_for_facet(&title.facet);
 
+        let mut admissible_episode_numberings = Vec::new();
         let mut queries = vec![format!(
             "{} S{:0>2}E{:0>2}",
             title.name.trim(),
@@ -2348,6 +2356,12 @@ impl AppUseCase {
                 episode_num as i32,
                 anime_numbering_bridge.as_ref(),
             ));
+            admissible_episode_numberings = community_numbering_admissible_pairs(
+                title,
+                season_num as i32,
+                episode_num as i32,
+                anime_numbering_bridge.as_ref(),
+            );
         }
         let mut seen = HashSet::new();
         queries.retain(|query| !query.trim().is_empty() && seen.insert(query.to_ascii_lowercase()));
@@ -2375,6 +2389,7 @@ impl AppUseCase {
                 .or(title.runtime_minutes),
             season: Some(season_num),
             episode: Some(episode_num),
+            admissible_episode_numberings,
             absolute_episode,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
@@ -2442,6 +2457,7 @@ impl AppUseCase {
             runtime_minutes,
             season: Some(season_num),
             episode: None,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Season,
             last_search_at: item.last_search_at.clone(),
@@ -2517,6 +2533,7 @@ impl AppUseCase {
                 runtime_minutes: search_title.runtime_minutes,
                 season: None,
                 episode: None,
+                admissible_episode_numberings: Vec::new(),
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: wanted.as_ref().and_then(|item| item.last_search_at.clone()),
@@ -2589,6 +2606,7 @@ impl AppUseCase {
                 .or(search_title.runtime_minutes),
             season: query_result.season,
             episode: query_result.episode,
+            admissible_episode_numberings: query_result.admissible_episode_numberings,
             absolute_episode,
             subject_kind: match item.media_type.as_str() {
                 "episode" => ReleaseSearchSubjectKind::Episode,
@@ -2832,6 +2850,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -2996,6 +3015,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -3074,6 +3094,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -3170,6 +3191,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season,
             episode,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             last_search_at: None,
@@ -4381,6 +4403,7 @@ mod tests {
             runtime_minutes: title.runtime_minutes,
             season: None,
             episode: None,
+            admissible_episode_numberings: Vec::new(),
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             last_search_at: None,
@@ -4473,6 +4496,7 @@ mod tests {
                 runtime_minutes: title.runtime_minutes,
                 season: None,
                 episode: None,
+                admissible_episode_numberings: Vec::new(),
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 last_search_at: None,
