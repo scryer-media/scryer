@@ -79,6 +79,7 @@ export type IndexerQueryStats = {
   lastQueryAt: string | null;
   apiRequestsToday: number;
   apiRequestsWindowStartedAt: string | null;
+  apiRequestsObservedSince: string | null;
   apiCurrent: number | null;
   apiMax: number | null;
   grabCurrent: number | null;

@@ -54,7 +54,9 @@ impl AppUseCase {
             Some(&normalized_config_json),
         )?;
         let validated_base_url = validate_test_flight_url(&base_url)?;
-        preflight_test_flight_url(&validated_base_url).await?;
+        let accounting = persisted_config
+            .as_ref()
+            .and_then(crate::IndexerAccountingContext::for_config);
 
         let now = Utc::now();
 
@@ -90,6 +92,16 @@ impl AppUseCase {
         let indexer_proxy_config = if let Some(indexer_proxy_config_id) =
             indexer_proxy_config_id.as_deref()
         {
+            if provider_type.trim().eq_ignore_ascii_case("prowlarr")
+                || persisted_config
+                    .as_ref()
+                    .is_some_and(IndexerConfig::is_prowlarr_nab_proxy)
+            {
+                return Err(AppError::Validation(
+                    "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
+                        .to_string(),
+                ));
+            }
             let proxy_config = self
                 .services
                 .integrations
@@ -141,12 +153,18 @@ impl AppUseCase {
             updated_at: now,
         };
 
+        preflight_test_flight_url(
+            &validated_base_url,
+            accounting.as_ref(),
+            self.services.integrations.indexer_stats.clone(),
+        )
+        .await?;
         let management_capabilities = provider.management_capabilities_for_provider(provider_type);
         if management_capabilities.supports_validate_config
             || management_capabilities.supports_managed_children_sync
         {
             let client = provider
-                .management_client_for_provider(&temp_config)
+                .management_client_for_provider_with_accounting(&temp_config, accounting.as_ref())
                 .ok_or_else(|| {
                     AppError::Validation(format!(
                         "no indexer management client available for provider type '{provider_type}'"
@@ -168,7 +186,11 @@ impl AppUseCase {
         }
 
         let client = provider
-            .client_for_provider_with_proxy(&temp_config, indexer_proxy_config.as_ref())
+            .client_for_provider_with_accounting(
+                &temp_config,
+                indexer_proxy_config.as_ref(),
+                accounting.as_ref(),
+            )
             .ok_or_else(|| {
                 AppError::Validation(format!(
                     "no indexer provider available for provider type '{provider_type}'"
@@ -206,7 +228,7 @@ impl AppUseCase {
             .available()
             .is_some();
         let caps_snapshot = self
-            .fetch_caps_snapshot_json_for_config(&temp_config)
+            .fetch_caps_snapshot_json_for_config_with_accounting(&temp_config, accounting.as_ref())
             .await
             .map_err(map_indexer_connection_test_error)?;
         if caps_refresh_available && temp_config.is_direct_nab() && caps_snapshot.is_none() {
@@ -247,7 +269,12 @@ impl AppUseCase {
             Some(&normalized_config_json),
         )?;
         let validated_base_url = validate_test_flight_url(&base_url)?;
-        preflight_test_flight_url(&validated_base_url).await?;
+        preflight_test_flight_url(
+            &validated_base_url,
+            None,
+            self.services.integrations.indexer_stats.clone(),
+        )
+        .await?;
 
         let provider = self
             .services
@@ -610,7 +637,19 @@ fn format_preflight_transport_error(url: &url::Url, origin: &str, error: &str) -
 }
 
 #[cfg(not(test))]
-async fn preflight_test_flight_url(url: &url::Url) -> AppResult<()> {
+async fn preflight_test_flight_url(
+    url: &url::Url,
+    accounting: Option<&crate::IndexerAccountingContext>,
+    stats: Arc<dyn crate::IndexerStatsTracker>,
+) -> AppResult<()> {
+    observed_preflight_test_flight_url(url, accounting, stats).await
+}
+
+async fn observed_preflight_test_flight_url(
+    url: &url::Url,
+    accounting: Option<&crate::IndexerAccountingContext>,
+    stats: Arc<dyn crate::IndexerStatsTracker>,
+) -> AppResult<()> {
     let origin = url.origin().ascii_serialization();
     let client = scryer_outbound_http::indexer_reqwest_client();
     let outbound_http = scryer_outbound_http::OutboundHttpClient::new(
@@ -618,25 +657,55 @@ async fn preflight_test_flight_url(url: &url::Url) -> AppResult<()> {
         scryer_outbound_http::RateLimitRegistry::new(),
     );
 
-    outbound_http
-        .send(
+    let tally = crate::IndexerRequestTally::new(
+        accounting
+            .map(|context| context.indexer_id.as_str())
+            .unwrap_or(crate::CONNECTION_TEST_INDEXER_ID)
+            .to_string(),
+        accounting
+            .map(|context| context.indexer_name.as_str())
+            .unwrap_or("Test Connection")
+            .to_string(),
+        crate::IndexerErrorOperation::IndexerAction,
+        stats,
+    )
+    .with_indexer_origin(url.as_str());
+    let response = outbound_http
+        .send_with_dispatch_observer(
             scryer_outbound_http::RequestPolicy::no_retry("indexer_preflight", "head_origin"),
             || outbound_http.client().head(&origin),
+            |url| {
+                if tally.try_note_sent(url.as_str()) {
+                    Ok(())
+                } else {
+                    Err(scryer_outbound_http::OutboundHttpError::DispatchRejected)
+                }
+            },
         )
         .await
         .map_err(|error| {
+            tally.note_result(crate::IndexerRequestResult::NoResponse);
             AppError::Validation(format_preflight_transport_error(
                 url,
                 &origin,
                 &error.to_string(),
             ))
         })?;
+    tally.note_response(&crate::CapturedIndexerHttpResponse {
+        status: response.status().as_u16(),
+        headers: Vec::new(),
+        body: Vec::new(),
+    });
 
     Ok(())
 }
 
 #[cfg(test)]
-async fn preflight_test_flight_url(_url: &url::Url) -> AppResult<()> {
+async fn preflight_test_flight_url(
+    _url: &url::Url,
+    _accounting: Option<&crate::IndexerAccountingContext>,
+    _stats: Arc<dyn crate::IndexerStatsTracker>,
+) -> AppResult<()> {
     Ok(())
 }
 
@@ -684,6 +753,61 @@ fn connection_test_id_value(id_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn connection_preflight_counts_saved_identity_and_respects_shutdown() {
+        #[derive(Default)]
+        struct Stats {
+            ids: std::sync::Mutex<Vec<String>>,
+            gate: crate::IndexerDispatchGate,
+        }
+        impl crate::IndexerStatsTracker for Stats {
+            fn dispatch_gate(&self) -> Option<crate::IndexerDispatchGate> {
+                Some(self.gate.clone())
+            }
+            fn record_query(&self, _: &str, _: &str, _: bool) {}
+            fn record_grab(&self, _: &str, _: &str) {}
+            fn record_api_limits(
+                &self,
+                _: &str,
+                _: Option<u32>,
+                _: Option<u32>,
+                _: Option<u32>,
+                _: Option<u32>,
+            ) {
+            }
+            fn record_api_request_sent(&self, id: &str, _: &str) {
+                self.ids.lock().unwrap().push(id.to_string());
+            }
+            fn all_stats(&self) -> Vec<crate::IndexerQueryStats> {
+                vec![]
+            }
+        }
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("HEAD"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let url = url::Url::parse(&server.uri()).unwrap();
+        let stats = Arc::new(Stats::default());
+        let accounting = crate::IndexerAccountingContext {
+            indexer_id: "saved-preflight".into(),
+            indexer_name: "Saved".into(),
+        };
+        observed_preflight_test_flight_url(&url, Some(&accounting), stats.clone())
+            .await
+            .unwrap();
+        observed_preflight_test_flight_url(&url, None, stats.clone())
+            .await
+            .unwrap();
+        stats.gate.close();
+        assert!(
+            observed_preflight_test_flight_url(&url, Some(&accounting), stats.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(*stats.ids.lock().unwrap(), vec!["saved-preflight"]);
+    }
     use crate::NullSettingsRepository;
     use crate::null_repositories::test_nulls::{
         NullDownloadClient, NullDownloadClientConfigRepository, NullIndexerClient,
@@ -1137,6 +1261,7 @@ mod tests {
 
     struct RecordingPluginProvider {
         seen_configs: Arc<std::sync::Mutex<Vec<IndexerConfig>>>,
+        seen_client_accounting: Arc<std::sync::Mutex<Vec<Option<crate::IndexerAccountingContext>>>>,
         seen_management_configs: Arc<std::sync::Mutex<Vec<IndexerConfig>>>,
         client: Arc<RecordingIndexerClient>,
         provider_type: String,
@@ -1164,6 +1289,7 @@ mod tests {
         ) -> Self {
             Self {
                 seen_configs: Arc::new(std::sync::Mutex::new(Vec::new())),
+                seen_client_accounting: Arc::new(std::sync::Mutex::new(Vec::new())),
                 seen_management_configs: Arc::new(std::sync::Mutex::new(Vec::new())),
                 client,
                 provider_type: provider_type.to_string(),
@@ -1307,6 +1433,19 @@ mod tests {
         fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
             self.seen_configs.lock().unwrap().push(config.clone());
             Some(self.client.clone())
+        }
+
+        fn client_for_provider_with_accounting(
+            &self,
+            config: &IndexerConfig,
+            _proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+            accounting: Option<&crate::IndexerAccountingContext>,
+        ) -> Option<Arc<dyn IndexerClient>> {
+            self.seen_client_accounting
+                .lock()
+                .unwrap()
+                .push(accounting.cloned());
+            self.client_for_provider(config)
         }
 
         fn management_client_for_provider(
@@ -1576,6 +1715,87 @@ mod tests {
 
         assert!(message.contains("try http:// instead of https://"));
         assert!(message.contains("https://localhost:9696/"));
+    }
+
+    #[tokio::test]
+    async fn prowlarr_parent_rejects_solver_on_create_update_and_test() {
+        let provider = Arc::new(RecordingPluginProvider::new(
+            "prowlarr",
+            vec![string_field(
+                "base_url",
+                "Base URL",
+                Some(scryer_domain::ConfigFieldRole::ConnectionUrl),
+            )],
+            searchable_capabilities(),
+            Arc::new(RecordingIndexerClient::new(false)),
+        ));
+        let app = test_app(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            Some(provider),
+            Arc::new(NullSettingsRepository),
+        );
+        let input = NewIndexerConfig {
+            name: "Prowlarr".into(),
+            provider_type: "prowlarr".into(),
+            rate_limit_seconds: None,
+            rate_limit_burst: None,
+            is_enabled: true,
+            enable_interactive_search: false,
+            enable_auto_search: false,
+            indexer_proxy_config_id: Some("solver".into()),
+            download_client_id: None,
+            config_json: Some(r#"{"base_url":"http://localhost:9696"}"#.into()),
+        };
+        let error = app
+            .create_indexer_config(&test_admin(), input.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Prowlarr indexers cannot use challenge solvers")
+        );
+        let error = app
+            .test_indexer_connection(
+                &test_admin(),
+                "prowlarr",
+                input.config_json.as_deref(),
+                None,
+                Some(Some("solver")),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Prowlarr indexers cannot use challenge solvers")
+        );
+        let created = app
+            .create_indexer_config(
+                &test_admin(),
+                NewIndexerConfig {
+                    indexer_proxy_config_id: None,
+                    ..input
+                },
+            )
+            .await
+            .unwrap();
+        let error = app
+            .update_indexer_config(
+                &test_admin(),
+                IndexerConfigUpdate {
+                    id: created.id,
+                    indexer_proxy_config_id: Some(Some("solver".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Prowlarr indexers cannot use challenge solvers")
+        );
     }
 
     #[tokio::test]
@@ -2241,7 +2461,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_indexer_connection_with_indexer_id_uses_persisted_base_url_and_api_key() {
+    async fn test_indexer_connection_uses_submitted_config_with_saved_accounting_context() {
         let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
         indexer_repo.created.lock().await.push(IndexerConfig {
             id: "cfg-1".to_string(),
@@ -2292,19 +2512,74 @@ mod tests {
         );
         let mut receiver = app.runtime.events.indexers_changed_broadcast.subscribe();
 
-        app.test_indexer_connection(&test_admin(), "nzbgeek", None, Some("cfg-1"), None)
-            .await
-            .expect("persisted config should be reused");
+        app.test_indexer_connection(
+            &test_admin(),
+            "nzbgeek",
+            Some(r#"{"base_url":"https://api.nzbgeek.info","api_key":"submitted-key"}"#),
+            Some("cfg-1"),
+            None,
+        )
+        .await
+        .expect("submitted config should execute under the saved indexer's accounting context");
 
         let seen = provider.seen_configs.lock().unwrap().clone();
         assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].id, crate::CONNECTION_TEST_INDEXER_ID);
         assert_eq!(seen[0].base_url, "https://api.nzbgeek.info");
         assert_eq!(
             seen[0].config_json.as_deref(),
-            Some(r#"{"base_url":"https://api.nzbgeek.info","api_key":"good-key"}"#)
+            Some(r#"{"base_url":"https://api.nzbgeek.info","api_key":"submitted-key"}"#)
         );
+        assert!(
+            seen[0].id != "cfg-1",
+            "execution must not reuse the saved id"
+        );
+        let accounting = provider.seen_client_accounting.lock().unwrap().clone();
+        assert_eq!(accounting.len(), 1);
+        let accounting = accounting[0]
+            .as_ref()
+            .expect("saved connection tests must retain the saved accounting identity");
+        assert_eq!(accounting.indexer_id, "cfg-1");
+        assert_eq!(accounting.indexer_name, "NZBGeek");
         assert_eq!(indexer_repo.cleared_ids().await, vec!["cfg-1".to_string()]);
         expect_indexers_changed(&mut receiver, "test_indexer_connection").await;
+    }
+
+    #[tokio::test]
+    async fn test_indexer_connection_without_saved_config_has_no_accounting_context() {
+        let provider = Arc::new(RecordingPluginProvider::new(
+            "newznab",
+            vec![string_field(
+                "base_url",
+                "Base URL",
+                Some(scryer_domain::ConfigFieldRole::ConnectionUrl),
+            )],
+            searchable_capabilities(),
+            Arc::new(RecordingIndexerClient::new(false)),
+        ));
+        let app = test_app(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            Some(provider.clone()),
+            Arc::new(NullSettingsRepository),
+        );
+
+        app.test_indexer_connection(
+            &test_admin(),
+            "newznab",
+            Some(r#"{"base_url":"https://api.nzbgeek.info/"}"#),
+            None,
+            None,
+        )
+        .await
+        .expect("an unsaved probe should still execute");
+
+        assert_eq!(
+            provider.seen_configs.lock().unwrap()[0].id,
+            crate::CONNECTION_TEST_INDEXER_ID
+        );
+        let accounting = provider.seen_client_accounting.lock().unwrap().clone();
+        assert_eq!(accounting.len(), 1);
+        assert!(accounting[0].is_none());
     }
 
     #[tokio::test]
@@ -2730,6 +3005,10 @@ mod tests {
         assert!(
             !crate::indexer_error_history_is_persistable(crate::CONNECTION_TEST_INDEXER_ID),
             "the connection-test id must be excluded from error history"
+        );
+        assert!(
+            !crate::indexer_error_history_is_persistable(crate::PREVIEW_MANAGED_SYNC_INDEXER_ID),
+            "the managed-sync preview id must be excluded from error history"
         );
         assert!(
             crate::indexer_error_history_is_persistable("indexer-1"),

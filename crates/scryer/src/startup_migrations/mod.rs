@@ -9,5 +9,6 @@ pub(crate) mod _0008_title_credits_rehydration_018;
 pub(crate) mod _0010_download_client_remove_failed_default;
 pub(crate) mod _0011_long_tail_reconverge_default;
 pub(crate) mod _0012_legacy_newznab_wrappers_01822;
+pub(crate) mod _0013_indexer_request_accounting;
 pub(crate) mod runner;
 pub(crate) mod versioning;

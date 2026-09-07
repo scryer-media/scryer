@@ -77,6 +77,9 @@ impl HttpTitleImageProcessor {
             )
             .await
             .map_err(|error| match error {
+                OutboundHttpError::DispatchRejected => {
+                    AppError::canceled("outbound dispatch is closed")
+                }
                 OutboundHttpError::RateLimited(rate_limited) => AppError::Repository(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => format!(

@@ -6,9 +6,12 @@ use std::sync::{
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use scryer_application::{IndexerQueryStats, IndexerStatsTracker};
+use scryer_application::{IndexerDispatchGate, IndexerQueryStats, IndexerStatsTracker};
 
-use crate::queries::sql_runtime::StoreDatastore;
+use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+const INDEXER_REQUEST_ACCOUNTING_V2_STARTED_AT_KEY: &str =
+    "indexer.request_accounting_v2_started_at";
 
 const QUOTA_FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -52,7 +55,7 @@ impl IndexerEntry {
     /// the reset the persisted row performs on its next write.
     fn roll_request_window(&mut self, today: NaiveDate) {
         match self.api_requests_window_started_on {
-            Some(started_on) if started_on == today => {}
+            Some(started_on) if started_on >= today => {}
             Some(_) => {
                 self.api_requests_today = 0;
                 self.api_requests_window_started_on = Some(today);
@@ -127,8 +130,12 @@ pub struct InMemoryIndexerStatsTracker {
     entries: Arc<Mutex<HashMap<String, IndexerEntry>>>,
     datastore: Option<StoreDatastore>,
     pending_quota_updates: Arc<Mutex<BTreeMap<(String, NaiveDate), PendingQuotaUpdate>>>,
+    /// Ensures an explicit shutdown drain cannot overlap the scheduled flush.
+    quota_flush_lock: Arc<tokio::sync::Mutex<()>>,
+    dispatch_gate: IndexerDispatchGate,
     quota_flush_scheduled: Arc<AtomicBool>,
     quota_runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
+    observation_started_at: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for InMemoryIndexerStatsTracker {
@@ -143,8 +150,11 @@ impl InMemoryIndexerStatsTracker {
             entries: Arc::new(Mutex::new(HashMap::new())),
             datastore,
             pending_quota_updates: Arc::new(Mutex::new(BTreeMap::new())),
+            quota_flush_lock: Arc::new(tokio::sync::Mutex::new(())),
+            dispatch_gate: IndexerDispatchGate::default(),
             quota_flush_scheduled: Arc::new(AtomicBool::new(false)),
             quota_runtime: Arc::new(Mutex::new(tokio::runtime::Handle::try_current().ok())),
+            observation_started_at: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -170,6 +180,38 @@ impl InMemoryIndexerStatsTracker {
                 return;
             }
         };
+        let observation_started_at = match SqlRuntime::fetch_optional(
+            datastore.read_exec(),
+            "SELECT CAST(settings_values.value_json AS TEXT) AS value_json
+               FROM settings_values
+               JOIN settings_definitions
+                 ON settings_definitions.id = settings_values.setting_definition_id
+              WHERE settings_definitions.category = {}
+                AND settings_definitions.scope = {}
+                AND settings_definitions.key_name = {}
+                AND settings_values.scope = {}
+                AND settings_values.scope_id IS NULL",
+            &[
+                SqlArg::Text("service".to_string()),
+                SqlArg::Text("system".to_string()),
+                SqlArg::Text(INDEXER_REQUEST_ACCOUNTING_V2_STARTED_AT_KEY.to_string()),
+                SqlArg::Text("system".to_string()),
+            ],
+        )
+        .await
+        {
+            Ok(Some(row)) => row
+                .text("value_json")
+                .ok()
+                .and_then(|value| serde_json::from_str::<Option<String>>(&value).ok())
+                .flatten(),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to load indexer request accounting observation epoch");
+                None
+            }
+        };
+        *self.observation_started_at.lock().unwrap() = observation_started_at;
 
         let today = Utc::now().date_naive();
         let mut entries = self.entries.lock().unwrap();
@@ -237,6 +279,7 @@ impl InMemoryIndexerStatsTracker {
     }
 
     pub async fn flush_pending_quota_updates(&self) {
+        let _flush_guard = self.quota_flush_lock.lock().await;
         let Some(datastore) = &self.datastore else {
             self.quota_flush_scheduled.store(false, Ordering::Release);
             return;
@@ -294,9 +337,37 @@ impl InMemoryIndexerStatsTracker {
             self.schedule_quota_flush();
         }
     }
+
+    /// Final, awaited drain for orderly shutdown. Call only after request
+    /// producers have stopped; a failed write remains queued and is surfaced
+    /// to the caller instead of being mistaken for durable accounting.
+    pub async fn drain_pending_quota_updates(&self) -> scryer_application::AppResult<()> {
+        self.flush_pending_quota_updates().await;
+        if self.pending_quota_updates.lock().unwrap().is_empty() {
+            Ok(())
+        } else {
+            Err(scryer_application::AppError::Repository(
+                "indexer request accounting could not be persisted during shutdown".into(),
+            ))
+        }
+    }
+
+    /// Stop admitting new observed indexer HTTP dispatches before final drain.
+    pub fn close_dispatch_gate(&self) {
+        self.dispatch_gate.close();
+    }
+
+    /// Await completion of dispatches admitted before the gate was closed.
+    pub async fn wait_for_admitted_dispatches(&self) {
+        self.dispatch_gate.wait_for_idle().await;
+    }
 }
 
 impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
+    fn dispatch_gate(&self) -> Option<IndexerDispatchGate> {
+        Some(self.dispatch_gate.clone())
+    }
+
     fn record_query(&self, indexer_id: &str, indexer_name: &str, success: bool) {
         let mut entries = self.entries.lock().unwrap();
         let entry = entries
@@ -357,6 +428,15 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
         self.record_api_request_sent_on(indexer_id, indexer_name, Utc::now().date_naive());
     }
 
+    fn record_api_request_sent_at(
+        &self,
+        indexer_id: &str,
+        indexer_name: &str,
+        dispatched_at: DateTime<Utc>,
+    ) {
+        self.record_api_request_sent_on(indexer_id, indexer_name, dispatched_at.date_naive());
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats> {
         self.collect_stats()
     }
@@ -364,6 +444,9 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
 
 impl InMemoryIndexerStatsTracker {
     fn record_api_request_sent_on(&self, indexer_id: &str, indexer_name: &str, today: NaiveDate) {
+        if !scryer_application::indexer_error_history_is_persistable(indexer_id) {
+            return;
+        }
         {
             let mut entries = self.entries.lock().unwrap();
             let entry = entries
@@ -371,7 +454,9 @@ impl InMemoryIndexerStatsTracker {
                 .or_insert_with(|| IndexerEntry::new(indexer_name));
             entry.indexer_name = indexer_name.to_string();
             entry.roll_request_window(today);
-            entry.api_requests_today = entry.api_requests_today.saturating_add(1);
+            if entry.api_requests_window_started_on == Some(today) {
+                entry.api_requests_today = entry.api_requests_today.saturating_add(1);
+            }
         }
 
         if self.datastore.is_some() {
@@ -386,6 +471,7 @@ impl InMemoryIndexerStatsTracker {
     }
 
     fn collect_stats(&self) -> Vec<IndexerQueryStats> {
+        let observation_started_at = self.observation_started_at.lock().unwrap().clone();
         let mut entries = self.entries.lock().unwrap();
         let cutoff = Utc::now() - chrono::Duration::hours(24);
         let today = Utc::now().date_naive();
@@ -410,6 +496,7 @@ impl InMemoryIndexerStatsTracker {
                     api_requests_window_started_at: entry
                         .api_requests_window_started_on
                         .map(|day| day.to_string()),
+                    api_requests_observed_since: observation_started_at.clone(),
                     api_current: entry.api_current,
                     api_max: entry.api_max,
                     grab_current: entry.grab_current,
@@ -585,6 +672,58 @@ mod tests {
         .execute(pool)
         .await
         .expect("quota table should be created");
+    }
+
+    #[tokio::test]
+    async fn hydrate_exposes_the_observation_epoch_and_ignores_synthetic_test_requests() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+        sqlx::query(
+            "CREATE TABLE settings_definitions (
+                id TEXT PRIMARY KEY, category TEXT NOT NULL, scope TEXT NOT NULL,
+                key_name TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("settings definitions table");
+        sqlx::query(
+            "CREATE TABLE settings_values (
+                id TEXT PRIMARY KEY, setting_definition_id TEXT NOT NULL, scope TEXT NOT NULL,
+                scope_id TEXT, value_json TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("settings values table");
+        sqlx::query(
+            "INSERT INTO settings_definitions (id, category, scope, key_name)
+             VALUES ('epoch', 'service', 'system', 'indexer.request_accounting_v2_started_at')",
+        )
+        .execute(&pool)
+        .await
+        .expect("epoch definition");
+        sqlx::query(
+            "INSERT INTO settings_values (id, setting_definition_id, scope, scope_id, value_json)
+             VALUES ('epoch-value', 'epoch', 'system', NULL, '\"2026-09-06T12:00:00Z\"')",
+        )
+        .execute(&pool)
+        .await
+        .expect("epoch value");
+
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        tracker.hydrate().await;
+        tracker.record_api_request_sent("test-connection", "Test connection");
+        assert!(tracker.all_stats().is_empty());
+
+        tracker.record_api_request_sent("idx-observed", "Observed Indexer");
+        let stat = tracker.all_stats().pop().expect("observed stat");
+        assert_eq!(
+            stat.api_requests_observed_since.as_deref(),
+            Some("2026-09-06T12:00:00Z")
+        );
     }
 
     #[tokio::test]
@@ -848,6 +987,83 @@ mod tests {
             );
             assert!(tracker.pending_quota_updates.lock().unwrap().is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn explicit_send_timestamps_survive_out_of_order_requeue_and_reopen() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        let today = Utc::now().date_naive();
+        let yesterday = today.pred_opt().expect("previous UTC day");
+        let at_noon = |day: NaiveDate| {
+            DateTime::from_naive_utc_and_offset(day.and_hms_opt(12, 0, 0).expect("valid noon"), Utc)
+        };
+
+        // Arrival order is intentionally inverted. The queued key retains the
+        // transport send day, so the eventual database replay is day-correct.
+        tracker.record_api_request_sent_at("idx-order", "Ordered Indexer", at_noon(today));
+        tracker.record_api_request_sent_at("idx-order", "Ordered Indexer", at_noon(yesterday));
+        assert_eq!(
+            tracker
+                .all_stats()
+                .pop()
+                .expect("live quota stat")
+                .api_requests_today,
+            1,
+            "a delayed callback from yesterday must not reset today's live count"
+        );
+        assert!(
+            tracker.drain_pending_quota_updates().await.is_err(),
+            "a failed final drain must report failure rather than discard its batch"
+        );
+        assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 2);
+
+        create_quota_table(&pool).await;
+        tracker
+            .drain_pending_quota_updates()
+            .await
+            .expect("final drain should replay both queued UTC days");
+        let reopened = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        reopened.hydrate().await;
+        let stat = reopened.all_stats().pop().expect("reopened quota stat");
+        assert_eq!(
+            stat.api_requests_today, 1,
+            "yesterday's replay must not become today's usage"
+        );
+    }
+
+    #[tokio::test]
+    async fn final_drain_persists_concurrent_requests_and_reopens_their_total() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_quota_table(&pool).await;
+        let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        let mut workers = Vec::new();
+        for _ in 0..24 {
+            let tracker = tracker.clone();
+            workers.push(std::thread::spawn(move || {
+                tracker.record_api_request_sent("idx-drain", "Drain Indexer");
+            }));
+        }
+        for worker in workers {
+            worker.join().expect("request worker should finish");
+        }
+
+        tracker
+            .drain_pending_quota_updates()
+            .await
+            .expect("final drain should persist every admitted request");
+        let reopened = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
+        reopened.hydrate().await;
+        let stat = reopened.all_stats().pop().expect("reopened quota stat");
+        assert_eq!(stat.api_requests_today, 24);
     }
 
     #[tokio::test]

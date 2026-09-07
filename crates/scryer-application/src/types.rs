@@ -3344,6 +3344,9 @@ pub struct IndexerQueryStats {
     /// When the current `api_requests_today` window opened, or `None` when the
     /// counter has never been persisted for this indexer.
     pub api_requests_window_started_at: Option<String>,
+    /// UTC timestamp when corrected Scryer-owned request observation began.
+    /// Counts on that first UTC day are intentionally partial.
+    pub api_requests_observed_since: Option<String>,
     pub api_current: Option<u32>,
     pub api_max: Option<u32>,
     pub grab_current: Option<u32>,

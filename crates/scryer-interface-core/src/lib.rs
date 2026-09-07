@@ -446,6 +446,12 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::ArchiveExtractionTimedOut { message } => {
             coded_gql_error(message, "ARCHIVE_EXTRACTION_TIMED_OUT")
         }
+        AppError::NewznabQuotaExceeded { code, message } => {
+            Error::new(message).extend_with(|_, extensions| {
+                extensions.set("code", "TEMPORARY_UNAVAILABLE");
+                extensions.set("providerErrorCode", code);
+            })
+        }
         AppError::TemporaryUnavailable {
             message,
             retry_after,
@@ -566,6 +572,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::ArchiveExtractionPluginRequired { .. } => "ArchiveExtractionPluginRequired",
         AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
+        AppError::NewznabQuotaExceeded { .. } => "NewznabQuotaExceeded",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
         AppError::ReauthenticationRequired(_) => "ReauthenticationRequired",
         AppError::TotpEnrollmentRequired(_) => "TotpEnrollmentRequired",

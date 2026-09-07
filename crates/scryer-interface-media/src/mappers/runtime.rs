@@ -47,6 +47,10 @@ pub fn from_system_health(health: SystemHealth) -> SystemHealthPayload {
                         .map(|day| format!("{day}T00:00:00Z")),
                     "indexer stats api_requests_window_started_at",
                 ),
+                api_requests_observed_since: parse_optional_datetime(
+                    s.api_requests_observed_since,
+                    "indexer stats api_requests_observed_since",
+                ),
                 api_current: s.api_current.map(|v| v as i32),
                 api_max: s.api_max.map(|v| v as i32),
                 grab_current: s.grab_current.map(|v| v as i32),

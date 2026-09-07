@@ -10,6 +10,7 @@ use crate::types::{
     TitleCatalogFilterCounts,
 };
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot, MonitorSelection,
@@ -23,9 +24,86 @@ use scryer_plugin_sdk::{
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 pub const NOTIFICATION_REQUEST_SCHEMA_VERSION: u32 = 1;
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
+
+/// Admission gate for observed indexer dispatches during orderly shutdown.
+/// The transport holds an admission while it invokes its dispatch observer;
+/// closing the gate makes later attempts fail before HTTP can start.
+#[derive(Clone)]
+pub struct IndexerDispatchGate {
+    state: Arc<Mutex<IndexerDispatchGateState>>,
+    idle: Arc<Notify>,
+}
+
+impl Default for IndexerDispatchGate {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(IndexerDispatchGateState::default())),
+            idle: Arc::new(Notify::new()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct IndexerDispatchGateState {
+    closed: bool,
+    admitted: u32,
+}
+
+impl IndexerDispatchGate {
+    pub fn admit(&self) -> Option<IndexerDispatchAdmission> {
+        let mut state = self.state.lock().ok()?;
+        if state.closed {
+            return None;
+        }
+        state.admitted = state.admitted.saturating_add(1);
+        Some(IndexerDispatchAdmission { gate: self.clone() })
+    }
+
+    pub fn close(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closed = true;
+        }
+    }
+
+    /// Wait until every dispatch admitted before close has completed its
+    /// observer/send boundary. No later dispatch can be admitted.
+    pub async fn wait_for_idle(&self) {
+        loop {
+            let notified = self.idle.notified();
+            let idle = self
+                .state
+                .lock()
+                .map(|state| state.admitted == 0)
+                .unwrap_or(true);
+            if idle {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+/// A successful gate admission. Its lifetime documents that the dispatch
+/// observer and transport send belong to the pre-shutdown producer set.
+pub struct IndexerDispatchAdmission {
+    gate: IndexerDispatchGate,
+}
+
+impl Drop for IndexerDispatchAdmission {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.gate.state.lock() {
+            state.admitted = state.admitted.saturating_sub(1);
+            if state.admitted == 0 {
+                self.gate.idle.notify_waiters();
+            }
+        }
+    }
+}
 
 /// A field-level title option patch. `None` preserves stored state, `Some(None)`
 /// clears an override, and `Some(Some(_))` applies an explicit override.
@@ -3251,6 +3329,14 @@ pub trait IndexerCapsSnapshotRefresher: Send + Sync {
         &self,
         config: &IndexerConfig,
     ) -> AppResult<Option<IndexerCapsSnapshot>>;
+
+    async fn fetch_for_config_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        _accounting: Option<&IndexerAccountingContext>,
+    ) -> AppResult<Option<IndexerCapsSnapshot>> {
+        self.fetch_for_config(config).await
+    }
 }
 
 /// One coverage-ledger row: the raw `(scope_key, indexer_id)`
@@ -3483,6 +3569,10 @@ pub trait HousekeepingRepository: Send + Sync {
 }
 
 pub trait IndexerStatsTracker: Send + Sync {
+    /// Present for durable trackers that coordinate dispatch shutdown.
+    fn dispatch_gate(&self) -> Option<IndexerDispatchGate> {
+        None
+    }
     fn record_query(&self, indexer_id: &str, indexer_name: &str, success: bool);
     /// Record one release grabbed through this indexer and accepted by a
     /// download client.
@@ -3511,6 +3601,19 @@ pub trait IndexerStatsTracker: Send + Sync {
     /// the null tracker) need not implement it.
     fn record_api_request_sent(&self, indexer_id: &str, indexer_name: &str) {
         let _ = (indexer_id, indexer_name);
+    }
+
+    /// Record an observed indexer dispatch with the timestamp captured by the
+    /// transport after admission and immediately before the request leaves.
+    /// Implementations that only need the current time can retain the legacy
+    /// method; durable trackers override this to preserve UTC-day attribution.
+    fn record_api_request_sent_at(
+        &self,
+        indexer_id: &str,
+        indexer_name: &str,
+        _dispatched_at: DateTime<Utc>,
+    ) {
+        self.record_api_request_sent(indexer_id, indexer_name);
     }
 
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
@@ -5674,6 +5777,25 @@ pub trait PluginDescriptorLoader: Send + Sync {
 
 #[async_trait]
 pub trait IndexerClient: Send + Sync {
+    async fn resolve_download(
+        &self,
+        _download_url: &str,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        Ok(None)
+    }
+
+    async fn resolve_download_with_cancellation(
+        &self,
+        download_url: &str,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(AppError::canceled("indexer grab canceled")),
+            result = self.resolve_download(download_url) => result,
+        }
+    }
+
     async fn finalize_search_session(
         &self,
         _search_session_id: &str,
@@ -5897,6 +6019,23 @@ pub trait IndexerClient: Send + Sync {
     }
 }
 
+/// Persisted identity charged for an observed request, independent of the
+/// configuration used to execute a connection test.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerAccountingContext {
+    pub indexer_id: String,
+    pub indexer_name: String,
+}
+
+impl IndexerAccountingContext {
+    pub fn for_config(config: &IndexerConfig) -> Option<Self> {
+        crate::indexer_error_history_is_persistable(&config.id).then(|| Self {
+            indexer_id: config.id.clone(),
+            indexer_name: config.name.clone(),
+        })
+    }
+}
+
 pub trait IndexerPluginProvider: Send + Sync {
     /// Validate normalized instance configuration using provider-owned
     /// descriptor metadata. Providers without such metadata accept it.
@@ -5921,6 +6060,21 @@ pub trait IndexerPluginProvider: Send + Sync {
         _config: &IndexerConfig,
     ) -> Option<Arc<dyn IndexerManagementClient>> {
         None
+    }
+    fn client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        _accounting: Option<&IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerClient>> {
+        self.client_for_provider_with_proxy(config, proxy_config)
+    }
+    fn management_client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        _accounting: Option<&IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerManagementClient>> {
+        self.management_client_for_provider(config)
     }
     fn available_provider_types(&self) -> Vec<String>;
     fn builtin_provider_types(&self) -> Vec<String> {
@@ -6649,6 +6803,16 @@ impl DownloadClientListing {
     pub fn all_unreadable(&self) -> bool {
         self.polled_client_count > 0 && self.unreadable_client_ids.len() >= self.polled_client_count
     }
+}
+
+#[async_trait]
+pub trait IndexerArtifactResolver: Send + Sync {
+    /// Resolves an artifact using the indexer's authenticated grab action, or
+    /// its ordinary transport when that action is explicitly unsupported.
+    async fn resolve_artifact(
+        &self,
+        request: &IndexerArtifactResolutionRequest,
+    ) -> AppResult<PreparedIndexerArtifact>;
 }
 
 #[async_trait]

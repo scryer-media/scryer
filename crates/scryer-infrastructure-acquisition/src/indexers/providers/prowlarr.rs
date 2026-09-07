@@ -405,6 +405,7 @@ pub struct ProwlarrManagementClient {
     api_state: Arc<RwLock<Option<ResolvedProwlarrApi>>>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
     indexer_stats: Arc<dyn IndexerStatsTracker>,
+    accounting: Option<scryer_application::IndexerAccountingContext>,
 }
 
 #[derive(Clone)]
@@ -412,23 +413,9 @@ struct ProwlarrErrorCapture {
     indexer_id: String,
     indexer_name: String,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
-    indexer_stats: Arc<dyn IndexerStatsTracker>,
 }
 
 impl ProwlarrErrorCapture {
-    /// Prowlarr's own transport is the one place plugin-host accounting cannot
-    /// see, so requests to the parent config are counted here. Searches are
-    /// not: a Prowlarr parent is management-only and its synced children are
-    /// ordinary newznab clients counted by the plugin host.
-    fn tally(&self, operation: IndexerErrorOperation) -> IndexerRequestTally {
-        IndexerRequestTally::new(
-            self.indexer_id.clone(),
-            self.indexer_name.clone(),
-            operation,
-            Arc::clone(&self.indexer_stats),
-        )
-    }
-
     async fn record(
         &self,
         operation: IndexerErrorOperation,
@@ -596,7 +583,31 @@ impl ProwlarrManagementClient {
             api_state: Arc::new(RwLock::new(None)),
             indexer_errors,
             indexer_stats,
+            accounting: scryer_application::IndexerAccountingContext::for_config(config),
         }
+    }
+
+    fn with_accounting(
+        mut self,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Self {
+        self.accounting = accounting.cloned();
+        self
+    }
+
+    fn tally(&self, operation: IndexerErrorOperation) -> IndexerRequestTally {
+        IndexerRequestTally::new(
+            self.accounting
+                .as_ref()
+                .map(|context| context.indexer_id.clone())
+                .unwrap_or_else(|| scryer_application::CONNECTION_TEST_INDEXER_ID.to_string()),
+            self.accounting
+                .as_ref()
+                .map(|context| context.indexer_name.clone())
+                .unwrap_or_else(|| self.parent_indexer_name.clone()),
+            operation,
+            Arc::clone(&self.indexer_stats),
+        )
     }
 
     fn config(&self) -> AppResult<&ProwlarrConfig> {
@@ -610,7 +621,6 @@ impl ProwlarrManagementClient {
             indexer_id: self.parent_config_id.clone(),
             indexer_name: self.parent_indexer_name.clone(),
             indexer_errors: Arc::clone(&self.indexer_errors),
-            indexer_stats: Arc::clone(&self.indexer_stats),
         }
     }
 
@@ -675,16 +685,13 @@ impl ProwlarrManagementClient {
         let api_key = config.api_key.clone();
         let url = api_url(&base_url, path);
         let error_capture = self.error_capture();
-        // The builder runs once per attempt inside the transport's retry loop,
-        // so counting here counts retries, which is what the indexer saw.
-        let tally = Arc::new(error_capture.tally(operation));
+        let tally = Arc::new(self.tally(operation));
         let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
-            .send_with_rate_limit_observer(
+            .send_with_rate_limit_and_dispatch_observer(
                 self.request_policy(path),
                 || {
-                    tally.note_sent(&url);
                     self.outbound_http
                         .client()
                         .get(&url)
@@ -705,6 +712,18 @@ impl ProwlarrManagementClient {
                             .await;
                     }
                 },
+                |actual_url| {
+                    let same_origin = reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin());
+                    let admitted = if same_origin {
+                        tally.try_note_sent(actual_url.as_str())
+                    } else {
+                        tally.try_note_auxiliary_sent_call("external_redirect")
+                    };
+                    admitted
+                        .then_some(())
+                        .ok_or(OutboundHttpError::DispatchRejected)
+                },
             )
             .await
             .inspect_err(|error| {
@@ -713,6 +732,9 @@ impl ProwlarrManagementClient {
                 }
             })
             .map_err(|error| match error {
+                OutboundHttpError::DispatchRejected => {
+                    ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
+                }
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => {
@@ -780,16 +802,15 @@ impl ProwlarrManagementClient {
         let request_path = format!("/{indexer_id}/api?t=caps");
         let child_key = indexer_id.to_string();
         let error_capture = self.error_capture();
-        // A child caps refresh is proxied through to the child indexer, so it
-        // spends a request; the parent row is where an operator sees it.
-        let tally = Arc::new(error_capture.tally(IndexerErrorOperation::CapsRefresh));
+        // This is an observed call made during parent management. We cannot
+        // infer how many requests Prowlarr makes internally from this response.
+        let tally = Arc::new(self.tally(IndexerErrorOperation::CapsRefresh));
         let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
-            .send_with_rate_limit_observer(
+            .send_with_rate_limit_and_dispatch_observer(
                 self.child_request_policy(&request_path, &child_key),
                 || {
-                    tally.note_sent(&url);
                     self.outbound_http
                         .client()
                         .get(&url)
@@ -809,6 +830,18 @@ impl ProwlarrManagementClient {
                             .await;
                     }
                 },
+                |actual_url| {
+                    let same_origin = reqwest::Url::parse(&url)
+                        .is_ok_and(|url| url.origin() == actual_url.origin());
+                    let admitted = if same_origin {
+                        tally.try_note_sent(actual_url.as_str())
+                    } else {
+                        tally.try_note_auxiliary_sent_call("external_redirect")
+                    };
+                    admitted
+                        .then_some(())
+                        .ok_or(OutboundHttpError::DispatchRejected)
+                },
             )
             .await
             .inspect_err(|error| {
@@ -817,6 +850,9 @@ impl ProwlarrManagementClient {
                 }
             })
             .map_err(|error| match error {
+                OutboundHttpError::DispatchRejected => {
+                    ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
+                }
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => {
@@ -1093,16 +1129,42 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
         &self,
         config: &IndexerConfig,
     ) -> Option<Arc<dyn IndexerManagementClient>> {
+        self.management_client_for_provider_with_accounting(
+            config,
+            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
+        )
+    }
+
+    fn client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerClient>> {
+        if is_prowlarr_provider(&config.provider_type) {
+            return Some(Arc::new(ProwlarrSearchStub));
+        }
+        self.delegate
+            .client_for_provider_with_accounting(config, proxy_config, accounting)
+    }
+
+    fn management_client_for_provider_with_accounting(
+        &self,
+        config: &IndexerConfig,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> Option<Arc<dyn IndexerManagementClient>> {
         if is_prowlarr_provider(&config.provider_type) {
             return Some(Arc::new(
                 ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
                     config,
                     Arc::clone(&self.indexer_errors),
                     Arc::clone(&self.indexer_stats),
-                ),
+                )
+                .with_accounting(accounting),
             ));
         }
-        self.delegate.management_client_for_provider(config)
+        self.delegate
+            .management_client_for_provider_with_accounting(config, accounting)
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -2888,6 +2950,96 @@ mod tests {
             caps.movie_search.supported_params,
             vec!["q", "imdbid", "genre"]
         );
+    }
+
+    #[tokio::test]
+    async fn observed_management_calls_include_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(path(SYSTEM_STATUS_PATH))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "/redirected-status"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/redirected-status"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"appName":"Prowlarr", "version":"2.0.0"})),
+            )
+            .mount(&server)
+            .await;
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+            &test_indexer_config(&server.uri()),
+            Arc::new(RecordingIndexerErrorRepository::default()),
+            stats.clone(),
+        );
+        client.fetch_system_status().await.unwrap();
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(stats.sent.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_management_cooldown_does_not_count_a_send() {
+        let server = MockServer::start().await;
+        let stats = Arc::new(CountingIndexerStatsTracker::default());
+        let mut config = test_indexer_config(&server.uri());
+        config.id = format!("cooldown-{}", server.address().port());
+        let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+            &config,
+            Arc::new(RecordingIndexerErrorRepository::default()),
+            stats.clone(),
+        );
+        let destination = DestinationKey::from(indexer_rate_limit_domain_key(&config.id, None));
+        client
+            .outbound_http
+            .registry()
+            .record_destination_cooldown(
+                &destination,
+                Duration::from_secs(30),
+                scryer_outbound_http::RetryAfterSource::Seconds,
+            )
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), client.fetch_system_status())
+                .await
+                .is_err()
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert_eq!(stats.sent.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn saved_management_probe_accounts_to_saved_identity_only() {
+        let server = MockServer::start().await;
+        Mock::given(path(SYSTEM_STATUS_PATH))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"appName":"Prowlarr", "version":"2.0.0"})),
+            )
+            .mount(&server)
+            .await;
+        let stats = Arc::new(crate::indexers::stats::InMemoryIndexerStatsTracker::default());
+        let mut config = test_indexer_config(&server.uri());
+        config.id = scryer_application::CONNECTION_TEST_INDEXER_ID.to_string();
+        let accounting = scryer_application::IndexerAccountingContext {
+            indexer_id: "saved-parent".into(),
+            indexer_name: "Saved Prowlarr".into(),
+        };
+        for identity in [None, Some(&accounting)] {
+            let client = ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+                &config,
+                Arc::new(RecordingIndexerErrorRepository::default()),
+                stats.clone(),
+            )
+            .with_accounting(identity);
+            client.fetch_system_status().await.unwrap();
+        }
+        let rows = stats.all_stats();
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].indexer_id, "saved-parent");
+        assert_eq!(rows[0].api_requests_today, 1);
     }
 
     /// A caps responder that records the window each fetch is held open for.

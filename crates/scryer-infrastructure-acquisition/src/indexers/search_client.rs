@@ -2398,7 +2398,12 @@ impl MultiIndexerSearchClient {
     ) -> AppResult<(Arc<dyn IndexerClient>, Option<String>, std::time::Duration)> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let (proxy_config, proxy_cache_key) =
-            if let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() {
+            if config.is_prowlarr_nab_proxy() || provider == "prowlarr" {
+                // Prowlarr owns challenge handling for its management parent and
+                // synchronized children. Old persisted solver assignments must
+                // not regain effect at runtime while startup cleanup catches up.
+                (None, None)
+            } else if let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() {
                 let proxy_config = proxy_configs_by_id
                     .get(proxy_config_id)
                     .cloned()
@@ -3482,6 +3487,11 @@ impl IndexerClient for MultiIndexerSearchClient {
         let mut proxy_configs_by_id: HashMap<String, Option<scryer_domain::IndexerProxyConfig>> =
             HashMap::new();
         for (config, _) in &enabled {
+            if config.is_prowlarr_nab_proxy()
+                || config.provider_type.trim().eq_ignore_ascii_case("prowlarr")
+            {
+                continue;
+            }
             let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() else {
                 continue;
             };

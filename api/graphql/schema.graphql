@@ -7447,6 +7447,10 @@ type IndexerQueryStatsPayload {
 	"""
 	apiRequestsWindowStartedAt: DateTime
 	"""
+	UTC time corrected Scryer-owned API request observation began. The first UTC day is partial.
+	"""
+	apiRequestsObservedSince: DateTime
+	"""
 	Current API request count, or null when not reported.
 	"""
 	apiCurrent: Int

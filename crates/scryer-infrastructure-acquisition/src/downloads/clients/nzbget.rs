@@ -1069,6 +1069,7 @@ fn map_nzbget_outbound_error(operation: &str, error: OutboundHttpError) -> AppEr
                 RateLimitCooldownAction::AlreadyRecorded,
             )
         }
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
         OutboundHttpError::Transport { source, .. } => {
             AppError::Repository(format!("{operation} failed: {source}"))
         }
@@ -1096,6 +1097,7 @@ fn map_nzbget_append_outbound_error(
                 RateLimitCooldownAction::AlreadyRecorded,
             )
         }
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
         OutboundHttpError::Transport {
             attempts, source, ..
         } => {
@@ -1184,7 +1186,6 @@ impl DownloadClient for NzbgetDownloadClient {
             .unwrap_or_default();
 
         let staged = resolve_staged_nzb_for_request(
-            &self.outbound_http,
             &self.staged_nzb_store,
             &self.staged_nzb_pipeline_limit,
             request,

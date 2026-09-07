@@ -826,6 +826,7 @@ fn content_etag(bytes: &[u8]) -> String {
 
 fn outbound_error(error: OutboundHttpError) -> AppError {
     match error {
+        OutboundHttpError::DispatchRejected => AppError::canceled("outbound dispatch is closed"),
         OutboundHttpError::RateLimited(rate_limited) => AppError::Repository(format!(
             "image proxy fetch was rate limited{}",
             rate_limited

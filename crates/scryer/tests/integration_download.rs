@@ -20,8 +20,10 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use common::{TestContext, load_fixture};
 use scryer_application::{
     AppError, DownloadClient, DownloadClientAddRequest, DownloadClientPluginProvider,
-    DownloadSourceKind, DownloadSubmissionPurpose, NullSettingsRepository, NullStagedNzbStore,
-    StagedNzbRef,
+    DownloadSourceKind, DownloadSubmissionPurpose, IndexerArtifactLease,
+    IndexerArtifactResolutionRequest, IndexerArtifactResolver, IndexerConfigRepository,
+    NullIndexerProxyConfigRepository, NullSettingsRepository, NullStagedNzbStore,
+    PreparedIndexerArtifact, StagedNzbRef,
 };
 use scryer_domain::DownloadClientConfig;
 use scryer_infrastructure_acquisition::downloads::{
@@ -32,7 +34,29 @@ use scryer_infrastructure_acquisition::downloads::{
     config_store::DownloadClientConfigStore,
     staged_nzb_store::FileSystemStagedNzbStore,
 };
+use scryer_infrastructure_acquisition::indexers::{
+    artifact_resolver::AcquisitionIndexerArtifactResolver, config_store::IndexerConfigStore,
+};
 use scryer_plugins::WasmDownloadClientPluginProvider;
+
+struct DirectArtifactPluginProvider;
+
+impl scryer_application::IndexerPluginProvider for DirectArtifactPluginProvider {
+    fn client_for_provider(
+        &self,
+        _config: &scryer_domain::IndexerConfig,
+    ) -> Option<Arc<dyn scryer_application::IndexerClient>> {
+        None
+    }
+
+    fn available_provider_types(&self) -> Vec<String> {
+        vec![]
+    }
+
+    fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+        vec![]
+    }
+}
 
 fn new_nzbget_client(
     uri: &str,
@@ -68,6 +92,70 @@ async fn new_staged_nzb_store() -> Arc<FileSystemStagedNzbStore> {
             .await
             .expect("staged nzb store"),
     )
+}
+
+async fn resolve_direct_nzb_request(
+    ctx: &TestContext,
+    store: Arc<FileSystemStagedNzbStore>,
+    source_url: String,
+    title: scryer_domain::Title,
+    source_title: &str,
+    category: Option<String>,
+) -> (Box<dyn IndexerArtifactLease>, DownloadClientAddRequest) {
+    let indexer_configs: Arc<dyn IndexerConfigRepository> = Arc::new(IndexerConfigStore::new(
+        ctx.db.datastore(),
+        ctx.db.encryption_key_state(),
+    ));
+    let resolver = AcquisitionIndexerArtifactResolver::new(
+        Arc::new(DirectArtifactPluginProvider),
+        indexer_configs,
+        Arc::new(NullIndexerProxyConfigRepository),
+        store,
+        Arc::new(Semaphore::new(4)),
+    );
+    let prepared = resolver
+        .resolve_artifact(&IndexerArtifactResolutionRequest {
+            indexer_id: None,
+            source_url,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            info_hash_hint: None,
+            title_id: Some(title.id.clone()),
+            search_facet: Some(title.facet.clone()),
+            cancellation: tokio_util::sync::CancellationToken::new(),
+        })
+        .await
+        .expect("direct NZB resolves before native submission");
+    let PreparedIndexerArtifact::StagedNzb(lease) = prepared else {
+        panic!("direct NZB must be staged");
+    };
+    let request = DownloadClientAddRequest {
+        search_facet: Some(title.facet.clone()),
+        title,
+        download_id: None,
+        source_hint: None,
+        staged_nzb: Some(lease.staged_nzb().clone()),
+        resolved_download_artifact: None,
+        source_kind: Some(DownloadSourceKind::NzbFile),
+        source_title: Some(source_title.to_string()),
+        source_password: None,
+        category,
+        queue_priority: None,
+        download_directory: None,
+        release_title: None,
+        indexer_name: None,
+        indexer_id: None,
+        info_hash_hint: None,
+        seed_goal_ratio: None,
+        seed_goal_seconds: None,
+        tracker_min_seed_ratio: None,
+        tracker_min_seed_time_minutes: None,
+        season_pack_seed_ratio: None,
+        season_pack_seed_time_minutes: None,
+        is_recent: None,
+        season_pack: None,
+        purpose: DownloadSubmissionPurpose::Standard,
+    };
+    (lease, request)
 }
 
 fn test_title(name: &str) -> scryer_domain::Title {
@@ -404,6 +492,29 @@ fn request_with_staged_nzb(
         season_pack: None,
         purpose: DownloadSubmissionPurpose::Standard,
     }
+}
+
+fn request_with_resolved_nzb(
+    title: scryer_domain::Title,
+    bytes: Vec<u8>,
+    source_title: &str,
+) -> DownloadClientAddRequest {
+    let mut request = request_with_staged_nzb(
+        title,
+        StagedNzbRef {
+            id: "unused".into(),
+            compressed_path: std::path::PathBuf::new(),
+            raw_size_bytes: 0,
+        },
+        source_title,
+    );
+    request.staged_nzb = None;
+    request.resolved_download_artifact = Some(scryer_application::ResolvedDownloadArtifact::Nzb {
+        bytes,
+        file_name: None,
+        content_type: Some("application/x-nzb".into()),
+    });
+    request
 }
 
 fn download_client_config_repo(
@@ -910,10 +1021,26 @@ async fn nzbget_submit_download() {
     let title = test_title("Test Movie Title");
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
-    let result = new_submit_nzbget_client(&ctx.nzbget_server.uri())
-        .await
-        .submit_to_download_queue(&title, Some(source_hint), None, None, None, None)
-        .await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+    let (_lease, request) = resolve_direct_nzb_request(
+        &ctx,
+        staged_nzb_store.clone(),
+        source_hint,
+        title,
+        "Test Movie Title",
+        None,
+    )
+    .await;
+    let result = NzbgetDownloadClient::with_staged_nzb_store(
+        ctx.nzbget_server.uri(),
+        Some("test-user".into()),
+        Some("test-pass".into()),
+        "SCORE".into(),
+        staged_nzb_store,
+        Arc::new(Semaphore::new(4)),
+    )
+    .submit_download(&request)
+    .await;
 
     assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
     let grab = result.unwrap();
@@ -962,10 +1089,26 @@ async fn nzbget_submit_download_supports_v25_3_append_signature() {
     let title = test_title("Test Movie Title");
 
     let source_hint = format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri());
-    let result = new_submit_nzbget_client(&ctx.nzbget_server.uri())
-        .await
-        .submit_to_download_queue(&title, Some(source_hint), None, None, None, None)
-        .await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+    let (_lease, request) = resolve_direct_nzb_request(
+        &ctx,
+        staged_nzb_store.clone(),
+        source_hint,
+        title,
+        "Test Movie Title",
+        None,
+    )
+    .await;
+    let result = NzbgetDownloadClient::with_staged_nzb_store(
+        ctx.nzbget_server.uri(),
+        Some("test-user".into()),
+        Some("test-pass".into()),
+        "SCORE".into(),
+        staged_nzb_store,
+        Arc::new(Semaphore::new(4)),
+    )
+    .submit_download(&request)
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1017,15 +1160,14 @@ async fn nzbget_submit_download_deletes_self_staged_nzb_on_failure() {
         Arc::new(Semaphore::new(4)),
     );
 
+    let title = test_title("Broken NZBGet Submit");
+    let request = request_with_resolved_nzb(
+        title,
+        load_fixture("nzbgeek/nzb_content.xml").into_bytes(),
+        "Broken.Release",
+    );
     let error = client
-        .submit_to_download_queue(
-            &test_title("Broken NZBGet Submit"),
-            Some(format!("{}/getnzb/test.nzb", ctx.nzbget_server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Broken.Release".to_string()),
-            None,
-            None,
-        )
+        .submit_download(&request)
         .await
         .expect_err("submit should fail");
 
@@ -1424,20 +1566,23 @@ async fn router_reuses_single_staged_nzb_across_client_failover() {
     .await;
 
     let router = build_router_with_cache(&ctx, staged_nzb_store.clone());
+    let (lease, request) = resolve_direct_nzb_request(
+        &ctx,
+        staged_nzb_store.clone(),
+        format!("{}/release.nzb", source_server.uri()),
+        test_title("Router Failover"),
+        "Router.Failover.Release",
+        None,
+    )
+    .await;
     let result = router
-        .submit_to_download_queue(
-            &test_title("Router Failover"),
-            Some(format!("{}/release.nzb", source_server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Router.Failover.Release".to_string()),
-            None,
-            None,
-        )
+        .submit_download(&request)
         .await
         .expect("secondary client should succeed after failover");
 
     assert_eq!(result.client_type, "nzbget");
     assert_eq!(source_server.received_requests().await.unwrap().len(), 1);
+    drop(lease);
     assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 0);
 }
 
@@ -1479,20 +1624,23 @@ async fn router_deletes_staged_nzb_after_final_failure() {
     .await;
 
     let router = build_router_with_cache(&ctx, staged_nzb_store.clone());
+    let (lease, request) = resolve_direct_nzb_request(
+        &ctx,
+        staged_nzb_store.clone(),
+        format!("{}/release.nzb", source_server.uri()),
+        test_title("Router Failure"),
+        "Router.Failure.Release",
+        None,
+    )
+    .await;
     let error = router
-        .submit_to_download_queue(
-            &test_title("Router Failure"),
-            Some(format!("{}/release.nzb", source_server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Router.Failure.Release".to_string()),
-            None,
-            None,
-        )
+        .submit_download(&request)
         .await
         .expect_err("all clients should fail");
 
     assert!(error.to_string().contains("500") || error.to_string().contains("failed"));
     assert_eq!(source_server.received_requests().await.unwrap().len(), 1);
+    drop(lease);
     assert_eq!(staged_nzb_store.count_staged_artifacts().await.unwrap(), 0);
 }
 
@@ -2141,8 +2289,8 @@ async fn sabnzbd_delete_history_item() {
 
 #[tokio::test]
 async fn sabnzbd_submit_download() {
-    // Mock server for both the NZB download and the SABnzbd API
-    let server = MockServer::start().await;
+    let ctx = TestContext::new().await;
+    let server = &ctx.nzbgeek_server;
 
     // Mock: NZB file download from indexer
     Mock::given(method("GET"))
@@ -2151,7 +2299,7 @@ async fn sabnzbd_submit_download() {
             ResponseTemplate::new(200)
                 .set_body_bytes(b"<?xml version=\"1.0\"?><nzb></nzb>".to_vec()),
         )
-        .mount(&server)
+        .mount(server)
         .await;
 
     // Mock: SABnzbd addfile (POST with multipart)
@@ -2160,23 +2308,29 @@ async fn sabnzbd_submit_download() {
         .respond_with(
             ResponseTemplate::new(200).set_body_string(load_fixture("sabnzbd/addurl.json")),
         )
-        .mount(&server)
+        .mount(server)
         .await;
 
     let title = test_title("Test Movie Title");
 
-    let nzb_url = format!("{}/getnzb?id=abc123&apikey=xyz", server.uri());
-    let result = new_submit_sabnzbd_client(&server.uri())
-        .await
-        .submit_to_download_queue(
-            &title,
-            Some(nzb_url),
-            None,
-            None,
-            None,
-            Some("movies".to_string()),
-        )
-        .await;
+    let staged_nzb_store = new_staged_nzb_store().await;
+    let (_lease, request) = resolve_direct_nzb_request(
+        &ctx,
+        staged_nzb_store.clone(),
+        format!("{}/getnzb?id=abc123&apikey=xyz", server.uri()),
+        title,
+        "Test Movie Title",
+        Some("movies".to_string()),
+    )
+    .await;
+    let result = SabnzbdDownloadClient::with_staged_nzb_store(
+        server.uri(),
+        "test-api-key".to_string(),
+        staged_nzb_store,
+        Arc::new(Semaphore::new(4)),
+    )
+    .submit_download(&request)
+    .await;
 
     assert!(result.is_ok(), "submit should succeed: {:?}", result.err());
     let grab = result.unwrap();
@@ -2242,16 +2396,14 @@ async fn sabnzbd_submit_download_deletes_self_staged_nzb_on_failure() {
         staged_nzb_store.clone(),
         Arc::new(Semaphore::new(4)),
     );
+    let request = request_with_resolved_nzb(
+        test_title("Broken SAB Submit"),
+        load_fixture("nzbgeek/nzb_content.xml").into_bytes(),
+        "Broken.SAB.Release",
+    );
 
     let error = client
-        .submit_to_download_queue(
-            &test_title("Broken SAB Submit"),
-            Some(format!("{}/getnzb?id=broken", server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Broken.SAB.Release".to_string()),
-            None,
-            Some("movies".to_string()),
-        )
+        .submit_download(&request)
         .await
         .expect_err("submit should fail");
 
@@ -2307,19 +2459,20 @@ async fn sabnzbd_submit_download_reconciles_ambiguous_addfile_from_queue() {
     let client = SabnzbdDownloadClient::with_staged_nzb_store(
         server.uri(),
         "test-api-key".to_string(),
-        staged_nzb_store,
+        staged_nzb_store.clone(),
         Arc::new(Semaphore::new(4)),
     );
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(load_fixture("nzbgeek/nzb_content.xml").as_bytes())
+        .await
+        .expect("stage fixture");
 
     let result = client
-        .submit_to_download_queue(
-            &test_title("My.Movie.2024.1080p.BluRay"),
-            Some(format!("{}/getnzb?id=movie", server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("My.Movie.2024.1080p.BluRay".to_string()),
-            None,
-            Some("movies".to_string()),
-        )
+        .submit_download(&request_with_staged_nzb(
+            test_title("My.Movie.2024.1080p.BluRay"),
+            staged,
+            "My.Movie.2024.1080p.BluRay",
+        ))
         .await
         .expect("ambiguous addfile should reconcile to the queued job");
 
@@ -2380,19 +2533,20 @@ async fn sabnzbd_submit_download_reconciles_title_with_sab_illegal_characters() 
     let client = SabnzbdDownloadClient::with_staged_nzb_store(
         server.uri(),
         "test-api-key".to_string(),
-        staged_nzb_store,
+        staged_nzb_store.clone(),
         Arc::new(Semaphore::new(4)),
     );
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(load_fixture("nzbgeek/nzb_content.xml").as_bytes())
+        .await
+        .expect("stage fixture");
 
     let result = client
-        .submit_to_download_queue(
-            &test_title("Mission: Impossible"),
-            Some(format!("{}/getnzb?id=mi", server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Mission: Impossible".to_string()),
-            None,
-            Some("movies".to_string()),
-        )
+        .submit_download(&request_with_staged_nzb(
+            test_title("Mission: Impossible"),
+            staged,
+            "Mission: Impossible",
+        ))
         .await
         .expect("illegal-char title should still reconcile from the queue");
 
@@ -2450,19 +2604,20 @@ async fn sabnzbd_submit_download_resolves_sabnzbd_compat_path() {
     let client = SabnzbdDownloadClient::with_staged_nzb_store(
         server.uri(),
         "test-api-key".to_string(),
-        staged_nzb_store,
+        staged_nzb_store.clone(),
         Arc::new(Semaphore::new(4)),
     );
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(load_fixture("nzbgeek/nzb_content.xml").as_bytes())
+        .await
+        .expect("stage fixture");
 
     let result = client
-        .submit_to_download_queue(
-            &test_title("Compat Path"),
-            Some(format!("{}/getnzb?id=compat", server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Compat.Path.Release".to_string()),
-            None,
-            Some("movies".to_string()),
-        )
+        .submit_download(&request_with_staged_nzb(
+            test_title("Compat Path"),
+            staged,
+            "Compat.Path.Release",
+        ))
         .await
         .expect("addfile should route to the resolved sabnzbd-compat path");
 
@@ -2524,19 +2679,20 @@ async fn sabnzbd_submit_download_rejects_definitive_status_false() {
     let client = SabnzbdDownloadClient::with_staged_nzb_store(
         server.uri(),
         "test-api-key".to_string(),
-        staged_nzb_store,
+        staged_nzb_store.clone(),
         Arc::new(Semaphore::new(4)),
     );
+    let staged = staged_nzb_store
+        .stage_nzb_bytes_for_test(load_fixture("nzbgeek/nzb_content.xml").as_bytes())
+        .await
+        .expect("stage fixture");
 
     let error = client
-        .submit_to_download_queue(
-            &test_title("Duplicate Release"),
-            Some(format!("{}/getnzb?id=dup", server.uri())),
-            Some(DownloadSourceKind::NzbUrl),
-            Some("Duplicate.Release".to_string()),
-            None,
-            Some("movies".to_string()),
-        )
+        .submit_download(&request_with_staged_nzb(
+            test_title("Duplicate Release"),
+            staged,
+            "Duplicate.Release",
+        ))
         .await
         .expect_err("a definitive rejection should fail the submit");
 

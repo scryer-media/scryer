@@ -41,6 +41,16 @@ pub struct RateLimitSignal {
 impl RateLimitSignal {
     pub fn from_error(error: &AppError) -> Option<Self> {
         match error {
+            AppError::NewznabQuotaExceeded {
+                code: 500 | 501,
+                message,
+            } => Some(Self {
+                retry_after: None,
+                source: RateLimitSignalSource::NewznabQuotaExhausted,
+                cooldown_action: RateLimitCooldownAction::RecordFallback,
+                status_code: None,
+                message: Some(message.clone()),
+            }),
             AppError::TemporaryUnavailable {
                 message,
                 retry_after,
@@ -115,6 +125,7 @@ impl RateLimitSignal {
 
     pub fn from_outbound_http_error(error: &OutboundHttpError) -> Option<Self> {
         match error {
+            OutboundHttpError::DispatchRejected => None,
             OutboundHttpError::RateLimited(rate_limited) => Some(Self {
                 retry_after: rate_limited.retry_after,
                 source: RateLimitSignalSource::OutboundHttpRateLimited,
@@ -223,6 +234,26 @@ fn retry_after_from_text(message: &str) -> Option<(Duration, RateLimitSignalSour
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_newznab_quotas_keep_code_without_inventing_a_reset_time() {
+        for code in [500, 501] {
+            let error = AppError::NewznabQuotaExceeded {
+                code,
+                message: "redacted provider message".into(),
+            };
+            let signal = RateLimitSignal::from_error(&error).unwrap();
+            assert_eq!(signal.source, RateLimitSignalSource::NewznabQuotaExhausted);
+            assert_eq!(signal.retry_after, None);
+            assert!(signal.warrants_system_backoff());
+        }
+        assert!(
+            RateLimitSignal::from_error(&AppError::Repository(
+                "Newznab error 910: API disabled".into()
+            ))
+            .is_none()
+        );
+    }
 
     #[test]
     fn parses_retry_after_seconds_from_flattened_plugin_errors() {
