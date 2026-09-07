@@ -826,9 +826,8 @@ fn contextual_release_matches_title_evidence(
     // Pass 2 — the target-biased parse confirms the anchor and supplies the
     // projection the acquisition pipeline actually consumes.
     let contextual = crate::analyze_release_for_target(&parsed.raw_title, &evidence.parse_context);
-    if contextual.is_unparseable() {
-        return None;
-    }
+    // Unresolved episode coverage does not invalidate an independently anchored
+    // title. Numbering and unresolved-pack checks govern automatic acquisition.
     let best_candidate = contextual.best_candidate()?;
 
     let year_corroborated = year_corroborated
@@ -1527,6 +1526,21 @@ pub(crate) fn evaluate_auto_candidate(
     // nothing the rest of the ladder measures can make it grabbable.
     if release_title_is_subtitles_only(&candidate.title) {
         return ReleaseAutoDecisionCode::SubtitlesOnly;
+    }
+
+    // A title match identifies the show, not the contents of an unresolved pack.
+    // Keep the ordinary unnamed-special fallback separate from pack claims.
+    if candidate
+        .parsed_release_metadata
+        .as_ref()
+        .is_some_and(|parsed| {
+            parsed
+                .parse_hints
+                .iter()
+                .any(|hint| hint == "identity:unresolved_pack_scope")
+        })
+    {
+        return ReleaseAutoDecisionCode::ParseUnparseable;
     }
 
     let parse_state = candidate_parse_state(candidate);
@@ -3744,6 +3758,82 @@ mod tests {
             unmonitored_episode_ids: &HashSet::new(),
         };
         evaluate_auto_candidate(candidate, &context)
+    }
+
+    #[test]
+    fn numbered_episode_completion_title_is_not_rejected_as_an_unresolved_pack() {
+        let title = make_title();
+        let subject = numbering_scoped_subject(&title, Some(1), Some(1));
+        let mut candidate = make_candidate(
+            &format!("{}.S01E01.The.Complete.Series.1080p.WEB-DL", title.name),
+            None,
+        );
+        candidate.parsed_release_metadata = Some(
+            crate::analyze_release_for_target(
+                &candidate.title,
+                &subject.title_evidence.parse_context,
+            )
+            .best_candidate()
+            .expect("numbered episode")
+            .projected
+            .clone(),
+        );
+        // The fixture has no quality admission decision. It must reach that
+        // gate instead of rejecting a supported identity because of its title.
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::QualityBlocked,
+        );
+        assert!(!candidate_numbering_contradicts_subject(
+            &candidate, &subject
+        ));
+    }
+
+    #[test]
+    fn unresolved_pack_scope_cannot_use_a_matching_title_fallback() {
+        let title = make_title();
+        let subject = numbering_scoped_subject(&title, None, None);
+        let mut candidate = make_candidate(&format!("{}.1080p.WEB-DL", title.name), None);
+        let parsed = candidate
+            .parsed_release_metadata
+            .as_mut()
+            .expect("parsed metadata");
+        parsed.episode = None;
+        parsed.disposition = ParseDisposition::Unparseable;
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::QualityBlocked
+        );
+        candidate
+            .parsed_release_metadata
+            .as_mut()
+            .unwrap()
+            .parse_hints
+            .push("identity:unresolved_pack_scope".into());
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::ParseUnparseable
+        );
+    }
+
+    #[test]
+    fn unnamed_special_without_a_pack_claim_keeps_its_title_fallback() {
+        let title = make_title();
+        let subject = numbering_scoped_subject(&title, Some(0), None);
+        let mut candidate = make_candidate(&format!("{}.1080p.WEB-DL", title.name), None);
+        let parsed = candidate
+            .parsed_release_metadata
+            .as_mut()
+            .expect("parsed metadata");
+        parsed.episode = None;
+        parsed.disposition = ParseDisposition::Unparseable;
+        assert!(!candidate_numbering_contradicts_subject(
+            &candidate, &subject
+        ));
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::QualityBlocked
+        );
     }
 
     #[test]
