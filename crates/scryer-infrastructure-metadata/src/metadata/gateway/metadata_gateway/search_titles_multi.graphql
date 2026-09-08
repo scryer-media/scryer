@@ -1,0 +1,58 @@
+query SearchTitlesMulti($query: String!, $limit: Int!, $language: String!) {
+  searchTitlesMulti(query: $query, limit: $limit, language: $language) {
+    movies {
+      title_id
+      primary_source
+      tvdb_id
+      imdb_id
+      external_ids { source kind id key }
+      name
+      slug
+      type
+      year
+      status
+      overview
+      poster_url
+      language
+      runtime_minutes
+      popularity
+      sort_title
+    }
+    series {
+      title_id
+      primary_source
+      tvdb_id
+      imdb_id
+      external_ids { source kind id key }
+      name
+      slug
+      type
+      year
+      status
+      overview
+      poster_url
+      language
+      runtime_minutes
+      popularity
+      sort_title
+    }
+    anime {
+      title_id
+      primary_source
+      tvdb_id
+      imdb_id
+      external_ids { source kind id key }
+      name
+      slug
+      type
+      year
+      status
+      overview
+      poster_url
+      language
+      runtime_minutes
+      popularity
+      sort_title
+    }
+  }
+}

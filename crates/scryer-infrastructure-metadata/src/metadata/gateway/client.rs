@@ -119,6 +119,7 @@ const OP_METADATA_BULK: &str = "MetadataBulk";
 const OP_TITLES: &str = "Titles";
 const OP_RESOLVE_TITLES: &str = "ResolveTitles";
 const OP_SEARCH_TITLES: &str = "SearchTitles";
+const OP_SEARCH_TITLES_MULTI: &str = "SearchTitlesMulti";
 const OP_SEARCH_TITLES_BATCH: &str = "SearchTitlesBatch";
 const OP_TITLE_RECOMMENDATIONS: &str = "TitleRecommendations";
 const OP_DISCOVER_PUBLIC_FEED: &str = "DiscoverPublicFeed";
@@ -513,6 +514,7 @@ pub struct MetadataGatewayClient {
     titles_hash: String,
     resolve_titles_hash: String,
     search_titles_hash: String,
+    search_titles_multi_hash: String,
     discover_public_feed_hash: String,
     title_recommendations_hash: String,
     collection_completions_hash: String,
@@ -538,6 +540,7 @@ impl MetadataGatewayClient {
         let titles_hash = apq_hash(graphql_docs::TITLES_QUERY);
         let resolve_titles_hash = apq_hash(graphql_docs::RESOLVE_TITLES_QUERY);
         let search_titles_hash = apq_hash(graphql_docs::SEARCH_TITLES_QUERY);
+        let search_titles_multi_hash = apq_hash(graphql_docs::SEARCH_TITLES_MULTI_QUERY);
         let discover_public_feed_hash = apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
         let title_recommendations_hash = apq_hash(graphql_docs::TITLE_RECOMMENDATIONS_QUERY);
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
@@ -602,6 +605,7 @@ impl MetadataGatewayClient {
             titles_hash,
             resolve_titles_hash,
             search_titles_hash,
+            search_titles_multi_hash,
             discover_public_feed_hash,
             title_recommendations_hash,
             collection_completions_hash,
@@ -632,6 +636,7 @@ impl MetadataGatewayClient {
         let titles_hash = apq_hash(graphql_docs::TITLES_QUERY);
         let resolve_titles_hash = apq_hash(graphql_docs::RESOLVE_TITLES_QUERY);
         let search_titles_hash = apq_hash(graphql_docs::SEARCH_TITLES_QUERY);
+        let search_titles_multi_hash = apq_hash(graphql_docs::SEARCH_TITLES_MULTI_QUERY);
         let discover_public_feed_hash = apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
         let title_recommendations_hash = apq_hash(graphql_docs::TITLE_RECOMMENDATIONS_QUERY);
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
@@ -675,6 +680,7 @@ impl MetadataGatewayClient {
             titles_hash,
             resolve_titles_hash,
             search_titles_hash,
+            search_titles_multi_hash,
             discover_public_feed_hash,
             title_recommendations_hash,
             collection_completions_hash,
@@ -2564,6 +2570,7 @@ mod tests {
             "resolve_titles" => {
                 json!({ "refs": (1..=50).map(|id| json!({ "id": id })).collect::<Vec<_>>(), "kind": "movie", "createMissing": false })
             }
+            "search_titles_multi" => json!({ "query": "Fixture", "limit": 25, "language": "eng" }),
             "search_titles" => {
                 json!({ "query": "Fixture", "kind": "movie", "limit": 25, "language": "eng", "year": 2024 })
             }
@@ -2634,6 +2641,11 @@ mod tests {
                 "search_titles",
                 super::OP_SEARCH_TITLES,
                 graphql_docs::SEARCH_TITLES_QUERY,
+            ),
+            (
+                "search_titles_multi",
+                super::OP_SEARCH_TITLES_MULTI,
+                graphql_docs::SEARCH_TITLES_MULTI_QUERY,
             ),
             (
                 "search_titles_batch",
@@ -2712,7 +2724,7 @@ mod tests {
             let encoded = serde_json::to_vec_pretty(&corpus).expect("serialize fixture corpus");
             std::fs::write(path, encoded).expect("write fixture corpus");
         }
-        assert_eq!(corpus.len(), 28);
+        assert_eq!(corpus.len(), 29);
         assert_eq!(
             corpus[6]["variables"]["movieTvdbIds"]
                 .as_array()
@@ -2726,7 +2738,7 @@ mod tests {
             Some(50)
         );
         assert_eq!(
-            corpus[25]["query"]
+            corpus[26]["query"]
                 .as_str()
                 .expect("movie query")
                 .matches(": movie(")
@@ -2734,7 +2746,7 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[26]["query"]
+            corpus[27]["query"]
                 .as_str()
                 .expect("series query")
                 .matches(": series(")
@@ -2742,12 +2754,12 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[27]["query"]
+            corpus[28]["query"]
                 .as_str()
                 .expect("combined query")
                 .matches(": movie(")
                 .count()
-                + corpus[27]["query"]
+                + corpus[28]["query"]
                     .as_str()
                     .expect("combined query")
                     .matches(": series(")
@@ -4983,6 +4995,91 @@ mod tests {
         reset_title_id_capability_probe();
     }
 
+    #[tokio::test]
+    async fn search_titles_multi_returns_all_facets_in_one_request_and_clamps_limits() {
+        let server = MockServer::start().await;
+        let item = |id: i64, tvdb: Option<i64>, source: &str, kind: &str| {
+            json!({
+                "title_id": id, "tvdb_id": tvdb, "primary_source": source,
+                "imdb_id": "", "type": kind, "name": "作品", "slug": "fixture",
+                "year": 0, "status": "Released", "overview": "日本語の概要",
+                "poster_url": "", "language": "jpn", "runtime_minutes": 90,
+                "popularity": 1.0, "sort_title": "作品",
+                "external_ids": [{"source": source, "kind": kind, "id": "42", "key": format!("{source}:{kind}:42")}]
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/graphql"))
+            .and(query_param("operationName", super::OP_SEARCH_TITLES_MULTI))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "searchTitlesMulti": {
+                    "movies": [item(101, None, "tmdb", "movie")],
+                    "series": [item(102, Some(42), "tvdb", "series")],
+                    "anime": [item(103, Some(43), "tvdb", "series")]
+                }
+            }})))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        for limit in [100, 0] {
+            let result = client
+                .search_titles_multi("作品", limit, "jpn")
+                .await
+                .unwrap();
+            assert_eq!(result.movies[0].smg_id, Some(101));
+            assert!(result.movies[0].tvdb_id.is_empty());
+            assert_eq!(result.movies[0].primary_source.as_deref(), Some("tmdb"));
+            assert_eq!(result.movies[0].external_ids[0].source, "tmdb");
+            assert_eq!(result.movies[0].external_ids[0].value, "42");
+            assert_eq!(result.movies[0].overview.as_deref(), Some("日本語の概要"));
+            assert_eq!(result.movies[0].year, None);
+            assert_eq!(result.movies[0].poster_url, None);
+            assert_eq!(result.series[0].tvdb_id, "42");
+            assert_eq!(result.anime[0].smg_id, Some(103));
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        for (request, limit) in requests
+            .iter()
+            .zip([super::METADATA_GATEWAY_MAX_TITLE_SEARCH_LIMIT, 1])
+        {
+            let variables = request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "variables")
+                .unwrap()
+                .1;
+            let variables: serde_json::Value = serde_json::from_str(&variables).unwrap();
+            assert_eq!(
+                variables,
+                json!({"query": "作品", "limit": limit, "language": "jpn"})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_titles_multi_returns_errors_without_legacy_requests() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/graphql"))
+            .and(query_param("operationName", super::OP_SEARCH_TITLES_MULTI))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(unknown_root_field_error("searchTitlesMulti")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        let error = client
+            .search_titles_multi("fixture", 25, "eng")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Cannot query field"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
     #[test]
     fn gateway_year_normalization_rejects_non_positive_sentinels() {
         assert_eq!(super::normalize_gateway_year(Some(2026)), Some(2026));
@@ -5213,6 +5310,19 @@ struct SearchTitlesResponse {
 #[derive(Deserialize)]
 struct SearchTitlesResult {
     results: Vec<TitleSearchItem>,
+}
+
+#[derive(Deserialize)]
+struct SearchTitlesMultiResponse {
+    #[serde(rename = "searchTitlesMulti")]
+    search_titles_multi: SearchTitlesMultiResult,
+}
+
+#[derive(Deserialize)]
+struct SearchTitlesMultiResult {
+    movies: Vec<TitleSearchItem>,
+    series: Vec<TitleSearchItem>,
+    anime: Vec<TitleSearchItem>,
 }
 
 #[derive(Deserialize)]
@@ -6687,6 +6797,34 @@ impl MetadataGateway for MetadataGatewayClient {
             return Ok(Vec::new());
         }
         self.resolve_movie_title_refs(refs, create_missing).await
+    }
+
+    async fn search_titles_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        let limit = limit.clamp(1, METADATA_GATEWAY_MAX_TITLE_SEARCH_LIMIT);
+        let data: SearchTitlesMultiResponse = self
+            .execute_graphql_apq(
+                OP_SEARCH_TITLES_MULTI,
+                graphql_docs::SEARCH_TITLES_MULTI_QUERY,
+                &self.search_titles_multi_hash,
+                json!({ "query": query, "limit": limit, "language": language }),
+            )
+            .await?;
+        let convert = |items: Vec<TitleSearchItem>| {
+            items
+                .into_iter()
+                .map(rich_metadata_from_title_search_item)
+                .collect()
+        };
+        Ok(MultiMetadataSearchResult {
+            movies: convert(data.search_titles_multi.movies),
+            series: convert(data.search_titles_multi.series),
+            anime: convert(data.search_titles_multi.anime),
+        })
     }
 
     async fn search_titles(

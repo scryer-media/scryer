@@ -722,6 +722,19 @@ pub trait MetadataGateway: Send + Sync {
         language: &str,
     ) -> AppResult<MultiMetadataSearchResult>;
 
+    /// Search every facet, including movies without a TVDB identity, in one request.
+    async fn search_titles_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        let _ = (query, limit, language);
+        Err(AppError::Repository(
+            "metadata gateway combined search is not implemented".into(),
+        ))
+    }
+
     async fn get_movie(&self, tvdb_id: i64, language: &str) -> AppResult<MovieMetadata>;
 
     async fn get_series(&self, tvdb_id: i64, language: &str) -> AppResult<SeriesMetadata>;
