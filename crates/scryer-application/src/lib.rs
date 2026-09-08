@@ -589,8 +589,7 @@ pub use quality_profile::{
     QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE, QualityProfile, QualityProfileCriteria,
     QualityProfileDecision, REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry,
     ScoringEntryKind, ScoringSource, apply_age_scoring, apply_size_scoring_for_category,
-    builtin_4k_profile,
-    builtin_8k_profile, builtin_1080p_profile, builtin_anime_profile,
+    builtin_4k_profile, builtin_8k_profile, builtin_1080p_profile, builtin_anime_profile,
     builtin_default_quality_profile, evaluate_against_profile, parse_profile_catalog_from_json,
 };
 pub use rate_limit_signal::{RateLimitSignal, RateLimitSignalSource};
