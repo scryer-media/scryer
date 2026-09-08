@@ -4380,6 +4380,31 @@ pub struct RuleSet {
     pub managed_tag_filter: Option<Vec<String>>,
 }
 
+/// A rule pack installed from a tracked source.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RulePackInstallation {
+    pub pack_id: String,
+    pub name: String,
+    pub version: String,
+    pub digest: String,
+    pub auto_update: bool,
+    /// Monotonically increasing optimistic-concurrency token.
+    pub revision: i64,
+    pub last_updated: DateTime<Utc>,
+    pub last_error: Option<String>,
+    pub members: Vec<RulePackMember>,
+}
+
+/// The stable source-template to local-rule-set mapping for one installed pack.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RulePackMember {
+    pub template_id: String,
+    pub rule_set_id: String,
+    /// A source template removed upstream. Retained so reappearance preserves
+    /// the local identity.
+    pub removed: bool,
+}
+
 /// How far a maintenance rule set is allowed to act (RFC 137 section 7).
 ///
 /// Only [`Self::Disabled`] is reachable in the foundation wave: nothing

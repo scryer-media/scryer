@@ -153,6 +153,9 @@ impl<'a> ScoringContext<'a> {
 /// shared between tasks: Regorus mutates its input on every evaluation.
 pub(crate) struct RuleEvaluationBatch {
     evaluator: Option<scryer_rules::UserRulesEvaluator>,
+    collect_diagnostics: bool,
+    pub(crate) errors: Vec<scryer_rules::RuleEvalError>,
+    pub(crate) engine_error: Option<String>,
 }
 
 impl RuleEvaluationBatch {
@@ -164,8 +167,17 @@ impl RuleEvaluationBatch {
                 .rules
                 .filter(|engine| !engine.is_empty())
                 .map(scryer_rules::UserRulesEngine::evaluator),
+            errors: Vec::new(),
+            engine_error: None,
+            collect_diagnostics: false,
         }
     }
+}
+
+pub(crate) struct ScoredReleasePreview {
+    pub scored: ScoredRelease,
+    pub rule_errors: Vec<scryer_rules::RuleEvalError>,
+    pub engine_error: Option<String>,
 }
 
 /// Whether the file backed up what the release claimed.
@@ -279,6 +291,20 @@ pub(crate) struct ScoredRelease {
 pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>) -> ScoredRelease {
     let mut rules = RuleEvaluationBatch::from_context(ctx);
     score_release_with_rules(evidence, ctx, &mut rules)
+}
+
+pub(crate) fn score_release_preview(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+) -> ScoredReleasePreview {
+    let mut rules = RuleEvaluationBatch::from_context(ctx);
+    rules.collect_diagnostics = true;
+    let scored = score_release_with_rules(evidence, ctx, &mut rules);
+    ScoredReleasePreview {
+        scored,
+        rule_errors: rules.errors,
+        engine_error: rules.engine_error,
+    }
 }
 
 /// Score a candidate in a batch that already owns the sole rule evaluator.
@@ -539,6 +565,9 @@ fn append_rule_scores(
                 decision.log_with_source(&entry.code, entry.delta, source);
             }
             for err in result.errors {
+                if rules.collect_diagnostics {
+                    rules.errors.push(err.clone());
+                }
                 let (code, source) = match err.origin {
                     scryer_rules::PolicyOrigin::User => (
                         "user_rule_error",
@@ -559,6 +588,9 @@ fn append_rule_scores(
             }
         }
         Err(error) => {
+            if rules.collect_diagnostics {
+                rules.engine_error = Some(error.to_string());
+            }
             tracing::warn!(
                 error = %error,
                 title_id = ?ctx.title_id,

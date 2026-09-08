@@ -65,8 +65,9 @@ import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
 import { trashLocalePacks } from "@/lib/utils/trash-packs";
 
 type SettingsRulesSectionProps = {
+  canManageTrackedPacks: boolean;
   isEditorOpen: boolean;
-  editorMode: "create" | "edit";
+  editorMode: "create" | "edit" | "copy";
   editingRuleSetId: string | null;
   ruleSetDraft: RuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RuleSetDraft>>;
@@ -94,6 +95,10 @@ type SettingsRulesSectionProps = {
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
+  testScoring?: React.ReactNode;
+  trackedRulePacks?: React.ReactNode;
+  installTrackedRulePack: (packId: string, templateIds: string[]) => Promise<void> | void;
+  installingRulePackId: string | null;
 };
 
 const ArrCustomFormatImportDialog = React.lazy(
@@ -675,16 +680,21 @@ type CommunityTemplate = {
   title: string;
   description: string;
   category: string;
-  regoSource: string;
   appliedFacets: string[];
 };
 
 function RuleLibrary({
   onApply,
   defaultOpen,
+  onInstallCommunityPack,
+  installingRulePackId,
+  canManage,
 }: {
   onApply: (template: RuleTemplate) => void;
   defaultOpen?: boolean;
+  onInstallCommunityPack: (packId: string, templateIds: string[]) => Promise<void> | void;
+  installingRulePackId: string | null;
+  canManage: boolean;
 }) {
   const t = useTranslate();
   const client = useClient();
@@ -704,6 +714,7 @@ function RuleLibrary({
     [],
   );
   const [packLoading, setPackLoading] = React.useState(false);
+  const [selectedTemplateIds, setSelectedTemplateIds] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (tab === "community" && !communityPacksLoaded) {
@@ -723,6 +734,7 @@ function RuleLibrary({
   const loadPack = React.useCallback(
     async (pack: CommunityPack) => {
       setSelectedPack(pack);
+      setSelectedTemplateIds([]);
       setPackLoading(true);
       try {
         const { data } = await client
@@ -852,20 +864,50 @@ function RuleLibrary({
                   {t("label.loading")}
                 </p>
               ) : (
-                <TemplateGrid
-                  templates={packTemplates.map((t) => ({
-                    id: t.id,
-                    title: t.title,
-                    description: t.description,
-                    category: t.category,
-                    regoSource: t.regoSource,
-                    appliedFacets: t.appliedFacets,
-                  }))}
-                  onApply={(tpl) => {
-                    onApply(tpl);
-                    setOpen(false);
-                  }}
-                />
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Choose the rules to enable after installation. Rules stay managed and can be copied individually for customization.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Existing custom copies are not adopted or disabled when this pack is installed.
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
+                    {packTemplates.map((template) => {
+                      const checked = selectedTemplateIds.includes(template.id);
+                      const checkboxId = selectorId("settings-rules-library-template-install", template.id);
+                      return (
+                        <label key={template.id} className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3">
+                          <Checkbox
+                            id={checkboxId}
+                            checked={checked}
+                            disabled={!canManage}
+                            onCheckedChange={(value) => setSelectedTemplateIds((current) => (
+                              value === true
+                                ? [...current, template.id]
+                                : current.filter((id) => id !== template.id)
+                            ))}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium">{template.title}</span>
+                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">{template.description}</span>
+                            <span className="mt-2 flex flex-wrap gap-1">
+                              <Badge tone="neutral" className="text-[10px]">{template.category}</Badge>
+                              {template.appliedFacets.map((facet) => <Badge key={facet} tone="info" className="text-[10px]">{facet}</Badge>)}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {canManage ? <Button
+                    id={selectorId("settings-rules-library-pack-install", selectedPack.id)}
+                    type="button"
+                    disabled={installingRulePackId === selectedPack.id}
+                    onClick={() => void onInstallCommunityPack(selectedPack.id, selectedTemplateIds)}
+                  >
+                    {installingRulePackId === selectedPack.id ? "Installing…" : "Install pack"}
+                  </Button> : null}
+                </div>
               )}
             </div>
           ) : (
@@ -949,6 +991,7 @@ function TemplateGrid({
 }
 
 export function SettingsRulesSection({
+  canManageTrackedPacks,
   isEditorOpen,
   editorMode,
   editingRuleSetId,
@@ -971,6 +1014,10 @@ export function SettingsRulesSection({
   translationDiagnostics,
   focusEditor,
   onEditorFocused,
+  testScoring,
+  trackedRulePacks,
+  installTrackedRulePack,
+  installingRulePackId,
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
@@ -1114,7 +1161,9 @@ export function SettingsRulesSection({
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
-                {editingRuleSetId
+                {editorMode === "copy"
+                  ? t("settings.ruleCopyAsCustom")
+                  : editingRuleSetId
                   ? t("settings.ruleUpdate")
                   : t("settings.ruleCreate")}
               </CardTitle>
@@ -1239,19 +1288,21 @@ export function SettingsRulesSection({
                   </div>
                 </div>
 
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    id="settings-rule-enabled"
-                    checked={ruleSetDraft.enabled}
-                    onCheckedChange={(value) =>
-                      setRuleSetDraft((prev) => ({
-                        ...prev,
-                        enabled: value === true,
-                      }))
-                    }
-                  />
-                  <span className="text-sm">{t("label.enabled")}</span>
-                </label>
+                {editorMode !== "copy" ? (
+                  <label className="flex items-center gap-2">
+                    <Checkbox
+                      id="settings-rule-enabled"
+                      checked={ruleSetDraft.enabled}
+                      onCheckedChange={(value) =>
+                        setRuleSetDraft((prev) => ({
+                          ...prev,
+                          enabled: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">{t("label.enabled")}</span>
+                  </label>
+                ) : null}
 
                 {validationResult ? (
                   <div
@@ -1286,6 +1337,8 @@ export function SettingsRulesSection({
                   >
                     {mutatingRuleSetId !== null
                       ? t("label.saving")
+                      : editorMode === "copy"
+                        ? t("settings.ruleCopyAsCustom")
                       : editingRuleSetId
                         ? t("settings.ruleUpdate")
                         : t("settings.ruleCreate")}
@@ -1311,6 +1364,7 @@ export function SettingsRulesSection({
                   </Button>
                 </div>
               </form>
+              {testScoring ? <div className="mt-3">{testScoring}</div> : null}
             </CardContent>
           </Card>
           {editorMode === "edit" ? (
@@ -1341,12 +1395,16 @@ export function SettingsRulesSection({
         mutatingRuleSetId={mutatingRuleSetId}
         toggleRuleSetEnabled={toggleRuleSetEnabled}
       />
+      {trackedRulePacks}
           </div>
         </div>
         <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
           <RuleLibrary
             defaultOpen={ruleSetRecords.length === 0}
             onApply={applyTemplate}
+            onInstallCommunityPack={installTrackedRulePack}
+            installingRulePackId={installingRulePackId}
+            canManage={canManageTrackedPacks}
           />
           <RulesContextReference />
         </div>

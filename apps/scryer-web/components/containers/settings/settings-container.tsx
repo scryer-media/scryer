@@ -984,16 +984,16 @@ export const SettingsContainer = memo(function SettingsContainer({
               onDownloadClientsChanged={refreshIndexerDownloadClientMappingCatalog}
             />
           ) : settingsSection === "rules" ? (
-            <SettingsRulesContainer />
+            <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
           ) : settingsSection === "maintenanceRules" ? (
             maintenanceRulesHidden ? (
-              <SettingsRulesContainer />
+              <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
             ) : (
               <SettingsMaintenanceRulesContainer section={maintenanceRulesSection} />
             )
           ) : settingsSection === "requestRules" ? (
             requestRulesHidden ? (
-              <SettingsRulesContainer />
+              <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
             ) : (
               <SettingsRequestRulesContainer />
             )

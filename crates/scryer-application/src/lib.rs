@@ -88,6 +88,12 @@ mod quality;
 mod rate_limit_signal;
 pub mod request_rules;
 mod rules;
+pub use rules::preview::{
+    RuleSetTestContext, RuleSetTestDraft, RuleSetTestDraftContribution, RuleSetTestEntry,
+    RuleSetTestError, RuleSetTestParsed, RuleSetTestRequest, RuleSetTestResult,
+    RuleSetTestRuleSetResult,
+};
+pub use rules::tracked_packs::{RulePackPreviewChange, TrackedRulePackPreview};
 mod scheduler;
 mod security;
 mod services;
@@ -224,8 +230,8 @@ use scryer_domain::{
     MediaFacet, MediaRequest, MediaServerConnection, MediaServerDefaultLibraryGrant,
     MediaServerPathMapping, MediaServerProvider, NewDomainEvent, NewDownloadClientConfig,
     NewIndexerConfig, NewTitle, PluginCatalogSource, PluginCatalogStatusRecord, PluginInstallation,
-    PolicyInput, PolicyOutput, RuleSet, SubtitleProviderConfig, TaggedAlias, Title,
-    TitleHistoryEventType, TitleHistoryRecord, User,
+    PolicyInput, PolicyOutput, RulePackInstallation, RuleSet, SubtitleProviderConfig, TaggedAlias,
+    Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -374,9 +380,9 @@ pub use media_servers::{
 };
 pub use plugins::plugins::{
     ManualPluginPreview, PluginCatalogStatus, RegistryPlugin, RulePackRegistryEntry,
-    RulePackTemplate,
+    RulePackTemplate, VerifiedRulePack,
 };
-pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind};
+pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind, RuleSetHistoryChange};
 pub use request_rules::{
     Arbitration, ArbitrationReason, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_NO_RULE_MATCHED,
     FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER, PREFLIGHT_REQUEST_ID_PREFIX,
@@ -1014,4 +1020,4 @@ impl AppError {
 }
 
 #[cfg(test)]
-mod lib_tests;
+pub(crate) mod lib_tests;

@@ -3381,6 +3381,16 @@ type DeleteTitlesPreviewPayload {
 }
 
 """
+Identifier returned after uninstalling a tracked rule pack.
+"""
+type DeleteTrackedRulePackPayload {
+	"""
+	Immutable registry rule-pack ID.
+	"""
+	packId: String!
+}
+
+"""
 Identity returned after deleting a user.
 """
 type DeleteUserPayload {
@@ -15459,6 +15469,125 @@ type MutationRoot {
 		input: ValidateRuleSetInput!
 	): RuleValidationResultPayload!
 	"""
+	Evaluate the current unsaved editor draft against title-aware release facts without saving it.
+	"""
+	testRuleSet(
+		"""
+		Current editor draft, copy context, selected title and episode, release name, and optional size. This is a scoring preview only.
+		"""
+		input: TestRuleSetInput!
+	): TestRuleSetPayload!
+	"""
+	Install the whole verified pack with selected templates enabled.
+	"""
+	installTrackedRulePack(
+		"""
+		Immutable registry rule-pack ID.
+		"""
+		packId: String!,
+		"""
+		Template IDs to enable. An empty list installs every rule disabled.
+		"""
+		templateIds: [String!]!
+	): TrackedRulePackPayload!
+	"""
+	Preview the exact template changes from the latest compatible source version.
+	"""
+	previewTrackedRulePackUpdate(
+		"""
+		Installed rule-pack ID to compare with the registry.
+		"""
+		packId: String!
+	): TrackedRulePackPreviewPayload!
+	"""
+	Apply a previously reviewed immutable source version to a tracked rule pack.
+	"""
+	updateTrackedRulePack(
+		"""
+		Installed rule-pack ID to update.
+		"""
+		packId: String!,
+		"""
+		Reviewed immutable source version.
+		"""
+		version: String!,
+		"""
+		Verified digest for the reviewed source version.
+		"""
+		digest: String!,
+		"""
+		Revision returned by the update preview.
+		"""
+		revision: Long!
+	): TrackedRulePackPayload!
+	"""
+	Atomically retain editable member settings and the automatic-update preference.
+	"""
+	setTrackedRulePackSettings(
+		"""
+		Installed rule-pack ID.
+		"""
+		packId: String!,
+		"""
+		Template IDs that should be enabled.
+		"""
+		enabledTemplateIds: [String!]!,
+		"""
+		Local priority for each template whose priority changes.
+		"""
+		priorities: [TrackedRulePackPriorityInput!]!,
+		"""
+		Whether the scheduled registry refresh may update this pack.
+		"""
+		autoUpdate: Boolean!,
+		"""
+		Current pack revision required for this mutation.
+		"""
+		expectedRevision: Long!
+	): TrackedRulePackPayload!
+	"""
+	Copy one tracked rule to an editable custom rule and disable the source binding.
+	"""
+	copyTrackedRulePackRule(
+		"""
+		Tracked local rule-set ID to copy.
+		"""
+		ruleSetId: ID!,
+		"""
+		Name for the editable copy.
+		"""
+		name: String!,
+		"""
+		Description for the editable copy.
+		"""
+		description: String!,
+		"""
+		Complete Rego source for the editable copy.
+		"""
+		regoSource: String!,
+		"""
+		Facet scope for the editable copy.
+		"""
+		appliedFacets: [String!]!,
+		"""
+		Evaluation priority for the editable copy.
+		"""
+		priority: Int!
+	): RuleSetPayload!
+	"""
+	Uninstall a tracked rule pack and its owned rules.
+	"""
+	uninstallTrackedRulePack(
+		"""
+		Installed rule-pack ID to remove.
+		"""
+		packId: String!,
+		"""
+		Current pack revision required for this mutation.
+		"""
+		revision: Long!
+	): DeleteTrackedRulePackPayload!
+	"""
 	Create a maintenance rule set together with its first matcher revision.
 	"""
 	createMaintenanceRuleSet(
@@ -19340,6 +19469,15 @@ type QueryRoot {
 	"""
 	ruleSets: [RuleSetPayload!]!
 	"""
+	Return one rule set, including its source, when it is visible to the caller.
+	"""
+	ruleSet(
+		"""
+		Rule-set identity to load.
+		"""
+		id: ID!
+	): RuleSetPayload
+	"""
 	List maintenance rule sets; requires catalog-settings management permission.
 	"""
 	maintenanceRuleSets: [MaintenanceRuleSet!]!
@@ -19568,6 +19706,10 @@ type QueryRoot {
 		"""
 		packId: String!
 	): [RulePackTemplatePayload!]!
+	"""
+	List tracked community rule packs and their local rule bindings.
+	"""
+	trackedRulePacks: [TrackedRulePackPayload!]!
 	"""
 	Return available indexer provider types and their configuration fields; requires system-settings permission.
 	"""
@@ -21295,6 +21437,224 @@ type RuleSetPayload {
 }
 
 """
+Title and library facts resolved for a rule-set scoring preview.
+"""
+type RuleSetTestContextPayload {
+	"""
+	Resolved title name.
+	"""
+	titleName: String!
+	"""
+	Resolved library name, or null when unavailable.
+	"""
+	libraryName: String
+	"""
+	Resolved media facet.
+	"""
+	facet: String!
+	"""
+	Resolved original language, or null when unavailable.
+	"""
+	language: String
+	"""
+	Resolved title tags.
+	"""
+	tags: [String!]!
+	"""
+	Resolved episode label, or null for whole-title previews.
+	"""
+	episodeLabel: String
+}
+
+"""
+Current editor draft's contribution to a scoring preview.
+"""
+type RuleSetTestDraftContributionPayload {
+	"""
+	Signed score contribution from the draft.
+	"""
+	score: Int!
+	"""
+	Whether the draft matched the candidate facts.
+	"""
+	matched: Boolean!
+	"""
+	Whether the draft emitted a blocking signal.
+	"""
+	blocked: Boolean!
+	"""
+	Whether the draft applies to the selected title facet.
+	"""
+	applies: Boolean!
+	"""
+	Whether the draft is enabled.
+	"""
+	enabled: Boolean!
+	"""
+	Explanation for a disabled or non-applicable draft, or null when none.
+	"""
+	message: String
+}
+
+"""
+Unsaved rule-set fields evaluated by a scoring preview.
+"""
+input RuleSetTestDraftInput {
+	"""
+	Rule name used in the preview output.
+	"""
+	name: String!
+	"""
+	Rule description retained for the editor draft.
+	"""
+	description: String!
+	"""
+	Complete Rego source for the unsaved draft.
+	"""
+	regoSource: String!
+	"""
+	Whether the draft participates in the preview policy set.
+	"""
+	enabled: Boolean!
+	"""
+	Evaluation priority for the draft.
+	"""
+	priority: Int!
+	"""
+	Media facets to which the draft applies.
+	"""
+	appliedFacets: [String!]!
+}
+
+"""
+One score or block entry emitted by a rule set in a scoring preview.
+"""
+type RuleSetTestEntryPayload {
+	"""
+	Stable score or block code.
+	"""
+	code: String!
+	"""
+	Signed score delta associated with the entry.
+	"""
+	delta: Int!
+	"""
+	Whether the entry is a blocking signal.
+	"""
+	blocked: Boolean!
+}
+
+"""
+A validation or evaluation error retained by a scoring preview.
+"""
+type RuleSetTestErrorPayload {
+	"""
+	Stable error classification.
+	"""
+	code: String!
+	"""
+	Human-readable error detail.
+	"""
+	message: String!
+	"""
+	Rule-set identity associated with the error, or null when global.
+	"""
+	ruleSetId: String
+}
+
+"""
+Release facts parsed for a rule-set scoring preview.
+"""
+type RuleSetTestParsedPayload {
+	"""
+	Parsed release group, or null when unknown.
+	"""
+	releaseGroup: String
+	"""
+	Parsed quality, or null when unknown.
+	"""
+	quality: String
+	"""
+	Parsed release source, or null when unknown.
+	"""
+	source: String
+	"""
+	Season parsed from the release name, or null when absent.
+	"""
+	season: String
+	"""
+	Episode parsed from the release name, or null when absent.
+	"""
+	episode: String
+	"""
+	Parsed edition, or null when unknown.
+	"""
+	edition: String
+	"""
+	Parsed video codec, or null when unknown.
+	"""
+	videoCodec: String
+	"""
+	Parsed audio codec, or null when unknown.
+	"""
+	audio: String
+	"""
+	Parsed release year, or null when unknown.
+	"""
+	year: Int
+	"""
+	Parsed audio-language codes.
+	"""
+	audioLanguages: [String!]!
+	"""
+	Release size in bytes, or null when the caller omitted it.
+	"""
+	sizeBytes: Long
+}
+
+"""
+One rule-set's contribution to a title-aware scoring preview.
+"""
+type RuleSetTestRuleSetPayload {
+	"""
+	Stable rule-set identity.
+	"""
+	ruleSetId: String
+	"""
+	Rule-set display name.
+	"""
+	ruleSetName: String!
+	"""
+	Existing policy origin.
+	"""
+	origin: String!
+	"""
+	Signed score contribution.
+	"""
+	score: Int!
+	"""
+	Whether this rule set matched the candidate facts.
+	"""
+	matched: Boolean!
+	"""
+	Whether this rule set emitted a blocking signal.
+	"""
+	blocked: Boolean!
+	"""
+	Whether this entry represents the current editor draft.
+	"""
+	isDraft: Boolean!
+	"""
+	Individual matched score and block entries emitted by this rule set.
+	"""
+	entries: [RuleSetTestEntryPayload!]!
+	"""
+	Evaluation messages and diagnostics for this rule set.
+	"""
+	messages: [String!]!
+}
+
+"""
 Result of validating Rego source.
 """
 type RuleValidationResultPayload {
@@ -22943,6 +23303,90 @@ input TestMediaServerConnectionInput {
 	Optional Plex authentication token used for this test.
 	"""
 	plexAuthToken: String
+}
+
+"""
+Input for an explicit, read-only title-aware rule-set scoring preview.
+"""
+input TestRuleSetInput {
+	"""
+	Current unsaved editor draft.
+	"""
+	draft: RuleSetTestDraftInput!
+	"""
+	Existing rule-set identity being edited, or null when creating a rule.
+	"""
+	editRuleSetId: ID
+	"""
+	Source identity when the editor was opened by copying a rule, or null.
+	"""
+	copySourceRuleSetId: ID
+	"""
+	Whether copying disables the source rule in the preview policy set.
+	"""
+	copyDisablesSource: Boolean!
+	"""
+	Library title used to construct title-aware scoring facts.
+	"""
+	titleId: ID!
+	"""
+	Episode belonging to the selected title, or null for a whole-title preview.
+	"""
+	episodeId: ID
+	"""
+	Release name to parse and score.
+	"""
+	releaseName: String!
+	"""
+	Release size in bytes, or null when unknown.
+	"""
+	sizeBytes: Long
+}
+
+"""
+Explicit, read-only scoring preview for the current rule-editor draft.
+"""
+type TestRuleSetPayload {
+	"""
+	Aggregate score after normal policy aggregation.
+	"""
+	score: Int!
+	"""
+	Whether the preview passes normal quality and minimum-score gates.
+	"""
+	allowed: Boolean!
+	"""
+	Whether any policy emitted a blocking signal.
+	"""
+	blocked: Boolean!
+	"""
+	Whether the configured minimum-score gate passed.
+	"""
+	minimumScoreMet: Boolean!
+	"""
+	Resolved quality-profile name.
+	"""
+	profileName: String!
+	"""
+	Resolved title, library, and episode context.
+	"""
+	context: RuleSetTestContextPayload!
+	"""
+	Parsed release facts preserved from the supplied release name.
+	"""
+	parsed: RuleSetTestParsedPayload!
+	"""
+	Contributions grouped by policy rule set.
+	"""
+	ruleSets: [RuleSetTestRuleSetPayload!]!
+	"""
+	Dedicated explanation of the current draft's contribution.
+	"""
+	draftContribution: RuleSetTestDraftContributionPayload!
+	"""
+	Validation and evaluation errors retained by the preview.
+	"""
+	errors: [RuleSetTestErrorPayload!]!
 }
 
 """
@@ -24620,6 +25064,138 @@ enum TrackedDownloadStatusValue {
 	The item has an error.
 	"""
 	ERROR
+}
+
+"""
+Local state of one source-template binding in a tracked rule pack.
+"""
+type TrackedRulePackMemberPayload {
+	"""
+	Stable template ID from the source pack.
+	"""
+	templateId: String!
+	"""
+	Local rule-set ID retained across source updates.
+	"""
+	ruleSetId: ID!
+	"""
+	Whether the template is absent from the current upstream version.
+	"""
+	removed: Boolean!
+	"""
+	Local enabled state, or null when the retained rule no longer exists.
+	"""
+	enabled: Boolean
+	"""
+	Local evaluation priority, or null when the retained rule no longer exists.
+	"""
+	priority: Int
+	"""
+	Local rule name, or null when the retained rule no longer exists.
+	"""
+	name: String
+	"""
+	Local rule description, or null when the retained rule no longer exists.
+	"""
+	description: String
+	"""
+	Local facet scope; empty when the retained rule no longer exists.
+	"""
+	appliedFacets: [String!]!
+}
+
+"""
+One installed rule pack and its locally editable member settings.
+"""
+type TrackedRulePackPayload {
+	"""
+	Immutable registry rule-pack ID.
+	"""
+	packId: String!
+	"""
+	Display name recorded from the verified manifest.
+	"""
+	name: String!
+	"""
+	Installed immutable source version.
+	"""
+	version: String!
+	"""
+	Verified source digest for the installed version.
+	"""
+	digest: String!
+	"""
+	Optimistic-concurrency token for pack changes.
+	"""
+	revision: Long!
+	"""
+	Whether scheduled updates are enabled for this pack.
+	"""
+	autoUpdate: Boolean!
+	"""
+	Newer compatible registry version, or null when the installed version is current.
+	"""
+	availableVersion: String
+	"""
+	Whether an automatic update is currently eligible for this pack.
+	"""
+	autoUpdateAvailable: Boolean!
+	"""
+	Most recent automatic-update failure, or null when none is recorded.
+	"""
+	lastError: String
+	"""
+	UTC timestamp of the last successful installation or update.
+	"""
+	lastUpdated: DateTime!
+	"""
+	Source templates and their local rule-set bindings.
+	"""
+	members: [TrackedRulePackMemberPayload!]!
+}
+
+"""
+Preview of the exact source version that a tracked-pack update would apply.
+"""
+type TrackedRulePackPreviewPayload {
+	"""
+	Candidate immutable source version.
+	"""
+	version: String!
+	"""
+	Candidate verified source digest.
+	"""
+	digest: String!
+	"""
+	Revision that must be supplied to apply this preview.
+	"""
+	revision: Long!
+	"""
+	Template IDs newly introduced by the candidate version.
+	"""
+	addedTemplateIds: [String!]!
+	"""
+	Template IDs whose source content changed in the candidate version.
+	"""
+	changedTemplateIds: [String!]!
+	"""
+	Template IDs removed by the candidate version.
+	"""
+	removedTemplateIds: [String!]!
+}
+
+"""
+Priority to retain for one tracked source template.
+"""
+input TrackedRulePackPriorityInput {
+	"""
+	Stable template ID from the source pack.
+	"""
+	templateId: String!
+	"""
+	Local evaluation priority.
+	"""
+	priority: Int!
 }
 
 """

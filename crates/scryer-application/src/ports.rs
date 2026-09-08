@@ -6333,6 +6333,71 @@ pub trait RuleSetRepository: Send + Sync {
     async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>>;
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
+
+    async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_rule_pack_installation(
+        &self,
+        _pack_id: &str,
+    ) -> AppResult<Option<RulePackInstallation>> {
+        Ok(None)
+    }
+
+    async fn find_rule_pack_installation_by_rule_set_id(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Option<RulePackInstallation>> {
+        Ok(None)
+    }
+
+    /// Applies the pack metadata, stable membership mapping, rule rows and
+    /// audit history as one optimistic-concurrency transaction. `false` means
+    /// the pack did not have `expected_revision` (or already exists on create).
+    async fn apply_rule_pack_installation(
+        &self,
+        _installation: &RulePackInstallation,
+        _expected_revision: Option<i64>,
+        _changed_rule_sets: &[RuleSet],
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "rule pack persistence is not configured".to_string(),
+        ))
+    }
+
+    async fn uninstall_rule_pack(
+        &self,
+        _pack_id: &str,
+        _expected_revision: i64,
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "rule pack persistence is not configured".to_string(),
+        ))
+    }
+
+    async fn copy_rule_pack_rule_set_to_custom(
+        &self,
+        _pack_id: &str,
+        _source_rule_set_id: &str,
+        _custom_rule_set: &RuleSet,
+        _expected_revision: i64,
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "rule pack persistence is not configured".to_string(),
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleSetHistoryChange {
+    pub rule_set_id: String,
+    pub action: String,
+    pub rego_source: Option<String>,
+    pub actor_id: Option<String>,
 }
 
 /// Persistence for user-authored maintenance rules (RFC 137 section 11).

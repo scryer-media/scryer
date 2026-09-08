@@ -170,6 +170,7 @@ pub struct AppCustomizationServices {
     pub(crate) plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
     pub(crate) user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
+    pub(crate) rule_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -434,6 +435,7 @@ impl AppServices {
                 user_rules: Arc::new(std::sync::RwLock::new(
                     scryer_rules::UserRulesEngine::empty(),
                 )),
+                rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             notifications: AppNotificationServices::Disabled,
         }

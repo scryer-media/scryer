@@ -10,10 +10,11 @@ use scryer_application::{
     IndexerErrorRepository, IndexerSearchLearningRepository, LibraryRepository,
     LogicalBackupExporter, MediaRequestRepository, MediaServerConnectionRepository,
     OAuthRepository, PluginInstallationRepository, PostProcessingScriptRepository,
-    QualityProfileRepository, RuleSetRepository, ScopeIndexerCoverageRepository,
-    SettingsRepository, ShowRepository, SubtitleProviderConfigRepository, TitleImageProcessor,
-    TitleImageRepository, TitleRepository, TotpRepository, UpstreamScheduler,
-    UserExternalAccountRepository, UserRepository, UserUiSettingsRepository, WebauthnRepository,
+    QualityProfileRepository, RuleSetHistoryChange, RuleSetRepository,
+    ScopeIndexerCoverageRepository, SettingsRepository, ShowRepository,
+    SubtitleProviderConfigRepository, TitleImageProcessor, TitleImageRepository, TitleRepository,
+    TotpRepository, UpstreamScheduler, UserExternalAccountRepository, UserRepository,
+    UserUiSettingsRepository, WebauthnRepository,
 };
 
 #[cfg(feature = "image-processing")]
@@ -421,6 +422,75 @@ impl RuleSetRepository for DatastoreCustomizationStore {
     ) -> AppResult<Vec<scryer_domain::RuleSet>> {
         self.rule_sets
             .list_rule_sets_by_managed_key_prefix(prefix)
+            .await
+    }
+
+    async fn list_rule_pack_installations(
+        &self,
+    ) -> AppResult<Vec<scryer_domain::RulePackInstallation>> {
+        self.rule_sets.list_rule_pack_installations().await
+    }
+
+    async fn get_rule_pack_installation(
+        &self,
+        pack_id: &str,
+    ) -> AppResult<Option<scryer_domain::RulePackInstallation>> {
+        self.rule_sets.get_rule_pack_installation(pack_id).await
+    }
+
+    async fn find_rule_pack_installation_by_rule_set_id(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<Option<scryer_domain::RulePackInstallation>> {
+        self.rule_sets
+            .find_rule_pack_installation_by_rule_set_id(rule_set_id)
+            .await
+    }
+
+    async fn apply_rule_pack_installation(
+        &self,
+        installation: &scryer_domain::RulePackInstallation,
+        expected_revision: Option<i64>,
+        changed_rule_sets: &[scryer_domain::RuleSet],
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        self.rule_sets
+            .apply_rule_pack_installation(
+                installation,
+                expected_revision,
+                changed_rule_sets,
+                history,
+            )
+            .await
+    }
+
+    async fn uninstall_rule_pack(
+        &self,
+        pack_id: &str,
+        expected_revision: i64,
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        self.rule_sets
+            .uninstall_rule_pack(pack_id, expected_revision, history)
+            .await
+    }
+
+    async fn copy_rule_pack_rule_set_to_custom(
+        &self,
+        pack_id: &str,
+        source_rule_set_id: &str,
+        custom_rule_set: &scryer_domain::RuleSet,
+        expected_revision: i64,
+        history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        self.rule_sets
+            .copy_rule_pack_rule_set_to_custom(
+                pack_id,
+                source_rule_set_id,
+                custom_rule_set,
+                expected_revision,
+                history,
+            )
             .await
     }
 }
@@ -1800,6 +1870,10 @@ mod tests {
         TitleImageKind, TitleImageRepository, TitleImageSourceResult, TitleImageVariantRecord,
         TitleRepository, UserRepository, inspect_backup_bundle,
     };
+    #[cfg(feature = "runtime-backups")]
+    use scryer_application::{
+        BackupBundleStaging, backup_table_part_filename, prepare_backup_restore_payload,
+    };
     use scryer_domain::{ExternalId, MediaFacet, Title, User};
     use sqlx::Row;
     use std::sync::{Mutex, MutexGuard};
@@ -2096,6 +2170,102 @@ mod tests {
     async fn sqlite_logical_backup_restore_round_trip_preserves_setup_data() -> AppResult<()> {
         run_backup_restore_round_trip_or_skip(TestBackupEngine::Sqlite, TestBackupEngine::Sqlite)
             .await
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[tokio::test]
+    async fn sqlite_restore_accepts_a_pre_0224_bundle_without_rule_pack_tables() -> AppResult<()> {
+        let source = TestBackupSource::new(TestBackupEngine::Sqlite).await?;
+        let target = TestBackupTarget::new(TestBackupEngine::Sqlite).await?;
+        let bundle_dir =
+            tempfile::tempdir().map_err(|error| AppError::Repository(error.to_string()))?;
+        let bundle_path = bundle_dir.path().join("pre-0224.scryer-backup.enc");
+        let result: AppResult<()> = async {
+            source.seed().await?;
+            target.seed_stale_ephemeral_rows().await?;
+            let intermediate = bundle_dir.path().join("current.scryer-backup.enc");
+            source
+                .export_backup(&intermediate, "pre-0224-passphrase")
+                .await?;
+            let payload =
+                prepare_backup_restore_payload(&intermediate, Some("pre-0224-passphrase"))?;
+            let mut staging = BackupBundleStaging::new()?;
+            for (table, row_count) in &payload.manifest().row_counts {
+                if matches!(
+                    table.as_str(),
+                    "rule_pack_installations" | "rule_pack_members"
+                ) {
+                    continue;
+                }
+                let filename = backup_table_part_filename(table);
+                std::fs::copy(
+                    payload.tables_dir().join(&filename),
+                    staging.tables_dir().join(&filename),
+                )
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+                let checksum = payload
+                    .manifest()
+                    .part_checksums
+                    .get(&format!("tables/{filename}"))
+                    .cloned()
+                    .ok_or_else(|| AppError::Validation(format!("missing checksum for {table}")))?;
+                staging.record_table_part(table, *row_count, checksum)?;
+            }
+            staging.finish(BackupBundleExportRequest {
+                output_path: bundle_path.clone(),
+                passphrase: "pre-0224-passphrase".into(),
+                source_migration_key: Some("0223_legacy_fixture".into()),
+                source_scryer_version: "0.20.0".into(),
+                source_engine: "sqlite".into(),
+                secrets: BackupExportSecrets {
+                    encryption_master_key: "test-master-key".into(),
+                    jwt_signing_secret: "test-jwt-secret".into(),
+                    smg_registration_secret: Some("test-smg-secret".into()),
+                    smg_gateway_url: Some("https://smg.example.invalid/graphql".into()),
+                },
+            })?;
+            let inspected = inspect_backup_bundle(&bundle_path, Some("pre-0224-passphrase"))?;
+            assert_eq!(
+                inspected.source_migration_key.as_deref(),
+                Some("0223_legacy_fixture")
+            );
+            assert!(!inspected.row_counts.contains_key("rule_pack_installations"));
+            assert!(!inspected.row_counts.contains_key("rule_pack_members"));
+            restore_backup_bundle_to_datastore(
+                target.config.clone(),
+                &bundle_path,
+                Some("pre-0224-passphrase"),
+            )
+            .await?;
+            target.verify_restored().await?;
+            let services = SqliteServices::new_with_mode(
+                target.config.database_url.clone(),
+                MigrationMode::Apply,
+            )
+            .await?;
+            let installations: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM rule_pack_installations")
+                    .fetch_one(services.pool())
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+            let members: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_pack_members")
+                .fetch_one(services.pool())
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(
+                installations, 0,
+                "legacy restore should leave installations empty"
+            );
+            assert_eq!(members, 0, "legacy restore should leave members empty");
+            services.pool().close().await;
+            Ok(())
+        }
+        .await;
+        let source_cleanup = source.cleanup().await;
+        let target_cleanup = target.cleanup().await;
+        result?;
+        source_cleanup?;
+        target_cleanup
     }
 
     async fn run_backup_restore_round_trip_or_skip(

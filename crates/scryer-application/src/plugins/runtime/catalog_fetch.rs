@@ -62,6 +62,7 @@ pub struct RulePackRegistryEntry {
     pub description: String,
     pub author: String,
     pub version: String,
+    pub digest: String,
     pub source_url: String,
     #[serde(default)]
     pub min_scryer_version: Option<String>,
@@ -78,6 +79,11 @@ impl RulePackRegistryEntry {
             description: value.description.clone(),
             author: value.author.clone(),
             version: release.version.clone(),
+            digest: release
+                .rule_pack_digests
+                .first()
+                .cloned()
+                .unwrap_or_default(),
             source_url: artifact.url.clone(),
             min_scryer_version: release.min_scryer_version.clone(),
         }
@@ -86,11 +92,20 @@ impl RulePackRegistryEntry {
 /// Full rule pack JSON fetched from a URL.
 #[derive(Clone, Debug, Deserialize)]
 struct RulePackManifest {
-    #[expect(dead_code)]
     schema_version: u32,
-    #[expect(dead_code)]
     id: String,
+    name: String,
+    description: String,
+    author: String,
+    version: String,
     rules: Vec<RulePackRule>,
+}
+/// A signed, decoded, and schema-validated rule pack ready for installation.
+#[derive(Clone, Debug)]
+pub struct VerifiedRulePack {
+    pub registry: RulePackRegistryEntry,
+    pub revision: String,
+    pub templates: Vec<RulePackTemplate>,
 }
 struct FetchedCatalogArtifact {
     persisted_wasm_bytes: Vec<u8>,
@@ -415,14 +430,23 @@ fn select_rule_pack_release_and_artifact(
     pack: &CatalogV3RulePackEntry,
     cpu_class: crate::services::RuntimePerformanceClass,
 ) -> Option<(CatalogV3RulePackRelease, CatalogV3DistributionArtifact)> {
+    select_rule_pack_candidate(pack, cpu_class, None, None)
+}
+
+fn select_rule_pack_candidate(
+    pack: &CatalogV3RulePackEntry,
+    cpu_class: crate::services::RuntimePerformanceClass,
+    exact_version: Option<&str>,
+    patch_from: Option<&semver::Version>,
+) -> Option<(CatalogV3RulePackRelease, CatalogV3DistributionArtifact)> {
     pack.releases
         .iter()
         .filter(|release| {
-            release
-                .min_scryer_version
-                .as_ref()
-                .and_then(|v| semver::Version::parse(v).ok())
-                .is_none_or(|min| current_scryer_version() >= &min)
+            exact_version.is_none_or(|version| release.version == version)
+                && release.min_scryer_version.as_ref().is_none_or(|version| {
+                    semver::Version::parse(version)
+                        .is_ok_and(|min| current_scryer_version() >= &min)
+                })
         })
         .filter_map(|release| {
             select_distribution_artifact(&release.artifacts, cpu_class)
@@ -431,6 +455,15 @@ fn select_rule_pack_release_and_artifact(
         .filter_map(|(release, artifact)| {
             parse_rule_pack_release_version(&pack.id, release)
                 .map(|version| (version, release, artifact))
+        })
+        .filter(|(version, _, _)| {
+            patch_from.is_none_or(|installed| {
+                installed.pre.is_empty()
+                    && version.pre.is_empty()
+                    && version.major == installed.major
+                    && version.minor == installed.minor
+                    && version.cmp_precedence(installed).is_gt()
+            })
         })
         .max_by(|(left, _, _), (right, _, _)| left.cmp(right))
         .map(|(_, release, artifact)| (release.clone(), artifact))
@@ -570,10 +603,20 @@ async fn decode_rule_pack_manifest_bytes(
     let manifest_label = format!("rule pack '{pack_id}' manifest");
     match artifact_encoding_from_url(actual_url) {
         Some("br") => {
-            decompress_brotli(compressed_manifest, rule_pack_manifest_limit, manifest_label).await
+            decompress_brotli(
+                compressed_manifest,
+                rule_pack_manifest_limit,
+                manifest_label,
+            )
+            .await
         }
         Some("zst") => {
-            decompress_zstd(compressed_manifest, rule_pack_manifest_limit, manifest_label).await
+            decompress_zstd(
+                compressed_manifest,
+                rule_pack_manifest_limit,
+                manifest_label,
+            )
+            .await
         }
         _ => Err(AppError::Validation(format!(
             "rule pack '{pack_id}' selected artifact '{actual_url}' has unsupported encoding"
@@ -1415,6 +1458,8 @@ impl AppUseCase {
     ) -> AppResult<Vec<RulePackRegistryEntry>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
         let catalog = self.load_rule_pack_catalog().await?;
         let cpu_class = self.runtime_performance().await.cpu_class;
         Ok(catalog
@@ -1431,31 +1476,85 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// Fetch a community rule pack by its registry ID.
-    pub async fn fetch_rule_pack_templates(
+    /// Fetch a community rule pack by its registry ID and validate every
+    /// manifest and rule field before it can reach installation code.
+    pub async fn fetch_verified_rule_pack(
         &self,
         actor: &User,
         pack_id: &str,
-    ) -> AppResult<Vec<RulePackTemplate>> {
+    ) -> AppResult<VerifiedRulePack> {
+        self.fetch_verified_rule_pack_selected(actor, pack_id, None)
+            .await
+    }
+
+    pub async fn fetch_verified_rule_pack_version(
+        &self,
+        actor: &User,
+        pack_id: &str,
+        version: &str,
+    ) -> AppResult<VerifiedRulePack> {
+        self.fetch_verified_rule_pack_selected(actor, pack_id, Some(version))
+            .await
+    }
+
+    pub async fn rule_pack_update_candidate(
+        &self,
+        actor: &User,
+        pack_id: &str,
+        installed_version: &str,
+        patch_only: bool,
+    ) -> AppResult<Option<RulePackRegistryEntry>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        let installed = semver::Version::parse(installed_version).map_err(|error| {
+            AppError::Validation(format!("invalid installed pack version: {error}"))
+        })?;
+        let catalog = self.load_rule_pack_catalog().await?;
+        let Some(pack) = catalog.rule_packs.iter().find(|pack| pack.id == pack_id) else {
+            return Ok(None);
+        };
+        let cpu = self.runtime_performance().await.cpu_class;
+        Ok(
+            select_rule_pack_candidate(pack, cpu, None, patch_only.then_some(&installed))
+                .filter(|(release, _)| {
+                    semver::Version::parse(&release.version)
+                        .is_ok_and(|candidate| candidate.cmp_precedence(&installed).is_gt())
+                })
+                .map(|(release, artifact)| {
+                    RulePackRegistryEntry::from_release(pack, &release, &artifact)
+                }),
+        )
+    }
 
-        let packs = self.list_rule_pack_registry(actor).await?;
-        let pack = packs
-            .iter()
-            .find(|p| p.id == pack_id)
-            .ok_or_else(|| AppError::NotFound(format!("rule pack {pack_id}")))?;
+    async fn fetch_verified_rule_pack_selected(
+        &self,
+        actor: &User,
+        pack_id: &str,
+        exact_version: Option<&str>,
+    ) -> AppResult<VerifiedRulePack> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+
         let catalog = self.load_rule_pack_catalog().await?;
         let cpu_class = self.runtime_performance().await.cpu_class;
         let pack_entry = catalog
             .rule_packs
             .iter()
-            .find(|candidate| candidate.id == pack.id)
+            .find(|candidate| candidate.id == pack_id)
             .ok_or_else(|| AppError::NotFound(format!("rule pack {pack_id}")))?;
-        let (release, artifact) = select_rule_pack_release_and_artifact(pack_entry, cpu_class)
-            .ok_or_else(|| {
-                AppError::Validation(format!("rule pack '{pack_id}' has no compatible artifact"))
-            })?;
+        let (release, artifact) =
+            select_rule_pack_candidate(pack_entry, cpu_class, exact_version, None).ok_or_else(
+                || {
+                    AppError::Validation(format!(
+                        "rule pack '{pack_id}' has no compatible artifact"
+                    ))
+                },
+            )?;
+        let pack = RulePackRegistryEntry::from_release(pack_entry, &release, &artifact);
         let signer = RequiredSigner {
             github_repository: CENTRAL_CATALOG_REPO.to_string(),
             github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
@@ -1485,7 +1584,8 @@ impl AppUseCase {
         let manifest: RulePackManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| AppError::Repository(format!("invalid rule pack JSON: {e}")))?;
 
-        Ok(manifest
+        validate_rule_pack_manifest(&manifest, &pack)?;
+        let templates = manifest
             .rules
             .into_iter()
             .map(|r| RulePackTemplate {
@@ -1496,6 +1596,80 @@ impl AppUseCase {
                 rego_source: r.rego_source,
                 applied_facets: r.applied_facets,
             })
-            .collect())
+            .collect();
+        Ok(VerifiedRulePack {
+            revision: format!("{}:{}", release.version, pack.digest),
+            registry: pack,
+            templates,
+        })
     }
+
+    /// Fetch templates for callers that do not need installation provenance.
+    pub async fn fetch_rule_pack_templates(
+        &self,
+        actor: &User,
+        pack_id: &str,
+    ) -> AppResult<Vec<RulePackTemplate>> {
+        Ok(self
+            .fetch_verified_rule_pack(actor, pack_id)
+            .await?
+            .templates)
+    }
+}
+
+fn validate_rule_pack_manifest(
+    manifest: &RulePackManifest,
+    registry: &RulePackRegistryEntry,
+) -> AppResult<()> {
+    if manifest.schema_version != 1 {
+        return Err(AppError::Validation(format!(
+            "rule pack '{}' uses unsupported schema version {}",
+            registry.id, manifest.schema_version
+        )));
+    }
+    if manifest.id != registry.id || manifest.version != registry.version {
+        return Err(AppError::Validation(format!(
+            "rule pack '{}' does not match the catalog id/version",
+            registry.id
+        )));
+    }
+    for (field, value) in [
+        ("name", manifest.name.as_str()),
+        ("description", manifest.description.as_str()),
+        ("author", manifest.author.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(AppError::Validation(format!(
+                "rule pack '{}' has an empty {field}",
+                registry.id
+            )));
+        }
+    }
+    if manifest.rules.is_empty() {
+        return Err(AppError::Validation(format!(
+            "rule pack '{}' contains no rules",
+            registry.id
+        )));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for rule in &manifest.rules {
+        if rule.id.trim().is_empty()
+            || rule.title.trim().is_empty()
+            || rule.description.trim().is_empty()
+            || rule.category.trim().is_empty()
+            || rule.rego_source.trim().is_empty()
+        {
+            return Err(AppError::Validation(format!(
+                "rule pack '{}' contains a rule with required fields missing",
+                registry.id
+            )));
+        }
+        if !ids.insert(rule.id.as_str()) {
+            return Err(AppError::Validation(format!(
+                "rule pack '{}' contains duplicate rule id '{}'",
+                registry.id, rule.id
+            )));
+        }
+    }
+    Ok(())
 }

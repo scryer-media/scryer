@@ -10,15 +10,17 @@ use scryer_application::{
     ExternalImportSetupSecretDraft as AppExternalImportSetupSecretDraft,
     ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
     ExternalImportSetupSecretOverrideDraft, ImageProxyKind, JwtSessionScope, MediaRequestCounts,
-    OAuthAuthorizationSource, PendingImportCounts, RenamePlan, RenameWriteAction, RuntimePathStyle,
-    SCRYER_VERSION, SortDirection, TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogSort,
-    TitleCatalogSortKey, TitleHistoryFilter, is_supported_title_history_event_type,
-    supported_title_history_event_types,
+    OAuthAuthorizationSource, PendingImportCounts, RenamePlan, RenameWriteAction,
+    RulePackRegistryEntry, RuntimePathStyle, SCRYER_VERSION, SortDirection,
+    TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogSort, TitleCatalogSortKey,
+    TitleHistoryFilter, is_supported_title_history_event_type, supported_title_history_event_types,
 };
-use scryer_domain::{AppPermission, LibraryPermission, TitleHistoryEventType};
+use scryer_domain::{
+    AppPermission, LibraryPermission, RulePackInstallation, RuleSet, TitleHistoryEventType,
+};
 use scryer_interface_metadata::MetadataQueries;
 use scryer_interface_settings::SettingsQueries;
-use std::{fs, io, path::Path};
+use std::{collections::HashMap, fs, io, path::Path};
 
 use scryer_interface_core as context;
 use scryer_interface_core::{
@@ -143,6 +145,51 @@ fn parse_required_datetime(value: &str, field: &str) -> Result<DateTime<Utc>, Ap
     DateTime::parse_from_rfc3339(value)
         .map(|value| value.with_timezone(&Utc))
         .map_err(|error| AppError::Validation(format!("invalid {field} timestamp: {error}")))
+}
+
+fn from_tracked_rule_pack(
+    installation: RulePackInstallation,
+    available: Option<RulePackRegistryEntry>,
+    auto_update_available: bool,
+    rule_sets: &HashMap<String, RuleSet>,
+) -> TrackedRulePackPayload {
+    TrackedRulePackPayload {
+        pack_id: installation.pack_id,
+        name: installation.name,
+        version: installation.version,
+        digest: installation.digest,
+        revision: installation.revision.into(),
+        auto_update: installation.auto_update,
+        available_version: available.map(|candidate| candidate.version),
+        auto_update_available,
+        last_error: installation.last_error,
+        last_updated: installation.last_updated,
+        members: installation
+            .members
+            .into_iter()
+            .map(|member| {
+                let rule_set = rule_sets.get(&member.rule_set_id);
+                TrackedRulePackMemberPayload {
+                    template_id: member.template_id,
+                    rule_set_id: ID::from(member.rule_set_id),
+                    removed: member.removed,
+                    enabled: rule_set.map(|rule_set| rule_set.enabled),
+                    priority: rule_set.map(|rule_set| rule_set.priority),
+                    name: rule_set.map(|rule_set| rule_set.name.clone()),
+                    description: rule_set.map(|rule_set| rule_set.description.clone()),
+                    applied_facets: rule_set
+                        .map(|rule_set| {
+                            rule_set
+                                .applied_facets
+                                .iter()
+                                .map(|facet| facet.as_str().to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
+            })
+            .collect(),
+    }
 }
 
 fn parse_supported_title_history_event_types(
@@ -3232,6 +3279,21 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    /// Return one rule set, including its source, when it is visible to the caller.
+    async fn rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Rule-set identity to load.")] id: ID,
+    ) -> GqlResult<Option<RuleSetPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let rule_set = app
+            .get_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(rule_set.map(crate::mappers::from_rule_set))
+    }
+
     // ── Maintenance Rule Sets ────────────────────────────────────────────
 
     /// List maintenance rule sets; requires catalog-settings management permission.
@@ -3758,6 +3820,57 @@ impl AcquisitionQueries {
                 applied_facets: t.applied_facets,
             })
             .collect())
+    }
+
+    /// List tracked community rule packs and their local rule bindings.
+    async fn tracked_rule_packs(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<TrackedRulePackPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let installations = app
+            .list_tracked_rule_packs(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        let rule_sets = app.list_rule_sets(&actor).await.map_err(to_gql_error)?;
+        let rule_sets = rule_sets
+            .into_iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set))
+            .collect::<HashMap<_, _>>();
+
+        let mut payloads = Vec::with_capacity(installations.len());
+        for installation in installations {
+            let available = app
+                .rule_pack_update_candidate(
+                    &actor,
+                    &installation.pack_id,
+                    &installation.version,
+                    false,
+                )
+                .await
+                .unwrap_or(None);
+            let auto_update_available = if installation.auto_update {
+                app.rule_pack_update_candidate(
+                    &actor,
+                    &installation.pack_id,
+                    &installation.version,
+                    true,
+                )
+                .await
+                .unwrap_or(None)
+                .is_some()
+            } else {
+                false
+            };
+            payloads.push(from_tracked_rule_pack(
+                installation,
+                available,
+                auto_update_available,
+                &rule_sets,
+            ));
+        }
+        Ok(payloads)
     }
 
     /// Return available indexer provider types and their configuration fields; requires system-settings permission.

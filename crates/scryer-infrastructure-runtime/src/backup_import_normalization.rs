@@ -33,6 +33,7 @@ pub fn strip_nonportable_backup_fields(table: &str, object: &mut JsonMap<String,
 pub fn validate_restore_manifest_table_set(
     row_counts: &BTreeMap<String, u64>,
     export_tables: &[String],
+    source_migration_key: Option<&str>,
 ) -> AppResult<()> {
     let expected_tables = export_tables.iter().cloned().collect::<BTreeSet<_>>();
     let manifest_tables = row_counts.keys().cloned().collect::<BTreeSet<_>>();
@@ -48,11 +49,31 @@ pub fn validate_restore_manifest_table_set(
         .difference(&expected_tables)
         .cloned()
         .collect::<Vec<_>>();
+    if unexpected.is_empty()
+        && missing
+            == [
+                "rule_pack_installations".to_string(),
+                "rule_pack_members".to_string(),
+            ]
+        && source_migration_key
+            .and_then(migration_number)
+            .is_some_and(|number| number < 224)
+    {
+        return Ok(());
+    }
     Err(AppError::Validation(format!(
         "backup bundle table set does not match the current restore catalog: missing [{}], unexpected [{}]",
         missing.join(", "),
         unexpected.join(", ")
     )))
+}
+
+fn migration_number(migration_key: &str) -> Option<u32> {
+    migration_key
+        .split_once('_')
+        .map_or(migration_key, |(number, _)| number)
+        .parse()
+        .ok()
 }
 
 pub fn normalize_import_object_for_target(
@@ -584,7 +605,7 @@ mod tests {
             "settings_values".to_string(),
         ];
 
-        let error = validate_restore_manifest_table_set(&row_counts, &export_tables)
+        let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
             .expect_err("non-export catalog tables should invalidate the bundle");
         assert!(error.to_string().contains("title_image_blobs"));
         assert!(error.to_string().contains("title_image_variants"));
@@ -602,9 +623,34 @@ mod tests {
             "settings_values".to_string(),
         ];
 
-        let error = validate_restore_manifest_table_set(&row_counts, &export_tables)
+        let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
             .expect_err("unknown tables should stay invalid");
         assert!(error.to_string().contains("mystery_cache"));
+    }
+
+    #[test]
+    fn restore_manifest_validation_allows_only_pre_0224_missing_rule_pack_tables() {
+        let row_counts = BTreeMap::from_iter([("settings_values".to_string(), 1)]);
+        let export_tables = vec![
+            "rule_pack_installations".to_string(),
+            "rule_pack_members".to_string(),
+            "settings_values".to_string(),
+        ];
+
+        validate_restore_manifest_table_set(&row_counts, &export_tables, Some("0223_prior_change"))
+            .expect("known pre-0224 bundles should restore into the newer schema");
+
+        let error = validate_restore_manifest_table_set(
+            &row_counts,
+            &export_tables,
+            Some("0224_tracked_rule_packs"),
+        )
+        .expect_err("new bundles must include the rule pack tables");
+        assert!(error.to_string().contains("rule_pack_installations"));
+
+        let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
+            .expect_err("bundles without migration metadata remain strict");
+        assert!(error.to_string().contains("rule_pack_members"));
     }
 
     #[test]
