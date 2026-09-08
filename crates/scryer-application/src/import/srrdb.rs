@@ -198,11 +198,12 @@ impl SrrdbHttpFilenameLookup {
         label: &'static str,
         body_cap_bytes: usize,
     ) -> Result<Option<T>, SrrdbOutage> {
+        let deadline = tokio::time::Instant::now() + SRRDB_REQUEST_TIMEOUT;
         let request_url = url.clone();
         let send = self.client.send(Self::policy(label), || {
             self.client.client().get(request_url.clone())
         });
-        let response = match tokio::time::timeout(SRRDB_REQUEST_TIMEOUT, send).await {
+        let response = match tokio::time::timeout_at(deadline, send).await {
             Err(_) => {
                 tracing::debug!(%url, label, "srrdb lookup timed out");
                 return Err(SrrdbOutage);
@@ -231,7 +232,7 @@ impl SrrdbHttpFilenameLookup {
         let mut body: Vec<u8> = Vec::new();
         let mut stream = response.bytes_stream();
         loop {
-            let chunk = match tokio::time::timeout(SRRDB_REQUEST_TIMEOUT, {
+            let chunk = match tokio::time::timeout_at(deadline, {
                 use futures_util::StreamExt;
                 stream.next()
             })

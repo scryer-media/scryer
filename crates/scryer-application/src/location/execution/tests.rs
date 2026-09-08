@@ -298,6 +298,88 @@ fn placement_for(plan: &RootMoveExecutionPlan) -> TitlePlacementSnapshot {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+#[tokio::test]
+async fn changed_duplicate_copies_keep_the_source_and_catalog_intact() {
+    for changed_copy in ["source", "destination", "missing"] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut plan = single_title_plan(
+            &temp.path().join("a"),
+            &temp.path().join("b"),
+            "film.mkv",
+            4,
+        );
+        let file = plan.titles[0].files.remove(0);
+        write_file(&file.source(), b"same");
+        write_file(&file.destination(), b"same");
+        plan.titles[0]
+            .deduplicated_sources
+            .push(file.source_path.clone());
+        plan.titles[0]
+            .deduplicated_media_file_ids
+            .push("mf-1".into());
+        plan.deduplication_destinations.insert(
+            file.source_path.clone(),
+            crate::location::root_move::DeduplicationSurvivor {
+                destination_path: file.destination_path.clone(),
+                source_media_file_id: file.media_file_id.clone(),
+            },
+        );
+        let store = InMemoryLocationOperationStore::new();
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let operation = queued_operation(
+            "dedup",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        let title = plan.titles[0].to_planned_title();
+        reconciler
+            .revalidate_duplicate(&file.source_path)
+            .await
+            .expect("initially identical");
+        match changed_copy {
+            "source" => write_file(&file.source(), b"diff"),
+            "destination" => write_file(&file.destination(), b"diff"),
+            _ => std::fs::remove_file(file.destination()).unwrap(),
+        }
+        reconciler
+            .reconcile_title(&operation, &title)
+            .await
+            .expect_err("stale before catalog writes");
+        assert!(catalog.writes().is_empty());
+        reconciler
+            .clean_up_title(&operation, &title)
+            .await
+            .expect_err("stale before source disposal");
+        assert!(file.source().exists());
+        assert!(recycler.recycled.lock().unwrap().is_empty());
+        write_file(&file.source(), b"same");
+        write_file(&file.destination(), b"same");
+        reconciler
+            .reconcile_title(&operation, &title)
+            .await
+            .expect("matching copies reconcile");
+        assert!(
+            catalog
+                .writes()
+                .iter()
+                .any(|write| write == "delete-media:mf-1")
+        );
+        reconciler
+            .clean_up_title(&operation, &title)
+            .await
+            .expect("matching source is recycled");
+        reconciler
+            .clean_up_title(&operation, &title)
+            .await
+            .expect("cleanup remains idempotent");
+        assert!(!file.source().exists());
+        assert_eq!(std::fs::read(file.destination()).unwrap(), b"same");
+    }
+}
+
 /// FR-032: a move inside one filesystem is a rename. No bytes are copied, so
 /// the record carries no hashes and no verification pass ran — and the source
 /// is gone because the rename moved it, not because cleanup removed it.
@@ -1684,11 +1766,15 @@ async fn a_completed_move_asks_media_servers_to_re_read_the_destination_folder()
         requests[0].folders,
         vec![
             plan.titles[0]
+                .source_folder_path
+                .clone()
+                .expect("planned source folder"),
+            plan.titles[0]
                 .destination_folder_path
                 .clone()
                 .expect("planned destination folder")
         ],
-        "the notification names the folder the content landed in"
+        "the notification names both folders changed by the move"
     );
 }
 

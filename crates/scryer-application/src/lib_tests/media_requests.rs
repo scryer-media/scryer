@@ -1322,6 +1322,7 @@ async fn requester_can_update_pending_request_preferences() {
         .expect("request profile allowlist should save");
     let mut input = media_request_input(library_id, 9033);
     input.facet = MediaFacet::Series;
+    input.requested_lease_days = Some(30);
 
     harness
         .app
@@ -1344,6 +1345,22 @@ async fn requester_can_update_pending_request_preferences() {
         )
         .await
         .expect("requester should update pending request");
+    assert_eq!(updated.requested_lease_days, Some(30));
+    let cleared = harness
+        .app
+        .update_my_media_request(
+            &harness.user,
+            UpdateMediaRequestInput {
+                request_id: updated.id.clone(),
+                requested_quality_profile_id: "1080p".into(),
+                requested_monitor_type: Some("allEpisodes".into()),
+                requested_monitor_selection: None,
+                requested_lease_days: Some(None),
+            },
+        )
+        .await
+        .expect("explicit forever remains available");
+    assert_eq!(cleared.requested_lease_days, None);
 
     assert_eq!(
         updated.requested_quality_profile_id.as_deref(),

@@ -769,6 +769,51 @@ async fn a_shadow_rule_records_its_verdict_and_changes_nothing() {
 }
 
 #[tokio::test]
+async fn shadow_denials_and_tags_do_not_override_an_enforcing_approval() {
+    let harness = bootstrap_media_request_app();
+    let enforcing = create_rule(&harness, "Enforced approval", APPROVE_EVERYTHING).await;
+    arm(
+        &harness,
+        &enforcing.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    let shadow_source = format!("{DENY_EVERYTHING}\ntags contains \"shadow-only\" if {{ true }}\n");
+    let shadow = create_rule(&harness, "Shadow denial", &shadow_source).await;
+    harness
+        .app
+        .create_title_tag_definition(&harness.manager, "shadow-only", None)
+        .await
+        .expect("shadow tag is a real registry label");
+    arm(
+        &harness,
+        &shadow.rule_set.id,
+        RequestRuleEvaluationMode::Shadow,
+    )
+    .await;
+    enable_gate(&harness).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    submit(&harness, &library_id, 9901, Some(30)).await;
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Approved);
+    assert!(
+        !requests[0]
+            .policy_tags
+            .iter()
+            .any(|tag| tag == "shadow-only")
+    );
+    assert_eq!(
+        requests[0].decided_by_rule_set_ids,
+        vec![enforcing.rule_set.id]
+    );
+    let traces = harness.request_rule_decisions.recorded().await;
+    assert_eq!(
+        traces[0].effective_outcome,
+        RequestDecisionOutcome::AutoApprove
+    );
+}
+
+#[tokio::test]
 async fn an_enforced_approval_creates_the_title_with_the_policy_tags_and_a_dormant_lease() {
     let harness = bootstrap_media_request_app();
     let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
@@ -1059,7 +1104,7 @@ async fn editing_a_pending_request_re_evaluates_it() {
         MediaRequestStatus::Pending
     );
 
-    harness
+    let updated = harness
         .app
         .update_my_media_request(
             &harness.user,
@@ -1068,11 +1113,13 @@ async fn editing_a_pending_request_re_evaluates_it() {
                 requested_quality_profile_id: "1080p".to_string(),
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
-                requested_lease_days: Some(7),
+                requested_lease_days: Some(Some(7)),
             },
         )
         .await
         .expect("the requester may shorten their lease");
+    assert_eq!(updated.status, MediaRequestStatus::Approved);
+    assert_eq!(updated.approved_lease_days, Some(7));
 
     let requests = harness.media_requests.requests.lock().await;
     assert_eq!(
@@ -1661,6 +1708,15 @@ async fn an_administrator_can_extend_convert_and_release_a_claim() {
         .await
         .expect("extend should succeed");
     assert_eq!(extended.expires_at, Some(expires_at));
+    harness
+        .app
+        .activate_dormant_claims_for_title(&extended.title_id, chrono::Utc::now())
+        .await
+        .expect("activate the extended dormant claim");
+    assert_eq!(
+        harness.lifecycle_claims.all().await[0].expires_at,
+        Some(expires_at)
+    );
 
     // Converting leaves the original as history and produces an operator keep.
     let replacement = harness

@@ -37,6 +37,8 @@ const MAX_RUNNING_JOBS_PER_ACTOR: usize = 8;
 /// Releases one browser download may bundle (D17). Each one is a separate
 /// upstream fetch, so the cap bounds how long a single request can hold.
 const MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS: usize = 50;
+/// Total retained payload before archive construction (individual fetches are also capped).
+const MAX_INTERACTIVE_SEARCH_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 /// Room for the extension and a dedupe suffix inside every filesystem's limit.
 const ARTIFACT_FILE_NAME_STEM_MAX_BYTES: usize = 180;
 
@@ -1173,6 +1175,52 @@ impl AppUseCase {
             ));
         };
 
+        // Serialize retries of this exact client/source pair, including retries
+        // after the client accepted but catalog persistence failed.
+        let claim_key = format!("unlinked:{download_client_id}:{source_hint}");
+        let guards = &self.runtime.acquisition.download_submission_guards;
+        let _submission_guard = guards.acquire_title(&claim_key).await;
+        if let Some(crate::services::UncertainDownloadSubmissionClaim::Accepted {
+            submission,
+            ..
+        }) = guards.uncertain_claim(&claim_key)
+        {
+            self.services
+                .workflow
+                .download_submissions
+                .record_submission(submission.clone())
+                .await
+                .map_err(|error| {
+                    AppError::DownloadSubmitAmbiguous(format!(
+                        "accepted unlinked download {} is still not durable: {error}",
+                        submission.download_id
+                    ))
+                })?;
+            let title = unlinked_grab_title(
+                &result.title,
+                MediaFacet::parse(&submission.facet).unwrap_or(MediaFacet::Movie),
+                self.runtime.environment.now(),
+            );
+            self.append_domain_event(new_global_domain_event(
+                actor,
+                DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title_context_snapshot(&title),
+                    source_title: submission.source_title.clone(),
+                    source_hint: submission.source_hint.clone(),
+                    source_provider: submission.source_provider_name.clone(),
+                    download_id: Some(submission.download_client_item_id.clone()),
+                    episode_ids: Vec::new(),
+                }),
+            ))
+            .await?;
+            guards.clear_uncertain(&claim_key);
+            return Ok(QueueUnlinkedReleaseOutcome {
+                download_id: submission.download_client_item_id,
+                client_name: client.name,
+                source_title: result.title,
+            });
+        }
+
         // With no title there is no owner facet. The operator's search kind is
         // the stated intent; a raw search falls back to what the release parses
         // as, the same read the tracked-download reconciler makes.
@@ -1252,28 +1300,55 @@ impl AppUseCase {
         let grab = grab_result?;
         self.record_indexer_grab(result.indexer_id.as_deref(), grab_indexer.as_deref());
 
-        self.services
+        let submission = DownloadSubmission {
+            download_id,
+            title_id: String::new(),
+            facet: facet.as_str().to_string(),
+            download_client_id: grab.client_id.clone(),
+            download_client_type: grab.client_type.clone(),
+            download_client_item_id: grab.job_id.clone(),
+            source_hint: Some(source_hint.clone()),
+            source_provider_id: result.indexer_id.clone(),
+            source_provider_name: Some(result.source.clone()),
+            source_kind: Some(source_kind),
+            source_title: Some(result.title.clone()),
+            info_hash: info_hash_hint.clone(),
+            release_size_bytes: result.size_bytes,
+            request_signature: None,
+            purpose: DownloadSubmissionPurpose::OperatorQueued,
+            scope: SubmissionScope::Orphan,
+        };
+        let wire_id = download_id.to_wire();
+        let identity = crate::download_identity::accepted_download_submission_identity(
+            crate::download_identity::AcceptedDownloadIdentityInput {
+                initial_download_id: Some(&wire_id),
+                source_kind: Some(source_kind),
+                source_hint: Some(&source_hint),
+                info_hash_hint: info_hash_hint.as_deref(),
+                client_type: Some(&grab.client_type),
+                client_item_id: Some(&grab.job_id),
+                accepted_info_hash: grab.info_hash.as_deref(),
+            },
+        );
+        guards.mark_uncertain(
+            &claim_key,
+            crate::services::UncertainDownloadSubmissionClaim::accepted(
+                submission.clone(),
+                identity,
+                grab.seed_goals.clone(),
+            ),
+        );
+        if let Err(error) = self
+            .services
             .workflow
             .download_submissions
-            .record_submission(DownloadSubmission {
-                download_id,
-                title_id: String::new(),
-                facet: facet.as_str().to_string(),
-                download_client_id: grab.client_id.clone(),
-                download_client_type: grab.client_type.clone(),
-                download_client_item_id: grab.job_id.clone(),
-                source_hint: Some(source_hint.clone()),
-                source_provider_id: result.indexer_id.clone(),
-                source_provider_name: Some(result.source.clone()),
-                source_kind: Some(source_kind),
-                source_title: Some(result.title.clone()),
-                info_hash: info_hash_hint,
-                release_size_bytes: result.size_bytes,
-                request_signature: None,
-                purpose: DownloadSubmissionPurpose::OperatorQueued,
-                scope: SubmissionScope::Orphan,
-            })
-            .await?;
+            .record_submission(submission)
+            .await
+        {
+            return Err(AppError::DownloadSubmitAmbiguous(format!(
+                "accepted unlinked download {download_id} could not be made durable: {error}"
+            )));
+        }
 
         self.append_domain_event(new_global_domain_event(
             actor,
@@ -1290,6 +1365,7 @@ impl AppUseCase {
         ))
         .await?;
 
+        guards.clear_uncertain(&claim_key);
         Ok(QueueUnlinkedReleaseOutcome {
             download_id: grab.job_id,
             client_name: client.name,
@@ -1325,6 +1401,7 @@ impl AppUseCase {
 
         let now = self.runtime.environment.now();
         let mut artifacts: Vec<FetchedSearchArtifact> = Vec::with_capacity(targets.len());
+        let mut total_bytes = 0usize;
         for target in targets {
             let (result, kind) = self
                 .find_interactive_search_result(actor, &target.search_id, &target.download_url)
@@ -1411,6 +1488,12 @@ impl AppUseCase {
                     )));
                 }
             };
+            total_bytes = total_bytes.saturating_add(bytes.len());
+            if total_bytes > MAX_INTERACTIVE_SEARCH_ARTIFACT_BYTES {
+                return Err(AppError::Validation(
+                    "selected release files exceed the 64 MiB download bundle limit".to_string(),
+                ));
+            }
             artifacts.push(FetchedSearchArtifact {
                 file_name: artifact_file_name(&result.title, extension),
                 content_type: content_type.unwrap_or_else(|| default_content_type.to_string()),

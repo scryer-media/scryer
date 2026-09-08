@@ -664,6 +664,13 @@ async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
     let release = done.results.first().expect("one result").clone();
     let download_url = release.download_url.clone().expect("release download url");
 
+    *submissions.record_submission_error.lock().await = Some("temporary catalog outage".into());
+    let error = app
+        .queue_unlinked_release(&user, &start.id, &download_url, &download_client.id)
+        .await
+        .expect_err("client acceptance survives a catalog outage");
+    assert!(matches!(error, AppError::DownloadSubmitAmbiguous(_)));
+    *submissions.record_submission_error.lock().await = None;
     let outcome = app
         .queue_unlinked_release(&user, &start.id, &download_url, &download_client.id)
         .await
@@ -1034,6 +1041,36 @@ async fn one_release_downloads_its_own_file_and_records_a_grab() {
         vec!["Paperman.2012.1080p.WEB-DL".to_string()],
         "a browser download is a grab from the indexer's perspective"
     );
+}
+
+#[tokio::test]
+async fn browser_download_rejects_an_oversized_aggregate_without_grab_history() {
+    let (app, user, search_id, urls) = browser_download_fixture(vec![
+        nzb_release("First.Release", "large-1"),
+        nzb_release("Second.Release", "large-2"),
+        nzb_release("Third.Release", "large-3"),
+    ])
+    .await;
+    let artifacts = urls
+        .iter()
+        .map(|url| {
+            (
+                url.clone(),
+                ResolvedDownloadArtifact::Nzb {
+                    bytes: vec![b'x'; 24 * 1024 * 1024],
+                    file_name: None,
+                    content_type: None,
+                },
+            )
+        })
+        .collect();
+    let app = with_artifacts(&app, artifacts);
+    let error = app
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect_err("aggregate payload is bounded");
+    assert!(matches!(error, AppError::Validation(message) if message.contains("64 MiB")));
+    assert!(grabbed_release_titles(&app).await.is_empty());
 }
 
 #[tokio::test]

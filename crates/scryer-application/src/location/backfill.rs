@@ -309,9 +309,9 @@ impl AppUseCase {
         {
             return Err(BackfillOutcome::Skipped(BackfillSkip::UnavailableMount));
         }
-        if tokio::fs::metadata(&path).await.is_err() {
-            return Err(BackfillOutcome::Skipped(BackfillSkip::UnavailableMount));
-        }
+        let before = tokio::fs::metadata(&path)
+            .await
+            .map_err(|_| BackfillOutcome::Skipped(BackfillSkip::UnavailableMount))?;
 
         // The queue predicate already excluded hashed rows, but a copy or an
         // import can hash this file between the page query and its turn. One
@@ -323,28 +323,45 @@ impl AppUseCase {
             .get_media_file_by_id(&candidate.id)
             .await
             .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
-        match current {
+        let current = match current {
             None => return Err(BackfillOutcome::Skipped(BackfillSkip::AlreadyHashed)),
             Some(file) if file.content_hashes.is_some() => {
                 return Err(BackfillOutcome::Skipped(BackfillSkip::AlreadyHashed));
             }
-            Some(_) => {}
+            Some(file) => file,
+        };
+        if current.file_path != candidate.file_path || current.size_bytes != candidate.size_bytes {
+            return Err(BackfillOutcome::Failed(
+                "file changed before hashing".into(),
+            ));
         }
 
-        let hashes = hash_file_throttled(path, options.chunk_pause)
+        let hashes = hash_file_throttled(path.clone(), options.chunk_pause)
             .await
             .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
+        let after = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+        if !same_file_version(&before, &after) || bytes != current.size_bytes as u64 {
+            return Err(BackfillOutcome::Failed("file changed while hashing".into()));
+        }
 
-        self.services
+        let published = self
+            .services
             .library
             .media_files
-            .update_media_file_content_hashes(
-                &candidate.id,
+            .update_media_file_content_hashes_if_unchanged(
+                &current,
                 &PersistedContentHashes::from_streamed(&hashes, Utc::now()),
             )
             .await
             .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+        if !published {
+            return Err(BackfillOutcome::Failed(
+                "catalog changed while hashing".into(),
+            ));
+        }
 
         Ok(Some(bytes))
     }
@@ -433,7 +450,7 @@ enum BackfillOutcome {
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
 /// means a later move can compare a destination read-back against a stored
 /// value instead of re-reading the source.
-async fn hash_file_throttled(
+pub(super) async fn hash_file_throttled(
     path: PathBuf,
     chunk_pause: Duration,
 ) -> AppResult<crate::location::model::StreamedContentHashes> {
@@ -446,6 +463,9 @@ async fn hash_file_throttled(
                 path.display()
             ))
         })?;
+        let before = file
+            .metadata()
+            .map_err(|error| AppError::Repository(error.to_string()))?;
         let mut hasher = StreamedContentHasher::new();
         let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
         loop {
@@ -463,10 +483,36 @@ async fn hash_file_throttled(
                 std::thread::sleep(chunk_pause);
             }
         }
+        let after =
+            std::fs::metadata(&path).map_err(|error| AppError::Repository(error.to_string()))?;
+        if !same_file_version(&before, &after) {
+            return Err(AppError::Validation("file changed while hashing".into()));
+        }
         Ok(hasher.finalize())
     })
     .await
     .map_err(|error| {
         AppError::Repository(format!("full-hash backfill task failed to join: {error}"))
     })?
+}
+
+pub(super) fn same_file_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    if before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+        || before.created().ok() != after.created().ok()
+    {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != after.dev()
+            || before.ino() != after.ino()
+            || before.ctime() != after.ctime()
+            || before.ctime_nsec() != after.ctime_nsec()
+        {
+            return false;
+        }
+    }
+    true
 }

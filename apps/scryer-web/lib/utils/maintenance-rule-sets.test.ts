@@ -302,6 +302,16 @@ test("an action the backend's title executor cannot run is never offered", () =>
   const withShowDelete: MaintenanceActionDescriptor[] = [
     ...descriptors,
     {
+      kind: "UNMONITOR_TITLE_DELETE_ALL_FILES",
+      supportedSubjects: ["MOVIE", "SHOW"],
+      riskClass: "HIGH",
+      effectClasses: ["DELETE_FILES"],
+      timingMode: "GRACE",
+      allowedRepeatModes: ["ONCE"],
+      requiresTargetQualityProfile: false,
+      requiresTags: false,
+    },
+    {
       kind: "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
       supportedSubjects: ["SHOW"],
       riskClass: "HIGH",

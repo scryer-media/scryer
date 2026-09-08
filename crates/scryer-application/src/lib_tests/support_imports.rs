@@ -892,6 +892,27 @@ impl MediaFileRepository for MockMediaFileRepo {
         Ok(())
     }
 
+    async fn update_media_file_content_hashes_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let Some(entry) = list.iter_mut().find(|entry| {
+            entry.id == expected.id
+                && entry.title_id == expected.title_id
+                && entry.file_path == expected.file_path
+                && entry.size_bytes == expected.size_bytes
+                && entry.source_signature_scheme == expected.source_signature_scheme
+                && entry.source_signature_value == expected.source_signature_value
+                && entry.content_hashes.is_none()
+        }) else {
+            return Ok(false);
+        };
+        entry.content_hashes = Some(hashes.clone());
+        Ok(true)
+    }
+
     async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
         let mut list = self.store.lock().await;
         let Some(entry) = list.iter_mut().find(|entry| entry.id == file_id) else {

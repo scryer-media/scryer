@@ -186,11 +186,14 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
             &self.datastore,
             "activate_lifecycle_claim",
             "UPDATE lifecycle_claims
-                SET state = {}, starts_at = {}, expires_at = {}, updated_at = {}
+                SET state = {}, starts_at = {},
+                    expires_at = CASE WHEN expires_at > {} THEN expires_at ELSE {} END,
+                    updated_at = {}
               WHERE id = {} AND state = {}",
             vec![
                 SqlArg::Text(LifecycleClaimState::Active.as_storage_str().to_string()),
                 SqlArg::Timestamp(starts_at),
+                SqlArg::OptTimestamp(expires_at),
                 SqlArg::OptTimestamp(expires_at),
                 SqlArg::Timestamp(now),
                 SqlArg::Text(id.to_string()),

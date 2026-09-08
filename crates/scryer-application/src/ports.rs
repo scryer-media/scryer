@@ -5819,6 +5819,17 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(())
     }
 
+    /// Publish a backfill only if the unhashed row still describes the file read.
+    /// Unsupported stores leave the row queued rather than writing without a guard.
+    async fn update_media_file_content_hashes_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let _ = (expected, hashes);
+        Ok(false)
+    }
+
     /// Clear the 0205 columns, putting the file back on the backfill queue
     /// (FR-046). Returns whether a row actually changed.
     async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {

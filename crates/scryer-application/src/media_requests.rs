@@ -71,9 +71,8 @@ pub struct UpdateMediaRequestInput {
     pub requested_quality_profile_id: String,
     pub requested_monitor_type: Option<String>,
     pub requested_monitor_selection: Option<MonitorSelection>,
-    /// The lease the requester now wants; `None` is forever. Always written —
-    /// the edit form carries the current value, so there is no "leave it alone".
-    pub requested_lease_days: Option<i64>,
+    /// Omission preserves the lease; `Some(None)` explicitly requests forever.
+    pub requested_lease_days: Option<Option<i64>>,
 }
 
 /// Where a resolution's policy provenance comes from, carried from the
@@ -622,8 +621,11 @@ impl AppUseCase {
             requested_monitor_type.as_deref(),
             input.requested_monitor_selection,
         )?;
-        let requested_lease_days =
-            crate::request_rules::validate_lease_days(input.requested_lease_days)?;
+        let requested_lease_days = crate::request_rules::validate_lease_days(
+            input
+                .requested_lease_days
+                .unwrap_or(request.requested_lease_days),
+        )?;
         let mut submitted_event_data = media_request_submitted_event_data(
             &request,
             Some(requested_quality_profile_id.clone()),
@@ -678,7 +680,12 @@ impl AppUseCase {
         self.act_on_request_decision(actor, updated_request, &evaluation)
             .await?;
 
-        Ok(update.request)
+        self.services
+            .catalog
+            .media_requests
+            .get(&update.request.id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("media request not found".into()))
     }
 
     pub async fn cancel_my_media_request(&self, actor: &User, request_id: &str) -> AppResult<u64> {

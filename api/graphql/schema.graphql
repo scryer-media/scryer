@@ -25256,8 +25256,7 @@ input UpdateMediaRequestInput {
 	"""
 	requestedMonitorSelection: MonitorSelectionInput
 	"""
-	Replacement lease in days; omitted means forever. Always applied,
-	because the edit form always carries the current value.
+	Replacement lease in days. Omission preserves the current lease; null requests forever.
 	"""
 	requestedLeaseDays: Int
 }

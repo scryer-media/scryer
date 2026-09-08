@@ -1654,6 +1654,7 @@ pub fn build_root_scope_plan(request: &RootScopePlanRequest) -> PlannedRootScope
             index as i64,
         );
         let (items, restated_warnings) = restate_for_root_scope(request, draft, items);
+        execution.record_deduplication_destinations(&items);
         title_items.extend(items);
         warnings.extend(title_warnings);
         warnings.extend(restated_warnings.iter().cloned());

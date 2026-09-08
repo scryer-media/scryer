@@ -157,11 +157,12 @@ export function updateMaintenanceRuleMetadataInput(
 /// This mirrors `EXECUTABLE_TITLE_RULE_ACTIONS` in
 /// `crates/scryer-application/src/maintenance_rules/action_execution.rs`: the
 /// season- and episode-only kinds are already excluded by the subject filter
-/// below, so this list carries only the show-subject kind that would otherwise
-/// slip through. The API refuses to save a rule using it, so offering it here
+/// below, so this list carries the remaining incomplete kinds. The API refuses
+/// to save a rule using them, so offering them here
 /// would only produce a validation error the operator cannot act on. Change one
 /// side, change the other.
 const TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS: MaintenanceActionKind[] = [
+  "UNMONITOR_TITLE_DELETE_ALL_FILES",
   "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
 ];
 

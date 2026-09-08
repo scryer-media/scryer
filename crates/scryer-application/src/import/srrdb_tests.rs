@@ -401,6 +401,62 @@ async fn recover_filename_reports_an_outage_when_the_call_times_out() {
 }
 
 #[tokio::test]
+async fn a_dripping_response_body_shares_the_request_deadline() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 4096];
+        let mut received = 0;
+        loop {
+            let read = stream.read(&mut request[received..]).await.unwrap();
+            assert!(read > 0, "request ended before its headers");
+            received += read;
+            if request[..received]
+                .windows(4)
+                .any(|bytes| bytes == b"\r\n\r\n")
+            {
+                break;
+            }
+            assert!(
+                received < request.len(),
+                "fixture request exceeded the header cap"
+            );
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if stream.write_all(b"1\r\n \r\n").await.is_err() {
+                break;
+            }
+        }
+    });
+    let lookup = SrrdbHttpFilenameLookup::with_rate_limits(
+        reqwest::Url::parse(&format!("http://{address}/v1")).unwrap(),
+        RateLimitRegistry::isolated(),
+    );
+    let result = tokio::time::timeout(
+        SRRDB_REQUEST_TIMEOUT + Duration::from_secs(2),
+        lookup.recover_filename(MEMBER_CRC, MEMBER_SIZE),
+    )
+    .await;
+    server.abort();
+    assert!(
+        result
+            .expect("the entire read must respect one deadline")
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn recover_filename_misses_when_the_body_exceeds_its_cap() {
     let server = MockServer::start().await;
     let padding = "p".repeat(SRRDB_SEARCH_BODY_CAP_BYTES + 1024);

@@ -353,12 +353,33 @@ impl AppUseCase {
         }
 
         let arbitration = arbitrate(&votes, &errors, permission);
-        let enforceable = arbitration.is_enforceable(&votes, &errors);
-        let effective_outcome =
-            arbitration.effective_outcome(gate_enabled, enforceable, permission);
+        // Shadow votes remain in the trace but cannot veto enforcing votes or
+        // attach tags to a request approved by another rule or permission.
+        let enforcing_votes: Vec<_> = votes
+            .iter()
+            .filter(|vote| vote.mode == RequestRuleEvaluationMode::Enforce)
+            .cloned()
+            .collect();
+        let enforcing_errors: Vec<_> = errors
+            .iter()
+            .filter(|error| error.mode == RequestRuleEvaluationMode::Enforce)
+            .cloned()
+            .collect();
+        let effective = arbitrate(&enforcing_votes, &enforcing_errors, permission);
+        let effective_outcome = effective.effective_outcome(gate_enabled, true, permission);
 
         let emitted_tags = arbitration.tags.clone();
-        let applicable_tags = self.applicable_policy_tags(&purpose, &emitted_tags).await?;
+        let arbitration = if enforcing_votes.is_empty() && enforcing_errors.is_empty() {
+            arbitration
+        } else {
+            effective.clone()
+        };
+        let applicable_tags = if gate_enabled {
+            self.applicable_policy_tags(&purpose, &effective.tags)
+                .await?
+        } else {
+            Vec::new()
+        };
 
         let mut evaluation = RequestEvaluation {
             decision_id: None,

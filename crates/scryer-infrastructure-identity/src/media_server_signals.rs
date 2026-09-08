@@ -17,10 +17,8 @@
 //! Two bounds, both deliberate:
 //!
 //! * a **page size** so a large library does not arrive as one enormous body;
-//! * a **hard cap** on total items, after which the read stops and logs. A
-//!   truncated read is worse than a complete one but far better than an
-//!   unbounded fetch against an operator's server; the cap is set high enough
-//!   that a realistic played history never reaches it.
+//! * a **hard cap** on total items, after which an incomplete read fails so
+//!   the previous watch history and its freshness timestamp are preserved.
 //!
 //! # Series ids
 //!
@@ -34,8 +32,8 @@
 //! # Malformed items
 //!
 //! An item without an `Id`, or with a `Type` that is neither `Movie` nor
-//! `Episode`, is skipped and counted. One unreadable entry must not fail a
-//! participant's whole history.
+//! `Episode`, makes the read incomplete. Publishing a partial history could
+//! turn an omitted played item into a false "never watched" maintenance fact.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -58,7 +56,7 @@ const SIGNAL_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub const JELLYFIN_SIGNAL_PAGE_SIZE: usize = 500;
 
 /// Hard ceiling on items read for one participant in one sweep. Beyond this the
-/// read stops and logs a truncation rather than paging forever.
+/// read fails as incomplete rather than publishing a truncated history.
 pub const JELLYFIN_SIGNAL_MAX_ITEMS: usize = 20_000;
 
 /// Series metadata lookups are batched; this bounds one batch's `Ids=` list so
@@ -140,7 +138,7 @@ impl HttpMediaServerSignalSource {
                 .get("Items")
                 .and_then(Value::as_array)
                 .cloned()
-                .unwrap_or_default();
+                .ok_or_else(|| AppError::Repository("unreadable played history".into()))?;
             if page.is_empty() {
                 break;
             }
@@ -153,13 +151,15 @@ impl HttpMediaServerSignalSource {
             if page.len() < JELLYFIN_SIGNAL_PAGE_SIZE {
                 break;
             }
-            if items.len() >= JELLYFIN_SIGNAL_MAX_ITEMS {
+            if start_index >= JELLYFIN_SIGNAL_MAX_ITEMS {
                 warn!(
                     connection_id = connection.id.as_str(),
                     cap = JELLYFIN_SIGNAL_MAX_ITEMS,
                     "Jellyfin played history exceeded the per-participant cap; the read was truncated"
                 );
-                break;
+                return Err(AppError::Repository(
+                    "incomplete played history: item cap reached".into(),
+                ));
             }
         }
 
@@ -168,6 +168,9 @@ impl HttpMediaServerSignalSource {
                 connection_id = connection.id.as_str(),
                 skipped, "skipped unreadable Jellyfin played items"
             );
+            return Err(AppError::Repository(
+                "incomplete played history: unreadable items".into(),
+            ));
         }
 
         self.attach_series_ids(&base, api_key, external_user_id, &mut items)
@@ -825,6 +828,29 @@ mod tests {
         assert!(message.contains("status 401"), "{message}");
         assert!(!message.contains("api-key"), "{message}");
         assert!(!message.contains("user-123"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn incomplete_played_histories_fail_instead_of_publishing_partial_signals() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        for body in [
+            json!({ "Items": [movie_item(), { "Type": "Movie" }] }),
+            json!({ "Unexpected": [] }),
+            json!({ "Items": vec![movie_item(); JELLYFIN_SIGNAL_PAGE_SIZE] }),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            let mut connection = connection_fixture();
+            connection.base_url = server.uri();
+            HttpMediaServerSignalSource::new()
+                .fetch_played_items(&connection, "user-123")
+                .await
+                .expect_err("an unreadable or unbounded history is not a fresh complete snapshot");
+        }
     }
 
     fn connection_fixture() -> MediaServerConnection {

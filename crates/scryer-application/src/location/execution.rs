@@ -539,6 +539,48 @@ impl<'a> RootMoveReconciler<'a> {
         })
     }
 
+    async fn revalidate_duplicate(&self, source: &str) -> AppResult<()> {
+        let destination = self
+            .plan
+            .deduplication_destinations
+            .get(source)
+            .map(|survivor| &survivor.destination_path)
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "stale plan: no surviving destination recorded for {source}; preview again"
+                ))
+            })?;
+        let source_before = tokio::fs::metadata(stored_path_to_path_buf(source))
+            .await
+            .map_err(|error| {
+                AppError::Validation(format!("stale plan: cannot read {source}: {error}"))
+            })?;
+        let source_hash = super::backfill::hash_file_throttled(
+            stored_path_to_path_buf(source),
+            std::time::Duration::ZERO,
+        )
+        .await?;
+        let destination_hash = super::backfill::hash_file_throttled(
+            stored_path_to_path_buf(destination),
+            std::time::Duration::ZERO,
+        )
+        .await?;
+        let source_after = tokio::fs::metadata(stored_path_to_path_buf(source))
+            .await
+            .map_err(|error| {
+                AppError::Validation(format!("stale plan: cannot read {source}: {error}"))
+            })?;
+        if source_hash.size_bytes != destination_hash.size_bytes
+            || source_hash.full_blake3 != destination_hash.full_blake3
+            || !super::backfill::same_file_version(&source_before, &source_after)
+        {
+            return Err(AppError::Validation(format!(
+                "stale plan: {source} no longer matches {destination}; preview again"
+            )));
+        }
+        Ok(())
+    }
+
     /// US7's catalog step: the merge transaction, then the source title's
     /// logical retirement handed to the delete path.
     ///
@@ -705,6 +747,20 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             return Ok(outcome);
         }
 
+        // Re-prove each duplicate immediately before removing its catalog row.
+        // A different file's hash read must not age this destructive decision.
+        for source in &planned.deduplicated_sources {
+            self.revalidate_duplicate(source).await?;
+            if let Some(media_file_id) = self
+                .plan
+                .deduplication_destinations
+                .get(source)
+                .and_then(|survivor| survivor.source_media_file_id.as_deref())
+            {
+                self.catalog.delete_media_file(media_file_id).await?;
+            }
+        }
+
         // Media-file paths first, then the folder, then the root: each step is
         // individually correct, and an interruption between them leaves rows
         // pointing at real files rather than at a folder nothing lives in.
@@ -715,16 +771,6 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             self.catalog
                 .set_media_file_path(media_file_id, &file.destination_path)
                 .await?;
-        }
-
-        // FR-073: a source copy proven identical to destination content is
-        // recycled rather than moved, so its catalog row is a duplicate of the
-        // survivor's. Dropping it here — before the merge repoints what is
-        // left — is what keeps "retain or merge catalog associations onto the
-        // survivor" true; leaving it would give the surviving title a second
-        // row pointing at a path in the recycle bin.
-        for media_file_id in &planned.deduplicated_media_file_ids {
-            self.catalog.delete_media_file(media_file_id).await?;
         }
 
         // US7: for a merge there is no source title left to point anywhere —
@@ -797,6 +843,13 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         // 1. Proven duplicates: the destination copy survives, the redundant
         //    source is recycled (FR-073).
         for source in &planned.deduplicated_sources {
+            if tokio::fs::symlink_metadata(stored_path_to_path_buf(source))
+                .await
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            {
+                continue;
+            }
+            self.revalidate_duplicate(source).await?;
             let disposal = self
                 .recycler
                 .recycle_source(

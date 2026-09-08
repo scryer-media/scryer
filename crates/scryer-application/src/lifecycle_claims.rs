@@ -215,9 +215,15 @@ impl AppUseCase {
 fn claim_expiry(claim: &LifecycleClaim, starts_at: DateTime<Utc>) -> Option<DateTime<Utc>> {
     match claim.kind {
         LifecycleClaimKind::Keep => None,
-        LifecycleClaimKind::RetainUntil => claim
-            .duration_days
-            .filter(|days| *days > 0)
-            .map(|days| starts_at + Duration::days(days)),
+        LifecycleClaimKind::RetainUntil => {
+            claim.duration_days.filter(|days| *days > 0).map(|days| {
+                // An operator's explicit extension is a minimum expiry, even
+                // when granted before the first import starts the clock.
+                let duration_expiry = starts_at + Duration::days(days);
+                claim
+                    .expires_at
+                    .map_or(duration_expiry, |expiry| expiry.max(duration_expiry))
+            })
+        }
     }
 }

@@ -4914,8 +4914,13 @@ pub async fn start_background_acquisition_poller(
     let mut staged_nzb_prune_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     // FR-047: the backfill's own throttling lives inside the job; the interval
     // only decides how often a bounded sweep is offered a turn.
-    let mut full_hash_backfill_interval =
-        tokio::time::interval(std::time::Duration::from_mins(30));
+    let mut full_hash_backfill_interval = tokio::time::interval_at(
+        tokio::time::Instant::now()
+            + std::time::Duration::from_secs(
+                JobKey::FullHashBackfill.initial_delay_seconds().unwrap_or(900).max(0) as u64,
+            ),
+        std::time::Duration::from_mins(30),
+    );
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut prowlarr_sync_interval = tokio::time::interval(std::time::Duration::from_mins(5));
     let mut direct_indexer_caps_interval =
@@ -4940,7 +4945,6 @@ pub async fn start_background_acquisition_poller(
     registry_refresh_interval.tick().await;
     health_check_interval.tick().await;
     staged_nzb_prune_interval.tick().await;
-    full_hash_backfill_interval.tick().await;
     housekeeping_interval.tick().await;
     prowlarr_sync_interval.tick().await;
     direct_indexer_caps_interval.tick().await;

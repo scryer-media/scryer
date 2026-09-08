@@ -1545,6 +1545,41 @@ impl MediaFileRepository for MediaFileStore {
         Ok(())
     }
 
+    async fn update_media_file_content_hashes_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        hashes: &scryer_application::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let affected = execute_write(
+            &self.datastore,
+            "publish_unchanged_media_file_hashes",
+            "UPDATE media_files SET full_blake3 = {}, move_crc = {},
+                move_crc_algorithm = {}, hash_computed_at = {}
+             WHERE id = {} AND title_id = {} AND file_path = {} AND size_bytes = {}
+               AND COALESCE(source_signature_scheme, '') = {}
+               AND COALESCE(source_signature_value, '') = {}
+               AND full_blake3 IS NULL",
+            vec![
+                SqlArg::Text(hashes.full_blake3.clone()),
+                SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
+                SqlArg::OptText(
+                    hashes
+                        .crc_algorithm
+                        .map(|algorithm| algorithm.as_str().to_string()),
+                ),
+                SqlArg::OptTimestamp(hashes.hash_computed_at),
+                SqlArg::Text(expected.id.clone()),
+                SqlArg::Text(expected.title_id.clone()),
+                SqlArg::Text(expected.file_path.clone()),
+                SqlArg::I64(expected.size_bytes),
+                SqlArg::Text(expected.source_signature_scheme.clone().unwrap_or_default()),
+                SqlArg::Text(expected.source_signature_value.clone().unwrap_or_default()),
+            ],
+        )
+        .await?;
+        Ok(affected > 0)
+    }
+
     async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
         // The `full_blake3 IS NOT NULL` guard makes this a no-op write for the
         // overwhelmingly common case (a scan re-seeing an already-unhashed
@@ -2239,6 +2274,40 @@ mod tests {
             crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
             hash_computed_at: Some(computed_at),
         };
+        let expected = media_files
+            .get_media_file_by_id(&ids[0])
+            .await
+            .unwrap()
+            .unwrap();
+        media_files
+            .update_media_file_source_signature(
+                &ids[0],
+                expected.size_bytes,
+                Some("stat-v1".into()),
+                Some("replacement".into()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !media_files
+                .update_media_file_content_hashes_if_unchanged(&expected, &hashes)
+                .await
+                .unwrap(),
+            "a scan replacing the signature must invalidate the pending hash"
+        );
+        let current = media_files
+            .get_media_file_by_id(&ids[0])
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(current.content_hashes.is_none());
+        assert!(
+            media_files
+                .update_media_file_content_hashes_if_unchanged(&current, &hashes)
+                .await
+                .unwrap(),
+            "an unchanged file can leave the backfill queue"
+        );
         media_files
             .update_media_file_content_hashes(&ids[0], &hashes)
             .await

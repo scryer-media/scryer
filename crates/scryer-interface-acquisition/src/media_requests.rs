@@ -140,7 +140,11 @@ impl MediaRequestMutations {
                     requested_monitor_selection: input
                         .requested_monitor_selection
                         .map(monitor_selection_from_input),
-                    requested_lease_days: input.requested_lease_days.map(i64::from),
+                    requested_lease_days: match input.requested_lease_days {
+                        async_graphql::MaybeUndefined::Undefined => None,
+                        async_graphql::MaybeUndefined::Null => Some(None),
+                        async_graphql::MaybeUndefined::Value(days) => Some(Some(i64::from(days))),
+                    },
                 },
             )
             .await

@@ -104,9 +104,7 @@ const EXECUTOR_TERMINAL_EXPECTED_STATES: &[MaintenanceCandidateState] =
 /// `unmonitor_show_delete_existing_files` is show-subject, so it passed
 /// authoring, and then hard-failed at execution three times into a terminal
 /// `Failed` candidate. A kind is on this list only when the executor has a real
-/// implementation for it; `unmonitor_title_delete_all_files` is on it because it
-/// does dispatch (its file-deletion half is a declared MVP gap that reports
-/// [`execution_reason::ACTION_NOT_FULLY_SUPPORTED`], not a missing arm).
+/// implementation for every part of the promised action.
 ///
 /// The web rule builder mirrors this list —
 /// `TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS` in
@@ -117,7 +115,6 @@ pub const EXECUTABLE_TITLE_RULE_ACTIONS: &[MaintenanceActionKind] = &[
     MaintenanceActionKind::DoNothing,
     MaintenanceActionKind::UnmonitorScopeKeepFiles,
     MaintenanceActionKind::DeleteTitleAndFiles,
-    MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
     MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
     MaintenanceActionKind::AddTags,
     MaintenanceActionKind::RemoveTags,
@@ -1368,16 +1365,8 @@ impl AppUseCase {
                 })
             }
             MaintenanceActionKind::UnmonitorTitleDeleteAllFiles => {
-                // The unmonitor half is safe and runs; the title-preserving
-                // bulk file deletion has no existing application seam, and this
-                // module does not invent deletion paths. The candidate blocks
-                // with a stable reason instead (flagged as an MVP gap).
-                if title.monitored {
-                    self.set_title_monitored(&actor, &title.id, false).await?;
-                }
                 Err(AppError::Validation(format!(
-                    "{}: title-preserving file deletion is not implemented yet; \
-                     the title was unmonitored and the candidate holds",
+                    "{}: title-preserving file deletion is not implemented yet",
                     execution_reason::ACTION_NOT_FULLY_SUPPORTED
                 )))
             }
@@ -1598,6 +1587,7 @@ mod tests {
     /// restated here literally. This list and that arm are edited together; the
     /// test below is what makes a one-sided edit fail.
     const EXECUTOR_REJECTION_ARM_KINDS: &[MaintenanceActionKind] = &[
+        MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
         MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
         MaintenanceActionKind::UnmonitorScopeDeleteFiles,
         MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty,

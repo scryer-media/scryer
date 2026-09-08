@@ -298,11 +298,20 @@ impl RootMoveTitleExecution {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeduplicationSurvivor {
+    pub destination_path: String,
+    pub source_media_file_id: Option<String>,
+}
+
 /// The whole confirmed instruction set, persisted as the operation's plan JSON
 /// so a restart resumes without rebuilding a preview (FR-033).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RootMoveExecutionPlan {
     pub titles: Vec<RootMoveTitleExecution>,
+    /// Surviving destination for every source the confirmed plan will recycle.
+    #[serde(default)]
+    pub deduplication_destinations: BTreeMap<String, DeduplicationSurvivor>,
     /// Titles the selection classified as already at their destination. They
     /// carry no instructions, so they are counted here rather than dropped
     /// (FR-091). Defaulted so a plan serialized before the field existed loads.
@@ -338,6 +347,20 @@ pub struct RootMoveExecutionPlan {
 }
 
 impl RootMoveExecutionPlan {
+    pub(super) fn record_deduplication_destinations(&mut self, items: &[PlanItem]) {
+        for item in items.iter().filter(|item| item.kind == PlanItemKind::Dedup) {
+            if let (Some(source), Some(destination)) = (&item.source_path, &item.destination_path) {
+                self.deduplication_destinations.insert(
+                    source.clone(),
+                    DeduplicationSurvivor {
+                        destination_path: destination.clone(),
+                        source_media_file_id: item.media_file_id.clone(),
+                    },
+                );
+            }
+        }
+    }
+
     /// The runner's work plan, in confirmed order.
     pub fn to_work_plan(&self) -> OperationWorkPlan {
         let work_plan = OperationWorkPlan::new(
@@ -603,6 +626,7 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
 
     for (index, draft) in request.titles.iter().enumerate() {
         let (title_execution, items, warnings) = plan_title(request, draft, index as i64);
+        execution.record_deduplication_destinations(&items);
         builder.extend(items);
         plan_warnings.extend(warnings.iter().cloned());
         // FR-071 + FR-081: the merge summary is both what the preview shows and
@@ -922,16 +946,16 @@ pub(super) fn plan_title(
                 if let Some(media_file_id) = file.media_file_id.as_deref() {
                     deduplicated_media_file_ids.push(media_file_id.to_string());
                 }
-                items.push(
-                    PlanItem::new(PlanItemKind::Dedup)
+                let mut dedup = PlanItem::new(PlanItemKind::Dedup)
                         .with_title(draft.title_id.clone())
                         .with_paths(Some(source_display), Some(destination_display))
                         .with_size(file.size_bytes)
                         .with_detail(
                             "identical content already exists at the destination; the source copy is recycled"
                                 .to_string(),
-                        ),
-                );
+                        );
+                dedup.media_file_id = file.media_file_id.clone();
+                items.push(dedup);
                 continue;
             }
             Some(disposition) if disposition.is_rename() => {
@@ -2010,6 +2034,9 @@ mod tests {
             execution.deduplicated_sources,
             vec!["/a/Some Movie/movie.mkv".to_string()]
         );
+        let survivor = &planned.execution.deduplication_destinations["/a/Some Movie/movie.mkv"];
+        assert_eq!(survivor.destination_path, "/b/Some Movie/movie.mkv");
+        assert_eq!(survivor.source_media_file_id.as_deref(), Some("mf-1"));
         assert!(execution.renamed_destinations.is_empty());
         let work = planned.work_plan();
         assert_eq!(work.titles[0].outcomes.dedups, 1);

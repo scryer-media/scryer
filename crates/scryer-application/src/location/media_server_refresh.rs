@@ -95,7 +95,7 @@ impl LocationMediaServerRefresh for NoMediaServerRefresh {
     }
 }
 
-/// The destination folders a finished operation actually placed content in.
+/// The source and destination folders a finished operation changed.
 ///
 /// Sorted and de-duplicated (two titles can land in one folder after a merge),
 /// and collapsed to parents past [`MAX_TARGETED_FOLDERS`].
@@ -103,7 +103,14 @@ pub fn refresh_folders(checkpoints: &[TitleCheckpoint]) -> Vec<String> {
     let folders = checkpoints
         .iter()
         .filter(|checkpoint| placed_content(checkpoint))
-        .filter_map(|checkpoint| checkpoint.placement.destination_folder_path.as_deref())
+        .flat_map(|checkpoint| {
+            [
+                checkpoint.placement.source_folder_path.as_deref(),
+                checkpoint.placement.destination_folder_path.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+        })
         .map(str::trim)
         .filter(|folder| !folder.is_empty())
         .map(str::to_string)
@@ -267,6 +274,16 @@ mod tests {
                 "/media/tv/Other Show".to_string(),
                 "/media/tv/Some Show".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn completed_moves_refresh_both_sides_without_duplicates() {
+        let mut moved = checkpoint("t-1", TitleCheckpointState::Completed, Some("/new/Film"));
+        moved.placement.source_folder_path = Some("/old/Film".into());
+        assert_eq!(
+            refresh_folders(&[moved.clone(), moved]),
+            vec!["/new/Film", "/old/Film"]
         );
     }
 
