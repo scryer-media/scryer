@@ -138,7 +138,7 @@ pub fn map_media_server_path(path: &str, mappings: &[MediaServerPathMapping]) ->
     } else {
         '/'
     };
-    let remainder = remainder.replace('\\', &separator.to_string());
+    let remainder = remainder.replace(['/', '\\'], &separator.to_string());
     format!("{destination}{separator}{remainder}")
 }
 
@@ -225,6 +225,10 @@ mod tests {
         assert_eq!(
             map_media_server_path("/media/tv/Some Show", &mappings),
             "D:\\Series\\Some Show"
+        );
+        assert_eq!(
+            map_media_server_path("/media/tv/Some Show/Season 01", &mappings),
+            "D:\\Series\\Some Show\\Season 01"
         );
     }
 }

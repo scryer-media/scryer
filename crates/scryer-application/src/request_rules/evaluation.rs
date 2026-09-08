@@ -364,7 +364,7 @@ impl AppUseCase {
             .cloned()
             .collect();
         let effective = arbitrate(&enforcing_votes, &enforcing_errors, permission);
-        let effective_outcome = effective.effective_outcome(gate_enabled, true, permission);
+        let mut effective_outcome = effective.effective_outcome(gate_enabled, true, permission);
 
         let emitted_tags = arbitration.tags.clone();
         let arbitration = if enforcing_votes.is_empty() && enforcing_errors.is_empty() {
@@ -372,9 +372,17 @@ impl AppUseCase {
         } else {
             effective.clone()
         };
+        let mut fallback_reason = arbitration.fallback_reason.map(str::to_string);
         let applicable_tags = if gate_enabled {
-            self.applicable_policy_tags(&purpose, &effective.tags)
-                .await?
+            match self.applicable_policy_tags(&purpose, &effective.tags).await {
+                Ok(tags) => tags,
+                Err(error) => {
+                    tracing::warn!(%error, "request rule tag registry unavailable; holding request");
+                    effective_outcome = RequestDecisionOutcome::ManualReview;
+                    fallback_reason = Some(FALLBACK_ERROR.to_string());
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };
@@ -383,7 +391,7 @@ impl AppUseCase {
             decision_id: None,
             policy_outcome: arbitration.policy_outcome,
             effective_outcome,
-            fallback_reason: arbitration.fallback_reason.map(str::to_string),
+            fallback_reason,
             deciding_rule_set_ids: arbitration.deciding_rule_set_ids.clone(),
             tags: applicable_tags,
             emitted_tags,

@@ -304,6 +304,9 @@ impl ApplicationMigrator {
     ) -> Result<(), String> {
         let datastore = self.ledger.datastore.clone();
         let store = DatastoreCustomizationStore::new(datastore.clone());
+        if let Err(error) = app.resume_pending_title_tag_renames().await {
+            tracing::warn!(error = %error, "title tag rename recovery remains pending; retry the tag update after correcting the repository failure");
+        }
         let spec = *MIGRATIONS
             .iter()
             .find(|spec| spec.id == super::_0014_plugin_components_020::ID)

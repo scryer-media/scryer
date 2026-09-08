@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "title_tag_recovery_tests.rs"]
+mod title_tag_recovery_tests;
+
 /// A movie library with two roots plus a title parked on the first one, which
 /// is what every FR-077 direct-root-write case needs before it can ask for a
 /// second root.

@@ -483,11 +483,17 @@ impl ComponentHost {
         {
             return Ok(entry.client.clone());
         }
-        let client = transport_proxy::transport_proxied_reqwest_client(config, extra_ca_bundle_pem)
-            .map_err(|message| {
-                transport_proxy::record_transport_proxy_failure(config, &message);
-                TransportError::Transport
-            })?;
+        let client = transport_proxy::transport_proxied_reqwest_client_with_redirect_policy(
+            config,
+            extra_ca_bundle_pem,
+            crate::plugin_http_host::plugin_transport_redirect_policy(Some(
+                self.inner.allowed_hosts.clone(),
+            )),
+        )
+        .map_err(|message| {
+            transport_proxy::record_transport_proxy_failure(config, &message);
+            TransportError::Transport
+        })?;
         *cached = Some(CachedTransportProxyClient {
             revision,
             extra_ca_bundle_pem: extra_ca_bundle_pem.to_string(),
@@ -1937,6 +1943,56 @@ mod tests {
             "expected an absolute-form proxied request line, got {}",
             seen[0]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_transport_proxy_redirects_revalidate_every_destination() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+        for (destination, expected_success, expected_requests) in [
+            ("/final", true, 3),
+            ("http://outside.example/final", false, 2),
+            (
+                "/middle",
+                false,
+                scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS,
+            ),
+        ] {
+            let proxy = MockServer::start().await;
+            Mock::given(path("/start"))
+                .respond_with(ResponseTemplate::new(302).insert_header("Location", "/middle"))
+                .mount(&proxy)
+                .await;
+            Mock::given(path("/middle"))
+                .respond_with(ResponseTemplate::new(302).insert_header("Location", destination))
+                .mount(&proxy)
+                .await;
+            Mock::given(path("/final"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+                .mount(&proxy)
+                .await;
+            let host =
+                component_transport_test_host(scryer_domain::ProxyProviderType::Http, proxy.uri());
+            let result = host
+                .http(HttpRequest {
+                    method: "GET".into(),
+                    url: "http://indexer.example/start".into(),
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                })
+                .await;
+            assert_eq!(
+                result.is_ok(),
+                expected_success,
+                "{destination}: {result:?}"
+            );
+            let requests = proxy.received_requests().await.unwrap();
+            assert_eq!(requests.len(), expected_requests, "{destination}");
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| request.url.host_str() != Some("outside.example"))
+            );
+        }
     }
 
     /// A transport proxy has no solve endpoint: an unreachable one must fail

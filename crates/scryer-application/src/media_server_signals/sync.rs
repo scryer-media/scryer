@@ -228,10 +228,16 @@ impl AppUseCase {
                 .sync_one_participant(connection, external_user_id, participant.user_id.as_str())
                 .await
             {
-                Ok((written, unmapped)) => {
+                Ok((written, unmapped, incomplete)) => {
                     outcome.participants_synced += 1;
                     outcome.signals += written;
                     outcome.unmapped += unmapped;
+                    if incomplete {
+                        outcome.record_error(
+                            "played movies could not be mapped; watch history is incomplete"
+                                .to_string(),
+                        );
+                    }
                 }
                 Err(error) => {
                     outcome.participants_failed += 1;
@@ -266,13 +272,13 @@ impl AppUseCase {
     }
 
     /// Read, map, and replace one participant's signals. Returns
-    /// `(rows written, rows written unmapped)`.
+    /// `(rows written, rows written unmapped, incomplete movie history)`.
     async fn sync_one_participant(
         &self,
         connection: &MediaServerConnection,
         external_user_id: &str,
         scryer_user_id: &str,
-    ) -> AppResult<(u64, u64)> {
+    ) -> AppResult<(u64, u64, bool)> {
         let items = self
             .services
             .integrations
@@ -283,6 +289,7 @@ impl AppUseCase {
         let observed_at = Utc::now();
         let subjects = self.map_played_items(&items).await?;
         let mut unmapped = 0_u64;
+        let mut incomplete = false;
 
         let signals = items
             .iter()
@@ -290,6 +297,7 @@ impl AppUseCase {
             .map(|(item, subject)| {
                 if !subject.is_mapped() {
                     unmapped += 1;
+                    incomplete |= item.played && item.kind == MediaServerSignalKind::Movie;
                 }
                 NewUserMediaSignal {
                     provider: connection.provider.clone(),
@@ -313,7 +321,7 @@ impl AppUseCase {
             .replace_participant_signals(&connection.id, external_user_id, &signals)
             .await?;
 
-        Ok((written, unmapped))
+        Ok((written, unmapped, incomplete))
     }
 
     /// Map a whole participant's items in two batched reads: one external-id

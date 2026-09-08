@@ -135,6 +135,26 @@ async fn plugin_compatibility_startup_recovers_bundled_match_and_retains_blocked
         &[SqlArg::Text(ID.into()), SqlArg::Text(manual.id.clone())]).await.unwrap();
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0].text("status").unwrap(), "blocked");
+    let mut timestamp_only = manual.clone();
+    timestamp_only.updated_at += chrono::Duration::seconds(1);
+    store
+        .update_plugin_installation(&timestamp_only, None)
+        .await
+        .unwrap();
+    assert!(!migrate(&app, &datastore, &store).await.unwrap());
+    let repeated = SqlRuntime::fetch_all(datastore.read_exec(),
+        "SELECT original_metadata FROM application_compatibility_journal WHERE migration_id = {} AND subject_id = {}",
+        &[SqlArg::Text(ID.into()), SqlArg::Text(manual.id.clone())]).await.unwrap();
+    assert_eq!(
+        repeated.len(),
+        1,
+        "timestamp-only reseeding must reuse the journal entry"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&repeated[0].text("original_metadata").unwrap())
+            .unwrap(),
+        serde_json::to_value(&manual).unwrap()
+    );
     let configs = SqlRuntime::fetch_all(
         datastore.read_exec(),
         "SELECT provider_type, api_key_encrypted, config_json, is_enabled FROM indexers",

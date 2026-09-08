@@ -922,7 +922,7 @@ impl AppUseCase {
                 actor,
                 &effective_provider,
                 validation_config_json,
-                None,
+                Some(&existing.id),
                 proxy_override,
             )
             .await?;

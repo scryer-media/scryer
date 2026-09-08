@@ -41,13 +41,22 @@ pub(crate) async fn migrate(
             .await
             .map_err(|error| error.to_string())?;
         let original = serde_json::to_string(&installation).map_err(|error| error.to_string())?;
+        // Builtin seeding refreshes updated_at on every boot. Retain that
+        // timestamp in the first journal snapshot without treating it as a
+        // change to the artifact or its compatibility contract.
+        let mut compatibility_metadata =
+            serde_json::to_value(&installation).map_err(|error| error.to_string())?;
+        compatibility_metadata
+            .as_object_mut()
+            .ok_or("plugin installation metadata must be an object")?
+            .remove("updated_at");
         let builtin = bundled
             .iter()
             .find(|plugin| plugin.descriptor.id == installation.plugin_id)
             .cloned();
         let evidence = serde_json::to_vec(&(
             env!("CARGO_PKG_VERSION"),
-            &original,
+            &compatibility_metadata,
             payload
                 .as_ref()
                 .map(|payload| scryer_application::plugin_wasm_blake3_digest(&payload.bytes)),

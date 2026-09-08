@@ -2053,6 +2053,9 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn get(&self, request_id: &str) -> AppResult<Option<MediaRequest>>;
 
+    /// Resolve matching pending rows while preserving each sibling's lease
+    /// and policy provenance. Persistent stores must commit approval retention
+    /// claims and resolution events atomically with the request transitions.
     async fn resolve_pending_overlapping(
         &self,
         request: &MediaRequest,

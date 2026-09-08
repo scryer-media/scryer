@@ -7,7 +7,75 @@
 // affected title's library. Reading the registry is unprivileged: the picker
 // and the catalog filter need it for anyone who can see a title at all.
 
+const TITLE_TAG_PENDING_RENAMES_KEY: &str = "title_tags.pending_renames";
+static TITLE_TAG_REGISTRY_MUTATION: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingTitleTagRename {
+    previous_label: String,
+    next_label: String,
+    updated_by_user_id: Option<String>,
+}
+type PendingTitleTagRenames = std::collections::BTreeMap<String, PendingTitleTagRename>;
+
 impl AppUseCase {
+    /// Resume committed renames after interruption. Called on startup and
+    /// before registry mutations, so a stale label cannot be reused while its
+    /// delay profiles or pending requests still need to move.
+    pub async fn resume_pending_title_tag_renames(&self) -> AppResult<()> {
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_renames_locked().await
+    }
+
+    async fn resume_pending_title_tag_renames_locked(&self) -> AppResult<()> {
+        let pending = self
+            .read_setting_json_value::<PendingTitleTagRenames>(TITLE_TAG_PENDING_RENAMES_KEY, None)
+            .await?
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for (id, rename) in &pending {
+            let definition = self
+                .services
+                .catalog
+                .titles
+                .get_title_tag_definition(id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Validation(format!("pending rename refers to missing title tag {id}"))
+                })?;
+            if definition.label == rename.previous_label {
+                // The registry transaction never committed. Nothing outside
+                // that transaction could have been rewritten yet.
+                continue;
+            }
+            if definition.label != rename.next_label {
+                return Err(AppError::Validation(format!(
+                    "title tag {id} changed while its rename was pending"
+                )));
+            }
+            self.rewrite_delay_profile_tag(
+                rename.updated_by_user_id.clone(),
+                &rename.previous_label,
+                Some(&rename.next_label),
+            )
+            .await?;
+            self.rewrite_pending_request_policy_tag(
+                &rename.previous_label,
+                Some(&rename.next_label),
+            )
+            .await?;
+        }
+        self.upsert_system_setting_json(
+            TITLE_TAG_PENDING_RENAMES_KEY,
+            &PendingTitleTagRenames::new(),
+            None,
+        )
+        .await
+    }
+
     /// Every defined tag with its current title count.
     ///
     /// Deliberately unauthorized beyond being a request from a user: the tag
@@ -17,7 +85,11 @@ impl AppUseCase {
         &self,
         _actor: &User,
     ) -> AppResult<Vec<crate::TitleTagDefinitionSummary>> {
-        self.services.catalog.titles.list_title_tag_definitions().await
+        self.services
+            .catalog
+            .titles
+            .list_title_tag_definitions()
+            .await
     }
 
     pub async fn create_title_tag_definition(
@@ -28,6 +100,8 @@ impl AppUseCase {
     ) -> AppResult<scryer_domain::TitleTagDefinition> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_renames_locked().await?;
         let label = crate::normalize_user_title_tag(label).map_err(AppError::Validation)?;
         let now = Utc::now();
         let definition = scryer_domain::TitleTagDefinition {
@@ -71,6 +145,8 @@ impl AppUseCase {
     ) -> AppResult<crate::TitleTagDefinitionUpdate> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_renames_locked().await?;
         let next_label = label
             .map(|label| crate::normalize_user_title_tag(&label).map_err(AppError::Validation))
             .transpose()?;
@@ -97,6 +173,24 @@ impl AppUseCase {
             RuleSetTagReferenceCounts::default()
         };
 
+        if renamed {
+            let pending = std::collections::BTreeMap::from([(
+                id.to_string(),
+                PendingTitleTagRename {
+                    previous_label: previous_label.clone(),
+                    next_label: next_label.clone().expect("renamed label is present"),
+                    updated_by_user_id: Some(actor.id.clone()),
+                },
+            )]);
+            // Write intent before the registry transaction: a retry must still
+            // know the old label after that transaction has committed.
+            self.upsert_system_setting_json(
+                TITLE_TAG_PENDING_RENAMES_KEY,
+                &pending,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        }
         let (definition, membership) = self
             .services
             .catalog
@@ -104,15 +198,15 @@ impl AppUseCase {
             .update_title_tag_definition(id, next_label, description, Utc::now())
             .await?;
 
-        // Delay-profile tag lists live in the settings catalog, behind a
-        // different repository, so this half cannot join the store's
-        // transaction. It runs immediately after and only ever rewrites labels,
-        // so a failure between the two leaves profiles pointing at a label that
-        // no longer exists — which reads as "matches nothing", the same as a
-        // deleted tag, rather than as a wrong match.
+        // These repositories cannot join the registry transaction. Leave the
+        // intent durable until both idempotent rewrites have completed.
         let delay_profiles = if renamed {
-            self.rewrite_delay_profile_tag(actor, &previous_label, Some(&definition.label))
-                .await?
+            self.rewrite_delay_profile_tag(
+                Some(actor.id.clone()),
+                &previous_label,
+                Some(&definition.label),
+            )
+            .await?
         } else {
             0
         };
@@ -124,6 +218,12 @@ impl AppUseCase {
         if renamed {
             self.rewrite_pending_request_policy_tag(&previous_label, Some(&definition.label))
                 .await?;
+            self.upsert_system_setting_json(
+                TITLE_TAG_PENDING_RENAMES_KEY,
+                &PendingTitleTagRenames::new(),
+                Some(actor.id.clone()),
+            )
+            .await?;
         }
 
         self.emit_configuration_changed_event(
@@ -160,6 +260,8 @@ impl AppUseCase {
     ) -> AppResult<crate::TitleTagRewriteCounts> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_renames_locked().await?;
 
         let existing = self
             .services
@@ -179,7 +281,7 @@ impl AppUseCase {
             .delete_title_tag_definition(id)
             .await?;
         let delay_profiles = self
-            .rewrite_delay_profile_tag(actor, &definition.label, None)
+            .rewrite_delay_profile_tag(Some(actor.id.clone()), &definition.label, None)
             .await?;
         // A pending request would otherwise keep offering an approver a label
         // that no longer exists, which the approval would then drop in silence.
@@ -261,6 +363,9 @@ impl AppUseCase {
             .await?;
         }
 
+        for title in &titles {
+            preflight_user_tag_patch(&title.tags, &add, &remove)?;
+        }
         let mut updated = Vec::with_capacity(titles.len());
         for title in &titles {
             let title = self
@@ -350,6 +455,9 @@ impl AppUseCase {
             parent_titles.insert(link.series_title_id.clone(), title);
         }
 
+        for link in &links {
+            preflight_user_tag_patch(&link.tags, &add, &remove)?;
+        }
         let mut updated = Vec::with_capacity(links.len());
         let mut notified_titles = HashSet::new();
         for link in &links {
@@ -438,7 +546,7 @@ impl AppUseCase {
     /// profile's tag list, returning how many profiles changed.
     async fn rewrite_delay_profile_tag(
         &self,
-        actor: &User,
+        updated_by_user_id: Option<String>,
         label: &str,
         replacement: Option<&str>,
     ) -> AppResult<u64> {
@@ -463,7 +571,7 @@ impl AppUseCase {
         self.upsert_system_setting_json(
             crate::delay_profile::DELAY_PROFILE_CATALOG_KEY,
             &profiles,
-            Some(actor.id.clone()),
+            updated_by_user_id,
         )
         .await?;
         let _ = self.runtime.events.settings_changed_broadcast.send(vec![
@@ -615,6 +723,33 @@ fn require_disjoint_tag_patch(add: &[String], remove: &[String]) -> AppResult<()
     if let Some(label) = add.iter().find(|label| remove.contains(*label)) {
         return Err(AppError::Validation(format!(
             "'{label}' is listed both to add and to remove; choose one"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject deterministic ceiling failures across the whole request before any
+/// owner is written. Stores still enforce the ceiling inside each transaction
+/// against the current bag to cover concurrent updates.
+fn preflight_user_tag_patch(tags: &[String], add: &[String], remove: &[String]) -> AppResult<()> {
+    let mut remaining = tags
+        .iter()
+        .filter(|tag| crate::is_reserved_title_tag(tag) || !remove.contains(tag))
+        .cloned()
+        .collect::<Vec<_>>();
+    for label in add {
+        if !remaining.contains(label) {
+            remaining.push(label.clone());
+        }
+    }
+    let count = remaining
+        .iter()
+        .filter(|tag| !crate::is_reserved_title_tag(tag))
+        .count();
+    if count > crate::MAX_USER_TAGS_PER_TITLE {
+        return Err(AppError::Validation(format!(
+            "a title can carry at most {} tags; this change would leave it with {count}",
+            crate::MAX_USER_TAGS_PER_TITLE,
         )));
     }
     Ok(())

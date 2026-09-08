@@ -125,6 +125,12 @@ impl AppUseCase {
                 .await?;
             let recovered = match installation {
                 None => true,
+                Some(ref installation)
+                    if installation_is_host_blocked(installation)
+                        || !installation_sdk_contract_is_host_compatible(installation) =>
+                {
+                    false
+                }
                 Some(ref installation) => {
                     match self
                         .load_runtime_plugin_for_installation(installation)

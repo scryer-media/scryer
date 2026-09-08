@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 pub(super) type DeleteOperationLog = Arc<Mutex<Vec<String>>>;
 pub(super) type OptionalDeleteOperationLog = Arc<Mutex<Option<DeleteOperationLog>>>;
@@ -23,6 +24,7 @@ pub(super) struct MockTitleRepo {
     /// behaviour rather than its SQL: unique labels, a rename that rewrites
     /// every bag carrying the old label, and a delete that strips it.
     pub(super) title_tag_definitions: Arc<Mutex<Vec<scryer_domain::TitleTagDefinition>>>,
+    pub(super) fail_tag_reads: AtomicBool,
     pub(super) smg_identity_backfill_attempts: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) create_or_get_existing_error: Arc<Mutex<Option<String>>>,
     /// `(title_id, message)`: fail folder-ownership writes for one title, so a
@@ -274,6 +276,11 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn list_title_tag_definitions(&self) -> AppResult<Vec<TitleTagDefinitionSummary>> {
+        if self.fail_tag_reads.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic tag registry read failure".into(),
+            ));
+        }
         let definitions = self.title_tag_definitions.lock().await.clone();
         let titles = self.store.lock().await.clone();
         let mut summaries = definitions

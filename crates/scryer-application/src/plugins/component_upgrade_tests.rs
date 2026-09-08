@@ -260,3 +260,75 @@ async fn component_upgrade_blocker_survives_unrelated_mutation_and_clears_after_
             .contains_key("alpha")
     );
 }
+
+#[tokio::test]
+async fn component_upgrade_unrelated_mutation_preserves_incompatible_host_and_sdk_blockers() {
+    for host_constraint in [true, false] {
+        let h = bootstrap_plugins(None);
+        let original = official_catalog_installation("alpha", "0.1.0");
+        seed_auto_update_installation(&h, original.clone()).await;
+        let replacement = make_runtime_plugin_load("alpha", "indexer", "alpha");
+        h.plugin_descriptor_loader
+            .register(&replacement.wasm_bytes, replacement.descriptor.clone());
+        h.app
+            .repair_plugin_component_installation(original, Some(replacement))
+            .await
+            .unwrap();
+        let mut installation = h
+            .plugin_repo
+            .get_plugin_installation("alpha")
+            .await
+            .unwrap()
+            .unwrap();
+        if host_constraint {
+            installation.scryer_constraint = Some(">=999.0.0".into());
+        } else {
+            installation.sdk_constraint = ">=999.0.0".into();
+        }
+        h.plugin_repo
+            .update_plugin_installation(&installation, None)
+            .await
+            .unwrap();
+        h.app
+            .set_plugin_component_blocker(&installation, Some("incompatible contract".into()))
+            .await
+            .unwrap();
+        h.app
+            .finalize_runtime_plugin_mutation("notification", false)
+            .await
+            .unwrap();
+        assert!(
+            h.app
+                .runtime
+                .plugins
+                .compatibility_blockers
+                .read()
+                .await
+                .contains_key("alpha")
+        );
+        if host_constraint {
+            installation.scryer_constraint = None;
+        } else {
+            installation.sdk_constraint = plugin_descriptor_sdk_constraint(
+                &serde_json::from_str(installation.descriptor_json.as_deref().unwrap()).unwrap(),
+            );
+        }
+        h.plugin_repo
+            .update_plugin_installation(&installation, None)
+            .await
+            .unwrap();
+        h.app
+            .finalize_runtime_plugin_mutation("notification", false)
+            .await
+            .unwrap();
+        assert!(
+            !h.app
+                .runtime
+                .plugins
+                .compatibility_blockers
+                .read()
+                .await
+                .contains_key("alpha")
+        );
+    }
+}

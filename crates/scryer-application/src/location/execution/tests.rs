@@ -14,6 +14,7 @@ use crate::location::media_server_refresh::{
 };
 use crate::location::model::{
     LocationExecutionMode, LocationOperationState, LocationOperationType, TitleCheckpointState,
+    VerificationDepth,
 };
 use crate::location::root_move::{RootMoveFileExecution, RootMoveTitleExecution};
 use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
@@ -298,6 +299,152 @@ fn placement_for(plan: &RootMoveExecutionPlan) -> TitlePlacementSnapshot {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+#[cfg(unix)]
+#[tokio::test]
+async fn no_copy_placement_refuses_a_self_move_without_removing_the_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("movie.mkv");
+    write_file(&source, b"hello world");
+    stage_same_filesystem_file(&source, &source)
+        .await
+        .expect_err("self move is unsafe");
+    assert_eq!(std::fs::read(&source).unwrap(), b"hello world");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn same_filesystem_placement_resumes_after_crash_before_verification_journal() {
+    for symlink in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = single_title_plan(
+            &temp.path().join("a"),
+            &temp.path().join("b"),
+            "movie.mkv",
+            11,
+        );
+        let file = &plan.titles[0].files[0];
+        write_file(&file.source(), b"hello world");
+        if symlink {
+            let target = temp.path().join("original.mkv");
+            std::fs::rename(file.source(), &target).unwrap();
+            std::os::unix::fs::symlink(&target, file.source()).unwrap();
+        }
+        let store = InMemoryLocationOperationStore::new();
+        let operation = queued_operation(
+            "op-1",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        store.insert_operation(operation.clone());
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let mover = RootMoveFileMover::without_permissions();
+        let work = plan.to_work_plan();
+        mover
+            .move_file(FileMoveRequest {
+                operation_id: "op-1",
+                title: &work.titles[0],
+                file: &work.titles[0].files[0],
+                depth: VerificationDepth::Full,
+                progress: &crate::location::verify::CopyProgress::none(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            file.source().exists(),
+            "placement must retain a resumable source"
+        );
+        assert!(
+            store.verifications().is_empty(),
+            "simulate crash before the journal write"
+        );
+
+        let admission = RootMoveAdmission::new(&plan, &catalog);
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let result = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &work)
+            .await
+            .unwrap();
+        assert_eq!(result.state, LocationOperationState::Completed);
+        assert_eq!(std::fs::read(file.destination()).unwrap(), b"hello world");
+        assert_eq!(
+            std::fs::symlink_metadata(file.destination())
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            symlink
+        );
+        assert!(!file.source().exists());
+        reconciler
+            .clean_up_title(&operation, &work.titles[0])
+            .await
+            .unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn no_copy_cleanup_preserves_source_if_survivor_was_replaced() {
+    struct FailingReconciler;
+    #[async_trait]
+    impl TitleReconciler for FailingReconciler {
+        async fn reconcile_title(
+            &self,
+            _: &LocationOperation,
+            _: &PlannedTitle,
+        ) -> AppResult<TitleStepOutcome> {
+            Err(AppError::Repository(
+                "injected failure before cleanup".into(),
+            ))
+        }
+
+        async fn clean_up_title(
+            &self,
+            _: &LocationOperation,
+            _: &PlannedTitle,
+        ) -> AppResult<TitleStepOutcome> {
+            unreachable!("reconciliation failure must retain the source")
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        11,
+    );
+    let file = &plan.titles[0].files[0];
+    write_file(&file.source(), b"hello world");
+    let store = InMemoryLocationOperationStore::new();
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    store.insert_operation(operation.clone());
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let mover = RootMoveFileMover::without_permissions();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let result = LocationOperationRunner::new(&store, &mover, &admission, &FailingReconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .unwrap();
+    assert_eq!(result.state, LocationOperationState::Failed);
+    assert_eq!(store.verifications().len(), 1);
+    std::fs::remove_file(file.destination()).unwrap();
+    write_file(&file.destination(), b"other bytes");
+    let recycler = RecordingRecycler::default();
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    reconciler
+        .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+        .await
+        .expect_err("a changed survivor must not authorize source deletion");
+    assert_eq!(std::fs::read(file.source()).unwrap(), b"hello world");
+}
+
 #[tokio::test]
 async fn changed_duplicate_copies_keep_the_source_and_catalog_intact() {
     for changed_copy in ["source", "destination", "missing"] {
@@ -380,11 +527,11 @@ async fn changed_duplicate_copies_keep_the_source_and_catalog_intact() {
     }
 }
 
-/// FR-032: a move inside one filesystem is a rename. No bytes are copied, so
-/// the record carries no hashes and no verification pass ran — and the source
-/// is gone because the rename moved it, not because cleanup removed it.
+/// A same-filesystem move copies no bytes; cleanup removes the old hard link
+/// after the journal and catalog have made the new path durable.
+#[cfg(unix)]
 #[tokio::test]
-async fn same_filesystem_moves_rename_and_skip_verification() {
+async fn same_filesystem_moves_keep_the_no_copy_fast_path() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source_root = temp.path().join("a");
     let destination_root = temp.path().join("b");
@@ -421,10 +568,10 @@ async fn same_filesystem_moves_rename_and_skip_verification() {
     assert_eq!(records.len(), 1);
     assert!(
         records[0].hashes.is_none(),
-        "a rename copies no bytes, so there is nothing to hash"
+        "a hard link copies no bytes, so there is nothing to hash"
     );
     assert!(records[0].outcome.permits_source_removal());
-    // Nothing was recycled: the rename already moved the only copy.
+    // Nothing was recycled: cleanup only unlinks the redundant name.
     assert!(recycler.recycled().is_empty());
     // The empty source folder was removed (FR-031).
     assert!(!source_root.join("Movie").exists());
@@ -530,11 +677,12 @@ async fn a_transfer_that_already_flipped_its_library_is_admitted_on_resume() {
     );
 }
 
-/// FR-032/FR-041: a same-filesystem rename copies no bytes, so there are no
+/// FR-032/FR-041: a same-filesystem hard link copies no bytes, so there are no
 /// hashes to persist. Writing one anyway would put an unfounded value on the
 /// media file and take it off the backfill queue.
+#[cfg(unix)]
 #[tokio::test]
-async fn a_rename_placement_persists_no_content_hashes() {
+async fn a_hard_link_placement_persists_no_content_hashes() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source_root = temp.path().join("a");
     let destination_root = temp.path().join("b");
@@ -874,7 +1022,7 @@ async fn resume_never_recopies_a_verified_file() {
     resumed.completed_at = None;
     store.insert_operation(resumed);
 
-    // Second run: the source is gone (the rename moved it) and the destination
+    // Second run: the source and destination remain, and the destination
     // is already verified, so the mover must not be called at all.
     let second_mover = FailAfterFirstFile {
         inner: RootMoveFileMover::without_permissions(),

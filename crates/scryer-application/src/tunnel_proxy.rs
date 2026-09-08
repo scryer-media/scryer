@@ -278,6 +278,7 @@ pub struct PendingHostKeyPin {
 /// plugin worker thread), so it records here and the async flows that own a
 /// repository drain it. `flush_solver_health` is that drain — one call-site
 /// list for both ledgers.
+#[derive(Default)]
 pub struct TunnelHostKeyLedger {
     pins: Mutex<std::collections::HashMap<String, PendingHostKeyPin>>,
 }
@@ -295,14 +296,12 @@ impl TunnelHostKeyLedger {
         self.pins
             .lock()
             .expect("tunnel host key ledger lock poisoned")
-            .insert(
-                proxy_config_id.to_string(),
-                PendingHostKeyPin {
-                    proxy_config_id: proxy_config_id.to_string(),
-                    fingerprint: fingerprint.to_string(),
-                    pinned_at: Utc::now(),
-                },
-            );
+            .entry(proxy_config_id.to_string())
+            .or_insert_with(|| PendingHostKeyPin {
+                proxy_config_id: proxy_config_id.to_string(),
+                fingerprint: fingerprint.to_string(),
+                pinned_at: Utc::now(),
+            });
     }
 
     /// Remove and return one proxy's pending pin.
@@ -317,13 +316,25 @@ impl TunnelHostKeyLedger {
             .remove(proxy_config_id)
     }
 
-    pub fn drain(&self) -> Vec<PendingHostKeyPin> {
+    /// Keep observations queued until their durable write is confirmed. A
+    /// failed or cancelled flush must not turn a later handshake into first use.
+    pub(crate) fn pending(&self) -> Vec<PendingHostKeyPin> {
         self.pins
             .lock()
             .expect("tunnel host key ledger lock poisoned")
-            .drain()
-            .map(|(_, pin)| pin)
+            .values()
+            .cloned()
             .collect()
+    }
+
+    pub(crate) fn acknowledge(&self, pin: &PendingHostKeyPin) {
+        let mut pins = self
+            .pins
+            .lock()
+            .expect("tunnel host key ledger lock poisoned");
+        if pins.get(&pin.proxy_config_id) == Some(pin) {
+            pins.remove(&pin.proxy_config_id);
+        }
     }
 }
 
@@ -713,12 +724,12 @@ pub(crate) mod tests {
 
     #[test]
     fn learned_host_keys_queue_for_the_repository() {
-        let ledger = TunnelHostKeyLedger::shared();
+        let ledger = TunnelHostKeyLedger::default();
         ledger.record("proxy-pin-test", "SHA256:one");
         ledger.record("proxy-pin-test", "SHA256:two");
-        // Latest observation wins, one entry per proxy.
+        // First observation wins, including while a repository flush awaits I/O.
         let taken = ledger.take("proxy-pin-test").expect("a queued pin");
-        assert_eq!(taken.fingerprint, "SHA256:two");
+        assert_eq!(taken.fingerprint, "SHA256:one");
         assert!(ledger.take("proxy-pin-test").is_none());
     }
 }

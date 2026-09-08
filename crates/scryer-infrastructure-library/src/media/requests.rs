@@ -638,9 +638,14 @@ async fn resolve_pending_overlapping_tx(
         SqlArg::OptText(resolution.created_title_id),
         SqlArg::OptText(resolution.approved_quality_profile_id),
         SqlArg::OptText(resolution.approved_quality_profile_name),
+        SqlArg::Text(request.id.clone()),
         SqlArg::OptI64(resolution.approved_lease_days),
-        SqlArg::OptText(resolution.decision_id),
+        SqlArg::Text(resolution.status.as_str().to_string()),
+        SqlArg::Text(request.id.clone()),
+        SqlArg::OptText(resolution.decision_id.clone()),
+        SqlArg::Text(request.id.clone()),
         SqlArg::Text(json_array_text(&resolution.decided_by_rule_set_ids)?),
+        SqlArg::Text(request.id.clone()),
         SqlArg::Text(json_array_text(&resolution.policy_tags)?),
         SqlArg::Timestamp(resolved_at),
     ];
@@ -689,23 +694,95 @@ async fn resolve_pending_overlapping_tx(
                 created_title_id = {{}},
                 approved_quality_profile_id = {{}},
                 approved_quality_profile_name = {{}},
-                approved_lease_days = {{}},
-                decision_id = {{}},
-                decided_by_rule_set_ids = {{}},
-                policy_tags_json = {{}},
+                approved_lease_days = CASE WHEN id = {{}} THEN {{}}
+                    WHEN {{}} = 'approved' THEN requested_lease_days ELSE NULL END,
+                decision_id = CASE WHEN id = {{}} THEN {{}} ELSE decision_id END,
+                decided_by_rule_set_ids = CASE WHEN id = {{}} THEN {{}} ELSE decided_by_rule_set_ids END,
+                policy_tags_json = CASE WHEN id = {{}} THEN {{}} ELSE policy_tags_json END,
                 updated_at = {{}}
-          WHERE {where_clause}"
+          WHERE {where_clause}
+          RETURNING {REQUEST_COLUMNS}"
     );
-    let rows = tx.execute(&sql, &args).await?;
-    let event = if rows > 0 {
+    let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &args).await?;
+    for row in &rows {
+        let resolved = row_to_media_request(row)?;
+        if resolved.status == MediaRequestStatus::Approved {
+            create_approved_request_claim_tx(tx, &resolved).await?;
+        }
+        if resolved.id != request.id {
+            let mut event = resolution.event.clone();
+            event.event_id = scryer_domain::Id::new().0;
+            if let scryer_domain::DomainEventPayload::MediaRequestApproved(data)
+            | scryer_domain::DomainEventPayload::MediaRequestRejected(data) = &mut event.payload
+            {
+                data.request_id = resolved.id.clone();
+                data.title_name = resolved.title.clone();
+                data.external_ids =
+                    load_media_request_external_ids(SqlExec::Tx(tx), &resolved.id).await?;
+                data.requested_quality_profile_id = resolved.requested_quality_profile_id;
+                data.requested_quality_profile_name = resolved.requested_quality_profile_name;
+                data.requested_monitor_type = resolved.requested_monitor_type;
+                data.approved_lease_days = resolved.approved_lease_days;
+                data.decided_by_rule_set_ids = resolved.decided_by_rule_set_ids;
+                data.decision_reason_codes.clear();
+                data.policy_tags = resolved.policy_tags;
+            }
+            append_domain_event_tx(tx, event).await?;
+        }
+    }
+    let event = if !rows.is_empty() {
         Some(append_domain_event_tx(tx, resolution.event).await?)
     } else {
         None
     };
     Ok(MediaRequestResolutionResult {
-        updated: rows,
+        updated: rows.len() as u64,
         event,
     })
+}
+
+/// The approval and its hold commit together. If claim persistence fails, the
+/// request stays pending, with no approval event, so an operator can retry.
+async fn create_approved_request_claim_tx(
+    tx: &mut SqlTx<'_>,
+    request: &MediaRequest,
+) -> AppResult<()> {
+    let title_id = request.created_title_id.as_ref().ok_or_else(|| {
+        AppError::Repository("approved request has no title for its retention claim".into())
+    })?;
+    let finite = request.approved_lease_days.is_some();
+    let now = request.resolved_at.unwrap_or(request.updated_at);
+    tx.execute(
+        "INSERT INTO lifecycle_claims
+         (id, title_id, library_id, producer, producer_ref, kind, state, duration_days,
+          starts_at, expires_at, created_by, created_at, updated_at, released_reason)
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        &[
+            SqlArg::Text(scryer_domain::Id::new().0),
+            SqlArg::Text(title_id.clone()),
+            SqlArg::Text(request.library_id.clone()),
+            SqlArg::Text(
+                if finite {
+                    "request_lease"
+                } else {
+                    "request_permanent"
+                }
+                .into(),
+            ),
+            SqlArg::Text(request.id.clone()),
+            SqlArg::Text(if finite { "retain_until" } else { "keep" }.into()),
+            SqlArg::Text(if finite { "dormant" } else { "active" }.into()),
+            SqlArg::OptI64(request.approved_lease_days),
+            SqlArg::OptTimestamp((!finite).then_some(now)),
+            SqlArg::OptTimestamp(None),
+            SqlArg::Text(request.created_by_user_id.clone()),
+            SqlArg::Timestamp(now),
+            SqlArg::Timestamp(now),
+            SqlArg::OptText(None),
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 async fn resolve_pending_tx(
@@ -746,6 +823,16 @@ async fn resolve_pending_tx(
             ],
         )
         .await?;
+    if rows > 0 && resolution.status == MediaRequestStatus::Approved {
+        let row = SqlRuntime::fetch_optional(
+            SqlExec::Tx(tx),
+            &format!("SELECT {REQUEST_COLUMNS} FROM media_requests WHERE id = {{}}"),
+            &[SqlArg::Text(request_id.to_string())],
+        )
+        .await?
+        .ok_or_else(|| AppError::Repository("resolved request disappeared".into()))?;
+        create_approved_request_claim_tx(tx, &row_to_media_request(&row)?).await?;
+    }
     let event = if rows > 0 {
         Some(append_domain_event_tx(tx, resolution.event).await?)
     } else {
@@ -1016,7 +1103,7 @@ mod tests {
 
     use sqlx::sqlite::SqlitePoolOptions;
 
-    async fn test_store() -> MediaRequestStore {
+    pub(super) async fn test_store() -> MediaRequestStore {
         scryer_infrastructure_datastore::register_spellfix_auto_extension()
             .expect("spellfix extension should register before migrations");
         let pool = SqlitePoolOptions::new()
@@ -1041,7 +1128,7 @@ mod tests {
     /// a domain event and an external-id table into a test whose whole subject
     /// is one JSON column — but the schema still enforces its foreign keys, so
     /// the two parents have to exist.
-    async fn seed_owners(store: &MediaRequestStore) {
+    pub(super) async fn seed_owners(store: &MediaRequestStore) {
         SqlRuntime::execute_write(
             &store.datastore,
             "seed_library_for_tag_rewrite",
@@ -1078,7 +1165,12 @@ mod tests {
     }
 
     /// Insert a request row directly.
-    async fn seed_request(store: &MediaRequestStore, id: &str, status: &str, policy_tags: &[&str]) {
+    pub(super) async fn seed_request(
+        store: &MediaRequestStore,
+        id: &str,
+        status: &str,
+        policy_tags: &[&str],
+    ) {
         let tags = policy_tags
             .iter()
             .map(|tag| (*tag).to_string())
@@ -1181,3 +1273,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "request_resolution_tests.rs"]
+mod request_resolution_tests;

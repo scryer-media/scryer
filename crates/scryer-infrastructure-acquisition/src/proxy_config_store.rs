@@ -520,13 +520,10 @@ fn row_to_proxy_config(
         provider_type,
         protocol: parse_persisted_protocol(provider_type, row.opt_text("protocol")?)?,
         base_url: row.text("base_url")?,
-        request_timeout_seconds: u32::try_from(row.i64("request_timeout_seconds")?).map_err(
-            |_| {
-                AppError::Validation(
-                    "Stored proxy timeout is not a nonnegative 32-bit integer".into(),
-                )
-            },
-        )?,
+        // Keep malformed legacy rows editable. Zero is explicitly invalid:
+        // runtime reads and unrelated operator edits still fail validation,
+        // and reading this presentation never rewrites the stored value.
+        request_timeout_seconds: u32::try_from(row.i64("request_timeout_seconds")?).unwrap_or(0),
         is_enabled: row.bool("is_enabled")?,
         username_encrypted: decrypt_credential(
             encryption_key,
@@ -896,28 +893,49 @@ mod tests {
         config.password_encrypted = Some("secret".into());
         config.private_key_encrypted = None;
         config.private_key_passphrase_encrypted = None;
+        let mut healthy = config.clone();
+        healthy.id = "healthy-proxy".into();
         store.create(config).await.unwrap();
-        let original_ciphertext: Option<String> =
-            sqlx::query_scalar("SELECT password_encrypted FROM proxy_configs")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        store.create(healthy).await.unwrap();
+        let original_ciphertext: Option<String> = sqlx::query_scalar(
+            "SELECT password_encrypted FROM proxy_configs WHERE id = 'tunnel-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_ne!(original_ciphertext.as_deref(), Some("secret"));
-        for invalid in [0_i64, 121, 180] {
-            sqlx::query("UPDATE proxy_configs SET request_timeout_seconds = ?")
-                .bind(invalid)
-                .execute(&pool)
-                .await
-                .unwrap();
+        for invalid in [-1_i64, 0, 121, 180, i64::from(u32::MAX) + 1] {
+            sqlx::query(
+                "UPDATE proxy_configs SET request_timeout_seconds = ? WHERE id = 'tunnel-1'",
+            )
+            .bind(invalid)
+            .execute(&pool)
+            .await
+            .unwrap();
             assert!(store.get_by_id("tunnel-1").await.is_err());
             let mut editable = store.get_for_edit("tunnel-1").await.unwrap().unwrap();
-            assert_eq!(editable.request_timeout_seconds, invalid as u32);
+            assert_eq!(
+                editable.request_timeout_seconds,
+                u32::try_from(invalid).unwrap_or(0)
+            );
+            assert_eq!(store.list(None).await.unwrap().len(), 2);
+            assert!(store.get_by_id("healthy-proxy").await.unwrap().is_some());
             assert_eq!(editable.password_encrypted.as_deref(), Some("secret"));
-            let ciphertext: Option<String> =
-                sqlx::query_scalar("SELECT password_encrypted FROM proxy_configs")
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
+            editable.name = "Unrelated name edit".into();
+            assert!(scryer_application::validate_persisted_proxy_config(&editable).is_err());
+            let stored_timeout: i64 = sqlx::query_scalar(
+                "SELECT request_timeout_seconds FROM proxy_configs WHERE id = 'tunnel-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(stored_timeout, invalid);
+            let ciphertext: Option<String> = sqlx::query_scalar(
+                "SELECT password_encrypted FROM proxy_configs WHERE id = 'tunnel-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
             assert_eq!(ciphertext, original_ciphertext);
             editable.request_timeout_seconds = 60;
             store.update(editable).await.unwrap();
@@ -933,7 +951,7 @@ mod tests {
             );
             // Encryption is randomized on operator writes; preserve the new
             // ciphertext as the baseline for subsequent read-only checks.
-            sqlx::query("UPDATE proxy_configs SET password_encrypted = ?")
+            sqlx::query("UPDATE proxy_configs SET password_encrypted = ? WHERE id = 'tunnel-1'")
                 .bind(&original_ciphertext)
                 .execute(&pool)
                 .await

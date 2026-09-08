@@ -1566,6 +1566,16 @@ async fn every_overlapping_pending_request_gets_its_own_claim() {
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let first = submit(&harness, &library_id, 9057, Some(30)).await;
     let second = submit(&harness, &library_id, 9057, Some(5)).await;
+    {
+        let mut requests = harness.media_requests.requests.lock().await;
+        let sibling = requests
+            .iter_mut()
+            .find(|request| request.id == second)
+            .unwrap();
+        sibling.decision_id = Some("sibling-trace".into());
+        sibling.decided_by_rule_set_ids = vec!["sibling-policy".into()];
+        sibling.policy_tags = vec!["sibling-tag".into()];
+    }
 
     harness
         .app
@@ -1585,6 +1595,15 @@ async fn every_overlapping_pending_request_gets_its_own_claim() {
         .expect("the overlapping request has a claim");
     assert_eq!(first_claim.duration_days, Some(30));
     assert_eq!(second_claim.duration_days, Some(5));
+    let requests = harness.media_requests.requests.lock().await;
+    let sibling = requests
+        .iter()
+        .find(|request| request.id == second)
+        .unwrap();
+    assert_eq!(sibling.approved_lease_days, Some(5));
+    assert_eq!(sibling.decision_id.as_deref(), Some("sibling-trace"));
+    assert_eq!(sibling.decided_by_rule_set_ids, ["sibling-policy"]);
+    assert_eq!(sibling.policy_tags, ["sibling-tag"]);
 }
 
 #[tokio::test]

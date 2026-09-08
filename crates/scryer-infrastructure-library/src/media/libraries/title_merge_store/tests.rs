@@ -324,6 +324,103 @@ async fn rows_referencing_source(datastore: &StoreDatastore, table: &str, column
 }
 
 #[tokio::test]
+async fn location_changes_transfer_lifecycle_claims_atomically_and_preserve_lease_history() {
+    use scryer_application::TitleRepository;
+    for merge in [false, true] {
+        let (store, datastore) = test_store().await;
+        insert_title(&datastore, SOURCE, "library-a", &[]).await;
+        insert_title(&datastore, DESTINATION, "library-b", &[]).await;
+        run(&datastore,
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ('library-b', 'series', 'B', 'b', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            vec![]).await;
+        for state in ["dormant", "active", "expired", "released"] {
+            run(
+                &datastore,
+                "INSERT INTO lifecycle_claims (id, title_id, library_id, producer, producer_ref,
+                    kind, state, duration_days, starts_at, expires_at, created_by)
+                 VALUES ({}, {}, 'library-a', 'request', {}, 'retain_until', {}, 30,
+                    '2026-01-01T00:00:00Z', '2026-01-31T00:00:00Z', 'requester')",
+                vec![
+                    SqlArg::Text(state.into()),
+                    SqlArg::Text(SOURCE.into()),
+                    SqlArg::Text(format!("request-{state}")),
+                    SqlArg::Text(state.into()),
+                ],
+            )
+            .await;
+        }
+        run(
+            &datastore,
+            "CREATE TRIGGER fail_claim_move BEFORE UPDATE ON lifecycle_claims
+             BEGIN SELECT RAISE(ABORT, 'injected claim write failure'); END",
+            vec![],
+        )
+        .await;
+        let titles = crate::media::titles::store::TitleStore::new(datastore.clone());
+        let plan = plan_for(&store).await;
+        if merge {
+            store
+                .execute_title_merge(&plan)
+                .await
+                .expect_err("claim failure rolls back merge");
+        } else {
+            titles
+                .transfer_to_library(SOURCE, "library-b", "root-library-b", None, &[])
+                .await
+                .expect_err("claim failure rolls back transfer");
+        }
+        assert_eq!(
+            text(
+                &datastore,
+                "SELECT library_id AS value FROM titles WHERE id = {}",
+                vec![SqlArg::Text(SOURCE.into())]
+            )
+            .await
+            .as_deref(),
+            Some("library-a")
+        );
+        assert_eq!(scalar(&datastore,
+            "SELECT COUNT(*) AS row_count FROM lifecycle_claims WHERE title_id = {} AND library_id = 'library-a'",
+            vec![SqlArg::Text(SOURCE.into())]).await, 4);
+        run(&datastore, "DROP TRIGGER fail_claim_move", vec![]).await;
+        if merge {
+            store.execute_title_merge(&plan).await.unwrap();
+        } else {
+            titles
+                .transfer_to_library(SOURCE, "library-b", "root-library-b", None, &[])
+                .await
+                .unwrap();
+            titles
+                .transfer_to_library(SOURCE, "library-b", "root-library-b", None, &[])
+                .await
+                .unwrap();
+        }
+        let survivor = if merge { DESTINATION } else { SOURCE };
+        let rows = SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            "SELECT id, state, producer_ref, duration_days, expires_at, created_by
+               FROM lifecycle_claims WHERE title_id = {} AND library_id = 'library-b' ORDER BY id",
+            &[SqlArg::Text(survivor.into())],
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 4);
+        for row in rows {
+            let state = row.text("id").unwrap();
+            assert_eq!(row.text("state").unwrap(), state);
+            assert_eq!(
+                row.text("producer_ref").unwrap(),
+                format!("request-{state}")
+            );
+            assert_eq!(row.i64("duration_days").unwrap(), 30);
+            assert_eq!(row.text("expires_at").unwrap(), "2026-01-31T00:00:00Z");
+            assert_eq!(row.text("created_by").unwrap(), "requester");
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     let (store, datastore) = test_store().await;
     seed_two_season_series(&datastore).await;

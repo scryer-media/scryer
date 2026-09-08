@@ -75,6 +75,7 @@ pub mod unknown_reason {
     /// An enabled signal-sync connection has never completed a clean sweep, so
     /// its part of the watch picture has never been read at all.
     pub const SIGNAL_SYNC_NEVER_SUCCEEDED: &str = "signal_sync_never_succeeded";
+    pub const SIGNAL_SYNC_INCOMPLETE: &str = "signal_sync_incomplete";
 
     /// An enabled signal-sync connection last swept cleanly longer ago than
     /// [`super::WATCH_SIGNAL_FRESHNESS_HOURS`], so what it reported may no

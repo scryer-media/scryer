@@ -1759,13 +1759,28 @@ pub fn transport_proxy_reqwest_client_with_extra_ca(
     timeout: Duration,
     extra_ca_bundle_pem: &str,
 ) -> Result<Client, String> {
+    transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
+        proxy_url,
+        credentials,
+        timeout,
+        extra_ca_bundle_pem,
+        reqwest::redirect::Policy::limited(DEFAULT_TRUSTED_REDIRECT_HOPS),
+    )
+}
+
+/// Transport client with a caller-owned redirect boundary.
+pub fn transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+    timeout: Duration,
+    extra_ca_bundle_pem: &str,
+    redirect_policy: reqwest::redirect::Policy,
+) -> Result<Client, String> {
     let proxy = transport_proxy(proxy_url, credentials)
         .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
     let mut builder = reqwest_client_builder()
         .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::limited(
-            DEFAULT_TRUSTED_REDIRECT_HOPS,
-        ))
+        .redirect(redirect_policy)
         .user_agent(PROXY_USER_AGENT)
         .proxy(proxy);
     if !extra_ca_bundle_pem.trim().is_empty() {
@@ -1785,13 +1800,28 @@ pub fn blocking_transport_proxy_reqwest_client(
     timeout: Duration,
     extra_ca_bundle_pem: &str,
 ) -> Result<BlockingClient, String> {
+    blocking_transport_proxy_reqwest_client_with_redirect_policy(
+        proxy_url,
+        credentials,
+        timeout,
+        extra_ca_bundle_pem,
+        reqwest::redirect::Policy::limited(DEFAULT_TRUSTED_REDIRECT_HOPS),
+    )
+}
+
+/// Transport client with a caller-owned redirect boundary.
+pub fn blocking_transport_proxy_reqwest_client_with_redirect_policy(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+    timeout: Duration,
+    extra_ca_bundle_pem: &str,
+    redirect_policy: reqwest::redirect::Policy,
+) -> Result<BlockingClient, String> {
     let proxy = transport_proxy(proxy_url, credentials)
         .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
     let mut builder = blocking_reqwest_client_builder()
         .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::limited(
-            DEFAULT_TRUSTED_REDIRECT_HOPS,
-        ))
+        .redirect(redirect_policy)
         .user_agent(PROXY_USER_AGENT)
         .proxy(proxy);
     if !extra_ca_bundle_pem.trim().is_empty() {

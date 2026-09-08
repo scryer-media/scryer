@@ -1412,12 +1412,26 @@ impl AppUseCase {
             });
         }
 
-        let states: HashMap<String, DateTime<Utc>> = self
+        let sync_states = self
             .services
             .integrations
             .media_server_signals
             .signal_sync_states()
-            .await?
+            .await?;
+        if sync_states.iter().any(|state| {
+            state.last_error.is_some()
+                && connections
+                    .iter()
+                    .any(|connection| connection.id == state.connection_id)
+        }) {
+            return Ok(MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::SIGNAL_SYNC_INCOMPLETE,
+                ),
+                linked_user_ids: HashSet::new(),
+            });
+        }
+        let states: HashMap<String, DateTime<Utc>> = sync_states
             .into_iter()
             .filter_map(|state| Some((state.connection_id, state.last_success_at?)))
             .collect();

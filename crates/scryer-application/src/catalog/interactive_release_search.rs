@@ -1522,21 +1522,24 @@ impl AppUseCase {
 
         // Every fetch succeeded, so every release was grabbed as far as the
         // indexer is concerned; a failed bundle above emitted nothing.
-        for artifact in artifacts {
-            self.append_domain_event(new_global_domain_event(
-                actor,
-                DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
-                    title: title_context_snapshot(&artifact.stand_in_title),
-                    source_title: Some(artifact.source_title),
-                    source_hint: Some(artifact.source_hint),
-                    source_provider: Some(artifact.source_provider),
-                    // Nothing was submitted, so there is no client item id.
-                    download_id: None,
-                    episode_ids: Vec::new(),
-                }),
-            ))
-            .await?;
-        }
+        let events = artifacts
+            .into_iter()
+            .map(|artifact| {
+                new_global_domain_event(
+                    actor,
+                    DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                        title: title_context_snapshot(&artifact.stand_in_title),
+                        source_title: Some(artifact.source_title),
+                        source_hint: Some(artifact.source_hint),
+                        source_provider: Some(artifact.source_provider),
+                        // Nothing was submitted, so there is no client item id.
+                        download_id: None,
+                        episode_ids: Vec::new(),
+                    }),
+                )
+            })
+            .collect();
+        self.append_domain_events(events).await?;
 
         Ok(bundle)
     }

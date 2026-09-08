@@ -567,9 +567,14 @@ impl AppUseCase {
                     }
                     Ok(CandidateOutcome::LeaseLost) => report.lease_lost += 1,
                     Err(error) => {
-                        // A bookkeeping failure for one candidate is bounded to
-                        // that candidate; the pass keeps going.
+                        // The side effect may have completed before its result
+                        // failed to persist. Charge the attempt conservatively.
                         report.failed += 1;
+                        executed_this_rule += 1;
+                        if high_risk {
+                            high_risk_executed += 1;
+                            high_risk_failures += 1;
+                        }
                         warn!(error = %error, "maintenance action handling failed for one candidate");
                     }
                 }

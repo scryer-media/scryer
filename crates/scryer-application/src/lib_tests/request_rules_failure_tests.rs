@@ -1,6 +1,34 @@
 use super::*;
 
 #[tokio::test]
+async fn unreadable_request_rule_tag_registry_holds_the_persisted_request() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Approve with tags", APPROVE_EVERYTHING).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+    harness.titles.fail_tag_reads.store(true, Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let request_id = submit(&harness, &library_id, 9047, Some(30)).await;
+    let rows = harness.media_requests.requests.lock().await;
+    let request = rows
+        .iter()
+        .find(|request| request.id == request_id)
+        .unwrap();
+    assert_eq!(request.status, MediaRequestStatus::Pending);
+    assert!(request.policy_tags.is_empty());
+    assert!(harness.titles.store.lock().await.is_empty());
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.fallback_reason.as_deref(), Some(FALLBACK_ERROR));
+    assert!(trace.tags.iter().any(|tag| tag == "auto-approved"));
+}
+
+#[tokio::test]
 async fn request_rule_timeout_holds_an_armed_request_and_records_the_error() {
     use scryer_rules::request::{RequestPolicy, RequestRulesEngine, rewrite_package_declaration};
     let harness = bootstrap_media_request_app();

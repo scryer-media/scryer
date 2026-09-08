@@ -727,6 +727,58 @@ async fn reversible_unmonitor_executes_and_records_the_evidence() {
 }
 
 #[tokio::test]
+async fn action_result_write_failures_still_consume_the_rule_execution_budget() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let mut titles = Vec::new();
+    for index in 0..12 {
+        titles.push(
+            seed_title(
+                &fixture.app,
+                &fixture.user,
+                &format!("Budget {index}"),
+                true,
+            )
+            .await,
+        );
+    }
+    fixture.evaluate().await;
+    fixture
+        .evaluation
+        .fail_action_completion
+        .store(true, Ordering::SeqCst);
+    let report = fixture.handle().await;
+    assert_eq!(report.failed, 10, "{report:?}");
+    assert_eq!(
+        report.candidates_considered, 10,
+        "errors must consume the ten-action rule budget"
+    );
+    let mut changed = 0;
+    for title in titles {
+        if !fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+        {
+            changed += 1;
+        }
+    }
+    assert_eq!(
+        changed, 10,
+        "failure to persist a result must not permit extra side effects"
+    );
+}
+
+#[tokio::test]
 async fn an_already_met_postcondition_reports_already_satisfied() {
     let fixture = execution_app(None);
     let rule_id = fixture.observed_rule(unmonitor_draft(ALWAYS_MATCHER)).await;
@@ -747,6 +799,37 @@ async fn an_already_met_postcondition_reports_already_satisfied() {
         candidates[0].state_reason,
         execution_reason::ALREADY_SATISFIED
     );
+}
+
+#[tokio::test]
+async fn destructive_result_write_failures_trip_the_high_risk_breaker() {
+    let fixture = execution_app_with_operations(Arc::new(InMemoryLocationOperationStore::new()));
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    for index in 0..5 {
+        seed_title(
+            &fixture.app,
+            &fixture.user,
+            &format!("Breaker {index}"),
+            true,
+        )
+        .await;
+    }
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Destructive, Some(5))
+        .await;
+    fixture
+        .evaluation
+        .fail_action_completion
+        .store(true, Ordering::SeqCst);
+    let report = fixture.handle().await;
+    assert_eq!(report.failed, 3, "{report:?}");
+    assert_eq!(
+        report.candidates_considered, 3,
+        "result write failures must trip the destructive breaker"
+    );
+    assert_eq!(fixture.evaluation.all_action_runs().await.len(), 3);
 }
 
 #[tokio::test]

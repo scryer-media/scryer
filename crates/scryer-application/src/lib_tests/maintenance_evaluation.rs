@@ -7,6 +7,7 @@
 //! transition would not notice the clock being silently restarted.
 
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
 use crate::maintenance_rules::{
@@ -57,6 +58,7 @@ const UNKNOWN_MATCHER: &str = "package whatever\n\
 /// double.
 #[derive(Default)]
 pub(super) struct InMemoryMaintenanceEvaluationRepo {
+    pub(super) fail_action_completion: AtomicBool,
     candidates: Mutex<Vec<LifecycleCandidate>>,
     exclusions: Mutex<Vec<MaintenanceRuleExclusion>>,
     runs: Mutex<Vec<MaintenanceEvaluationRun>>,
@@ -381,6 +383,11 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
     }
 
     async fn finish_action_run(&self, run: &LifecycleActionRun) -> AppResult<()> {
+        if self.fail_action_completion.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic action result persistence failure".into(),
+            ));
+        }
         {
             let mut rows = self.action_runs.lock().await;
             let stored = rows
