@@ -42,6 +42,8 @@ export default defineConfig(({ command, mode }) => ({
   // startup so Vite does not replace its optimized URL while a route is loading.
   optimizeDeps: {
     include: ["@tanstack/react-virtual"],
+    // Worker query imports need Vite's worker transform, not dependency prebundling.
+    exclude: ["graphiql/setup-workers/vite"],
   },
   envPrefix: "SCRYER_",
   build: {

@@ -78,7 +78,8 @@ export default function ApiExplorerContainer() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
-        <Editor key={mode} mode={mode} />
+        {/* Replace the transport on mode changes without remounting unsaved editor tabs. */}
+        <Editor mode={mode} />
       </div>
     </section>
   );
