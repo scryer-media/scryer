@@ -17,13 +17,17 @@ use scryer_domain::{normalize_library_root_path, root_folder_id_for_normalized_p
 use super::synthetic_root_ids::synthetic_root_id_from_legacy_id;
 
 /// Version the catalog is replayed to before the new migrations are applied.
-const PRE_UPGRADE_VERSION: i64 = 203;
+const PRE_UPGRADE_VERSION: i64 = 210;
 
 fn path_derived_id(path: &str) -> String {
     root_folder_id_for_normalized_path(&normalize_library_root_path(path))
 }
 
 async fn pre_upgrade_pool() -> SqlitePool {
+    pre_upgrade_pool_at(PRE_UPGRADE_VERSION).await
+}
+
+async fn pre_upgrade_pool_at(version: i64) -> SqlitePool {
     crate::spellfix::register_spellfix_auto_extension()
         .expect("spellfix extension should register before the migration fixture");
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -31,13 +35,9 @@ async fn pre_upgrade_pool() -> SqlitePool {
         .connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite should open");
-    crate::migrations::replay_source_catalog_for_fresh_install(
-        &pool,
-        Some(PRE_UPGRADE_VERSION),
-        true,
-    )
-    .await
-    .expect("pre-upgrade migration fixture should apply");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(version), true)
+        .await
+        .expect("pre-upgrade migration fixture should apply");
     pool
 }
 
@@ -45,7 +45,7 @@ async fn apply_upgrade(pool: &SqlitePool) {
     crate::migrations::run_migrations(pool, crate::MigrationMode::Apply)
         .await
         .expect("synthetic-root-id upgrade should apply");
-    for version in [210, 211, 212] {
+    for version in [215, 216, 217] {
         let applied: i64 =
             sqlx::query_scalar("SELECT success FROM _sqlx_migrations WHERE version = ?1")
                 .bind(version)
@@ -55,6 +55,32 @@ async fn apply_upgrade(pool: &SqlitePool) {
         assert_eq!(
             applied, 1,
             "{version} must be recorded as successfully applied"
+        );
+    }
+}
+
+#[tokio::test]
+async fn older_and_current_upgrade_baselines_are_idempotent() {
+    for version in [203, PRE_UPGRADE_VERSION] {
+        let pool = pre_upgrade_pool_at(version).await;
+        let legacy =
+            seed_path_derived_root(&pool, "movie_default_library", "/mnt/legacy/movies").await;
+        seed_title(&pool, "legacy-title", "movie_default_library", &legacy).await;
+        apply_upgrade(&pool).await;
+        let id = title_root(&pool, "legacy-title").await;
+        assert_eq!(id, synthetic_root_id_from_legacy_id(&legacy));
+        let aliases: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM library_root_id_remaps")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        apply_upgrade(&pool).await;
+        assert_eq!(title_root(&pool, "legacy-title").await, id);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM library_root_id_remaps")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            aliases
         );
     }
 }
@@ -131,6 +157,92 @@ async fn the_upgrade_rekeys_path_derived_roots_and_carries_their_titles_along() 
     );
     assert_eq!(title_root(&pool, "title-1").await, expected_id);
     assert_eq!(title_root(&pool, "title-2").await, expected_id);
+}
+
+#[tokio::test]
+async fn failed_root_reference_update_rolls_back_and_can_be_retried() {
+    let pool = pre_upgrade_pool().await;
+    let legacy =
+        seed_path_derived_root(&pool, "movie_default_library", "/mnt/rollback/movies").await;
+    seed_title(&pool, "rollback-title", "movie_default_library", &legacy).await;
+    sqlx::raw_sql(
+        "CREATE TRIGGER reject_root_rekey BEFORE UPDATE OF root_folder_id ON titles
+        BEGIN SELECT RAISE(ABORT, 'synthetic root reference failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        crate::migrations::run_migrations(&pool, crate::MigrationMode::Apply)
+            .await
+            .is_err()
+    );
+    assert!(root_exists(&pool, &legacy).await);
+    assert_eq!(title_root(&pool, "rollback-title").await, legacy);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 215 AND success = 1"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::raw_sql("DROP TRIGGER reject_root_rekey")
+        .execute(&pool)
+        .await
+        .unwrap();
+    apply_upgrade(&pool).await;
+    apply_upgrade(&pool).await;
+    assert_eq!(
+        title_root(&pool, "rollback-title").await,
+        synthetic_root_id_from_legacy_id(&legacy)
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn root_upgrade_preserves_library_assignment_default_choice_and_normalized_paths() {
+    let pool = pre_upgrade_pool().await;
+    let mut roots = Vec::new();
+    for (library, path, default) in [
+        ("movie_default_library", "/mnt/archive/movies/", true),
+        ("movie_default_library", "/mnt/other/movies", false),
+        ("series_default_library", "/mnt/archive/series/", true),
+    ] {
+        let id = seed_path_derived_root(&pool, library, path).await;
+        if default {
+            sqlx::query("UPDATE library_roots SET is_default = 0 WHERE library_id = ?")
+                .bind(library)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE library_roots SET is_default = 1 WHERE id = ?")
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        roots.push((id, library, path, default));
+    }
+    apply_upgrade(&pool).await;
+    for (legacy, library, path, default) in roots {
+        let row = sqlx::query(
+            "SELECT library_id, path, normalized_path, is_default FROM library_roots WHERE id = ?",
+        )
+        .bind(synthetic_root_id_from_legacy_id(&legacy))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("library_id"), library);
+        assert_eq!(row.get::<String, _>("path"), path);
+        assert_eq!(
+            row.get::<String, _>("normalized_path"),
+            normalize_library_root_path(path)
+        );
+        assert_eq!(row.get::<bool, _>("is_default"), default);
+    }
+    pool.close().await;
 }
 
 #[tokio::test]

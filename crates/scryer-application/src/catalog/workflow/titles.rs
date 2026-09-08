@@ -492,13 +492,19 @@ impl AppUseCase {
         &self,
         facet: Option<MediaFacet>,
         library_ids: &[String],
+        title_id: Option<&str>,
     ) -> AppResult<Vec<(scryer_domain::Title, QualityProfile)>> {
-        let titles = self
+        let titles = if let Some(title_id) = title_id {
+            self.services.catalog.titles.get_by_id(title_id).await?
+                .filter(|title| library_ids.contains(&title.library_id)
+                    && facet.as_ref().is_none_or(|facet| facet == &title.facet))
+                .into_iter().collect()
+        } else { self
             .services
             .catalog
             .titles
             .list_for_libraries(facet, library_ids, None)
-            .await?;
+            .await? };
         let monitored: Vec<scryer_domain::Title> =
             titles.into_iter().filter(|title| title.monitored).collect();
         if monitored.is_empty() {
@@ -557,6 +563,15 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         library_filter: Option<Vec<String>>,
     ) -> AppResult<Vec<CutoffUnmetItem>> {
+        self.compute_cutoff_unmet_items_for_title(facet, library_filter, None).await
+    }
+
+    pub(crate) async fn compute_cutoff_unmet_items_for_title(
+        &self,
+        facet: Option<MediaFacet>,
+        library_filter: Option<Vec<String>>,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<CutoffUnmetItem>> {
         let mut libraries = self.services.catalog.libraries.list(facet.clone()).await?;
         if let Some(filter) = library_filter {
             let allowed: HashSet<String> = filter.into_iter().collect();
@@ -575,7 +590,7 @@ impl AppUseCase {
             .map(|library| library.id.clone())
             .collect::<Vec<_>>();
         let monitored_titles = self
-            .monitored_titles_with_profiles(facet, &library_ids)
+            .monitored_titles_with_profiles(facet, &library_ids, title_id)
             .await?;
         if monitored_titles.is_empty() {
             return Ok(Vec::new());

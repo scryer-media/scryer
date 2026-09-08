@@ -116,7 +116,17 @@ impl AppUseCase {
             .await?;
 
         let mut runtime_plugins = Vec::new();
+        let compatibility_blockers = self
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .clone();
         let mut pending_plugins = enabled.into_iter().filter_map(|(installation, payload)| {
+            if compatibility_blockers.contains_key(&installation.plugin_id) {
+                return None;
+            }
             if !matches!(
                 installation.source_kind,
                 PluginSourceKind::Downloaded
@@ -216,9 +226,10 @@ impl AppUseCase {
         let disabled_builtins: Vec<String> = all_installations
             .iter()
             .filter(|inst| {
-                inst.is_builtin
+                (inst.is_builtin
                     && !inst.is_enabled
-                    && !is_reserved_first_party_provider(&inst.provider_type)
+                    && !is_reserved_first_party_provider(&inst.provider_type))
+                    || compatibility_blockers.contains_key(&inst.plugin_id)
             })
             .map(|inst| inst.provider_type.clone())
             .collect();

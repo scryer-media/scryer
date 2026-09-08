@@ -2053,6 +2053,9 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn get(&self, request_id: &str) -> AppResult<Option<MediaRequest>>;
 
+    /// Resolve matching pending rows while preserving each sibling's lease
+    /// and policy provenance. Persistent stores must commit approval retention
+    /// claims and resolution events atomically with the request transitions.
     async fn resolve_pending_overlapping(
         &self,
         request: &MediaRequest,
@@ -3659,6 +3662,10 @@ pub trait ProxyConfigRepository: Send + Sync {
         provider_type: Option<scryer_domain::ProxyProviderType>,
     ) -> AppResult<Vec<scryer_domain::ProxyConfig>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>>;
+    /// Load editable values even when runtime validation blocks this proxy.
+    async fn get_for_edit(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        self.get_by_id(id).await
+    }
     async fn create(
         &self,
         config: scryer_domain::ProxyConfig,
@@ -5764,6 +5771,21 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(MissingScopeCandidates::default())
     }
 
+    async fn list_missing_scope_candidates_for_title(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<MissingScopeCandidates> {
+        let mut candidates = self.list_missing_scope_candidates().await?;
+        if let Some(title_id) = title_id {
+            candidates.episodes.retain(|item| item.title_id == title_id);
+            candidates.titles.retain(|item| item.title_id == title_id);
+            candidates
+                .series_movie_links
+                .retain(|item| item.title_id == title_id);
+        }
+        Ok(candidates)
+    }
+
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
@@ -7014,6 +7036,15 @@ pub trait PluginDescriptorLoader: Send + Sync {
         &self,
         wasm_bytes: &[u8],
     ) -> AppResult<scryer_plugin_sdk::PluginDescriptor>;
+
+    /// Startup repair needs initialization validation as well as metadata.
+    /// Runtime adapters override this to instantiate with restricted services.
+    fn validate_startup_component(
+        &self,
+        wasm_bytes: &[u8],
+    ) -> AppResult<scryer_plugin_sdk::PluginDescriptor> {
+        self.load_descriptor_from_wasm_bytes(wasm_bytes)
+    }
 }
 
 /// The numbering evidence an application search gives the multi-indexer guard.

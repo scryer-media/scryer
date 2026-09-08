@@ -48,13 +48,9 @@ pub struct ApproveMediaRequestOutcome {
     pub title_id: String,
     pub wanted_search: Option<WantedSearchOutcome>,
     pub search_error: Option<String>,
-    /// Set when the title was created and the request resolved, but the
-    /// retention claim could not be written (spec 0003 §4.5).
-    ///
-    /// The approval is **not** rolled back: the requester has their title, and
-    /// undoing an approval because a bookkeeping row failed would be a far
-    /// worse outcome than a title nothing holds. The caller surfaces this so an
-    /// operator can re-pin it by hand.
+    /// Compatibility fallback error for repositories without a shared claim
+    /// transaction. SQL stores commit retention claims with request approval;
+    /// a failed claim write leaves the request pending and retryable.
     pub claim_error: Option<String>,
 }
 
@@ -815,9 +811,8 @@ impl AppUseCase {
         if let Some(event) = &resolution.event {
             self.publish_stored_domain_event(event).await;
         }
-        // A claim-store failure never rolls the approval back; it is logged and
-        // reported (spec 0003 §4.5). There is no outcome to carry it on here, so
-        // the log is the only signal — the human approval path returns it.
+        // SQL approval already committed every resolved request's hold. This
+        // fills the compatibility fallback for non-transactional repositories.
         self.create_request_lifecycle_claims(
             actor,
             &request,
@@ -928,11 +923,34 @@ impl AppUseCase {
             if other.id == request.id || targets.iter().any(|(id, _)| id == &other.id) {
                 continue;
             }
-            targets.push((other.id.clone(), other.requested_lease_days));
+            targets.push((other.id.clone(), other.approved_lease_days));
         }
 
+        // SQL repositories commit these with the approval. The fallback keeps
+        // repositories without a shared transaction compatible and does not
+        // recreate a hold that was subsequently released or converted.
+        let existing = match self
+            .services
+            .catalog
+            .lifecycle_claims
+            .list_for_title(title_id)
+            .await
+        {
+            Ok(claims) => claims,
+            Err(error) => return Some(format!("could not read request retention claims: {error}")),
+        };
         let now = chrono::Utc::now();
         for (request_id, lease_days) in targets {
+            if existing.iter().any(|claim| {
+                claim.producer_ref.as_deref() == Some(&request_id)
+                    && matches!(
+                        claim.producer,
+                        LifecycleClaimProducer::RequestLease
+                            | LifecycleClaimProducer::RequestPermanent
+                    )
+            }) {
+                continue;
+            }
             let claim = new_request_lifecycle_claim(
                 &request_id,
                 title_id,
@@ -1044,6 +1062,16 @@ impl AppUseCase {
     ) -> AppResult<LifecycleClaim> {
         let claim = self.require_manageable_claim(actor, claim_id).await?;
         let now = chrono::Utc::now();
+        if expires_at <= now
+            || claim.kind != LifecycleClaimKind::RetainUntil
+            || claim
+                .expires_at
+                .is_some_and(|current| expires_at <= current)
+        {
+            return Err(AppError::Validation(
+                "claim extension must lengthen a finite lease into the future".into(),
+            ));
+        }
         self.services
             .catalog
             .lifecycle_claims

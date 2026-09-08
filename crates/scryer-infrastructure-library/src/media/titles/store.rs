@@ -2105,6 +2105,17 @@ impl TitleRepository for TitleStore {
                 // title in the same transaction rather than being left pointing
                 // at the library and facet it left (FR-055's match key).
                 persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await?;
+                // Claims belong to the title's current library, including
+                // historical claims surfaced to library-scoped operators.
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE lifecycle_claims SET library_id = {} WHERE title_id = {}",
+                    &[
+                        SqlArg::Text(title.library_id.clone()),
+                        SqlArg::Text(id.clone()),
+                    ],
+                )
+                .await?;
                 Ok(())
             })
         })

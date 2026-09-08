@@ -789,6 +789,7 @@ async fn arbitrate_and_commit_title_grabs(
     dl_snapshot: &DownloadClientSnapshot,
     now: &DateTime<Utc>,
     stats: &mut TitleWalkStats,
+    cancellation: &tokio_util::sync::CancellationToken,
 ) -> (usize, usize) {
     if proposals.is_empty() {
         return (0, 0);
@@ -814,6 +815,10 @@ async fn arbitrate_and_commit_title_grabs(
     let mut committed = 0usize;
     let mut set_aside = 0usize;
     for proposal in proposals {
+        if cancellation.is_cancelled() {
+            set_aside += 1;
+            continue;
+        }
         if proposal
             .episode_ids
             .iter()
@@ -2554,6 +2559,7 @@ where
         dl_snapshot,
         now,
         &mut stats,
+        &session.options.cancellation,
     )
     .await;
     session.stats = stats;
@@ -2686,11 +2692,8 @@ where
         .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
 
     let now = Utc::now();
-    // Cost: this derives every acquisition target in the library and keeps one
-    // title's. There is no per-title derivation to call, and adding one means
-    // threading a title filter through both halves of `derive_acquisition_targets`.
     let targets = app
-        .derive_acquisition_targets(&now)
+        .derive_acquisition_targets_for_title(&now, Some(title_id))
         .await?
         .into_iter()
         .filter(|target| target.title_id == title_id)
@@ -2752,11 +2755,11 @@ where
                     title.name
                 ),
             });
-            app.runtime
-                .acquisition
-                .title_walk_locks
-                .acquire(title_id)
-                .await
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Ok(TitleWalkStats::default()),
+                guard = app.runtime.acquisition.title_walk_locks.acquire(title_id) => guard,
+            }
         }
     };
     let _walk_lease = InteractiveWalkLease {
@@ -4912,15 +4915,6 @@ pub async fn start_background_acquisition_poller(
     let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));
     let mut staged_nzb_prune_interval = tokio::time::interval(std::time::Duration::from_hours(1));
-    // FR-047: the backfill's own throttling lives inside the job; the interval
-    // only decides how often a bounded sweep is offered a turn.
-    let mut full_hash_backfill_interval = tokio::time::interval_at(
-        tokio::time::Instant::now()
-            + std::time::Duration::from_secs(
-                JobKey::FullHashBackfill.initial_delay_seconds().unwrap_or(900).max(0) as u64,
-            ),
-        std::time::Duration::from_mins(30),
-    );
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut prowlarr_sync_interval = tokio::time::interval(std::time::Duration::from_mins(5));
     let mut direct_indexer_caps_interval =
@@ -5100,19 +5094,6 @@ pub async fn start_background_acquisition_poller(
                     if let Err(e) = app.run_scheduled_job_now(JobKey::StagedNzbPrune, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "periodic staged nzb prune failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "staged_nzb_prune").increment(1);
-                    }
-                }).await;
-            }
-            _ = full_hash_backfill_interval.tick() => {
-                let app = app.clone();
-                run_task("full_hash_backfill", async move {
-                    app.set_job_next_run_at(
-                        JobKey::FullHashBackfill,
-                        Utc::now() + chrono::Duration::minutes(30),
-                    ).await;
-                    if let Err(e) = app.run_scheduled_job_now(JobKey::FullHashBackfill, JobTriggerSource::ScheduledInterval).await {
-                        warn!(error = %e, "periodic full hash backfill failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "full_hash_backfill").increment(1);
                     }
                 }).await;
             }

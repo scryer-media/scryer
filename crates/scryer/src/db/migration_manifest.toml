@@ -2054,3 +2054,37 @@ kind = "sql"
 file = "postgres/migrations/0224_tracked_rule_packs.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 225
+description = "application compatibility repair journal"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0225_application_compatibility_journal.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0225_application_compatibility_journal.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 226
+description = "pending title tag rename recovery"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0226_pending_title_tag_renames.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0226_pending_title_tag_renames.sql"
+engine = "postgres"
+scope = "all"

@@ -696,6 +696,24 @@ async fn an_unmapped_observation_is_retained_with_no_subject() {
     assert!(rows[0].scryer_title_id.is_none());
     assert!(rows[0].scryer_episode_id.is_none());
     assert_eq!(rows[0].provider_item_id, "jf-movie-unknown");
+    let state = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
+    assert!(state.last_error.as_deref().unwrap().contains("incomplete"));
+    assert!(state.last_success_at.is_none());
+    // A recent successful sweep must not make a later incomplete answer safe.
+    let mut state = state;
+    state.last_success_at = Some(Utc::now());
+    fixture
+        .signals
+        .upsert_signal_sync_state(&state)
+        .await
+        .unwrap();
+    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    assert!(matches!(
+        context.freshness,
+        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::maintenance_rules::facts::unknown_reason::SIGNAL_SYNC_INCOMPLETE
+        )
+    ));
 }
 
 #[tokio::test]

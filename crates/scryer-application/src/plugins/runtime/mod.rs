@@ -51,6 +51,7 @@ include!("verification.rs");
 include!("install.rs");
 include!("manual_install.rs");
 include!("restore.rs");
+include!("component_upgrade.rs");
 include!("auto_update.rs");
 include!("rule_pack_auto_update.rs");
 include!("tests.rs");

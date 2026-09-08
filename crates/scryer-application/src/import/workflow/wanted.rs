@@ -137,7 +137,15 @@ async fn execute_resolved_episode_import(
             effective_quality_label.as_deref(),
         );
         let dest_path = additional_import_dest_path(&canonical_dest_path, &effective_parsed);
+        let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+            app,
+            Some(&title.library_id),
+            &title.facet,
+            completed,
+        )
+        .await?;
         let check_ctx = crate::import_checks::ImportCheckContext {
+            import_mode,
             source_path: source_video,
             dest_path: &dest_path,
             source_size: source_size as u64,
@@ -157,13 +165,6 @@ async fn execute_resolved_episode_import(
             });
         }
 
-        let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-            app,
-            Some(&title.library_id),
-            &title.facet,
-            completed,
-        )
-        .await?;
         persist_title_folder_path_if_missing(app, title, title_folder_path).await?;
         let destination_ownership = ImportDestinationOwnership::episodes(&target_episode_ids);
         let file_result = import_file_with_record_progress(
@@ -294,7 +295,15 @@ async fn execute_resolved_episode_import(
         precheck_quality_label.as_deref(),
     );
 
+    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+        app,
+        Some(&title.library_id),
+        &title.facet,
+        completed,
+    )
+    .await?;
     let check_ctx = crate::import_checks::ImportCheckContext {
+        import_mode,
         source_path: source_video,
         dest_path: &precheck_dest_path,
         source_size: source_size as u64,
@@ -460,14 +469,6 @@ async fn execute_resolved_episode_import(
         rename_episode_title,
         effective_quality_label.as_deref(),
     );
-    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-        app,
-        Some(&title.library_id),
-        &title.facet,
-        completed,
-    )
-    .await?;
-
     let manual_replacement = matches!(
         runtime_sample_mode,
         crate::post_download_gate::RuntimeSampleValidationMode::BypassRuntimeSampleCheck

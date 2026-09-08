@@ -4574,8 +4574,9 @@ mod tests {
         )
         .expect("place file");
 
+        let guard = result.source_cleanup.expect("cleanup guard");
         let error = remove_import_source_after_verified_import_blocking(
-            result.source_cleanup.expect("cleanup guard"),
+            guard.clone(),
             dest.clone(),
             ImportFileOptions {
                 force_delete_failure: true,
@@ -4587,6 +4588,14 @@ mod tests {
         assert!(error.to_string().contains("failed to remove source"));
         assert!(source.exists());
         assert!(dest.exists());
+        remove_import_source_after_verified_import_blocking(
+            guard,
+            dest.clone(),
+            ImportFileOptions::default(),
+        )
+        .expect("cleanup retry must converge after the transient failure");
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fake video bytes");
     }
 
     #[test]

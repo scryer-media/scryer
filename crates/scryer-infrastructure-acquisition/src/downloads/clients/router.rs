@@ -1765,12 +1765,7 @@ impl PrioritizedDownloadClientRouter {
         &self,
         config: &DownloadClientConfig,
     ) -> AppResult<Option<ProxyConfig>> {
-        let Some(proxy_config_id) = config
-            .proxy_config_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        else {
+        let Some(proxy_config_id) = config.proxy_config_id.as_deref() else {
             return Ok(None);
         };
         let Some(proxy_configs) = self.proxy_configs.as_ref() else {
@@ -5580,6 +5575,26 @@ mod tests {
             test_pipeline_limit(),
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn persisted_proxy_assignments_never_silently_fall_back_to_direct_traffic() {
+        let router = no_client_router();
+        let mut config = test_config("client", "Client", "sabnzbd", 0);
+        assert!(
+            router
+                .proxy_for_download_client(&config)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for id in ["", " ", "missing-proxy"] {
+            config.proxy_config_id = Some(id.into());
+            assert!(
+                router.proxy_for_download_client(&config).await.is_err(),
+                "assignment {id:?} must block direct traffic"
+            );
+        }
     }
 
     #[tokio::test]

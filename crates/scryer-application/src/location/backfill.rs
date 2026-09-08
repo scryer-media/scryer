@@ -56,6 +56,65 @@ use crate::settings::keys::FULL_HASH_BACKFILL_CURSOR_KEY;
 use crate::stored_paths::stored_path_to_path_buf;
 use crate::{AppError, AppResult, AppUseCase, MediaFileHashCandidate};
 
+/// Hashing has its own cadence and lifetime; acquisition, RSS and pending
+/// releases never await this worker.
+pub async fn start_full_hash_backfill_worker(
+    app: AppUseCase,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    let delay = Duration::from_secs(
+        crate::JobKey::FullHashBackfill
+            .initial_delay_seconds()
+            .unwrap_or(900)
+            .max(0) as u64,
+    );
+    let mut interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + delay,
+        Duration::from_secs(1800),
+    );
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    app.set_job_next_run_at(
+        crate::JobKey::FullHashBackfill,
+        Utc::now() + chrono::Duration::from_std(delay).unwrap_or_default(),
+    )
+    .await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = interval.tick() => {},
+        }
+        app.set_job_next_run_at(
+            crate::JobKey::FullHashBackfill,
+            Utc::now() + chrono::Duration::minutes(30),
+        )
+        .await;
+        let run_app = app.clone();
+        let mut run = tokio::spawn(async move {
+            run_app
+                .run_scheduled_job_now(
+                    crate::JobKey::FullHashBackfill,
+                    crate::JobTriggerSource::ScheduledInterval,
+                )
+                .await
+        });
+        let outcome = tokio::select! {
+            outcome = &mut run => outcome,
+            _ = shutdown.cancelled() => {
+                app.runtime.jobs.full_hash_shutdown.cancel();
+                // Drain cooperatively; aborting a join handle cannot stop an OS read.
+                run.await
+            },
+        };
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "periodic full-hash backfill failed"),
+            Err(error) => tracing::error!(%error, "full-hash backfill task panicked"),
+        }
+    }
+    app.runtime.jobs.full_hash_shutdown.cancel();
+}
+
 /// Rows fetched per queue page. Small: a page is a working set the job walks
 /// one file at a time, not a batch it processes.
 pub const FULL_HASH_BACKFILL_PAGE_SIZE: u32 = 32;
@@ -156,6 +215,8 @@ pub struct FullHashBackfillSummary {
     pub completed_sweep: bool,
     /// Where the next run resumes.
     pub resume_after_id: Option<String>,
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 impl FullHashBackfillSummary {
@@ -223,11 +284,29 @@ impl AppUseCase {
         &self,
         options: FullHashBackfillOptions,
     ) -> AppResult<FullHashBackfillSummary> {
+        // The blocking reader retains a share of this permit if its awaiting
+        // future is dropped. A replacement run cannot overlap the old I/O.
+        let permit = std::sync::Arc::new(
+            self.runtime
+                .jobs
+                .full_hash_execution_lock
+                .clone()
+                .try_lock_owned()
+                .map_err(|_| {
+                    AppError::Validation("Full-hash backfill is already running".into())
+                })?,
+        );
+        let cancellation = self.runtime.jobs.full_hash_shutdown.child_token();
+        let _cancel_on_drop = cancellation.clone().drop_guard();
         let owned = self.full_hash_backfill_owned_scope().await?;
         let mut cursor = self.read_full_hash_backfill_cursor().await;
         let mut summary = FullHashBackfillSummary::default();
 
-        while summary.examined < options.files_per_run {
+        'sweep: while summary.examined < options.files_per_run {
+            if cancellation.is_cancelled() {
+                summary.cancelled = true;
+                break;
+            }
             let remaining = options.files_per_run - summary.examined;
             let page_size = options
                 .page_size
@@ -246,13 +325,19 @@ impl AppUseCase {
             }
 
             for candidate in page {
-                // The cursor advances for every candidate the job *examines*,
-                // hashed or skipped, so a stuck file can never pin the sweep.
-                cursor = Some(candidate.id.clone());
-                summary.examined += 1;
+                if cancellation.is_cancelled() {
+                    summary.cancelled = true;
+                    break 'sweep;
+                }
 
                 match self
-                    .backfill_one_media_file(&candidate, &owned, options)
+                    .backfill_one_media_file(
+                        &candidate,
+                        &owned,
+                        options,
+                        &cancellation,
+                        permit.clone(),
+                    )
                     .await
                 {
                     Ok(Some(bytes)) => {
@@ -262,6 +347,10 @@ impl AppUseCase {
                     Ok(None) => {}
                     Err(BackfillOutcome::Skipped(skip)) => summary.record_skip(skip),
                     Err(BackfillOutcome::Failed(reason)) => {
+                        if cancellation.is_cancelled() {
+                            summary.cancelled = true;
+                            break 'sweep;
+                        }
                         summary.failed += 1;
                         tracing::debug!(
                             media_file_id = %candidate.id,
@@ -271,13 +360,21 @@ impl AppUseCase {
                         );
                     }
                 }
+                // Never advance past an interrupted file. Persist completed
+                // progress before yielding or starting another disk read.
+                cursor = Some(candidate.id.clone());
+                summary.examined += 1;
+                self.write_full_hash_backfill_cursor(cursor.clone()).await;
 
                 // Between every two files, unconditionally. Real work gets a
                 // scheduling point even when this run is hashing nothing but
                 // skips.
                 tokio::task::yield_now().await;
                 if !options.file_pause.is_zero() {
-                    tokio::time::sleep(options.file_pause).await;
+                    tokio::select! {
+                        _ = cancellation.cancelled() => {},
+                        _ = tokio::time::sleep(options.file_pause) => {},
+                    }
                 }
             }
         }
@@ -294,6 +391,8 @@ impl AppUseCase {
         candidate: &MediaFileHashCandidate,
         owned: &OwnedScope,
         options: FullHashBackfillOptions,
+        cancellation: &tokio_util::sync::CancellationToken,
+        permit: std::sync::Arc<tokio::sync::OwnedMutexGuard<()>>,
     ) -> Result<Option<u64>, BackfillOutcome> {
         let path = stored_path_to_path_buf(&candidate.file_path);
 
@@ -336,9 +435,14 @@ impl AppUseCase {
             ));
         }
 
-        let hashes = hash_file_throttled(path.clone(), options.chunk_pause)
-            .await
-            .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+        let hashes = hash_file_cancellable(
+            path.clone(),
+            options.chunk_pause,
+            cancellation.child_token(),
+            Some(permit),
+        )
+        .await
+        .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
         let after = tokio::fs::metadata(&path)
             .await
@@ -454,9 +558,29 @@ pub(super) async fn hash_file_throttled(
     path: PathBuf,
     chunk_pause: Duration,
 ) -> AppResult<crate::location::model::StreamedContentHashes> {
+    hash_file_cancellable(
+        path,
+        chunk_pause,
+        tokio_util::sync::CancellationToken::new(),
+        None,
+    )
+    .await
+}
+
+async fn hash_file_cancellable(
+    path: PathBuf,
+    chunk_pause: Duration,
+    cancellation: tokio_util::sync::CancellationToken,
+    permit: Option<std::sync::Arc<tokio::sync::OwnedMutexGuard<()>>>,
+) -> AppResult<crate::location::model::StreamedContentHashes> {
+    let _cancel_on_drop = cancellation.clone().drop_guard();
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         use std::io::Read;
 
+        if cancellation.is_cancelled() {
+            return Err(AppError::Validation("Full-hash backfill cancelled".into()));
+        }
         let mut file = std::fs::File::open(&path).map_err(|error| {
             AppError::Repository(format!(
                 "failed to open {} for full-hash backfill: {error}",
@@ -469,6 +593,11 @@ pub(super) async fn hash_file_throttled(
         let mut hasher = StreamedContentHasher::new();
         let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
         loop {
+            // Cancellation cannot interrupt an OS read already in progress.
+            // Check again before every bounded read and before publishing.
+            if cancellation.is_cancelled() {
+                return Err(AppError::Validation("Full-hash backfill cancelled".into()));
+            }
             let read = file.read(&mut buffer).map_err(|error| {
                 AppError::Repository(format!(
                     "failed to read {} for full-hash backfill: {error}",
@@ -485,6 +614,9 @@ pub(super) async fn hash_file_throttled(
         }
         let after =
             std::fs::metadata(&path).map_err(|error| AppError::Repository(error.to_string()))?;
+        if cancellation.is_cancelled() {
+            return Err(AppError::Validation("Full-hash backfill cancelled".into()));
+        }
         if !same_file_version(&before, &after) {
             return Err(AppError::Validation("file changed while hashing".into()));
         }

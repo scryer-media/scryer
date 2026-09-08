@@ -1029,6 +1029,26 @@ impl AppUseCase {
     pub async fn trigger_job(&self, actor: &User, job_key: JobKey) -> AppResult<JobRun> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        let hash_start = if job_key == JobKey::FullHashBackfill {
+            let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
+            if self.runtime.jobs.full_hash_shutdown.is_cancelled() {
+                return Err(AppError::Validation(
+                    "Full-hash backfill is shutting down".into(),
+                ));
+            }
+            if let Some(active) = self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .active_run_for_job(job_key)
+                .await
+            {
+                return Ok(active);
+            }
+            Some(guard)
+        } else {
+            None
+        };
         let artwork_start = if job_key == JobKey::ArtworkEncoding {
             let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
             if self.runtime.catalog.artwork_shutdown.is_cancelled() {
@@ -1073,6 +1093,7 @@ impl AppUseCase {
             .await;
         let event_actor = DomainEventActor::from(actor);
         drop(artwork_start);
+        drop(hash_start);
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 event_actor.clone(),
@@ -1109,6 +1130,22 @@ impl AppUseCase {
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
+        let hash_start = if job_key == JobKey::FullHashBackfill {
+            let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
+            if self.runtime.jobs.full_hash_shutdown.is_cancelled()
+                || self
+                    .runtime
+                    .jobs
+                    .job_run_tracker
+                    .has_active_job(job_key)
+                    .await
+            {
+                return Ok(());
+            }
+            Some(guard)
+        } else {
+            None
+        };
         let artwork_start = if job_key == JobKey::ArtworkEncoding {
             let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
             if self.runtime.catalog.artwork_shutdown.is_cancelled() {
@@ -1144,6 +1181,7 @@ impl AppUseCase {
             .upsert_active_run(run_payload)
             .await;
         drop(artwork_start);
+        drop(hash_start);
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 None,
@@ -1795,11 +1833,21 @@ impl AppUseCase {
                 }
             }
             JobKey::FullHashBackfill => {
-                let summary = self.run_full_hash_backfill_job().await?;
-                Ok(JobExecutionOutcome::new(
+                use futures_util::FutureExt;
+                // Keep a panicking backfill from leaving an active tracker
+                // entry that would block every later manual/scheduled retry.
+                let summary = std::panic::AssertUnwindSafe(self.run_full_hash_backfill_job())
+                    .catch_unwind()
+                    .await
+                    .map_err(|_| AppError::Repository("Full-hash backfill panicked".into()))??;
+                let mut outcome = JobExecutionOutcome::new(
                     Some(summary.summary_text()),
                     serde_json::to_string(&summary).ok(),
-                ))
+                );
+                if summary.cancelled {
+                    outcome.status_override = Some(JobRunStatus::Warning);
+                }
+                Ok(outcome)
             }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
             JobKey::ArtworkEncoding => {

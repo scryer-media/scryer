@@ -1130,6 +1130,34 @@ async fn several_releases_download_as_one_tar_gz_and_record_a_grab_each() {
 }
 
 #[tokio::test]
+async fn browser_download_history_failure_is_atomic_and_retryable() {
+    let (app, user, search_id, urls) = browser_download_fixture(vec![
+        nzb_release("First.2012.1080p.WEB-DL", "g1"),
+        nzb_release("Second.2012.1080p.WEB-DL", "g2"),
+    ])
+    .await;
+    let events = Arc::new(MockDomainEventRepo::default());
+    events.fail_append_many.store(true, Ordering::SeqCst);
+    let app = app.with_test_overrides(|builder| builder.with_domain_events(events.clone()));
+    let app = with_artifacts(
+        &app,
+        HashMap::from([
+            (urls[0].clone(), nzb_artifact("first")),
+            (urls[1].clone(), nzb_artifact("second")),
+        ]),
+    );
+    app.download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect_err("history failure must withhold the bundle");
+    assert!(grabbed_release_titles(&app).await.is_empty());
+    events.fail_append_many.store(false, Ordering::SeqCst);
+    app.download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect("retry bundle");
+    assert_eq!(grabbed_release_titles(&app).await.len(), 2);
+}
+
+#[tokio::test]
 async fn a_failed_or_magnet_only_release_fails_the_bundle_without_recording_a_grab() {
     let (app, user, search_id, urls) = browser_download_fixture(vec![
         nzb_release("Paperman.2012.1080p.WEB-DL", "g1"),

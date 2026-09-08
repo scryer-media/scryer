@@ -299,11 +299,19 @@ impl AppUseCase {
         &self,
         now: &DateTime<Utc>,
     ) -> AppResult<Vec<AcquisitionTarget>> {
+        self.derive_missing_targets_for_title(now, None).await
+    }
+
+    async fn derive_missing_targets_for_title(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
         let candidates = self
             .services
             .library
             .media_files
-            .list_missing_scope_candidates()
+            .list_missing_scope_candidates_for_title(title_id)
             .await?;
         let mut targets = Vec::new();
 
@@ -479,8 +487,13 @@ impl AppUseCase {
     /// Cutoff-upgrade targets across every library (§D1): scopes whose primary
     /// file sits strictly below the effective profile cutoff. Always cold — the
     /// file already plays, so upgrades drain at scheduler leisure.
-    pub(crate) async fn derive_cutoff_targets(&self) -> AppResult<Vec<AcquisitionTarget>> {
-        let items = self.compute_cutoff_unmet_items(None, None).await?;
+    async fn derive_cutoff_targets_for_title(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let items = self
+            .compute_cutoff_unmet_items_for_title(None, None, title_id)
+            .await?;
         let mut targets: Vec<AcquisitionTarget> = items
             .into_iter()
             .filter_map(|item| {
@@ -525,7 +538,7 @@ impl AppUseCase {
             .iter()
             .map(|target| target.scope_key.clone())
             .collect();
-        for target in self.derive_format_cutoff_targets().await? {
+        for target in self.derive_format_cutoff_targets(title_id).await? {
             if seen.insert(target.scope_key.clone()) {
                 targets.push(target);
             }
@@ -543,7 +556,10 @@ impl AppUseCase {
     /// page uses and, since MA4, the same number the grab gate compares against
     /// — in pages, so a large library re-scores in bounded chunks rather than
     /// all at once.
-    async fn derive_format_cutoff_targets(&self) -> AppResult<Vec<AcquisitionTarget>> {
+    async fn derive_format_cutoff_targets(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
         /// How many scopes are re-scored per batch. Each page is one media-file
         /// query plus one scoring context per distinct title on it.
         const PAGE: usize = 200;
@@ -551,7 +567,7 @@ impl AppUseCase {
         let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
         let titles = self
-            .monitored_titles_with_profiles(None, &library_ids)
+            .monitored_titles_with_profiles(None, &library_ids, title_id)
             .await?;
         let scored: Vec<(scryer_domain::Title, i32)> = titles
             .into_iter()
@@ -657,8 +673,16 @@ impl AppUseCase {
         &self,
         now: &DateTime<Utc>,
     ) -> AppResult<Vec<AcquisitionTarget>> {
-        let mut targets = self.derive_missing_targets(now).await?;
-        targets.extend(self.derive_cutoff_targets().await?);
+        self.derive_acquisition_targets_for_title(now, None).await
+    }
+
+    pub(crate) async fn derive_acquisition_targets_for_title(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let mut targets = self.derive_missing_targets_for_title(now, title_id).await?;
+        targets.extend(self.derive_cutoff_targets_for_title(title_id).await?);
 
         let paused = self
             .services
@@ -666,6 +690,7 @@ impl AppUseCase {
             .acquisition_scope_states
             .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
                 statuses: vec![AcquisitionScopeStatus::Paused.as_str().to_string()],
+                title_id: title_id.map(str::to_string),
                 limit: i64::MAX,
                 ..AcquisitionScopeStatesQuery::default()
             })

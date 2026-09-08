@@ -7,7 +7,7 @@
 //!
 //! | Seam | Implementation here | What it guarantees |
 //! |---|---|---|
-//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem rename with no verification pass (FR-032); otherwise a verified streaming copy at the operation's depth (FR-040–043), or a proof of a destination an interrupted run already placed. Configured permissions land on the destination straight after verification (FR-031). |
+//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem link placement without copying bytes; otherwise a verified streaming copy at the operation's depth (FR-040–043), or a proof of a destination an interrupted run already placed. The source survives until the journal and catalog are durable. Configured permissions land on the destination straight after verification (FR-031). |
 //! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order (FR-031, FR-044). For a title that merges into an existing destination title, the flip is replaced by the US7 merge engine's Groups 1–5 transaction (FR-063–FR-067). |
 //! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The FR-089 scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
 //!
@@ -39,7 +39,7 @@ use crate::location::executor::{
     TitleFileMover, TitleReconciler, TitleStepOutcome,
 };
 use crate::location::merge::engine::{TitleMergeRepository, execute_merge, plan_merge};
-use crate::location::model::{LocationOperation, VerificationDepth};
+use crate::location::model::LocationOperation;
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
 use crate::location::verify::{
@@ -283,9 +283,9 @@ pub trait SourceRecycler: Send + Sync {
 
 /// Moves one file for a root move.
 ///
-/// Same filesystem → an exclusive rename through [`crate::fs_safety`], recorded
-/// as [`VerifiedFile::same_filesystem_rename`]: no bytes were copied, so there
-/// is nothing a verification pass could compare (FR-032).
+/// Same filesystem → an exclusive hard link, recorded using the existing
+/// no-copy verification result: no bytes were copied, and the source survives
+/// until the journal and catalog are durable. Symbolic links retain their target.
 ///
 /// Different filesystem → [`VerifiedCopier::copy_and_verify`] at the
 /// operation's configured depth. The source is left exactly where it is; only
@@ -402,8 +402,11 @@ impl TitleFileMover for RootMoveFileMover {
             self.permissions.apply_to_directory(parent).await?;
         }
 
-        let verified = if !self.force_copies && same_filesystem(source, destination).await {
-            move_with_rename(source, destination, request.depth).await?
+        let verified = if !self.force_copies
+            && same_filesystem(source, destination).await
+            && stage_same_filesystem_file(source, destination).await?
+        {
+            VerifiedFile::same_filesystem_rename(source.clone(), destination.clone(), request.depth)
         } else if tokio::fs::symlink_metadata(destination).await.is_ok() {
             // The runner only asks for files it has no verification record for,
             // so a destination that is already there is the crash window
@@ -436,45 +439,77 @@ impl TitleFileMover for RootMoveFileMover {
     }
 }
 
-/// The FR-032 fast path: an exclusive rename that never replaces a destination
-/// the caller did not ask to replace.
-async fn move_with_rename(
-    source: &Path,
-    destination: &Path,
-    depth: VerificationDepth,
-) -> AppResult<VerifiedFile> {
-    // A resumed run can find the rename already done: the source is gone and
-    // the destination is there. That is this operation's own completed work,
-    // not a collision (FR-089).
-    if tokio::fs::symlink_metadata(source).await.is_err()
-        && tokio::fs::symlink_metadata(destination).await.is_ok()
-    {
-        return Ok(VerifiedFile::same_filesystem_rename(
-            source.to_path_buf(),
-            destination.to_path_buf(),
-            depth,
-        ));
-    }
-
-    crate::fs_safety::move_file_exclusive(
-        source,
-        destination,
-        crate::fs_safety::MoveOptions::default(),
-    )
-    .await
-    .map_err(|error| {
-        AppError::Repository(format!(
-            "failed to move {} to {}: {error}",
-            source.display(),
-            destination.display()
-        ))
+/// Place a second name for the same regular file without copying bytes. The
+/// source survives a crash before the verification journal is durable; cleanup
+/// removes that name only after the catalog has moved. Unsupported filesystems
+/// and platforms take the ordinary verified-copy path.
+async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppResult<bool> {
+    let source_metadata = tokio::fs::symlink_metadata(source).await.map_err(|error| {
+        AppError::Repository(format!("cannot inspect {}: {error}", source.display()))
     })?;
+    #[cfg(unix)]
+    if source_metadata.file_type().is_symlink() {
+        let target = tokio::fs::read_link(source).await.map_err(|error| {
+            AppError::Repository(format!("cannot read link {}: {error}", source.display()))
+        })?;
+        if tokio::fs::symlink_metadata(destination).await.is_ok() {
+            return Ok(tokio::fs::read_link(destination).await.ok().as_ref() == Some(&target));
+        }
+        tokio::fs::symlink(&target, destination)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "cannot place link {}: {error}",
+                    destination.display()
+                ))
+            })?;
+        return Ok(true);
+    }
+    if !source_metadata.is_file() || !cfg!(unix) {
+        return Ok(false);
+    }
+    if let Ok(destination_metadata) = tokio::fs::symlink_metadata(destination).await {
+        if tokio::fs::canonicalize(source).await.ok()
+            == tokio::fs::canonicalize(destination).await.ok()
+        {
+            return Err(AppError::Validation(
+                "source and destination are the same path".into(),
+            ));
+        }
+        return Ok(same_regular_file(&source_metadata, &destination_metadata));
+    }
+    match tokio::fs::hard_link(source, destination).await {
+        Ok(()) => {
+            let placed = tokio::fs::symlink_metadata(destination)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "cannot inspect {}: {error}",
+                        destination.display()
+                    ))
+                })?;
+            if !same_regular_file(&source_metadata, &placed) {
+                return Err(AppError::Validation(
+                    "source changed during file placement".into(),
+                ));
+            }
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
+}
 
-    Ok(VerifiedFile::same_filesystem_rename(
-        source.to_path_buf(),
-        destination.to_path_buf(),
-        depth,
-    ))
+fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    if !left.is_file() || !right.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        left.dev() == right.dev() && left.ino() == right.ino()
+    }
+    #[cfg(not(unix))]
+    false
 }
 
 // ── TitleReconciler ──────────────────────────────────────────────────────────
@@ -867,14 +902,51 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }
         }
 
-        // 2. Sources a cross-volume copy made redundant. A same-filesystem
-        //    rename left nothing behind, and its record carries no hashes,
-        //    which is exactly how the two cases are told apart (FR-032).
+        // 2. Retire sources only after durable verification and catalog writes.
+        // A no-copy placement keeps both hard links until this point.
         for file in &planned.files {
             let Some(record) = verified.get(&file.destination_path) else {
                 continue;
             };
             if record.hashes.is_none() {
+                let source = stored_path_to_path_buf(&file.source_path);
+                if source == file.destination() {
+                    return Err(AppError::Validation(
+                        "source and destination are the same path".into(),
+                    ));
+                }
+                let source_metadata = match tokio::fs::symlink_metadata(&source).await {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(AppError::Repository(error.to_string())),
+                };
+                let destination_metadata = tokio::fs::symlink_metadata(file.destination())
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let same_link = if source_metadata.file_type().is_symlink()
+                    && destination_metadata.file_type().is_symlink()
+                {
+                    match (
+                        tokio::fs::read_link(&source).await,
+                        tokio::fs::read_link(file.destination()).await,
+                    ) {
+                        (Ok(source_target), Ok(destination_target)) => {
+                            source_target == destination_target
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if !same_regular_file(&source_metadata, &destination_metadata) && !same_link {
+                    return Err(AppError::Validation(format!(
+                        "source or destination changed before cleanup: {}",
+                        file.source_path
+                    )));
+                }
+                tokio::fs::remove_file(&source)
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
                 continue;
             }
             let source = stored_path_to_path_buf(&file.source_path);

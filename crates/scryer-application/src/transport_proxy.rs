@@ -107,11 +107,25 @@ pub fn transport_proxied_reqwest_client(
     config: &ProxyConfig,
     extra_ca_bundle_pem: &str,
 ) -> Result<reqwest::Client, String> {
-    scryer_outbound_http::transport_proxy_reqwest_client_with_extra_ca(
+    transport_proxied_reqwest_client_with_redirect_policy(
+        config,
+        extra_ca_bundle_pem,
+        reqwest::redirect::Policy::limited(scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS),
+    )
+}
+
+/// Preserve the caller's destination boundary across proxy redirects.
+pub fn transport_proxied_reqwest_client_with_redirect_policy(
+    config: &ProxyConfig,
+    extra_ca_bundle_pem: &str,
+    redirect_policy: reqwest::redirect::Policy,
+) -> Result<reqwest::Client, String> {
+    scryer_outbound_http::transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
         &proxy_egress_url(config)?,
         transport_proxy_credentials(config),
         transport_proxy_request_timeout(config),
         extra_ca_bundle_pem,
+        redirect_policy,
     )
     .map_err(|error| transport_proxy_unreachable_message(config, &error))
 }
@@ -122,11 +136,25 @@ pub fn blocking_transport_proxied_reqwest_client(
     config: &ProxyConfig,
     extra_ca_bundle_pem: &str,
 ) -> Result<reqwest::blocking::Client, String> {
-    scryer_outbound_http::blocking_transport_proxy_reqwest_client(
+    blocking_transport_proxied_reqwest_client_with_redirect_policy(
+        config,
+        extra_ca_bundle_pem,
+        reqwest::redirect::Policy::limited(scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS),
+    )
+}
+
+/// Preserve the caller's destination boundary across proxy redirects.
+pub fn blocking_transport_proxied_reqwest_client_with_redirect_policy(
+    config: &ProxyConfig,
+    extra_ca_bundle_pem: &str,
+    redirect_policy: reqwest::redirect::Policy,
+) -> Result<reqwest::blocking::Client, String> {
+    scryer_outbound_http::blocking_transport_proxy_reqwest_client_with_redirect_policy(
         &proxy_egress_url(config)?,
         transport_proxy_credentials(config),
         transport_proxy_request_timeout(config),
         extra_ca_bundle_pem,
+        redirect_policy,
     )
     .map_err(|error| transport_proxy_unreachable_message(config, &error))
 }

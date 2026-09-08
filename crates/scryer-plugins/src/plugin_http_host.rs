@@ -291,6 +291,7 @@ impl PluginHttpWorkerRuntime {
         &mut self,
         runtime: &PluginHttpRuntime,
         config: &scryer_domain::ProxyConfig,
+        allowed_hosts: Option<Vec<String>>,
     ) -> HostResult<Client> {
         let extra_ca_bundle_pem = self.sync_trust_bundle(runtime)?;
         let revision = transport_proxy::transport_proxy_revision(config);
@@ -300,13 +301,15 @@ impl PluginHttpWorkerRuntime {
             return Ok(cached.client.clone());
         }
 
-        let client = transport_proxy::blocking_transport_proxied_reqwest_client(
-            config,
-            &extra_ca_bundle_pem,
-        )
-        .inspect_err(|message| {
-            transport_proxy::record_transport_proxy_failure(config, message);
-        })?;
+        let client =
+            transport_proxy::blocking_transport_proxied_reqwest_client_with_redirect_policy(
+                config,
+                &extra_ca_bundle_pem,
+                plugin_transport_redirect_policy(allowed_hosts),
+            )
+            .inspect_err(|message| {
+                transport_proxy::record_transport_proxy_failure(config, message);
+            })?;
         self.transport_proxy_client = Some(CachedTransportProxyClient {
             revision,
             client: client.clone(),
@@ -614,7 +617,7 @@ impl PluginHttpHost {
             worker_runtime
                 .lock()
                 .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-                .transport_proxy_client(&runtime, &policy.config)?
+                .transport_proxy_client(&runtime, &policy.config, allowed_hosts.clone())?
         } else {
             // The allowlist is the primary boundary; the guarded, DNS-pinned
             // client is the second layer that keeps a declared host from
@@ -967,6 +970,25 @@ impl PluginHttpHost {
         );
         Ok(())
     }
+}
+
+/// Reqwest applies this before issuing each hop, while retaining its request
+/// deadline, redirect method semantics, and cross-origin credential stripping.
+pub(crate) fn plugin_transport_redirect_policy(
+    allowed_hosts: Option<Vec<String>>,
+) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS {
+            return attempt.error("plugin HTTP redirect limit exceeded");
+        }
+        let destination = attempt.url().as_str();
+        if enforce_allowed_hosts(allowed_hosts.as_deref(), destination).is_err()
+            || scryer_outbound_http::validate_operator_http_url(destination, "plugin HTTP").is_err()
+        {
+            return attempt.error("plugin HTTP redirect destination is not allowed");
+        }
+        attempt.follow()
+    })
 }
 
 pub(crate) fn enforce_allowed_hosts(
@@ -1672,6 +1694,69 @@ mod tests {
             "expected an absolute-form proxied request line, got {}",
             seen[0]
         );
+    }
+
+    #[tokio::test]
+    async fn transport_proxy_redirects_revalidate_every_destination() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+        for (destination, expected_success, expected_requests) in [
+            ("/final", true, 3),
+            ("http://outside.example/final", false, 2),
+            (
+                "/middle",
+                false,
+                scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS,
+            ),
+        ] {
+            let proxy = MockServer::start().await;
+            Mock::given(path("/start"))
+                .respond_with(ResponseTemplate::new(302).insert_header("Location", "/middle"))
+                .mount(&proxy)
+                .await;
+            Mock::given(path("/middle"))
+                .respond_with(ResponseTemplate::new(302).insert_header("Location", destination))
+                .mount(&proxy)
+                .await;
+            Mock::given(path("/final"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+                .mount(&proxy)
+                .await;
+            let policy =
+                transport_proxy_policy(scryer_domain::ProxyProviderType::Http, proxy.uri());
+            let result = tokio::task::spawn_blocking(move || {
+                let host = PluginHttpHost::new(
+                    vec!["indexer.example".into()],
+                    scryer_outbound_http::PluginEgressPolicy::default(),
+                    Some(policy),
+                    None,
+                    Some(64 * 1024),
+                );
+                host.request(
+                    "newznab",
+                    PluginHttpRequest {
+                        url: "http://indexer.example/start".into(),
+                        method: Some("GET".into()),
+                        headers: BTreeMap::new(),
+                    },
+                    None,
+                    Duration::from_secs(5),
+                )
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.is_ok(),
+                expected_success,
+                "{destination}: {result:?}"
+            );
+            let requests = proxy.received_requests().await.unwrap();
+            assert_eq!(requests.len(), expected_requests, "{destination}");
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| request.url.host_str() != Some("outside.example"))
+            );
+        }
     }
 
     /// A transport proxy never reaches the solver: no solve POST, no clearance

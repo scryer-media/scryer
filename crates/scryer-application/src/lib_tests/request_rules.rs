@@ -8,6 +8,9 @@
 //! dormant lease claim of the length they asked for.
 
 use super::*;
+
+#[path = "request_rules_failure_tests.rs"]
+mod failure_tests;
 use scryer_domain::{
     LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState, MediaRequestStatus,
     RequestDecisionOutcome, RequestRuleEvaluationMode,
@@ -943,6 +946,32 @@ async fn an_enforced_denial_rejects_the_request_with_no_human_resolver() {
 }
 
 #[tokio::test]
+async fn trace_write_failure_does_not_disarm_an_enforced_denial() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+    harness
+        .request_rule_decisions
+        .fail_writes
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    submit(&harness, &library_id, 9047, Some(7)).await;
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Rejected
+    );
+    assert!(harness.titles.store.lock().await.is_empty());
+    assert!(harness.lifecycle_claims.all().await.is_empty());
+    assert!(harness.request_rule_decisions.recorded().await.is_empty());
+}
+
+#[tokio::test]
 async fn a_held_rule_never_approves() {
     let harness = bootstrap_media_request_app();
     // Reads a fact the claim store answers. With that store down the fact is
@@ -1537,6 +1566,16 @@ async fn every_overlapping_pending_request_gets_its_own_claim() {
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let first = submit(&harness, &library_id, 9057, Some(30)).await;
     let second = submit(&harness, &library_id, 9057, Some(5)).await;
+    {
+        let mut requests = harness.media_requests.requests.lock().await;
+        let sibling = requests
+            .iter_mut()
+            .find(|request| request.id == second)
+            .unwrap();
+        sibling.decision_id = Some("sibling-trace".into());
+        sibling.decided_by_rule_set_ids = vec!["sibling-policy".into()];
+        sibling.policy_tags = vec!["sibling-tag".into()];
+    }
 
     harness
         .app
@@ -1556,6 +1595,15 @@ async fn every_overlapping_pending_request_gets_its_own_claim() {
         .expect("the overlapping request has a claim");
     assert_eq!(first_claim.duration_days, Some(30));
     assert_eq!(second_claim.duration_days, Some(5));
+    let requests = harness.media_requests.requests.lock().await;
+    let sibling = requests
+        .iter()
+        .find(|request| request.id == second)
+        .unwrap();
+    assert_eq!(sibling.approved_lease_days, Some(5));
+    assert_eq!(sibling.decision_id.as_deref(), Some("sibling-trace"));
+    assert_eq!(sibling.decided_by_rule_set_ids, ["sibling-policy"]);
+    assert_eq!(sibling.policy_tags, ["sibling-tag"]);
 }
 
 #[tokio::test]

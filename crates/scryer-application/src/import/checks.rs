@@ -67,9 +67,9 @@ pub struct ImportCheckContext<'a> {
     pub source_path: &'a Path,
     pub dest_path: &'a Path,
     pub source_size: u64,
+    pub import_mode: scryer_domain::ImportMode,
     #[expect(dead_code)]
     pub parsed: &'a ParsedReleaseMetadata,
-    #[expect(dead_code)]
     pub existing_files: &'a [TitleMediaFile],
 }
 
@@ -204,9 +204,18 @@ pub fn check_not_unpacking(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
     ImportVerdict::Accept
 }
 
-/// Reject if destination already exists with the same size (exact duplicate).
+/// Skip a same-sized destination, allowing move retries to finish persistence.
 pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
-    if !ctx.dest_path.exists() {
+    // A failed catalog write can leave verified bytes at the destination. Let
+    // the coordinated importer prove their content and claim catalog ownership
+    // before it can remove the source on retry.
+    if !ctx.dest_path.exists()
+        || (ctx.import_mode == scryer_domain::ImportMode::Move
+            && !ctx
+                .existing_files
+                .iter()
+                .any(|file| Path::new(&file.file_path) == ctx.dest_path))
+    {
         return ImportVerdict::Accept;
     }
 
@@ -291,6 +300,7 @@ mod tests {
             source_path: source,
             dest_path: dest,
             source_size,
+            import_mode: scryer_domain::ImportMode::HardlinkOrCopy,
             parsed,
             existing_files,
         }
@@ -395,6 +405,26 @@ mod tests {
         let dst = PathBuf::from("/data/movie.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
         assert!(check_not_unpacking(&ctx).is_accept());
+    }
+
+    #[test]
+    fn uncataloged_move_destination_reaches_content_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("destination.mkv");
+        std::fs::write(&source, b"video").unwrap();
+        std::fs::write(&dest, b"video").unwrap();
+        let parsed = parse_release_metadata("movie");
+        let mut ctx = dummy_ctx(&source, &dest, 5, &parsed, &[]);
+        assert!(matches!(
+            check_not_already_imported(&ctx),
+            ImportVerdict::Reject {
+                code: ImportCheckCode::DuplicateFile,
+                ..
+            }
+        ));
+        ctx.import_mode = scryer_domain::ImportMode::Move;
+        assert!(check_not_already_imported(&ctx).is_accept());
     }
 
     #[test]

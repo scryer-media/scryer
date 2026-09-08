@@ -1508,9 +1508,10 @@ impl AppUseCase {
             .await?;
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
-        let installed = semver::Version::parse(installed_version).map_err(|error| {
-            AppError::Validation(format!("invalid installed pack version: {error}"))
-        })?;
+        let installed =
+            semver::Version::parse(installed_version.trim_start_matches('v')).map_err(|error| {
+                AppError::Validation(format!("invalid installed pack version: {error}"))
+            })?;
         let catalog = self.load_rule_pack_catalog().await?;
         let Some(pack) = catalog.rule_packs.iter().find(|pack| pack.id == pack_id) else {
             return Ok(None);
@@ -1519,7 +1520,7 @@ impl AppUseCase {
         Ok(
             select_rule_pack_candidate(pack, cpu, None, patch_only.then_some(&installed))
                 .filter(|(release, _)| {
-                    semver::Version::parse(&release.version)
+                    semver::Version::parse(release.version.trim_start_matches('v'))
                         .is_ok_and(|candidate| candidate.cmp_precedence(&installed).is_gt())
                 })
                 .map(|(release, artifact)| {

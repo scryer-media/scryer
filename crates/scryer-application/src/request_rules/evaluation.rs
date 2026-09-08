@@ -8,12 +8,10 @@
 //! # Nothing here may fail the caller
 //!
 //! A request rule is a convenience layered over a flow that worked without it.
-//! So every failure — an unreadable gate, a fact source that is down, a rule
-//! that will not compile, an engine that times out, a trace store that refuses
-//! the write — degrades to *today's behaviour*: the library's Auto-Approve
-//! permission approves, and everything else waits for a human. The policy
-//! verdict is still recorded when it can be, with `fallback_reason = "error"`,
-//! so an operator can see that policy did not get to speak.
+//! Unreadable gates and unavailable shared facts use the library's existing
+//! Auto-Approve permission. Uncertainty in an armed enforcing rule holds the
+//! request for a human. Trace persistence is best effort: a failed trace write
+//! must not change the verdict already reached by policy.
 
 use chrono::Utc;
 use scryer_domain::{
@@ -366,7 +364,7 @@ impl AppUseCase {
             .cloned()
             .collect();
         let effective = arbitrate(&enforcing_votes, &enforcing_errors, permission);
-        let effective_outcome = effective.effective_outcome(gate_enabled, true, permission);
+        let mut effective_outcome = effective.effective_outcome(gate_enabled, true, permission);
 
         let emitted_tags = arbitration.tags.clone();
         let arbitration = if enforcing_votes.is_empty() && enforcing_errors.is_empty() {
@@ -374,9 +372,17 @@ impl AppUseCase {
         } else {
             effective.clone()
         };
+        let mut fallback_reason = arbitration.fallback_reason.map(str::to_string);
         let applicable_tags = if gate_enabled {
-            self.applicable_policy_tags(&purpose, &effective.tags)
-                .await?
+            match self.applicable_policy_tags(&purpose, &effective.tags).await {
+                Ok(tags) => tags,
+                Err(error) => {
+                    tracing::warn!(%error, "request rule tag registry unavailable; holding request");
+                    effective_outcome = RequestDecisionOutcome::ManualReview;
+                    fallback_reason = Some(FALLBACK_ERROR.to_string());
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };
@@ -385,7 +391,7 @@ impl AppUseCase {
             decision_id: None,
             policy_outcome: arbitration.policy_outcome,
             effective_outcome,
-            fallback_reason: arbitration.fallback_reason.map(str::to_string),
+            fallback_reason,
             deciding_rule_set_ids: arbitration.deciding_rule_set_ids.clone(),
             tags: applicable_tags,
             emitted_tags,

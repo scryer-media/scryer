@@ -742,8 +742,24 @@ impl MediaFileRepository for MediaFileStore {
     }
 
     async fn list_missing_scope_candidates(&self) -> AppResult<MissingScopeCandidates> {
+        self.list_missing_scope_candidates_for_title(None).await
+    }
+
+    async fn list_missing_scope_candidates_for_title(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<MissingScopeCandidates> {
         let dialect = dialect_for_datastore(&self.datastore);
         let live_file = live_media_file_predicate(dialect, "mf");
+        let title_filter = if title_id.is_some() {
+            "AND t.id = {}"
+        } else {
+            ""
+        };
+        let args: Vec<SqlArg> = title_id
+            .into_iter()
+            .map(|id| SqlArg::Text(id.to_string()))
+            .collect();
 
         // Monitored episodes (inside monitored collections of monitored titles)
         // with no live primary file. Episodes outside a collection are not
@@ -756,6 +772,7 @@ impl MediaFileRepository for MediaFileStore {
               INNER JOIN titles t ON t.id = e.title_id
               INNER JOIN collections c ON c.id = e.collection_id
               WHERE {} AND {} AND {}
+                {title_filter}
                 AND t.deleted_at IS NULL
                 AND NOT EXISTS (
                     SELECT 1 FROM file_episode_map fem
@@ -769,7 +786,7 @@ impl MediaFileRepository for MediaFileStore {
             bool_column_is_true(dialect, "e.monitored"),
             bool_column_is_true(dialect, "c.monitored"),
         );
-        let episodes = SqlRuntime::fetch_all(self.datastore.read_exec(), &episode_sql, &[])
+        let episodes = SqlRuntime::fetch_all(self.datastore.read_exec(), &episode_sql, &args)
             .await?
             .iter()
             .map(|row| {
@@ -794,6 +811,7 @@ impl MediaFileRepository for MediaFileStore {
                     t.first_aired, t.digital_release_date, t.created_at
                FROM titles t
               WHERE {}
+                {title_filter}
                 AND t.deleted_at IS NULL
                 AND NOT EXISTS (
                     SELECT 1 FROM media_files mf
@@ -804,7 +822,7 @@ impl MediaFileRepository for MediaFileStore {
               ORDER BY t.id",
             bool_column_is_true(dialect, "t.monitored"),
         );
-        let titles = SqlRuntime::fetch_all(self.datastore.read_exec(), &title_sql, &[])
+        let titles = SqlRuntime::fetch_all(self.datastore.read_exec(), &title_sql, &args)
             .await?
             .iter()
             .map(|row| {
@@ -831,6 +849,7 @@ impl MediaFileRepository for MediaFileStore {
               INNER JOIN titles t ON t.id = sml.series_title_id
               INNER JOIN movie_entities me ON me.id = sml.movie_entity_id
               WHERE {} AND {}
+                {title_filter}
                 AND ({} OR {})
                 AND t.deleted_at IS NULL
                 AND NOT EXISTS (
@@ -845,21 +864,22 @@ impl MediaFileRepository for MediaFileStore {
             bool_column_is_true(dialect, "sml.metadata_active"),
             bool_column_is_true(dialect, "sml.monitoring_override"),
         );
-        let series_movie_links = SqlRuntime::fetch_all(self.datastore.read_exec(), &link_sql, &[])
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(MissingSeriesMovieLinkCandidate {
-                    series_movie_link_id: row.text("series_movie_link_id")?,
-                    title_id: row.text("title_id")?,
-                    library_id: row.text("library_id")?,
-                    title_facet: row.text("facet")?,
-                    continuity_status: row.opt_text("continuity_status")?,
-                    movie_digital_release_date: row.opt_text("movie_digital_release_date")?,
-                    link_created_at: timestamp_text(row, "link_created_at")?,
+        let series_movie_links =
+            SqlRuntime::fetch_all(self.datastore.read_exec(), &link_sql, &args)
+                .await?
+                .iter()
+                .map(|row| {
+                    Ok(MissingSeriesMovieLinkCandidate {
+                        series_movie_link_id: row.text("series_movie_link_id")?,
+                        title_id: row.text("title_id")?,
+                        library_id: row.text("library_id")?,
+                        title_facet: row.text("facet")?,
+                        continuity_status: row.opt_text("continuity_status")?,
+                        movie_digital_release_date: row.opt_text("movie_digital_release_date")?,
+                        link_created_at: timestamp_text(row, "link_created_at")?,
+                    })
                 })
-            })
-            .collect::<AppResult<Vec<_>>>()?;
+                .collect::<AppResult<Vec<_>>>()?;
 
         Ok(MissingScopeCandidates {
             episodes,
@@ -2877,6 +2897,52 @@ mod tests {
             .list_missing_scope_candidates()
             .await
             .expect("missing scope candidates should load");
+
+        let scoped = media_files
+            .list_missing_scope_candidates_for_title(Some(&title.id))
+            .await
+            .expect("title-filtered candidates");
+        assert_eq!(
+            scoped.episodes.len(),
+            missing
+                .episodes
+                .iter()
+                .filter(|item| item.title_id == title.id)
+                .count()
+        );
+        assert_eq!(
+            scoped.titles.len(),
+            missing
+                .titles
+                .iter()
+                .filter(|item| item.title_id == title.id)
+                .count()
+        );
+        assert_eq!(
+            scoped.series_movie_links.len(),
+            missing
+                .series_movie_links
+                .iter()
+                .filter(|item| item.title_id == title.id)
+                .count()
+        );
+        assert!(scoped.episodes.iter().all(|item| item.title_id == title.id));
+        assert!(scoped.titles.iter().all(|item| item.title_id == title.id));
+        assert!(
+            scoped
+                .series_movie_links
+                .iter()
+                .all(|item| item.title_id == title.id)
+        );
+        let absent = media_files
+            .list_missing_scope_candidates_for_title(Some("absent-title"))
+            .await
+            .expect("absent title");
+        assert!(
+            absent.episodes.is_empty()
+                && absent.titles.is_empty()
+                && absent.series_movie_links.is_empty()
+        );
 
         let episode_candidate = missing
             .episodes

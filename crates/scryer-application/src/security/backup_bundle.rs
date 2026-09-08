@@ -430,6 +430,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "application_migrations",
         classification: BackupTableClassification::Export,
     },
+    BackupTableCatalogEntry {
+        table: "application_compatibility_journal",
+        classification: BackupTableClassification::Export,
+    },
     // Legacy: no current migration creates this table, but installs that
     // upgraded through the pre-0122 schema may still carry it. The entry is
     // deliberately retained — an `Ignore` entry for an absent table costs

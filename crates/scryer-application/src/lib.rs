@@ -261,6 +261,7 @@ pub use app_usecase_integration::derive_download_queue_display_state;
 pub use app_usecase_integration::enrich_download_queue_items_from_submissions;
 pub use app_usecase_integration::matches_download_activity_filter;
 pub use app_usecase_integration::matches_download_queue_filter;
+pub use app_usecase_integration::validate_persisted_proxy_config;
 pub use app_usecase_integration::{
     DownloadQueuePollerOptions, start_download_queue_poller,
     start_download_queue_poller_with_options,
@@ -359,6 +360,7 @@ pub(crate) use library::rename::{
     validate_season_folder_template, validate_specials_folder_template,
     validate_title_folder_template,
 };
+pub use location::backfill::start_full_hash_backfill_worker;
 pub use media::language::{
     normalize_detected_audio_language_code, normalize_detected_audio_languages,
     normalize_detected_subtitle_language_code, normalize_detected_subtitle_languages,

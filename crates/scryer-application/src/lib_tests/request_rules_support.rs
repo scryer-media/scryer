@@ -162,6 +162,7 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
 #[derive(Default)]
 pub(super) struct InMemoryRequestRuleDecisionRepo {
     decisions: Mutex<Vec<RequestRuleDecisionRecord>>,
+    pub(super) fail_writes: std::sync::atomic::AtomicBool,
 }
 
 impl InMemoryRequestRuleDecisionRepo {
@@ -176,6 +177,11 @@ impl InMemoryRequestRuleDecisionRepo {
 #[async_trait]
 impl crate::ports::RequestRuleDecisionRepository for InMemoryRequestRuleDecisionRepo {
     async fn record(&self, decision: &RequestRuleDecisionRecord) -> AppResult<()> {
+        if self.fail_writes.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(AppError::Repository(
+                "synthetic decision trace failure".into(),
+            ));
+        }
         self.decisions.lock().await.push(decision.clone());
         Ok(())
     }

@@ -132,7 +132,6 @@ use ui_assets::{UiAssetMode, ui_asset_mode, ui_fallback};
 include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const LEGACY_NZBGEEK_PLUGIN_ID: &str = "nzbgeek";
 const RECOVERY_ADMIN_PASSWORD_ENV: &str = "SCRYER_RECOVERY_ADMIN_PASSWORD";
 const DEVELOPMENT_MODE_ENV: &str = "SCRYER_DEVELOPMENT_MODE";
 const ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV: &str = "SCRYER_ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS";
@@ -1025,6 +1024,9 @@ async fn bootstrap_application(
         .run_early(datastore.indexer_configs(), &customization_store)
         .await
         .map_err(|error| format!("required early application migration failed: {error}"))?;
+    application_migrator
+        .run_proxy_compatibility(datastore.proxy_configs())
+        .await?;
     record_post_upgrade_auto_backup_pending_if_needed(
         bootstrap_settings_store.clone(),
         &version_lifecycle,
@@ -1560,7 +1562,7 @@ async fn bootstrap_application(
             previous_version,
             VERSION,
         )
-        .await;
+        .await?;
     spawn_post_upgrade_auto_backup_if_pending(
         app_use_case.clone(),
         bootstrap_settings_store.clone(),
@@ -1835,6 +1837,10 @@ async fn bootstrap_application(
         bridged_client_types,
     ));
     tokio::spawn(start_background_acquisition_poller(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(scryer_application::start_full_hash_backfill_worker(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
@@ -3123,28 +3129,11 @@ async fn load_runtime_plugin_state(
 
 async fn bootstrap_plugin_installations(
     customization_store: &DatastoreCustomizationStore,
-    finalized_pending_restore: bool,
+    _finalized_pending_restore: bool,
 ) -> Result<(), String> {
-    let removed = customization_store
-        .delete_incompatible_external_plugin_installations(finalized_pending_restore)
-        .await
-        .map_err(|error| error.to_string())?;
-    for plugin_id in removed {
-        tracing::warn!(
-            plugin_id = plugin_id.as_str(),
-            "removed incompatible legacy external plugin installation during startup bootstrap"
-        );
-    }
-
+    // Compatibility migration needs the original installation and artifact.
+    // An unavailable runtime is never a reason to delete either.
     seed_builtin_plugin_installations(customization_store).await
-}
-
-fn preserves_legacy_nzbgeek_builtin_for_catalog_migration(
-    installation: &scryer_domain::PluginInstallation,
-) -> bool {
-    installation.plugin_id == LEGACY_NZBGEEK_PLUGIN_ID
-        && installation.is_builtin
-        && installation.source_kind == scryer_domain::PluginSourceKind::Bundled
 }
 
 async fn seed_builtin_plugin_installations(
@@ -3296,19 +3285,6 @@ async fn seed_builtin_plugin_installations(
         });
     }
 
-    let builtin_lookup_key = |plugin_type: &str, provider_type: &str| {
-        let family = match plugin_type {
-            "indexer" | "usenet_indexer" | "torrent_indexer" => "indexer",
-            other => other,
-        };
-        format!("{family}::{}", provider_type.trim().to_ascii_lowercase())
-    };
-
-    let builtin_keys = builtins
-        .iter()
-        .map(|builtin| builtin_lookup_key(&builtin.plugin_type, &builtin.provider_type))
-        .collect::<std::collections::HashSet<_>>();
-
     for builtin in builtins {
         customization_store
             .seed_builtin(
@@ -3321,29 +3297,6 @@ async fn seed_builtin_plugin_installations(
                 &builtin.plugin_type,
                 &builtin.provider_type,
             )
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-
-    let stale_builtin_plugin_ids = customization_store
-        .list_plugin_installations()
-        .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .filter(|installation| {
-            installation.is_builtin
-                && !preserves_legacy_nzbgeek_builtin_for_catalog_migration(installation)
-                && !builtin_keys.contains(&builtin_lookup_key(
-                    &installation.plugin_type,
-                    &installation.provider_type,
-                ))
-        })
-        .map(|installation| installation.plugin_id)
-        .collect::<Vec<_>>();
-
-    for plugin_id in stale_builtin_plugin_ids {
-        customization_store
-            .delete_plugin_installation(&plugin_id)
             .await
             .map_err(|error| error.to_string())?;
     }
@@ -3898,7 +3851,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_plugin_state_succeeds_after_bootstrap_deletes_legacy_external_rows() {
+    async fn runtime_plugin_state_retains_legacy_external_rows_for_compatibility_repair() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("plugins.db");
         let services = SqliteServices::new(db_path.to_string_lossy())
@@ -3957,7 +3910,7 @@ mod tests {
                 .get_plugin_installation("legacy")
                 .await
                 .expect("read plugin installation")
-                .is_none()
+                .is_some()
         );
     }
 

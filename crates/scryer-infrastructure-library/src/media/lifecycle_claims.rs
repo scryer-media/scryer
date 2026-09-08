@@ -321,6 +321,11 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         expires_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> AppResult<()> {
+        if expires_at <= now {
+            return Err(AppError::Validation(
+                "claim extension must be in the future".into(),
+            ));
+        }
         let state_placeholders = std::iter::repeat_n("{}", LIFECYCLE_CLAIM_LIVE_STATES.len())
             .collect::<Vec<_>>()
             .join(", ");
@@ -330,20 +335,23 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
             SqlArg::Text(id.to_string()),
         ];
         args.extend(live_state_args());
+        args.push(SqlArg::Timestamp(expires_at));
         let updated = execute_write_sql(
             &self.datastore,
             "extend_lifecycle_claim",
             format!(
                 "UPDATE lifecycle_claims
                     SET expires_at = {{}}, updated_at = {{}}
-                  WHERE id = {{}} AND state IN ({state_placeholders})"
+                  WHERE id = {{}} AND state IN ({state_placeholders})
+                    AND kind = 'retain_until'
+                    AND (expires_at IS NULL OR expires_at < {{}})"
             ),
             args,
         )
         .await?;
         if updated == 0 {
             return Err(AppError::Validation(
-                "lifecycle claim is no longer live".to_string(),
+                "claim extension must lengthen a live finite lease".to_string(),
             ));
         }
         Ok(())

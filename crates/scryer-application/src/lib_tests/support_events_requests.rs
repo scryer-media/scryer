@@ -1,7 +1,9 @@
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Default)]
 pub(super) struct MockDomainEventRepo {
+    pub(super) fail_append_many: AtomicBool,
     pub(super) events: Arc<Mutex<Vec<DomainEvent>>>,
     pub(super) subscriber_offsets: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
@@ -169,6 +171,11 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
+        if self.fail_append_many.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic event append failure".into(),
+            ));
+        }
         let mut stored = Vec::with_capacity(events.len());
         for event in events {
             stored.push(self.append(event).await?);
@@ -321,6 +328,7 @@ impl DomainEventRepository for MockDomainEventRepo {
 
 #[derive(Default)]
 pub(super) struct MockMediaRequestRepo {
+    pub(super) fail_policy_tag_rewrites: AtomicBool,
     pub(super) requests: Arc<Mutex<Vec<MediaRequest>>>,
     pub(super) domain_events: Option<Arc<MockDomainEventRepo>>,
 }
@@ -330,6 +338,7 @@ impl MockMediaRequestRepo {
         Self {
             requests: Arc::new(Mutex::new(Vec::new())),
             domain_events: Some(domain_events),
+            fail_policy_tag_rewrites: AtomicBool::new(false),
         }
     }
 }
@@ -455,10 +464,14 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             candidate.approved_quality_profile_id = resolution.approved_quality_profile_id.clone();
             candidate.approved_quality_profile_name =
                 resolution.approved_quality_profile_name.clone();
-            candidate.approved_lease_days = resolution.approved_lease_days;
-            candidate.decision_id = resolution.decision_id.clone();
-            candidate.decided_by_rule_set_ids = resolution.decided_by_rule_set_ids.clone();
-            candidate.policy_tags = resolution.policy_tags.clone();
+            if candidate.id == request.id {
+                candidate.approved_lease_days = resolution.approved_lease_days;
+                candidate.decision_id = resolution.decision_id.clone();
+                candidate.decided_by_rule_set_ids = resolution.decided_by_rule_set_ids.clone();
+                candidate.policy_tags = resolution.policy_tags.clone();
+            } else if resolution.status == MediaRequestStatus::Approved {
+                candidate.approved_lease_days = candidate.requested_lease_days;
+            }
             candidate.updated_at = resolution.resolved_at;
             updated += 1;
         }
@@ -726,6 +739,11 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         label: &str,
         replacement: Option<&str>,
     ) -> AppResult<u64> {
+        if self.fail_policy_tag_rewrites.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic pending policy tag rewrite failure".into(),
+            ));
+        }
         let mut requests = self.requests.lock().await;
         let mut changed = 0_u64;
         for request in requests

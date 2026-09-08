@@ -1909,6 +1909,9 @@ pub struct AppRuntimeLibraryState {
 #[derive(Clone)]
 pub struct AppRuntimeJobState {
     pub job_run_tracker: JobRunTracker,
+    pub(crate) full_hash_start_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) full_hash_execution_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) full_hash_shutdown: tokio_util::sync::CancellationToken,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
     pub interactive_operation_guards: InteractiveOperationGuardTable,
@@ -1933,6 +1936,7 @@ pub struct AppRuntimeHealthState {
 pub struct AppRuntimePluginState {
     pub plugin_operation_guards: PluginOperationGuardTable,
     pub plugin_install_orchestrator: PluginInstallOrchestrator,
+    pub(crate) compatibility_blockers: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2160,6 +2164,9 @@ impl AppRuntimeState {
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),
+                full_hash_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                full_hash_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
+                full_hash_shutdown: tokio_util::sync::CancellationToken::new(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
                 interactive_operation_guards: InteractiveOperationGuardTable::default(),
@@ -2174,6 +2181,7 @@ impl AppRuntimeState {
             plugins: AppRuntimePluginState {
                 plugin_operation_guards: PluginOperationGuardTable::default(),
                 plugin_install_orchestrator: PluginInstallOrchestrator::default(),
+                compatibility_blockers: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             },
             integrations: AppRuntimeIntegrationState {
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),

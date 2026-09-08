@@ -2412,6 +2412,43 @@ async fn list_rule_pack_registry_reads_cached_central_catalog() {
     assert_eq!(packs[0].id, "anime-defaults");
 }
 
+#[tokio::test]
+async fn rule_pack_updates_accept_v_prefixed_installed_and_catalog_versions() {
+    for candidate in ["0.1.1", "v0.1.1"] {
+        let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+        let catalog = serde_json::json!({
+            "plugins": [],
+            "rule_packs": [{
+                "id": "anime-defaults", "name": "Anime Defaults",
+                "description": "Test", "author": "scryer",
+                "version": candidate,
+                "url": "https://example.test/anime.json"
+            }]
+        })
+        .to_string();
+        h.plugin_repo
+            .store_catalog_fixture_json(&catalog)
+            .await
+            .unwrap();
+        for installed in ["0.1.0", "v0.1.0"] {
+            let update = h
+                .app
+                .rule_pack_update_candidate(&admin(), "anime-defaults", installed, true)
+                .await
+                .unwrap()
+                .expect("new patch");
+            assert_eq!(update.version, candidate);
+        }
+        assert!(
+            h.app
+                .rule_pack_update_candidate(&admin(), "anime-defaults", "v0.1.1", true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
 // ── list_available_plugins ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -4690,6 +4727,8 @@ fn bootstrap_plugins_with_settings(
 }
 
 const AUTO_UPDATE_WASM_BYTES: &[u8] = b"persisted plugin artifact";
+
+mod component_upgrade_tests;
 
 fn official_catalog_installation(plugin_id: &str, version: &str) -> PluginInstallation {
     let mut installation = make_installation(plugin_id, version, false, true);

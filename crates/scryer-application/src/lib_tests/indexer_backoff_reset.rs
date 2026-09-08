@@ -1,5 +1,55 @@
 use super::*;
 
+#[tokio::test]
+async fn editing_indexer_credentials_keeps_omitted_proxy_assignment_for_validation() {
+    let mut config = synthetic_direct_nab_indexer_config("idx", "nzbgeek");
+    config.config_json = Some(credentials("original"));
+    config.proxy_config_id = Some("missing-assigned-proxy".into());
+    let (app, admin) = bootstrap_with_search_settings_indexer_and_configs(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(BackoffRecordingIndexerClient::default()),
+        vec![config],
+    );
+    let error = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "idx".into(),
+                config_json: Some(credentials("new")),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("omission must validate through the assigned proxy");
+    assert!(
+        matches!(&error, AppError::Validation(message) if message == "Proxy configuration was not found."),
+        "{error}"
+    );
+    let unchanged = app
+        .get_indexer_config(&admin, "idx")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.config_json, Some(credentials("original")));
+    assert_eq!(
+        unchanged.proxy_config_id.as_deref(),
+        Some("missing-assigned-proxy")
+    );
+    let cleared = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "idx".into(),
+                config_json: Some(credentials("new")),
+                proxy_config_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("an explicit proxy removal may validate a direct connection");
+    assert!(cleared.proxy_config_id.is_none());
+}
+
 /// Records which indexers the search client was told to forget backoff for.
 #[derive(Default)]
 struct BackoffRecordingIndexerClient {

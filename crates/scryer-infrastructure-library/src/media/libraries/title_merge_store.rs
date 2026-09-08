@@ -185,6 +185,21 @@ impl TitleMergeRepository for TitleMergeStore {
                 };
                 repoint_media_files(tx, &plan, &map, &mut outcome).await?;
                 carry_history(tx, &map, &mut outcome).await?;
+                // Move protection and its history before retiring the source.
+                // Producer identity, state and lease deadlines remain intact.
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE lifecycle_claims
+                        SET title_id = {},
+                            library_id = (SELECT library_id FROM titles WHERE id = {})
+                      WHERE title_id = {}",
+                    &[
+                        SqlArg::Text(map.destination_title_id.clone()),
+                        SqlArg::Text(map.destination_title_id.clone()),
+                        SqlArg::Text(map.source_title_id.clone()),
+                    ],
+                )
+                .await?;
                 retire_source_title(tx, &map, &mut outcome).await?;
                 Ok(outcome)
             })

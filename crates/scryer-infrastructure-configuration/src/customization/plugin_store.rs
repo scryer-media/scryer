@@ -217,7 +217,6 @@ impl PluginInstallationRepository for PluginStore {
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[])
             .await?
             .iter()
-            .filter(|row| !row_is_incompatible_external_installation(row, true))
             .map(row_to_plugin_installation)
             .collect()
     }
@@ -240,9 +239,9 @@ impl PluginInstallationRepository for PluginStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        if row_is_incompatible_external_installation(&row, true) {
-            return Ok(None);
-        }
+        // Startup compatibility repair and the operator UI must see legacy
+        // rows, including incomplete payload metadata. Runtime loading applies
+        // compatibility checks separately; hiding rows prevents their repair.
         row_to_plugin_installation(&row).map(Some)
     }
 

@@ -676,16 +676,29 @@ pub async fn flush_solver_health(repo: &dyn ProxyConfigRepository) {
 /// there would evict the very session that did the pinning on every first
 /// connect. A trust-on-first-use pin is not an operator edit.
 async fn flush_tunnel_host_key_pins(repo: &dyn ProxyConfigRepository) {
-    for pin in crate::tunnel_proxy::TunnelHostKeyLedger::shared().drain() {
+    flush_tunnel_host_key_ledger(repo, crate::tunnel_proxy::TunnelHostKeyLedger::shared()).await;
+}
+
+async fn flush_tunnel_host_key_ledger(
+    repo: &dyn ProxyConfigRepository,
+    ledger: &crate::tunnel_proxy::TunnelHostKeyLedger,
+) {
+    for pin in ledger.pending() {
         match repo.get_by_id(&pin.proxy_config_id).await {
             // Already pinned — by the health probe, which owns a repository
             // handle and writes directly, or by an earlier flush. Trust on
             // *first* use means a queued observation never overwrites an
             // existing pin: once the row has one, the row is the authority.
-            Ok(Some(existing)) if existing.host_key_fingerprint.is_some() => continue,
+            Ok(Some(existing)) if existing.host_key_fingerprint.is_some() => {
+                ledger.acknowledge(&pin);
+                continue;
+            }
             Ok(Some(_)) => {}
             // The row was deleted between the handshake and the flush.
-            Ok(None) => continue,
+            Ok(None) => {
+                ledger.acknowledge(&pin);
+                continue;
+            }
             Err(error) => {
                 tracing::warn!(
                     proxy_config_id = pin.proxy_config_id.as_str(),
@@ -704,6 +717,8 @@ async fn flush_tunnel_host_key_pins(repo: &dyn ProxyConfigRepository) {
                 error = %error,
                 "failed to persist a tunnel host key pin"
             );
+        } else {
+            ledger.acknowledge(&pin);
         }
     }
 }
@@ -711,6 +726,103 @@ async fn flush_tunnel_host_key_pins(repo: &dyn ProxyConfigRepository) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AppError, AppResult};
+    use chrono::DateTime;
+
+    struct FailingPinRepository {
+        row: std::sync::Mutex<scryer_domain::ProxyConfig>,
+        ledger: std::sync::Arc<crate::tunnel_proxy::TunnelHostKeyLedger>,
+        fail_read: std::sync::atomic::AtomicBool,
+        fail_write: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl ProxyConfigRepository for FailingPinRepository {
+        async fn get_by_id(&self, _: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+            self.ledger.record("proxy-tunnel", "SHA256:later");
+            if self
+                .fail_read
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(AppError::Repository("injected read failure".into()));
+            }
+            Ok(Some(self.row.lock().unwrap().clone()))
+        }
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            fingerprint: &str,
+            pinned_at: DateTime<Utc>,
+        ) -> AppResult<()> {
+            self.ledger.record("proxy-tunnel", "SHA256:later");
+            if self
+                .fail_write
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(AppError::Repository("injected write failure".into()));
+            }
+            let mut row = self.row.lock().unwrap();
+            row.host_key_fingerprint = Some(fingerprint.into());
+            row.host_key_pinned_at = Some(pinned_at);
+            Ok(())
+        }
+        async fn list(
+            &self,
+            _: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
+            unreachable!()
+        }
+        async fn create(
+            &self,
+            _: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            unreachable!()
+        }
+        async fn delete(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn record_health(
+            &self,
+            _: &str,
+            _: scryer_domain::ProxyHealthStatus,
+            _: Option<String>,
+            _: Option<DateTime<Utc>>,
+        ) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn clear_host_key(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_host_key_flush_retries_the_original_observation_and_timestamp() {
+        for fail_read in [true, false] {
+            let ledger = std::sync::Arc::new(crate::tunnel_proxy::TunnelHostKeyLedger::default());
+            ledger.record("proxy-tunnel", "SHA256:first");
+            let first = ledger.pending().pop().unwrap();
+            let repo = FailingPinRepository {
+                row: std::sync::Mutex::new(crate::tunnel_proxy::tests::tunnel_config()),
+                ledger: ledger.clone(),
+                fail_read: fail_read.into(),
+                fail_write: (!fail_read).into(),
+            };
+            flush_tunnel_host_key_ledger(&repo, &ledger).await;
+            assert_eq!(ledger.pending(), vec![first.clone()]);
+            assert!(repo.row.lock().unwrap().host_key_fingerprint.is_none());
+            flush_tunnel_host_key_ledger(&repo, &ledger).await;
+            assert!(ledger.pending().is_empty());
+            let row = repo.row.lock().unwrap();
+            assert_eq!(row.host_key_fingerprint.as_deref(), Some("SHA256:first"));
+            assert_eq!(row.host_key_pinned_at, Some(first.pinned_at));
+        }
+    }
 
     fn solution_from_json(value: serde_json::Value) -> ChallengeSolverSolution {
         serde_json::from_value(value).expect("solution should deserialize")
