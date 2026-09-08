@@ -2320,6 +2320,15 @@ pub trait ImageProxyRepository: Send + Sync {
         limit: u32,
     ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
 
+    /// Keyset pagination keeps both admission and failure retries bounded per run.
+    async fn list_cached_jpegs(
+        &self,
+        _limit: usize,
+        _after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
     /// Sums the persisted `byte_size` scalars without reading entry rows.
     async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage>;
 
@@ -2339,10 +2348,38 @@ pub trait ImageProxyRepository: Send + Sync {
 pub trait ImageProxyCacheControl: Send + Sync {
     async fn clear_cache(&self) -> AppResult<()>;
     async fn set_configured_max_bytes(&self, value: u64) -> AppResult<()>;
+
+    async fn list_cached_jpegs(
+        &self,
+        _limit: usize,
+        _after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
+    /// Returns false when an entry was evicted or refreshed since admission.
+    async fn optimize_cached_jpeg(
+        &self,
+        _entry: ImageProxyCacheEntryRecord,
+        _processor: std::sync::Arc<dyn TitleImageProcessor>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn wait_for_cached_jpeg(&self) {
+        std::future::pending::<()>().await;
+    }
 }
 
 #[async_trait]
 pub trait TitleImageProcessor: Send + Sync {
+    /// A separate fast preset for disposable proxy artwork, on the configured pool.
+    async fn encode_cached_jpeg(&self, _bytes: Vec<u8>, _width: u32) -> AppResult<Vec<u8>> {
+        Err(AppError::Validation(
+            "cached JPEG encoding is unavailable".into(),
+        ))
+    }
+
     /// Configure the shared CPU budget before an exclusive artwork run starts.
     async fn configure_encoding_workers(&self, _workers: usize) -> AppResult<()> {
         Ok(())

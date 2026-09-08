@@ -19,6 +19,8 @@ use scryer_outbound_http::{
 const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
 const AVIF_SPEED: u8 = 4;
 const AVIF_QUALITY: u8 = 85;
+const PROXY_AVIF_SPEED: u8 = 10;
+const PROXY_AVIF_QUALITY: u8 = 60;
 
 fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     if !matches!(workers, 2 | 4) {
@@ -267,6 +269,26 @@ impl Default for HttpTitleImageProcessor {
 
 #[async_trait]
 impl TitleImageProcessor for HttpTitleImageProcessor {
+    async fn encode_cached_jpeg(&self, bytes: Vec<u8>, width: u32) -> AppResult<Vec<u8>> {
+        let pool = self.encoding_pool.read().await.clone().ok_or_else(|| {
+            AppError::Repository("artwork workers have not been configured".into())
+        })?;
+        let (send, receive) = tokio::sync::oneshot::channel();
+        pool.spawn(move || {
+            if send.is_closed() {
+                return;
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                encode_proxy_jpeg(&bytes, width)
+            }))
+            .unwrap_or_else(|_| Err(AppError::Repository("cached JPEG task panicked".into())));
+            let _ = send.send(result);
+        });
+        receive
+            .await
+            .map_err(|error| AppError::Repository(format!("cached JPEG task failed: {error}")))?
+    }
+
     async fn configure_encoding_workers(&self, workers: usize) -> AppResult<()> {
         let pool = tokio::task::spawn_blocking(move || artwork_pool(workers))
             .await
@@ -304,6 +326,32 @@ impl TitleImageProcessor for HttpTitleImageProcessor {
         result.requested_source_url = requested_source_url;
         Ok(result)
     }
+}
+
+fn encode_proxy_jpeg(bytes: &[u8], width: u32) -> AppResult<Vec<u8>> {
+    if bytes.len() > MAX_SOURCE_BYTES || width == 0 || width > 1280 {
+        return Err(AppError::Validation(
+            "invalid cached JPEG size or target width".into(),
+        ));
+    }
+    if image::guess_format(bytes).ok() != Some(ImageFormat::Jpeg) {
+        return Err(AppError::Validation("cached image is not a JPEG".into()));
+    }
+    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .map_err(|error| AppError::Validation(format!("failed to decode cached JPEG: {error}")))?;
+    let rgba = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1)).to_rgba8();
+    let width = width.min(rgba.width());
+    let height = scaled_height(rgba.width(), rgba.height(), width);
+    // Disposable proxy thumbnails use a cheap box resize; library artwork retains its preset.
+    let resized = image::imageops::thumbnail(&rgba, width, height);
+    encode_avif(&resized, PROXY_AVIF_SPEED, PROXY_AVIF_QUALITY)
 }
 
 fn build_requested_variants(
@@ -551,6 +599,37 @@ mod tests {
         outcome
             .expect("AVIF must finish without the global pool")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cached_jpeg_uses_fast_avif_and_bounds_dimensions_without_upscaling() {
+        let processor = HttpTitleImageProcessor::new();
+        processor.configure_encoding_workers(2).await.unwrap();
+        for (w, h, target, expected) in [
+            (500, 750, 250, (250, 375)),
+            (40, 60, 250, (40, 60)),
+            (1600, 900, 1280, (1280, 720)),
+        ] {
+            let rgb = image::RgbImage::from_pixel(w, h, image::Rgb([45, 89, 120]));
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+                .write_image(rgb.as_raw(), w, h, image::ExtendedColorType::Rgb8)
+                .unwrap();
+            let encoded = processor.encode_cached_jpeg(jpeg, target).await.unwrap();
+            assert_eq!(image::guess_format(&encoded).unwrap(), ImageFormat::Avif);
+            let ispe = encoded.windows(4).position(|v| v == b"ispe").unwrap();
+            let width = u32::from_be_bytes(encoded[ispe + 8..ispe + 12].try_into().unwrap());
+            let height = u32::from_be_bytes(encoded[ispe + 12..ispe + 16].try_into().unwrap());
+            assert_eq!((width, height), expected);
+        }
+        assert!(
+            processor
+                .encode_cached_jpeg(b"not a JPEG".to_vec(), 250)
+                .await
+                .is_err()
+        );
+        assert_eq!((AVIF_SPEED, AVIF_QUALITY), (4, 85));
+        assert_eq!((PROXY_AVIF_SPEED, PROXY_AVIF_QUALITY), (10, 60));
     }
 
     fn test_image() -> RgbaImage {
