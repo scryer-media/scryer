@@ -687,8 +687,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // and its IndexerCapsCategoryPayload element type: OBJECT 407->408,
     // public types 779->780. Root-field, input-object, and enum counts are
     // unchanged.
+    // Title-aware rule-editor previews add the `ruleSet` read and tracked rule
+    // packs add `trackedRulePacks`: query 161->163.
     assert_eq!(
-        query_field_count, 161,
+        query_field_count, 163,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -710,8 +712,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // edit, metadata edit, mode, delete, validate), the author-side preview,
     // the instance gate, and the three administrator claim operations.
     // 220->231.
+    // Title-aware rule-editor previews add `testRuleSet`; tracked rule packs
+    // add install, update preview, update, settings, copy, and delete actions:
+    // mutation 236->243.
     assert_eq!(
-        mutation_field_count, 236,
+        mutation_field_count, 243,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -796,9 +801,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // requiredWhen on a plugin config field) and its operator enum:
     // OBJECT 406->407, ENUM 146->147, public types 777->779. The `advanced`
     // flag is an additive field on the existing config-field payload.
-    assert_eq!(public_types.len(), 780);
-    assert_eq!(kind_count("OBJECT"), 408);
-    assert_eq!(kind_count("INPUT_OBJECT"), 213);
+    // Rule-editor scoring previews add seven payload objects and two inputs;
+    // tracked rule packs add four payload objects and one input. Together they
+    // move OBJECT 408->419, INPUT_OBJECT 213->216, and public types 780->794;
+    // the additions introduce no enum or scalar types.
+    assert_eq!(public_types.len(), 794);
+    assert_eq!(kind_count("OBJECT"), 419);
+    assert_eq!(kind_count("INPUT_OBJECT"), 216);
     assert_eq!(kind_count("ENUM"), 147);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
@@ -817,6 +826,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"ChangeTitleFolderPreviewPayload"));
     assert!(public_type_names.contains(&"ChangeTitleFolderPayload"));
     assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
+    assert!(query_field_names.contains(&"ruleSet"));
+    assert!(query_field_names.contains(&"trackedRulePacks"));
+    assert!(mutation_field_names.contains(&"testRuleSet"));
+    assert!(mutation_field_names.contains(&"installTrackedRulePack"));
+    assert!(mutation_field_names.contains(&"previewTrackedRulePackUpdate"));
+    assert!(mutation_field_names.contains(&"updateTrackedRulePack"));
+    assert!(mutation_field_names.contains(&"setTrackedRulePackSettings"));
+    assert!(mutation_field_names.contains(&"copyTrackedRulePackRule"));
+    assert!(mutation_field_names.contains(&"uninstallTrackedRulePack"));
+    assert!(public_type_names.contains(&"TestRuleSetInput"));
+    assert!(public_type_names.contains(&"TrackedRulePackPriorityInput"));
     assert!(query_field_names.contains(&"locationOperationPreview"));
     assert!(query_field_names.contains(&"locationOperation"));
     assert!(query_field_names.contains(&"locationOperationAssets"));
