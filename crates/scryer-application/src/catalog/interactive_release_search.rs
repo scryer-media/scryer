@@ -17,7 +17,6 @@ use super::release_search::{
 use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
 use crate::domain_events::{new_global_domain_event, title_context_snapshot};
-use crate::quality_profile::evaluate_against_profile_for_category;
 use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use std::sync::Arc;
@@ -997,7 +996,7 @@ impl AppUseCase {
                 None,
                 Vec::new(),
                 None,
-                cancel_token,
+                cancel_token.clone(),
             )
             .await?;
         let failure_reason = response
@@ -1005,36 +1004,71 @@ impl AppUseCase {
             .iter()
             .find(|outcome| outcome.indexer_id == indexer_id)
             .and_then(|outcome| incomplete_indexer_reason(outcome.outcome));
-        let results = response
-            .results
-            .into_iter()
-            .map(|mut result| {
-                if result
-                    .indexer_id
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                {
-                    result.indexer_id = Some(indexer_id.to_string());
+        let rules = self.user_rules_engine_snapshot();
+        let judge = judge.clone();
+        let indexer_id = indexer_id.to_string();
+        let results = tokio::task::spawn_blocking(move || {
+            // Reuse one evaluator for this response and keep synchronous rule
+            // evaluation off the async worker handling requests/cancellation.
+            let context = judge.as_ref().map(|(profile, weights, category)| {
+                crate::canonical_scoring::ScoringContext {
+                    profile,
+                    weights,
+                    required_audio_languages: &profile.criteria.required_audio_languages,
+                    category,
+                    size_basis: Default::default(),
+                    rules: Some(&rules),
+                    title_id: None,
+                    library_name: None,
+                    original_language: None,
+                    original_country: None,
+                    title_tags: &[],
+                    is_filler: false,
                 }
-                let parsed = result
-                    .parsed_release_metadata
-                    .take()
-                    .unwrap_or_else(|| crate::parse_release_metadata(&result.title));
-                if let Some((profile, weights, category)) = judge {
-                    // `has_existing_file: false` — with no title there is no
-                    // incumbent, so cutoff and upgrade blocks cannot fire.
-                    result.quality_profile_decision = Some(evaluate_against_profile_for_category(
-                        profile,
-                        &parsed,
-                        false,
-                        weights,
-                        Some(category.as_str()),
-                    ));
-                }
-                result.parsed_release_metadata = Some(parsed);
-                result
-            })
-            .collect();
+            });
+            let mut evaluator = context
+                .as_ref()
+                .map(crate::canonical_scoring::RuleEvaluationBatch::from_context);
+            let context = context.map(crate::canonical_scoring::ScoringContext::without_rules);
+            response
+                .results
+                .into_iter()
+                .take_while(|_| !cancel_token.is_cancelled())
+                .map(|mut result| {
+                    if result
+                        .indexer_id
+                        .as_deref()
+                        .is_none_or(|value| value.trim().is_empty())
+                    {
+                        result.indexer_id = Some(indexer_id.to_string());
+                    }
+                    let parsed = result
+                        .parsed_release_metadata
+                        .take()
+                        .unwrap_or_else(|| crate::parse_release_metadata(&result.title));
+                    if let (Some(context), Some(evaluator)) = (context.as_ref(), evaluator.as_mut())
+                    {
+                        // No title or incumbent context exists yet. Still collect
+                        // every applicable contribution before judging eligibility.
+                        result.quality_profile_decision = Some(
+                            crate::canonical_scoring::score_release_in_batch(
+                                &crate::canonical_scoring::ReleaseEvidence::announced(
+                                    parsed.clone(),
+                                    result.size_bytes,
+                                ),
+                                context,
+                                evaluator,
+                            )
+                            .announced_decision,
+                        );
+                    }
+                    result.parsed_release_metadata = Some(parsed);
+                    result
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("query scoring worker failed: {error}")))?;
         Ok((results, failure_reason))
     }
 

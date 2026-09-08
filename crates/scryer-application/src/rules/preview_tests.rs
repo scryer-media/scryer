@@ -293,14 +293,51 @@ async fn preview_reports_draft_block_entry_without_saving_it() {
         .expect("block preview succeeds");
     assert!(result.blocked);
     assert!(!result.allowed);
-    assert!(result.draft_contribution.blocked);
+    assert!(!result.draft_contribution.blocked);
+    assert_eq!(result.draft_contribution.score, -10_000);
     assert!(result.rule_sets.iter().any(|rule| {
         rule.is_draft
-            && rule
-                .entries
-                .iter()
-                .any(|entry| entry.code == "preview_block" && entry.blocked)
+            && rule.entries.iter().any(|entry| {
+                entry.code == "preview_block" && !entry.blocked && entry.delta == -10_000
+            })
     }));
+}
+
+#[tokio::test]
+async fn recoverable_scores_preview_includes_penalties_and_other_rules() {
+    let (app, user, _) = preview_app();
+    let title = movie(&app, &user).await;
+    app.create_rule_set(
+        &user,
+        "Penalty pack".into(),
+        String::new(),
+        "score_entry[\"penalty\"] := scryer.block_score()".into(),
+        vec![],
+        0,
+        Some(true),
+    )
+    .await
+    .unwrap();
+    let result = app
+        .test_rule_set(
+            &user,
+            request(title.id, "score_entry[\"group_bonus\"] := 20000"),
+        )
+        .await
+        .unwrap();
+    assert!(result.allowed, "{result:?}");
+    assert!(!result.blocked);
+    assert_eq!(result.draft_contribution.score, 20_000);
+    assert!(
+        result
+            .rule_sets
+            .iter()
+            .any(|rule| rule.score == -10_000 && !rule.blocked)
+    );
+    assert_eq!(
+        result.score,
+        crate::quality_profile::sum_score_deltas(result.rule_sets.iter().map(|rule| rule.score))
+    );
 }
 
 #[tokio::test]

@@ -426,6 +426,73 @@ async fn a_faceted_query_judges_releases_while_raw_leaves_them_unjudged() {
     );
 }
 
+#[tokio::test]
+async fn recoverable_scores_faceted_queries_include_all_rules_before_finalizing() {
+    for rescued in [false, true] {
+        let client = ScriptedIndexerClient::default()
+            .with_releases(
+                "idx-a",
+                vec![
+                    nzb_release("Movie.2024.1080p.WEB-DL-GRP", "score"),
+                    nzb_release("Movie.2024.1080p.WEB-DL-OTHER", "other"),
+                ],
+            )
+            .await;
+        let (app, user) = bootstrap_search(
+            Arc::new(StoredSettingsRepo::default()),
+            client,
+            vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+        );
+        let mut policies = vec![scryer_rules::UserPolicy {
+            id: "penalty".into(),
+            name: "Penalty".into(),
+            applied_facets: vec![],
+            origin: scryer_rules::PolicyOrigin::System,
+            rego_source: scryer_rules::rewrite_package_declaration(
+                "score_entry[\"penalty\"] := scryer.block_score()",
+                "penalty",
+            ),
+        }];
+        if rescued {
+            policies.push(scryer_rules::UserPolicy {
+                id: "boost".into(),
+                name: "Boost".into(),
+                applied_facets: vec![],
+                origin: scryer_rules::PolicyOrigin::User,
+                rego_source: scryer_rules::rewrite_package_declaration(
+                    "score_entry[\"boost\"] := 20000 if { input.release.release_group == \"GRP\" }",
+                    "boost",
+                ),
+            });
+        }
+        *app.services.customization.user_rules.write().unwrap() =
+            scryer_rules::UserRulesEngine::build(&policies).unwrap();
+        let job = app
+            .start_interactive_release_search(
+                &user,
+                query_request("movie", InteractiveSearchKind::Movie),
+            )
+            .await
+            .unwrap();
+        let result = await_completion(&app, &user, &job.id).await;
+        assert_eq!(result.results.len(), 2);
+        for release in &result.results {
+            let decision = release.quality_profile_decision.as_ref().unwrap();
+            assert_eq!(
+                decision.allowed,
+                rescued && release.title.ends_with("-GRP"),
+                "{decision:?}"
+            );
+            assert!(
+                decision
+                    .scoring_log
+                    .iter()
+                    .any(|entry| entry.code == "penalty" && entry.delta == -10_000)
+            );
+        }
+    }
+}
+
 // ── Health fields (D15) ─────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
+  "scoring.mandatoryRejection": "未满足强制要求",
+  "scoring.finalScoreRejection": "最终评分不合格",
+  "settings.refFnBlockScore": "返回可由其他加分抵消的 -10000 分惩罚",
+  "settings.arrImportBlockScoreHelp": "总分必须高于 -9000 且达到配置的最低分数。强制要求仍然有效。",
   "label.ready": "就绪",
   "label.moreInfo": "更多信息",
   "label.search": "搜索",

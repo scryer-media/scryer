@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseDecisionExplanation } from "./release-decision-explanation.ts";
+import { parseDecisionExplanation, scoringEntryText } from "./release-decision-explanation.ts";
+
+test("preserves recoverable penalties and explicit zero-point rejections", () => {
+  const entries = parseDecisionExplanation([
+    { code: "pack", delta: -10000, kind: "score_contribution" },
+    { code: "boost", delta: 20000, kind: "score_contribution" },
+    { code: "codec", delta: 0, kind: "mandatory_rejection" },
+    { code: "minimum", delta: 0, kind: "final_score_rejection" },
+    { code: "historical", delta: -10000 },
+  ]);
+  assert.equal(entries[0].kind, "score_contribution");
+  assert.equal(entries[4].kind, undefined);
+  const t = (key: string) => key;
+  assert.deepEqual(entries.map((entry) => scoringEntryText(entry, t)), [
+    "-10000", "+20000", "scoring.mandatoryRejection", "scoring.finalScoreRejection", "-10000",
+  ]);
+  assert.equal(entries.slice(0, 4).reduce((score, entry) => score + entry.delta, 0), 10000);
+});
 
 test("extracts scoring entries from the full release-decision explanation", () => {
   assert.deepEqual(

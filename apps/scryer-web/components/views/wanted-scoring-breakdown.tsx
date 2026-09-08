@@ -1,5 +1,6 @@
 import { useTranslate } from "@/lib/context/translate-context";
 import type { ReleaseDecisionExplanationEntry } from "@/lib/utils/release-decision-explanation";
+import { scoringEntryText } from "@/lib/utils/release-decision-explanation";
 
 export function WantedScoringBreakdown({
   entries,
@@ -23,7 +24,7 @@ export function WantedScoringBreakdown({
             <span className="truncate" title={entry.code}>
               {entry.code}
             </span>
-            <span>{entry.delta > 0 ? `+${entry.delta}` : entry.delta}</span>
+            <span>{scoringEntryText(entry, t)}</span>
           </div>
         ))}
       </div>

@@ -1928,7 +1928,7 @@ where
                     &decision
                         .scoring_log
                         .iter()
-                        .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
+                        .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta, "kind": entry.kind}))
                         .collect::<Vec<_>>(),
                 )
                 .ok()

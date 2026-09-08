@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "scoring.mandatoryRejection": "必須条件を満たしていません",
+  "scoring.finalScoreRejection": "最終スコアが基準未満",
+  "settings.refFnBlockScore": "他の加点で相殺できる -10000 点の減点を返します",
+  "settings.arrImportBlockScoreHelp": "合計スコアは -9000 を超え、プロファイルの最低スコア以上である必要があります。必須条件は引き続き適用されます。",
   "label.ready": "準備完了",
   "label.moreInfo": "詳細情報",
   "label.search": "検索",

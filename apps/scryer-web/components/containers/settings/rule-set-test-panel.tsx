@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
+import { useTranslate } from "@/lib/context/translate-context";
+import { scoringEntryText, type ScoringEntryKind } from "@/lib/utils/release-decision-explanation";
 import {
   Collapsible,
   CollapsibleContent,
@@ -40,7 +42,7 @@ type Episode = {
   episodeLabel?: string | null;
   title?: string | null;
 };
-type PreviewEntry = { code: string; delta: number; blocked: boolean };
+type PreviewEntry = { code: string; delta: number; blocked: boolean; kind?: ScoringEntryKind };
 type PreviewRuleSet = {
   ruleSetId?: string | null;
   ruleSetName?: string;
@@ -126,6 +128,7 @@ export function RuleSetTestPanel({
   copySourceRuleSetId: string | null;
 }) {
   const client = useClient();
+  const t = useTranslate();
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [candidates, setCandidates] = React.useState<TitleRecord[]>([]);
@@ -294,11 +297,11 @@ export function RuleSetTestPanel({
       {error ? <div className="mt-3 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]">{error}</div> : null}
       {result ? <div className="mt-3 space-y-3 rounded border border-border p-3" aria-live="polite">
         {incomplete ? <div className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]"><p className="font-medium">Incomplete scoring preview</p><p>This result includes evaluation errors, so it cannot determine download admission.</p></div> : null}
-        <div><p className="font-medium">Scoring preview: {result.score ?? 0}</p><p className="text-xs text-muted-foreground">{incomplete ? "Evaluation completed with errors." : result.allowed ? "Allowed by the scoring policy" : "Not allowed by the scoring policy"}{result.blocked ? " · Block signal present" : ""}{result.minimumScoreMet === false ? " · Minimum score not met" : ""}</p></div>
+        <div><p className="font-medium">Scoring preview: {result.score ?? 0}</p><p className="text-xs text-muted-foreground">{incomplete ? "Evaluation completed with errors." : result.allowed ? "Allowed by the scoring policy" : "Not allowed by the scoring policy"}{result.minimumScoreMet === false ? " · Minimum score not met" : ""}</p></div>
         <div className="grid gap-2 text-xs md:grid-cols-2"><p><span className="font-medium">Resolved profile:</span> {result.profileName || "Unavailable"}</p>{result.context ? <p><span className="font-medium">Context:</span> {[result.context.titleName, result.context.libraryName, result.context.facet, result.context.language, result.context.episodeLabel].filter(Boolean).join(" · ") || "Unavailable"}</p> : null}<p><span className="font-medium">Tags:</span> {result.context?.tags?.length ? result.context.tags.join(", ") : "None"}</p></div>
         <div className="text-xs"><p className="font-medium">Parsed release details</p><dl className="grid grid-cols-2 gap-x-3 gap-y-1">{parsedLines(result.parsed).map(([label, value]) => <React.Fragment key={label}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></React.Fragment>)}<dt className="text-muted-foreground">Size</dt><dd>{result.parsed?.sizeBytes == null ? "Unknown" : `${result.parsed.sizeBytes} bytes`}</dd></dl><p className="mt-1 text-muted-foreground">Listing metadata and file-probed facts are unavailable in this preview.</p></div>
-        {result.draftContribution ? <div className="rounded bg-muted/50 px-2 py-2 text-xs"><p className="font-medium">Current draft: {formatSignedScore(result.draftContribution.score ?? 0)}</p><p>{result.draftContribution.message || (result.draftContribution.enabled === false ? "Draft is disabled." : result.draftContribution.applies === false ? "Draft does not apply to this title facet." : result.draftContribution.matched ? "Draft matched." : "Draft did not match.")}{result.draftContribution.blocked ? " Block signal returned." : ""}</p></div> : null}
-        {groupedRuleSets.map(([origin, entries]) => <div key={origin} className="text-xs"><p className="font-medium">{origin}</p><ul className="mt-1 space-y-2">{entries.map((entry, index) => <li key={`${entry.ruleSetId || entry.ruleSetName || index}`}><div className="flex justify-between gap-2"><span>{entry.ruleSetName || "Unnamed rule"}{entry.isDraft ? " (draft)" : ""}{entry.messages?.length ? ` — ${entry.messages.join("; ")}` : ""}</span><span>{entry.blocked ? "Block · " : ""}{entry.matched ? formatSignedScore(entry.score ?? 0) : "No match"}</span></div>{entry.entries?.length ? <ul className="mt-1 space-y-1 border-l border-border pl-2 text-muted-foreground">{entry.entries.map((scoreEntry, entryIndex) => <li key={`${scoreEntry.code}-${entryIndex}`} className="flex justify-between gap-2"><span>{scoreEntry.code}</span><span>{scoreEntry.blocked ? "Block · " : ""}{formatSignedScore(scoreEntry.delta)}</span></li>)}</ul> : null}</li>)}</ul></div>)}
+        {result.draftContribution ? <div className="rounded bg-muted/50 px-2 py-2 text-xs"><p className="font-medium">Current draft: {formatSignedScore(result.draftContribution.score ?? 0)}</p><p>{result.draftContribution.message || (result.draftContribution.enabled === false ? "Draft is disabled." : result.draftContribution.applies === false ? "Draft does not apply to this title facet." : result.draftContribution.matched ? "Draft matched." : "Draft did not match.")}</p></div> : null}
+        {groupedRuleSets.map(([origin, entries]) => <div key={origin} className="text-xs"><p className="font-medium">{origin}</p><ul className="mt-1 space-y-2">{entries.map((entry, index) => <li key={`${entry.ruleSetId || entry.ruleSetName || index}`}><div className="flex justify-between gap-2"><span>{entry.ruleSetName || "Unnamed rule"}{entry.isDraft ? " (draft)" : ""}{entry.messages?.length ? ` — ${entry.messages.join("; ")}` : ""}</span><span>{entry.matched ? formatSignedScore(entry.score ?? 0) : "No match"}</span></div>{entry.entries?.length ? <ul className="mt-1 space-y-1 border-l border-border pl-2 text-muted-foreground">{entry.entries.map((scoreEntry, entryIndex) => <li key={`${scoreEntry.code}-${entryIndex}`} className="flex justify-between gap-2"><span>{scoreEntry.code}</span><span>{scoringEntryText(scoreEntry, t)}</span></li>)}</ul> : null}</li>)}</ul></div>)}
         {result.errors?.length ? <div className="rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-2 py-2 text-xs text-[var(--scry-danger-text)]"><p className="font-medium">Evaluation errors</p><ul className="list-disc pl-4">{result.errors.map((item, index) => <li key={`${item.code || "error"}-${index}`}>{item.message}</li>)}</ul></div> : null}
       </div> : null}
     </CollapsibleContent>

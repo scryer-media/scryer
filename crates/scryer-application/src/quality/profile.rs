@@ -159,9 +159,36 @@ impl QualityProfileCriteria {
     }
 }
 
-/// Score applied to any blocking rule. Massive negative value so blocked releases
-/// always sort below considered ones regardless of other bonuses.
+/// Strong, recoverable scoring penalty. Mandatory requirements are separate.
 pub const BLOCK_SCORE: i32 = -10_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoringEntryKind {
+    ScoreContribution,
+    MandatoryRejection,
+    FinalScoreRejection,
+}
+
+impl ScoringEntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ScoreContribution => "score_contribution",
+            Self::MandatoryRejection => "mandatory_rejection",
+            Self::FinalScoreRejection => "final_score_rejection",
+        }
+    }
+}
+
+/// Accumulate before narrowing, so cancelling large contributions are order independent.
+pub fn sum_score_deltas(deltas: impl IntoIterator<Item = i32>) -> i32 {
+    let total = deltas.into_iter().fold(0_i128, |total, delta| {
+        total
+            .checked_add(i128::from(delta))
+            .expect("a memory-resident collection of i32 contributions fits in i128")
+    });
+    total.clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32
+}
 
 /// Distinguishes built-in scoring entries from named-rule entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +205,7 @@ pub struct ScoringEntry {
     pub code: String,
     pub delta: i32,
     pub source: ScoringSource,
+    pub kind: ScoringEntryKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,9 +214,9 @@ pub struct QualityProfileDecision {
     pub release_score: i32,
     /// Every decision point in the order it was applied.
     pub scoring_log: Vec<ScoringEntry>,
-    /// Derived: true when no entry has `delta == BLOCK_SCORE`.
+    /// True when no explicit mandatory or finalized score rejection applies.
     pub allowed: bool,
-    /// Derived: codes from entries where `delta == BLOCK_SCORE`.
+    /// Codes from explicit rejections; numeric penalties never appear here by themselves.
     pub block_codes: Vec<String>,
     /// Kept equal to `release_score` so existing sort logic works without changes.
     pub preference_score: i32,
@@ -222,17 +250,46 @@ impl QualityProfileDecision {
 
     /// Record a decision point with an explicit source.
     pub fn log_with_source(&mut self, code: &str, delta: i32, source: ScoringSource) {
+        self.scoring_log
+            .retain(|entry| entry.kind != ScoringEntryKind::FinalScoreRejection);
         self.scoring_log.push(ScoringEntry {
             code: code.to_string(),
             delta,
             source,
+            kind: ScoringEntryKind::ScoreContribution,
         });
-        self.release_score += delta;
-        if delta == BLOCK_SCORE {
-            self.allowed = false;
-            self.block_codes.push(code.to_string());
+        self.refresh();
+    }
+
+    fn reject(&mut self, code: &str, kind: ScoringEntryKind) {
+        self.scoring_log.push(ScoringEntry {
+            code: code.to_string(),
+            delta: 0,
+            source: ScoringSource::Builtin,
+            kind,
+        });
+        self.refresh();
+    }
+
+    fn reject_requirement(&mut self, code: &str) {
+        self.reject(code, ScoringEntryKind::MandatoryRejection);
+    }
+
+    fn refresh(&mut self) {
+        for entry in &mut self.scoring_log {
+            if entry.kind != ScoringEntryKind::ScoreContribution {
+                entry.delta = 0;
+            }
         }
+        self.release_score = sum_score_deltas(self.scoring_log.iter().map(|entry| entry.delta));
         self.preference_score = self.release_score;
+        self.block_codes = self
+            .scoring_log
+            .iter()
+            .filter(|entry| entry.kind != ScoringEntryKind::ScoreContribution)
+            .map(|entry| entry.code.clone())
+            .collect();
+        self.allowed = self.block_codes.is_empty();
     }
 }
 
@@ -811,7 +868,7 @@ pub fn evaluate_against_profile_for_category(
 
     // ── Upgrade guard ────────────────────────────────────────────────────────
     if !c.allow_upgrades && has_existing_file {
-        d.log("upgrade_blocked_by_profile", BLOCK_SCORE);
+        d.reject_requirement("upgrade_blocked_by_profile");
     }
 
     // ── Quality tier ─────────────────────────────────────────────────────────
@@ -829,7 +886,7 @@ pub fn evaluate_against_profile_for_category(
     match normalize_quality_tier(release.quality.as_deref()) {
         Some(q) if !c.quality_tiers.is_empty() => {
             if !c.quality_tiers.iter().any(|t| t == &q) {
-                d.log("quality_not_in_profile_tiers", BLOCK_SCORE);
+                d.reject_requirement("quality_not_in_profile_tiers");
             }
         }
         Some(_) => {}
@@ -837,7 +894,7 @@ pub fn evaluate_against_profile_for_category(
             if c.allow_unknown_quality {
                 d.log("quality_unknown_allowed", 100);
             } else {
-                d.log("quality_missing_and_profile_disallows_unknown", BLOCK_SCORE);
+                d.reject_requirement("quality_missing_and_profile_disallows_unknown");
             }
         }
     }
@@ -856,11 +913,11 @@ pub fn evaluate_against_profile_for_category(
                     | ReleaseSource::Workprint
             ) && !explicitly_allowed
             {
-                d.log("source_low_quality_theatrical", BLOCK_SCORE);
+                d.reject_requirement("source_low_quality_theatrical");
             } else if !c.source_blocklist.is_empty() && c.source_blocklist.contains(&source) {
-                d.log("source_in_profile_blocklist", BLOCK_SCORE);
+                d.reject_requirement("source_in_profile_blocklist");
             } else if !c.source_allowlist.is_empty() && !c.source_allowlist.contains(&source) {
-                d.log("source_not_in_profile_allowlist", BLOCK_SCORE);
+                d.reject_requirement("source_not_in_profile_allowlist");
             } else {
                 let (code, delta) = match source {
                     ReleaseSource::BluRay | ReleaseSource::BrDisk => {
@@ -878,7 +935,7 @@ pub fn evaluate_against_profile_for_category(
         }
         None => {
             if !c.source_allowlist.is_empty() {
-                d.log("source_missing_and_profile_requires_source", BLOCK_SCORE);
+                d.reject_requirement("source_missing_and_profile_requires_source");
             }
         }
     }
@@ -886,13 +943,13 @@ pub fn evaluate_against_profile_for_category(
     // ── Video codec ──────────────────────────────────────────────────────────
     if let Some(codec) = release.video_codec.as_ref() {
         if !c.video_codec_blocklist.is_empty() && c.video_codec_blocklist.contains(codec) {
-            d.log("video_codec_in_profile_blocklist", BLOCK_SCORE);
+            d.reject_requirement("video_codec_in_profile_blocklist");
         } else if !c.video_codec_allowlist.is_empty() {
             if let Some(idx) = c.video_codec_allowlist.iter().position(|c| c == codec) {
                 let bonus = (80_i32 - idx as i32 * 20).max(0);
                 d.log(&format!("video_codec_preferred_{idx}"), bonus);
             } else {
-                d.log("video_codec_not_in_profile_allowlist", BLOCK_SCORE);
+                d.reject_requirement("video_codec_not_in_profile_allowlist");
             }
         } else {
             let (code, delta) = match codec {
@@ -921,7 +978,7 @@ pub fn evaluate_against_profile_for_category(
                 .all(|codec| c.audio_codec_blocklist.contains(codec));
 
         if all_blocklisted {
-            d.log("audio_codec_in_profile_blocklist", BLOCK_SCORE);
+            d.reject_requirement("audio_codec_in_profile_blocklist");
         } else if has_allowlist_match {
             if let Some(best_idx) =
                 c.audio_codec_allowlist
@@ -938,7 +995,7 @@ pub fn evaluate_against_profile_for_category(
                 d.log(&format!("audio_codec_preferred_{best_idx}"), bonus);
             }
         } else if !c.audio_codec_allowlist.is_empty() {
-            d.log("audio_codec_not_in_profile_allowlist", BLOCK_SCORE);
+            d.reject_requirement("audio_codec_not_in_profile_allowlist");
         } else {
             let best_delta = audio_codecs
                 .iter()
@@ -977,10 +1034,10 @@ pub fn evaluate_against_profile_for_category(
         if c.dolby_vision_allowed {
             d.log("dolby_vision_bonus", weights.dolby_vision);
         } else {
-            d.log("dolby_vision_not_allowed", BLOCK_SCORE);
+            d.reject_requirement("dolby_vision_not_allowed");
         }
         if weights.block_dv_without_fallback && !has_dv_hdr_fallback(release) {
-            d.log("dolby_vision_missing_hdr_fallback", BLOCK_SCORE);
+            d.reject_requirement("dolby_vision_missing_hdr_fallback");
         }
     }
 
@@ -989,13 +1046,13 @@ pub fn evaluate_against_profile_for_category(
         if c.detected_hdr_allowed {
             d.log("hdr_bonus", weights.hdr10);
         } else {
-            d.log("hdr_not_allowed", BLOCK_SCORE);
+            d.reject_requirement("hdr_not_allowed");
         }
     }
 
     // ── BD disk ──────────────────────────────────────────────────────────────
     if release.is_bd_disk && !c.allow_bd_disk {
-        d.log("bd_disk_not_allowed", BLOCK_SCORE);
+        d.reject_requirement("bd_disk_not_allowed");
     }
 
     // ── Remux preference ─────────────────────────────────────────────────────
@@ -1028,7 +1085,7 @@ pub fn evaluate_against_profile_for_category(
             &c.required_audio_languages,
             &release.languages_audio,
         ) {
-            d.log("required_audio_language_missing", BLOCK_SCORE);
+            d.reject_requirement("required_audio_language_missing");
         } else {
             d.log("required_audio_languages_match", 80);
         }
@@ -1151,14 +1208,23 @@ pub fn evaluate_against_profile_for_category(
     d
 }
 
-/// Apply the final minimum-score eligibility gate after every built-in and
-/// rule-provided score has been recorded.
+/// Finalize eligibility after every contribution. Repeated calls replace gates,
+/// never alter the numeric score, and never erase mandatory requirements.
 pub fn apply_min_score_gate(profile: &QualityProfile, decision: &mut QualityProfileDecision) {
+    decision
+        .scoring_log
+        .retain(|entry| entry.kind != ScoringEntryKind::FinalScoreRejection);
+    decision.refresh();
+    if decision.release_score <= scryer_rules::BLOCK_SCORE_THRESHOLD {
+        decision.reject(
+            "score_at_or_below_block_threshold",
+            ScoringEntryKind::FinalScoreRejection,
+        );
+    }
     if let Some(min_score) = profile.criteria.min_score_to_grab
-        && decision.allowed
         && decision.release_score < min_score
     {
-        decision.log("score_below_minimum", BLOCK_SCORE);
+        decision.reject("score_below_minimum", ScoringEntryKind::FinalScoreRejection);
     }
 }
 
@@ -1775,16 +1841,9 @@ pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
     // so two releases in the same band no longer score identically and a release
     // that drifts across a boundary no longer jumps.
     //
-    // **The band is logged before the veto, always.** `total` — the bar a file
-    // is compared by — is the pass's score with every `BLOCK_SCORE` entry
-    // stripped out (I5, `preference_score_without_blocks`). If the veto
-    // *replaced* the band entry, stripping it would leave a vetoed file with no
-    // size term at all: at import both passes see the same bytes, so both are
-    // blocked, nothing is "introduced", the verdict is `Consistent` — and the
-    // file lands with a bar 2500 points **above** the same file one byte the
-    // other side of the threshold, then refuses every real upgrade as
-    // `NotAnUpgrade`. A veto is a verdict *on top of* the honest number, not
-    // instead of it.
+    // Always retain the size contribution, even when the independent extreme-size
+    // requirement fails. Rejection carries zero points and cannot replace this
+    // term, or the incumbent bar would lose its size penalty.
     decision.log(
         size_band_code(ratio, &thresholds),
         interpolate_size_delta(ratio, &curve),
@@ -1798,7 +1857,7 @@ pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
     // article on the numbers. Everything below the veto is one continuous curve,
     // read at `ratio` (D3, D21).
     if ratio >= thresholds.implausible {
-        decision.log("size_implausible_for_quality", BLOCK_SCORE);
+        decision.reject_requirement("size_implausible_for_quality");
     }
 }
 
@@ -1845,6 +1904,70 @@ mod tests {
             CoverageSizeBasis::single(runtime_minutes),
             prefer_remux,
             weights,
+        );
+    }
+
+    #[test]
+    fn recoverable_scores_finalize_only_the_complete_sum() {
+        let profile =
+            QualityProfile::parse(r#"{"id":"test","name":"Test","criteria":{}}"#).unwrap();
+        for (deltas, expected, allowed) in [
+            (vec![-10_000, 20_000], 10_000, true),
+            (vec![20_000, -10_000], 10_000, true),
+            (vec![-10_000, 999], -9_001, false),
+            (vec![-10_000, 1_000], -9_000, false),
+            (vec![-10_000, 1_001], -8_999, true),
+            (vec![-4_500, -4_500], -9_000, false),
+            (vec![-10_000, -10_000, 30_000], 10_000, true),
+            (vec![-100], -100, true),
+            (vec![i32::MAX, i32::MAX, -i32::MAX], i32::MAX, true),
+            (vec![i32::MIN, i32::MAX, i32::MAX], i32::MAX - 1, true),
+        ] {
+            let mut decision = QualityProfileDecision::new();
+            for delta in deltas {
+                decision.log_with_source(
+                    "video_codec_in_profile_blocklist",
+                    delta,
+                    ScoringSource::UserRule {
+                        id: "custom".into(),
+                        name: "Custom".into(),
+                    },
+                );
+                assert!(decision.allowed, "a contribution alone cannot reject");
+            }
+            apply_min_score_gate(&profile, &mut decision);
+            assert_eq!(decision.release_score, expected);
+            assert_eq!(decision.allowed, allowed);
+            let first = decision.clone();
+            apply_min_score_gate(&profile, &mut decision);
+            assert_eq!(decision, first);
+        }
+    }
+
+    #[test]
+    fn recoverable_scores_respect_minimum_and_mandatory_requirements() {
+        let mut profile =
+            QualityProfile::parse(r#"{"id":"test","name":"Test","criteria":{}}"#).unwrap();
+        profile.criteria.min_score_to_grab = Some(100);
+        let mut decision = QualityProfileDecision::new();
+        decision.log("penalty", -10_000);
+        apply_min_score_gate(&profile, &mut decision);
+        assert_eq!(decision.block_codes.len(), 2);
+        decision.log("bonus", 10_100);
+        apply_min_score_gate(&profile, &mut decision);
+        assert!(decision.allowed);
+        assert_eq!(decision.release_score, 100);
+        decision.reject_requirement("required_audio_language_missing");
+        decision.log("bonus", i32::MAX);
+        apply_min_score_gate(&profile, &mut decision);
+        assert!(!decision.allowed);
+        assert_eq!(decision.block_codes, ["required_audio_language_missing"]);
+        assert!(
+            decision
+                .scoring_log
+                .iter()
+                .filter(|entry| entry.kind != ScoringEntryKind::ScoreContribution)
+                .all(|entry| entry.delta == 0)
         );
     }
 

@@ -9,12 +9,11 @@
 //!
 //! ```text
 //! release_score  = announced pass          → grab decisions (no file, and upgrades)
-//! total          = analyzed pass, vetoes excluded
+//! total          = analyzed pass, all numeric contributions
 //!                                          → the import score; PERSISTED; the upgrade bar
 //! ```
 //!
-//! With no analysis there is only one pass, and `total` is that pass with its
-//! vetoes excluded. `truth_variance` is the difference between the two passes,
+//! With no analysis there is only one pass, and `total` is its full numeric sum. `truth_variance` is the difference between the two passes,
 //! reported rather than folded in: it says *how far* the file drifted from its
 //! announcement, while `truth_verdict` says whether that drift was a lie. Because
 //! both passes go through one function with one term set, formula drift between
@@ -30,8 +29,8 @@
 //!   priority and pack-coverage preferences describe a *listing*, not a
 //!   release. They cannot be reconstructed from a media row, so admitting them
 //!   here would make a stored score unreproducible. They belong to search rank.
-//! - **Hard blocks as numbers.** A `BLOCK_SCORE` discovered by the analyzed pass
-//!   is a verdict, not a bounded numeric adjustment. See [`TruthVerdict`].
+//! - **Mandatory failures as numbers.** Explicit requirements carry zero-point
+//!   rejection entries. Numeric penalties remain recoverable. See [`TruthVerdict`].
 //!
 //! ## Where this sits in the loop
 //!
@@ -49,7 +48,7 @@
 //! display-only and cannot become the source of truth for later comparisons.
 
 use crate::quality_profile::{
-    BLOCK_SCORE, QualityProfileDecision, ScoringEntry, ScoringSource, apply_min_score_gate,
+    QualityProfileDecision, ScoringEntry, ScoringSource, apply_min_score_gate,
     apply_size_scoring_for_category_with_remux_preference, evaluate_against_profile_for_category,
     normalize_quality_tier,
 };
@@ -275,7 +274,7 @@ pub(crate) struct ScoredRelease {
     /// same pipeline over the stored release name, so the number an incumbent
     /// gets is the number that release got when it was a candidate.
     pub revision: i32,
-    /// The analyzed pass's score with hard blocks excluded (the announced pass's
+    /// The analyzed pass's complete numeric score (the announced pass's
     /// when there was no analysis). This is the upgrade bar. It is written to
     /// `media_files.acquisition_score` for display and history, but a comparison
     /// always re-derives it rather than reading it back. A veto never appears
@@ -402,8 +401,8 @@ fn score_release_with_rules(
     };
 
     // The bar is what the file *is*. Once the bytes have been measured, the
-    // analyzed pass is the honest number and `total` is exactly that — minus any
-    // veto (see [`preference_score_without_blocks`]).
+    // analyzed pass supplies every numeric contribution in `total`; explicit
+    // rejections contribute zero points (see [`numeric_score`]).
     //
     // It is deliberately not `release_score + truth_variance`: the variance is
     // clamped, so on a contradiction that sum drifts above the analyzed score —
@@ -412,8 +411,7 @@ fn score_release_with_rules(
     // instead. The persisted bar would then be unreproducible, which is the
     // defect this whole change set exists to remove. `truth_variance` and
     // `truth_verdict` stay as the *report* of the contradiction.
-    let total =
-        preference_score_without_blocks(analyzed_decision.as_ref().unwrap_or(&announced_decision));
+    let total = numeric_score(analyzed_decision.as_ref().unwrap_or(&announced_decision));
     let parsed_quality = analyzed_quality.or_else(|| evidence.parsed.quality.clone());
 
     ScoredRelease {
@@ -428,27 +426,18 @@ fn score_release_with_rules(
     }
 }
 
-/// The pass's score with every hard block taken back out.
-///
-/// `BLOCK_SCORE` is summed into `preference_score` like any other delta, so one
-/// veto drags a pass to roughly −10 000. Persisting that as the bar turns a
-/// verdict into a number, and the number then misbehaves in both directions: the
-/// vetoed file's re-derived bar sits so far below everything that every
-/// candidate reads as a large upgrade and is fetched, and when the block is
-/// structural (a minimum score no release for this title can reach, a language
-/// the files never carry) the *next* file scores −10 000 too, ties are admitted
-/// at import, and the scope churns on every RSS cycle.
-///
-/// So the veto travels as a veto: `allowed`, `block_codes` and
-/// [`TruthVerdict`] carry it, admission and the import gate act on it, and the
-/// number stays the honest sum of everything that was actually a preference.
-fn preference_score_without_blocks(decision: &QualityProfileDecision) -> i32 {
-    decision
-        .scoring_log
-        .iter()
-        .filter(|entry| entry.delta != BLOCK_SCORE)
-        .map(|entry| entry.delta)
-        .sum()
+/// Sum every numeric contribution, including strong penalties. Mandatory
+/// requirements and final score gates carry zero points.
+fn numeric_score(decision: &QualityProfileDecision) -> i32 {
+    crate::quality_profile::sum_score_deltas(
+        decision
+            .scoring_log
+            .iter()
+            .filter(|entry| {
+                entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
+            })
+            .map(|entry| entry.delta),
+    )
 }
 
 /// The one term sequence. Both evidence levels walk exactly this path; the only
@@ -600,22 +589,10 @@ fn append_rule_scores(
     }
 }
 
-/// Block codes that describe the *announcement and the profile*, never the file.
-///
-/// They can only ever fire on both passes at once, so the set difference below
-/// would never surface them — except that the announced pass can be blocked by
-/// something else first, and `apply_min_score_gate` only fires when the pass is
-/// still `allowed`. Listing them explicitly keeps that ordering artefact from
-/// reading as evidence against the file.
-///
-/// - `score_below_minimum` is Sonarr's `MinFormatScore`, a **grab** floor. It is
-///   not an import specification there and must not become one here: a file that
-///   is on disk and correct cannot be improved by refusing it. A score-only
-///   contradiction is not a blocklist reason.
-/// - `upgrade_blocked_by_profile` is the profile's upgrade guard, which is an
-///   admission concern; canonical scoring hardcodes `has_existing_file = false`,
-///   so it should never appear at all — it is listed defensively.
-const POLICY_ONLY_BLOCK_CODES: &[&str] = &["score_below_minimum", "upgrade_blocked_by_profile"];
+/// The upgrade guard is an admission concern, never evidence against the file.
+/// Canonical scoring uses `has_existing_file = false`; exclude it defensively.
+/// Final score gates are classified separately by their explicit entry kind.
+const POLICY_ONLY_BLOCK_CODES: &[&str] = &["upgrade_blocked_by_profile"];
 
 /// Did the announcement *state* the fact this veto keys on?
 ///
@@ -645,44 +622,11 @@ fn veto_contradicts_an_assertion(code: &str, announced: &ParsedReleaseMetadata) 
     false
 }
 
-/// Turn the announced/analyzed difference into a bounded variance or a verdict.
-///
-/// A hard block is never flattened into a number — `allowed` is derived from
-/// explicit `BLOCK_SCORE` entries, and collapsing that into arithmetic would
-/// silently convert a veto into a survivable penalty. Both sides of the variance
-/// are therefore the passes' **non-block** sums, so no `BLOCK_SCORE` ever reaches
-/// the subtraction.
-///
-/// ## `Blocked` means the announcement *asserted* the field and the file
-/// contradicts it
-///
-/// The verdict answers "did this release lie", because that is the question the
-/// import gate acts on: `Blocked` costs the release a blocklist entry and
-/// reopens the search. Two filters stand between a `BLOCK_SCORE` entry and that
-/// answer, and both are load-bearing.
-///
-/// **First: only blocks the file evidence introduced.** Most `BLOCK_SCORE` terms
-/// are decided from the release *name* against the profile — a blocklisted
-/// source, a codec outside the allowlist, a missing required audio language — so
-/// they fire identically on both passes. Deciding from `!analyzed.allowed` alone
-/// (as this briefly did) burns the release, reopens the scope, grabs the next
-/// release, blocks it the same way and burns that one too: a loop that ends only
-/// when every release for the title is blocklisted, with a provably correct file
-/// on disk. If the announcement was already blocked, the release should never
-/// have been grabbed; that is a grab-side bug and destroying candidates does not
-/// fix it.
-///
-/// **Second: only fields the announcement actually stated.** "Introduced" alone
-/// reads *silence* as a lie, which is the same loop wearing a different hat. A
-/// release name that says nothing about codec, against a profile with a codec
-/// blocklist, produces `video_codec_in_profile_blocklist` on the analyzed pass
-/// only — and so does the next codec-silent release, and the one after that.
-/// The same goes for HDR and Dolby Vision (read out of `video_hdr_format`, which
-/// no name is obliged to carry) and for user/system file rules, which only see
-/// `input.file.*` on the analyzed pass by construction. None of those is the
-/// release misrepresenting itself; they are the profile refusing the file, which
-/// is [`TruthVerdict::Vetoed`] — a burn followed by another convergence search. See
-/// [`veto_contradicts_an_assertion`] for the per-code table.
+/// Distinguish newly discovered mandatory failures from numeric score changes.
+/// Only a requirement that contradicts an advertised field proves a lie;
+/// undisclosed requirements and an unrecovered final score are policy refusals.
+/// Rules and packs contribute numbers, never mandatory failures, even when
+/// their codes resemble built-in requirements.
 fn classify_truth(
     announced_parsed: &ParsedReleaseMetadata,
     announced: &QualityProfileDecision,
@@ -694,7 +638,7 @@ fn classify_truth(
     let introduced: Vec<&ScoringEntry> = analyzed
         .scoring_log
         .iter()
-        .filter(|entry| entry.delta == BLOCK_SCORE)
+        .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::MandatoryRejection)
         .filter(|entry| !announced.block_codes.contains(&entry.code))
         .filter(|entry| !POLICY_ONLY_BLOCK_CODES.contains(&entry.code.as_str()))
         .collect();
@@ -719,12 +663,39 @@ fn classify_truth(
         return (0, TruthVerdict::Vetoed { codes: undisclosed });
     }
 
-    // Both sides with their vetoes taken back out, so a block on either pass
-    // cannot masquerade as a −10 000 contradiction.
-    let raw = preference_score_without_blocks(analyzed)
-        .saturating_sub(preference_score_without_blocks(announced));
+    // A finalized numeric refusal is policy, never proof of misrepresentation.
+    let score_rejections = analyzed
+        .scoring_log
+        .iter()
+        .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::FinalScoreRejection)
+        .map(|entry| entry.code.clone())
+        .collect::<Vec<_>>();
+    if !score_rejections.is_empty() && announced.allowed {
+        return (
+            0,
+            TruthVerdict::Vetoed {
+                codes: score_rejections,
+            },
+        );
+    }
 
-    if raw.abs() > TRUTH_VARIANCE_BOUND {
+    // Rule/pack changes report variance but cannot on their own prove a lie.
+    let raw = numeric_score(analyzed).saturating_sub(numeric_score(announced));
+    let builtin_score = |decision: &QualityProfileDecision| {
+        crate::quality_profile::sum_score_deltas(
+            decision
+                .scoring_log
+                .iter()
+                .filter(|entry| {
+                    entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
+                        && matches!(entry.source, ScoringSource::Builtin)
+                })
+                .map(|entry| entry.delta),
+        )
+    };
+    let builtin_variance = builtin_score(analyzed).saturating_sub(builtin_score(announced));
+
+    if builtin_variance.unsigned_abs() > TRUTH_VARIANCE_BOUND as u32 {
         return (
             raw.clamp(-TRUTH_VARIANCE_BOUND, TRUTH_VARIANCE_BOUND),
             TruthVerdict::Contradicted {
@@ -733,11 +704,14 @@ fn classify_truth(
         );
     }
 
-    (raw, TruthVerdict::Consistent)
+    (
+        raw.clamp(-TRUTH_VARIANCE_BOUND, TRUTH_VARIANCE_BOUND),
+        TruthVerdict::Consistent,
+    )
 }
 
-/// Name the terms that moved, so a contradiction says what was misadvertised
-/// rather than only that something was.
+/// Name only built-in numeric evidence that moved. Rule-authored codes are
+/// arithmetic labels and must never impersonate evidence of a quality change.
 fn contradiction_codes(
     announced: &QualityProfileDecision,
     analyzed: &QualityProfileDecision,
@@ -747,12 +721,20 @@ fn contradiction_codes(
     let announced_by_code: HashMap<&str, i32> = announced
         .scoring_log
         .iter()
+        .filter(|entry| {
+            entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
+                && matches!(entry.source, ScoringSource::Builtin)
+        })
         .map(|entry| (entry.code.as_str(), entry.delta))
         .collect();
 
     let mut codes: Vec<String> = analyzed
         .scoring_log
         .iter()
+        .filter(|entry| {
+            entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
+                && matches!(entry.source, ScoringSource::Builtin)
+        })
         .filter(|entry| announced_by_code.get(entry.code.as_str()) != Some(&entry.delta))
         .map(|entry| entry.code.clone())
         .collect();

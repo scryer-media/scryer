@@ -1175,7 +1175,7 @@ fn size_implausibly_small_penalises_a_release_a_tenth_of_its_size() {
         !decision
             .scoring_log
             .iter()
-            .any(|entry| entry.delta == BLOCK_SCORE),
+            .any(|entry| entry.kind != ScoringEntryKind::ScoreContribution),
         "{:?}",
         decision.scoring_log
     );
@@ -1183,11 +1183,8 @@ fn size_implausibly_small_penalises_a_release_a_tenth_of_its_size() {
 
 /// **BL2.** The honest number is always in the log.
 ///
-/// `total` — the bar every later comparison uses — is the pass's score with the
-/// `BLOCK_SCORE` entries stripped out. When the bottom veto existed, replacing
-/// the band entry with it would have left a refused file carrying **no** size
-/// term and a bar 2500 points above the same file a byte the other side of the
-/// threshold. Nothing replaces the band today either.
+/// `total` retains every numeric contribution. A mandatory rejection cannot
+/// replace a size penalty and accidentally improve the incumbent's score.
 #[test]
 fn a_tiny_release_carries_the_size_penalty_it_earned() {
     let release = parse_release_metadata("Portmere.2024.1080p.WEB-DL.H.264-GRP");
@@ -1206,7 +1203,7 @@ fn a_tiny_release_carries_the_size_penalty_it_earned() {
     let non_block: i32 = decision
         .scoring_log
         .iter()
-        .filter(|entry| entry.delta != BLOCK_SCORE)
+        .filter(|entry| entry.kind == ScoringEntryKind::ScoreContribution)
         .map(|entry| entry.delta)
         .sum();
     assert_eq!(
@@ -1238,7 +1235,7 @@ fn the_bar_is_monotone_across_the_bottom_of_the_size_curve() {
         let total: i32 = decision
             .scoring_log
             .iter()
-            .filter(|entry| entry.delta != BLOCK_SCORE)
+            .filter(|entry| entry.kind == ScoringEntryKind::ScoreContribution)
             .map(|entry| entry.delta)
             .sum();
         (total, decision.allowed)
@@ -1821,12 +1818,14 @@ fn decision_log_tracks_entries() {
 }
 
 #[test]
-fn decision_log_block_sets_not_allowed() {
+fn decision_log_penalty_waits_for_finalization() {
     let mut d = QualityProfileDecision::new();
     d.log("test_bonus", 100);
     d.log("blocked_rule", BLOCK_SCORE);
+    assert!(d.allowed);
+    apply_min_score_gate(&QualityProfile::default(), &mut d);
     assert!(!d.allowed);
-    assert_eq!(d.block_codes, vec!["blocked_rule"]);
+    assert_eq!(d.block_codes, vec!["score_at_or_below_block_threshold"]);
     assert_eq!(d.release_score, 100 + BLOCK_SCORE);
 }
 
@@ -2250,7 +2249,8 @@ fn ai_enhanced_gets_block_score() {
     let profile = QualityProfile::default();
     let w = balanced_weights();
     let release = parse_release_metadata("Movie.2024.1080p.WEB-DL.AI.Enhanced.H.265");
-    let d = evaluate_against_profile(&profile, &release, false, &w);
+    let mut d = evaluate_against_profile(&profile, &release, false, &w);
+    apply_min_score_gate(&profile, &mut d);
     assert!(
         d.scoring_log
             .iter()
@@ -2267,7 +2267,9 @@ fn trash_guides_blocked_title_gets_block_score() {
     release.guide_facts.push(scryer_release_parser::GuideFact {
         code: "trash.blocked.lq_release_title".to_string(),
     });
-    let d = evaluate_against_profile_for_category(&profile, &release, false, &w, Some("series"));
+    let mut d =
+        evaluate_against_profile_for_category(&profile, &release, false, &w, Some("series"));
+    apply_min_score_gate(&profile, &mut d);
     assert!(
         d.scoring_log
             .iter()

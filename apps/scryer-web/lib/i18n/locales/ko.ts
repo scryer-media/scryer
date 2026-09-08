@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
+  "scoring.mandatoryRejection": "필수 조건 미충족",
+  "scoring.finalScoreRejection": "최종 점수 기준 미달",
+  "settings.refFnBlockScore": "다른 점수로 상쇄할 수 있는 -10000점 감점을 반환합니다",
+  "settings.arrImportBlockScoreHelp": "총점은 -9000을 초과하고 프로필의 최소 점수 이상이어야 합니다. 필수 조건은 계속 적용됩니다.",
   "label.ready": "준비됨",
   "label.moreInfo": "추가 정보",
   "label.search": "검색",

@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const de: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Pflichtanforderung nicht erfüllt",
+  "scoring.finalScoreRejection": "Endpunktzahl abgelehnt",
+  "settings.refFnBlockScore": "Gibt -10000 als Abzug zurück, den andere Punkte ausgleichen können",
+  "settings.arrImportBlockScoreHelp": "Die Gesamtpunktzahl muss über -9000 liegen und den Profil-Mindestwert erreichen. Pflichtanforderungen gelten weiterhin.",
   "label.ready": "Bereit",
   "label.moreInfo": "Weitere Informationen",
   "label.search": "Suchen",

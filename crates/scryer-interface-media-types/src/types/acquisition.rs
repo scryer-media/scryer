@@ -196,6 +196,8 @@ pub struct ScoringEntryPayload {
     pub code: String,
     /// Signed score delta contributed by the rule.
     pub delta: i32,
+    /// score_contribution, mandatory_rejection, or final_score_rejection.
+    pub kind: String,
     /// Source of the scoring rule.
     pub source: String,
     /// Rule-set name, or null when not associated with a named set.

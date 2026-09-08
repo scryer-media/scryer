@@ -276,8 +276,8 @@ fn title_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str> {
 ///
 /// [`crate::AppUseCase::incumbent_bar`] is the same derivation the grab path
 /// uses, so the pair this returns is the pair the gate will see for that file.
-/// It also keeps the ranking number free of `BLOCK_SCORE`: a veto is a verdict,
-/// never a −10 000 comparison term (I5).
+/// Mandatory rejections carry no points. All numeric penalties remain in the
+/// same canonical score used by import and subsequent upgrade comparisons.
 fn rank_movie_media_file_for_primary(
     app: &AppUseCase,
     context: &crate::quality::canonical_context::ResolvedScoringContext,

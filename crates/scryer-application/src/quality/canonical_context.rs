@@ -124,12 +124,9 @@ pub(crate) struct ParkedReleaseFacts {
     /// The D4 runtime basis for what the release covers: total runtime, one
     /// member's, and how many members.
     pub size_basis: CoverageSizeBasis,
-    /// The release's **block-free** score ([`crate::canonical_scoring::ScoredRelease::total`]):
-    /// the number an incumbent's bar is built from, so a queued release the
-    /// profile now vetoes still compares on honest terms instead of carrying
-    /// `BLOCK_SCORE` into the ladder (I5). Whether the profile allows it at all
-    /// is `allowed`, and the lanes that must refuse a vetoed release read that
-    /// first.
+    /// The complete numeric score ([`crate::canonical_scoring::ScoredRelease::total`]),
+    /// including penalties. Mandatory requirements contribute zero points.
+    /// Lanes that require eligibility read `allowed` before comparing scores.
     pub score: i32,
     pub tier_index: Option<usize>,
     pub revision: i32,
@@ -187,9 +184,8 @@ pub(crate) fn score_parked_release_title(
 
     ParkedReleaseFacts {
         size_basis,
-        // Block-free, like an incumbent's bar: a queued release the profile
-        // now vetoes must not carry −10 000 into `queued_rejection`, where it
-        // would lose to every candidate and quietly switch the queue gate off.
+        // Like the incumbent bar, retain every numeric contribution and carry
+        // eligibility separately from the score.
         score: scored.total,
         tier_index,
         revision: scored.revision,

@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Mandatory requirement failed",
+  "scoring.finalScoreRejection": "Final score rejected",
 
   "label.ready": "Ready",
   "label.moreInfo": "More information",
@@ -1868,11 +1870,11 @@ const en: LocaleDictionary = {
   "settings.arrImportScoreReasonPreference": "The format name expresses a preference.",
   "settings.arrImportScoreReasonPenalty": "The format name identifies something undesirable.",
   "settings.arrImportScoreReasonExtras": "The format appears to identify extras or samples.",
-  "settings.arrImportScoreSuggestionHelp": "Suggestions are editable starting points. Matching formats add their scores together; name-based suggestions never hard-block a release.",
+  "settings.arrImportScoreSuggestionHelp": "Suggestions are editable starting points. Matching formats add their scores together; penalties can be offset by other scores.",
   "settings.arrImportAmbiguousScore":
     "This format has more than one suggested score. Choose the score you want to apply.",
   "settings.arrImportBlockScoreHelp":
-    "Scores at or below -9000 hard-block a release.",
+    "The complete score must exceed -9000 and meet the profile minimum. Mandatory requirements still apply.",
   "settings.arrImportTranslate": "Translate into Rego",
   "settings.arrImportTranslationFailed":
     "Translation failed. Your pasted JSON is still available to review or retry.",
@@ -2083,7 +2085,7 @@ const en: LocaleDictionary = {
   "settings.refBuiltinsIntro":
     "These helper functions are available in your Rego rules in addition to all standard OPA builtins.",
   "settings.refFnBlockScore":
-    "Returns -10000, the constant used to hard-block a release",
+    "Returns -10000 as a penalty that other scores can offset",
   "settings.refFnSizeGib":
     "Converts bytes to GiB (e.g. scryer.size_gib(input.release.size_bytes) > 50)",
   "settings.refFnLangMatches":
@@ -2113,7 +2115,7 @@ const en: LocaleDictionary = {
 
   "settings.refSectionOutput": "Rule Output Format",
   "settings.refOutputIntro":
-    "Rules must define a score_entry rule that returns a map of string keys (score codes) to integer values (point deltas). Positive values boost the release, negative values penalize it, and scryer.block_score() hard-blocks it. File-based rules naturally no-op pre-download because input.file is null until post-download evaluation.",
+    "Rules must define a score_entry rule that returns a map of string keys (score codes) to integer values (point deltas). Positive values boost the release, negative values penalize it, and scryer.block_score() contributes a recoverable -10000 penalty. Eligibility is decided after all contributions; mandatory profile requirements remain blocking. File-based rules naturally no-op pre-download because input.file is null until post-download evaluation.",
 
   "settings.subtitles": "Subtitles",
   "settings.subtitlesDescription":

@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const pt_BR: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Requisito obrigatório não atendido",
+  "scoring.finalScoreRejection": "Pontuação final rejeitada",
+  "settings.refFnBlockScore": "Retorna -10000 como penalidade que outras pontuações podem compensar",
+  "settings.arrImportBlockScoreHelp": "A pontuação total deve superar -9000 e atingir o mínimo do perfil. Os requisitos obrigatórios continuam valendo.",
   "label.ready": "Pronto",
   "label.moreInfo": "Mais informações",
   "label.search": "Pesquisar",

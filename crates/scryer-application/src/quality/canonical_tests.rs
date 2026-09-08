@@ -1302,9 +1302,18 @@ score_entry["quality_not_in_profile_tiers"] := -10000 if {
             scored.truth_verdict
         );
     };
-    // Deliberately named like a builtin quality veto: the source is what
-    // decides, not the string.
-    assert_eq!(codes, &["quality_not_in_profile_tiers".to_string()]);
+    // A rule cannot manufacture a mandatory requirement by copying its code.
+    assert_eq!(codes, &["score_at_or_below_block_threshold".to_string()]);
+    assert!(
+        scored
+            .analyzed_decision
+            .as_ref()
+            .unwrap()
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "quality_not_in_profile_tiers"
+                && entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution)
+    );
 }
 
 fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
@@ -1316,6 +1325,134 @@ fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
         applied_facets: vec!["movie".to_string()],
     };
     scryer_rules::UserRulesEngine::build(&[policy]).expect("rule fixture should compile")
+}
+
+#[test]
+fn recoverable_scores_cannot_forge_quality_contradictions_during_size_drift() {
+    let engine = rule_engine(
+        "quality_label",
+        r#"
+score_entry["quality_contradicted:1080P->720P"] := -10000 if { input.file != null }
+score_entry["recovery"] := 20000 if { input.file != null }
+"#,
+    );
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let mut context = ctx(&profile, &weights, &[]);
+    context.rules = Some(&engine);
+
+    // The size difference produces real built-in variance, but the measured
+    // resolution still matches the release. A rule's label cannot invent a lie.
+    let scored = score_release(
+        &announced(8.0).with_analysis(analyzed(1.0, Some("h264"))),
+        &context,
+    );
+    assert!(scored.analyzed_decision.as_ref().unwrap().allowed);
+    let TruthVerdict::Contradicted { codes } = &scored.truth_verdict else {
+        panic!(
+            "expected size contradiction, got {:?}",
+            scored.truth_verdict
+        );
+    };
+    assert!(codes.iter().any(|code| code.starts_with("size_")));
+    assert!(
+        !codes
+            .iter()
+            .any(|code| code.starts_with("quality_contradicted:"))
+    );
+    assert!(matches!(
+        crate::post_download_gate::resolve_truth_verdict_action_for_origin(
+            &scored.truth_verdict,
+            &profile.criteria,
+            true,
+            crate::import_decide::ImportOrigin::OperatorQueued,
+        ),
+        crate::post_download_gate::TruthVerdictAction::Import
+    ));
+}
+
+#[test]
+fn recoverable_scores_survive_analysis_and_incumbent_rederivation() {
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let evidence = ReleaseEvidence::announced(
+        parse_release_metadata("Movie.2024.1080p.WEB-DL.H.264-GROUP"),
+        Some(8 * GIB),
+    )
+    .with_analysis(analyzed(8.0, Some("h264")));
+    for file_only in [false, true] {
+        let penalty = if file_only {
+            "score_entry[\"penalty\"] := scryer.block_score() if { input.file != null }"
+        } else {
+            "score_entry[\"penalty\"] := scryer.block_score()"
+        };
+        let policies = [
+            scryer_rules::UserPolicy {
+                id: "pack".into(),
+                name: "Pack".into(),
+                rego_source: scryer_rules::rewrite_package_declaration(penalty, "pack"),
+                origin: scryer_rules::PolicyOrigin::System,
+                applied_facets: vec!["movie".into()],
+            },
+            scryer_rules::UserPolicy {
+                id: "boost".into(),
+                name: "Group boost".into(),
+                rego_source: scryer_rules::rewrite_package_declaration(
+                    "score_entry[\"boost\"] := 20000 if { lower(input.release.release_group) == \"group\" }",
+                    "boost",
+                ),
+                origin: scryer_rules::PolicyOrigin::User,
+                applied_facets: vec!["movie".into()],
+            },
+        ];
+        let engine = scryer_rules::UserRulesEngine::build(&policies).unwrap();
+        let mut context = ctx(&profile, &weights, &[]);
+        let baseline = score_release(&evidence, &context);
+        context.rules = Some(&engine);
+        let scored = score_release(&evidence, &context);
+        assert!(scored.announced_decision.allowed);
+        assert!(scored.analyzed_decision.as_ref().unwrap().allowed);
+        assert_eq!(scored.total, baseline.total + 10_000);
+        assert_eq!(scored.truth_verdict, TruthVerdict::Consistent);
+        let row = media_row_as_import_would_write(&evidence, &scored);
+        assert_eq!(score_media_file(&row, &context).total, scored.total);
+        assert_eq!(
+            score_release_preview(&evidence, &context).scored.total,
+            scored.total
+        );
+    }
+}
+
+#[test]
+fn recoverable_scores_never_override_profile_requirements() {
+    let weights = balanced_weights();
+    let engine = rule_engine("boost", "score_entry[\"boost\"] := 20000000");
+    let profile = profile(
+        r#"{"id":"t","name":"T","criteria":{"video_codec_blocklist":["H.264"],"quality_tiers":["1080P"]}}"#,
+    );
+    let mut context = ctx(&profile, &weights, &[]);
+    context.rules = Some(&engine);
+    let scored = score_release(&announced(8.0), &context);
+    assert!(scored.total > 10_000_000);
+    assert!(!scored.announced_decision.allowed);
+    assert_eq!(
+        scored.announced_decision.block_codes,
+        ["video_codec_in_profile_blocklist"]
+    );
+
+    let profile = movie_profile();
+    let mut context = ctx(&profile, &weights, &[]);
+    context.rules = Some(&engine);
+    let oversized = score_release(&announced(10_000.0), &context);
+    assert!(oversized.total > 10_000_000);
+    assert!(!oversized.announced_decision.allowed);
+    assert!(
+        oversized
+            .announced_decision
+            .block_codes
+            .iter()
+            .any(|code| code == "size_implausible_for_quality")
+    );
 }
 
 #[test]

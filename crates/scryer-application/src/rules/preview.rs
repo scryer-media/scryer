@@ -59,6 +59,7 @@ pub struct RuleSetTestEntry {
     pub code: String,
     pub delta: i32,
     pub blocked: bool,
+    pub kind: crate::quality_profile::ScoringEntryKind,
 }
 
 #[derive(Clone, Debug)]
@@ -494,16 +495,17 @@ fn preview_rule_sets(
                 messages: Vec::new(),
                 entries: Vec::new(),
             });
-        if entry.delta > scryer_rules::BLOCK_SCORE_THRESHOLD {
-            result.score += entry.delta;
-        }
         result.matched = true;
-        result.blocked |= entry.delta <= scryer_rules::BLOCK_SCORE_THRESHOLD;
+        result.blocked |= entry.kind != crate::quality_profile::ScoringEntryKind::ScoreContribution;
         result.entries.push(RuleSetTestEntry {
             code: entry.code.clone(),
             delta: entry.delta,
-            blocked: entry.delta <= scryer_rules::BLOCK_SCORE_THRESHOLD,
+            blocked: entry.kind != crate::quality_profile::ScoringEntryKind::ScoreContribution,
+            kind: entry.kind,
         });
+        result.score = crate::quality_profile::sum_score_deltas(
+            result.entries.iter().map(|entry| entry.delta),
+        );
     }
     for error in errors {
         let result =
@@ -563,14 +565,9 @@ fn preview_draft_contribution(
         error
     };
     RuleSetTestDraftContribution {
-        score: matching
-            .iter()
-            .filter(|delta| **delta > scryer_rules::BLOCK_SCORE_THRESHOLD)
-            .sum(),
+        score: crate::quality_profile::sum_score_deltas(matching.iter().copied()),
         matched: !matching.is_empty(),
-        blocked: matching
-            .iter()
-            .any(|delta| *delta <= scryer_rules::BLOCK_SCORE_THRESHOLD),
+        blocked: false,
         applies,
         enabled: draft.enabled,
         message,
