@@ -6306,7 +6306,13 @@ fn parse_split_standard_episode_at(
     let season = parse_season_token(tokens.get(index)?.normalized.as_str())?;
     let episode_token = tokens.get(index + 1)?;
     let episode = if episode_token.separator_before == SeparatorKind::Hyphen {
-        parse_numeric_token(episode_token.normalized.as_str())?
+        let token = episode_token.normalized.as_str();
+        parse_numeric_token(token).or_else(|| {
+            // Anime revisions such as `17v2` still identify one episode.
+            let (number, version) = token.split_once('V')?;
+            parse_numeric_token(version)?;
+            parse_numeric_token(number)
+        })?
     } else {
         dot_split_episode_after_season(tokens, index + 1)?
     };
