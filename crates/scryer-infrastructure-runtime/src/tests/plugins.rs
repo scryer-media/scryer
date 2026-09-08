@@ -233,7 +233,7 @@ async fn cleanup_deletes_legacy_external_plugin_rows_and_preserves_builtins() {
 }
 
 #[tokio::test]
-async fn legacy_external_rows_are_hidden_and_do_not_block_reinstall() {
+async fn legacy_external_rows_remain_visible_for_repair_and_do_not_block_reinstall() {
     let (services, db) = temp_services("scryer_plugin_reinstall_legacy").await;
     let customization = PluginStore::new(services.datastore());
     let now = Utc::now();
@@ -271,20 +271,20 @@ async fn legacy_external_rows_are_hidden_and_do_not_block_reinstall() {
         .await
         .expect("seed legacy external install");
 
-    assert!(
-        customization
-            .get_plugin_installation("email")
-            .await
-            .expect("read hidden legacy install")
-            .is_none()
-    );
+    let visible = customization
+        .get_plugin_installation("email")
+        .await
+        .expect("read legacy repair target")
+        .expect("legacy installation must remain visible");
+    assert_eq!(visible.id, legacy_external.id);
+    assert_eq!(visible.source_url, legacy_external.source_url);
     assert!(
         customization
             .list_plugin_installations()
             .await
             .expect("list plugin installations")
             .into_iter()
-            .all(|installation| installation.plugin_id != "email")
+            .any(|installation| installation.plugin_id == "email")
     );
 
     let compressed = zstd::encode_all(&b"catalog plugin bytes"[..], 1).expect("compress plugin");

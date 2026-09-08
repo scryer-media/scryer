@@ -4691,6 +4691,8 @@ fn bootstrap_plugins_with_settings(
 
 const AUTO_UPDATE_WASM_BYTES: &[u8] = b"persisted plugin artifact";
 
+mod component_upgrade_tests;
+
 fn official_catalog_installation(plugin_id: &str, version: &str) -> PluginInstallation {
     let mut installation = make_installation(plugin_id, version, false, true);
     installation.wasm_encoding = PluginWasmEncoding::Identity;

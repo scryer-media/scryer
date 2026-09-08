@@ -8,12 +8,10 @@
 //! # Nothing here may fail the caller
 //!
 //! A request rule is a convenience layered over a flow that worked without it.
-//! So every failure — an unreadable gate, a fact source that is down, a rule
-//! that will not compile, an engine that times out, a trace store that refuses
-//! the write — degrades to *today's behaviour*: the library's Auto-Approve
-//! permission approves, and everything else waits for a human. The policy
-//! verdict is still recorded when it can be, with `fallback_reason = "error"`,
-//! so an operator can see that policy did not get to speak.
+//! Unreadable gates and unavailable shared facts use the library's existing
+//! Auto-Approve permission. Uncertainty in an armed enforcing rule holds the
+//! request for a human. Trace persistence is best effort: a failed trace write
+//! must not change the verdict already reached by policy.
 
 use chrono::Utc;
 use scryer_domain::{

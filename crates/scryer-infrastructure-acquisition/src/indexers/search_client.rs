@@ -3763,7 +3763,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         };
         // Resolve each distinct proxy config once per search pass; both the
         // scheduler deadline calculation and client construction read from
-        // this map. A missing entry value means the config row is gone.
+        // this map. A missing value means the row is absent or cannot be used.
         let mut proxy_configs_by_id: HashMap<String, Option<scryer_domain::ProxyConfig>> =
             HashMap::new();
         for (config, _) in &enabled {
@@ -3773,7 +3773,15 @@ impl IndexerClient for MultiIndexerSearchClient {
             if proxy_configs_by_id.contains_key(proxy_config_id) {
                 continue;
             }
-            let fetched = self.proxy_configs.get_by_id(proxy_config_id).await?;
+            let fetched = match self.proxy_configs.get_by_id(proxy_config_id).await {
+                Ok(proxy) => proxy,
+                Err(error) => {
+                    // Keep this assignment unresolved so client construction
+                    // blocks its indexers without aborting unrelated searches.
+                    tracing::warn!(proxy_id = proxy_config_id, %error, "assigned indexer proxy cannot be loaded");
+                    None
+                }
+            };
             proxy_configs_by_id.insert(proxy_config_id.to_string(), fetched);
         }
         let mut scheduler_candidates = Vec::new();
@@ -7167,6 +7175,98 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    struct UnreadableProxyRepository;
+
+    #[async_trait]
+    impl ProxyConfigRepository for UnreadableProxyRepository {
+        async fn list(
+            &self,
+            _: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
+            unreachable!()
+        }
+        async fn get_by_id(&self, _: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+            Err(AppError::Validation(
+                "synthetic invalid persisted proxy".into(),
+            ))
+        }
+        async fn create(
+            &self,
+            _: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            unreachable!()
+        }
+        async fn delete(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn record_health(
+            &self,
+            _: &str,
+            _: scryer_domain::ProxyHealthStatus,
+            _: Option<String>,
+            _: Option<chrono::DateTime<Utc>>,
+        ) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn pin_host_key(&self, _: &str, _: &str, _: chrono::DateTime<Utc>) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn clear_host_key(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_proxy_blocks_only_its_assigned_indexers() {
+        let mut blocked = mock_indexer_config();
+        blocked.proxy_config_id = Some("broken".into());
+        let mut healthy = mock_indexer_config();
+        healthy.id = "healthy-indexer".into();
+        healthy.name = "Healthy indexer".into();
+        healthy.base_url = "https://healthy.test".into();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![blocked, healthy],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(MockIndexerPluginProvider {
+                rss: true,
+                calls: calls.clone(),
+            }),
+        )
+        .with_proxy_config_repository(Arc::new(UnreadableProxyRepository));
+        let response = multi
+            .search(
+                String::new(),
+                HashMap::new(),
+                None,
+                Some("series".into()),
+                None,
+                None,
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("unrelated indexer must remain searchable");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the blocked indexer must never run directly"
+        );
+        assert!(response.results.is_empty());
     }
 
     #[tokio::test]

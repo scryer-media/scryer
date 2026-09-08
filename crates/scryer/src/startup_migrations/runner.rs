@@ -30,6 +30,7 @@ use super::{
 enum MigrationPhase {
     Early,
     ApplicationReady,
+    Compatibility,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +114,18 @@ const MIGRATIONS: &[MigrationSpec] = &[
         id: "0013_indexer_request_accounting",
         description: "establish the corrected indexer request accounting epoch",
         phase: MigrationPhase::Early,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: super::_0014_plugin_components_020::ID,
+        description: "upgrade persisted plugins to compatible components",
+        phase: MigrationPhase::Compatibility,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: super::_0015_proxy_compatibility_020::ID,
+        description: "validate proxy configurations and retained provider assignments",
+        phase: MigrationPhase::Compatibility,
         legacy_state_key: None,
     },
 ];
@@ -266,13 +279,41 @@ impl ApplicationMigrator {
         Ok(())
     }
 
+    pub(crate) async fn run_proxy_compatibility(
+        &mut self,
+        proxies: Arc<dyn scryer_application::ProxyConfigRepository>,
+    ) -> Result<(), String> {
+        let datastore = self.ledger.datastore.clone();
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == super::_0015_proxy_compatibility_020::ID)
+            .unwrap();
+        let started = Instant::now();
+        if super::_0015_proxy_compatibility_020::migrate(&datastore, proxies).await? {
+            self.record_success(spec, started).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn run_application_ready(
         &mut self,
         app: &AppUseCase,
         quality_profiles: Arc<QualityProfileStore>,
         previous_version: Option<&str>,
         current_version: &str,
-    ) {
+    ) -> Result<(), String> {
+        let datastore = self.ledger.datastore.clone();
+        let store = DatastoreCustomizationStore::new(datastore.clone());
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == super::_0014_plugin_components_020::ID)
+            .unwrap();
+        // Inspect per-installation progress even after global completion: a
+        // restored catalog can introduce another legacy artifact later.
+        let started = Instant::now();
+        if super::_0014_plugin_components_020::migrate(app, &datastore, &store).await? {
+            self.record_success(spec, started).await?;
+        }
         for spec in MIGRATIONS
             .iter()
             .copied()
@@ -376,6 +417,7 @@ impl ApplicationMigrator {
                 _ => unreachable!("application-ready migration registry and dispatcher must agree"),
             }
         }
+        Ok(())
     }
 
     async fn run_retryable<F>(&mut self, spec: MigrationSpec, migration: F)

@@ -1072,7 +1072,15 @@ async fn import_additional_movie_download(
         .map(|episode_id| vec![episode_id.to_string()])
         .unwrap_or_default();
 
+    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+        app,
+        Some(&title.library_id),
+        &title.facet,
+        Some(completed),
+    )
+    .await?;
     let check_ctx = crate::import_checks::ImportCheckContext {
+        import_mode,
         source_path: source_video,
         dest_path: &dest_path,
         source_size: source_size as u64,
@@ -1128,13 +1136,6 @@ async fn import_additional_movie_download(
         return Ok(result);
     }
 
-    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-        app,
-        Some(&title.library_id),
-        &title.facet,
-        Some(completed),
-    )
-    .await?;
     persist_title_folder_path_if_missing(app, title, &full_folder_path).await?;
     let destination_ownership =
         series_movie_context
@@ -1478,7 +1479,15 @@ async fn import_movie_download(
     ensure_import_title_folder_available(app, title, &full_folder_path).await?;
 
     let dest_path = full_folder_path.join(&rendered_filename);
+    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+        app,
+        Some(&title.library_id),
+        &title.facet,
+        Some(completed),
+    )
+    .await?;
     let check_ctx = crate::import_checks::ImportCheckContext {
+        import_mode,
         source_path: &source_video,
         dest_path: &dest_path,
         source_size: source_size as u64,
@@ -1562,14 +1571,6 @@ async fn import_movie_download(
         )
         .await;
     }
-
-    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-        app,
-        Some(&title.library_id),
-        &title.facet,
-        Some(completed),
-    )
-    .await?;
 
     // **The one import decision** (design §3): subject, landed score, truth
     // verdict and admission in one call, over the same incumbents and the same
@@ -2738,8 +2739,7 @@ async fn import_series_movie_download(
         .await?;
     if nfo_enabled {
         let nfo_path = dest_path.with_extension("nfo");
-        let nfo_content =
-        crate::nfo::render_series_movie_episode_nfo(
+        let nfo_content = crate::nfo::render_series_movie_episode_nfo(
             movie,
             season_episode.as_deref().unwrap_or_default(),
             link.after_season,
@@ -2914,9 +2914,16 @@ fn series_movie_episode_season(episode: &scryer_domain::Episode) -> Option<i32> 
 
 /// `S{season:02}E{episode:02}` for an episode whose season and episode numbers
 /// are both known.
-pub(crate) fn series_movie_season_episode_token(episode: &scryer_domain::Episode) -> Option<String> {
+pub(crate) fn series_movie_season_episode_token(
+    episode: &scryer_domain::Episode,
+) -> Option<String> {
     let season = series_movie_episode_season(episode)?;
-    let episode_number = episode.episode_number.as_deref()?.trim().parse::<i32>().ok()?;
+    let episode_number = episode
+        .episode_number
+        .as_deref()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
     Some(format!("S{season:02}E{episode_number:02}"))
 }
 

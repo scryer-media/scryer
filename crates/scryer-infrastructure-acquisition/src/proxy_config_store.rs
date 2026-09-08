@@ -90,6 +90,14 @@ impl ProxyConfigRepository for ProxyConfigStore {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ProxyConfig>> {
+        let config = self.get_for_edit(id).await?;
+        if let Some(config) = &config {
+            scryer_application::validate_persisted_proxy_config(config)?;
+        }
+        Ok(config)
+    }
+
+    async fn get_for_edit(&self, id: &str) -> AppResult<Option<ProxyConfig>> {
         let encryption_key = self.encryption_key()?;
         fetch_optional_proxy_config(
             self.datastore.read_exec(),
@@ -506,13 +514,19 @@ fn row_to_proxy_config(
         .as_deref()
         .and_then(ProxyHealthStatus::parse);
 
-    Ok(ProxyConfig {
+    let config = ProxyConfig {
         id: row.text("id")?,
         name: row.text("name")?,
         provider_type,
         protocol: parse_persisted_protocol(provider_type, row.opt_text("protocol")?)?,
         base_url: row.text("base_url")?,
-        request_timeout_seconds: clamp_persisted_proxy_timeout(row.i64("request_timeout_seconds")?),
+        request_timeout_seconds: u32::try_from(row.i64("request_timeout_seconds")?).map_err(
+            |_| {
+                AppError::Validation(
+                    "Stored proxy timeout is not a nonnegative 32-bit integer".into(),
+                )
+            },
+        )?,
         is_enabled: row.bool("is_enabled")?,
         username_encrypted: decrypt_credential(
             encryption_key,
@@ -548,14 +562,8 @@ fn row_to_proxy_config(
         last_error_at: row.opt_timestamp("last_error_at")?,
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
-    })
-}
-
-fn clamp_persisted_proxy_timeout(timeout_seconds: i64) -> u32 {
-    timeout_seconds.clamp(
-        1,
-        i64::from(scryer_outbound_http::MAX_PROXY_TIMEOUT_SECONDS),
-    ) as u32
+    };
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -563,13 +571,6 @@ mod tests {
     use super::*;
     use scryer_domain::{ChallengeSolverProtocol, ProxyProviderType};
     use sqlx::sqlite::SqlitePoolOptions;
-
-    #[test]
-    fn persisted_proxy_timeout_is_clamped_to_supported_range() {
-        assert_eq!(clamp_persisted_proxy_timeout(-1), 1);
-        assert_eq!(clamp_persisted_proxy_timeout(60), 60);
-        assert_eq!(clamp_persisted_proxy_timeout(180), 120);
-    }
 
     #[test]
     fn solver_rows_still_require_a_protocol() {
@@ -694,15 +695,18 @@ mod tests {
 
     #[tokio::test]
     async fn tunnel_key_material_round_trips_and_the_host_key_pin_is_operator_visible() {
-        let (store, _pool) = proxy_store().await;
+        let (store, pool) = proxy_store().await;
         let config = tunnel_config();
         store
             .create(config.clone())
             .await
             .expect("tunnel row should insert");
 
+        // This codec fixture deliberately contains an invalid private key.
+        // It must remain editable while the runtime refuses to use it.
+        assert!(store.get_by_id("tunnel-1").await.is_err());
         let loaded = store
-            .get_by_id("tunnel-1")
+            .get_for_edit("tunnel-1")
             .await
             .expect("row should load")
             .expect("row should exist");
@@ -724,7 +728,7 @@ mod tests {
             .await
             .expect("pin should succeed");
         let pinned = store
-            .get_by_id("tunnel-1")
+            .get_for_edit("tunnel-1")
             .await
             .expect("row should load")
             .expect("row should exist");
@@ -739,13 +743,14 @@ mod tests {
             .await
             .expect("clear should succeed");
         let cleared = store
-            .get_by_id("tunnel-1")
+            .get_for_edit("tunnel-1")
             .await
             .expect("row should load")
             .expect("row should exist");
         assert_eq!(cleared.host_key_fingerprint, None);
         assert_eq!(cleared.host_key_pinned_at, None);
         assert!(cleared.updated_at > loaded.updated_at);
+        pool.close().await;
     }
 
     fn wireguard_config() -> ProxyConfig {
@@ -762,11 +767,13 @@ mod tests {
             username_encrypted: None,
             password_encrypted: None,
             remote_dns: false,
-            private_key_encrypted: Some("cHJpdmF0ZS1rZXktYmFzZTY0LXBsYWNlaG9sZGVy".to_string()),
+            private_key_encrypted: Some("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=".to_string()),
             private_key_passphrase_encrypted: None,
-            peer_public_key: Some("cGVlci1wdWJsaWMta2V5LWJhc2U2NC1wbGFjZWhvbGRlcg==".to_string()),
-            preshared_key_encrypted: Some("cHJlc2hhcmVkLWtleQ==".to_string()),
-            tunnel_public_key: Some("b3VyLXB1YmxpYy1rZXk=".to_string()),
+            peer_public_key: Some("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=".to_string()),
+            preshared_key_encrypted: Some(
+                "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=".to_string(),
+            ),
+            tunnel_public_key: None,
             tunnel_addresses: vec!["10.6.0.2/32".to_string(), "fd00::2/128".to_string()],
             tunnel_dns_servers: vec!["10.6.0.1".to_string()],
             tunnel_mtu: Some(1420),
@@ -876,5 +883,65 @@ mod tests {
         // row unloadable.
         assert_eq!(opt_u16_from_stored(Some(-1)), None);
         assert_eq!(opt_u16_from_stored(Some(100_000)), None);
+    }
+
+    #[tokio::test]
+    async fn invalid_persisted_timeout_blocks_routing_but_can_be_repaired_without_losing_credentials()
+     {
+        let (store, pool) = proxy_store().await;
+        *store.encryption_key.write().unwrap() = Some(EncryptionKey::from_bytes([7; 32]));
+        let mut config = tunnel_config();
+        config.provider_type = ProxyProviderType::Http;
+        config.base_url = "http://proxy.test:8080".into();
+        config.password_encrypted = Some("secret".into());
+        config.private_key_encrypted = None;
+        config.private_key_passphrase_encrypted = None;
+        store.create(config).await.unwrap();
+        let original_ciphertext: Option<String> =
+            sqlx::query_scalar("SELECT password_encrypted FROM proxy_configs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(original_ciphertext.as_deref(), Some("secret"));
+        for invalid in [0_i64, 121, 180] {
+            sqlx::query("UPDATE proxy_configs SET request_timeout_seconds = ?")
+                .bind(invalid)
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(store.get_by_id("tunnel-1").await.is_err());
+            let mut editable = store.get_for_edit("tunnel-1").await.unwrap().unwrap();
+            assert_eq!(editable.request_timeout_seconds, invalid as u32);
+            assert_eq!(editable.password_encrypted.as_deref(), Some("secret"));
+            let ciphertext: Option<String> =
+                sqlx::query_scalar("SELECT password_encrypted FROM proxy_configs")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(ciphertext, original_ciphertext);
+            editable.request_timeout_seconds = 60;
+            store.update(editable).await.unwrap();
+            assert_eq!(
+                store
+                    .get_by_id("tunnel-1")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .password_encrypted
+                    .as_deref(),
+                Some("secret")
+            );
+            // Encryption is randomized on operator writes; preserve the new
+            // ciphertext as the baseline for subsequent read-only checks.
+            sqlx::query("UPDATE proxy_configs SET password_encrypted = ?")
+                .bind(&original_ciphertext)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        *store.encryption_key.write().unwrap() = Some(EncryptionKey::from_bytes([8; 32]));
+        assert!(store.get_by_id("tunnel-1").await.is_err());
+        *store.encryption_key.write().unwrap() = Some(EncryptionKey::from_bytes([7; 32]));
+        assert!(store.get_by_id("tunnel-1").await.unwrap().is_some());
     }
 }

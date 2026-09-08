@@ -1,3 +1,43 @@
+/// Validate persisted configuration without rewriting the operator's values.
+/// Startup compatibility checks and runtime routing share these invariants.
+pub fn validate_persisted_proxy_config(config: &scryer_domain::ProxyConfig) -> AppResult<()> {
+    normalize_proxy_name(&config.name)?;
+    let endpoint = normalize_proxy_endpoint(config.provider_type, &config.base_url)?;
+    validate_proxy_timeout(config.request_timeout_seconds)?;
+    let protocol = resolve_new_proxy_protocol(config.provider_type, config.protocol)?;
+    if protocol != config.protocol {
+        return Err(AppError::Validation(
+            "Stored proxy protocol does not match its provider".into(),
+        ));
+    }
+    validate_proxy_credentials(
+        config.provider_type,
+        config.username_encrypted.as_deref(),
+        config.password_encrypted.as_deref(),
+    )?;
+    resolve_remote_dns(
+        config.provider_type,
+        Some(config.remote_dns),
+        endpoint.scheme_remote_dns,
+    )?;
+    validate_tunnel_auth(
+        config.provider_type,
+        &TunnelAuthFields {
+            username: config.username_encrypted.as_deref(),
+            password: config.password_encrypted.as_deref(),
+            private_key: config.private_key_encrypted.as_deref(),
+            private_key_passphrase: config.private_key_passphrase_encrypted.as_deref(),
+            peer_public_key: config.peer_public_key.as_deref(),
+            preshared_key: config.preshared_key_encrypted.as_deref(),
+            tunnel_addresses: &config.tunnel_addresses,
+            tunnel_dns_servers: &config.tunnel_dns_servers,
+            tunnel_mtu: config.tunnel_mtu,
+            tunnel_keepalive_seconds: config.tunnel_keepalive_seconds,
+        },
+    )?;
+    Ok(())
+}
+
 impl AppUseCase {
     pub async fn list_proxy_configs(
         &self,
@@ -110,7 +150,7 @@ impl AppUseCase {
             .services
             .integrations
             .proxy_configs
-            .get_by_id(id)
+            .get_for_edit(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
         if let Some(name) = update.name {
@@ -236,6 +276,7 @@ impl AppUseCase {
         if let Some(is_enabled) = update.is_enabled {
             config.is_enabled = is_enabled;
         }
+        validate_persisted_proxy_config(&config)?;
         config.updated_at = Utc::now();
 
         self.services

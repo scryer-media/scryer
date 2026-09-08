@@ -3659,6 +3659,10 @@ pub trait ProxyConfigRepository: Send + Sync {
         provider_type: Option<scryer_domain::ProxyProviderType>,
     ) -> AppResult<Vec<scryer_domain::ProxyConfig>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>>;
+    /// Load editable values even when runtime validation blocks this proxy.
+    async fn get_for_edit(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        self.get_by_id(id).await
+    }
     async fn create(
         &self,
         config: scryer_domain::ProxyConfig,
@@ -7029,6 +7033,15 @@ pub trait PluginDescriptorLoader: Send + Sync {
         &self,
         wasm_bytes: &[u8],
     ) -> AppResult<scryer_plugin_sdk::PluginDescriptor>;
+
+    /// Startup repair needs initialization validation as well as metadata.
+    /// Runtime adapters override this to instantiate with restricted services.
+    fn validate_startup_component(
+        &self,
+        wasm_bytes: &[u8],
+    ) -> AppResult<scryer_plugin_sdk::PluginDescriptor> {
+        self.load_descriptor_from_wasm_bytes(wasm_bytes)
+    }
 }
 
 /// The numbering evidence an application search gives the multi-indexer guard.

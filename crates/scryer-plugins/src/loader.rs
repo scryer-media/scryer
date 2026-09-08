@@ -3364,6 +3364,76 @@ impl PluginDescriptorLoader for WasmPluginDescriptorLoader {
             .map(|(descriptor, _)| descriptor)
             .map_err(AppError::Validation)
     }
+
+    fn validate_startup_component(&self, wasm_bytes: &[u8]) -> AppResult<PluginDescriptor> {
+        let descriptor = self.load_descriptor_from_wasm_bytes(wasm_bytes)?;
+        let initialized_descriptor = match &descriptor.provider {
+            ProviderDescriptor::Indexer(_) => {
+                // Indexers describe themselves through embedded metadata.
+                // Still enter the guest once: linking does not detect a trap
+                // or resource failure in component initialization.
+                std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| -> Result<(), String> {
+                            let executor = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .map_err(|error| error.to_string())?;
+                            executor.block_on(async {
+                                use crate::wasmtime_host::component_host::{
+                                    ComponentHost, ComponentRuntime,
+                                };
+                                let runtime = ComponentRuntime::new(
+                                    crate::wasmtime_host::engine::shared_async_engine(),
+                                    wasm_bytes,
+                                )?;
+                                // An empty host allowlist denies every HTTP request.
+                                // No operator configuration, filesystem preopens,
+                                // credentials, or provider services are available.
+                                let host = ComponentHost::for_indexer_with_provider_profile(
+                                    Default::default(),
+                                    Vec::new(),
+                                    Default::default(),
+                                    None,
+                                    std::time::Duration::from_secs(5),
+                                    None,
+                                    None,
+                                )?;
+                                runtime.instantiate(&host).await.map(|_| ())
+                            })
+                        })
+                        .join()
+                        .map_err(|_| "component initialization thread panicked".to_string())?
+                })
+                .map_err(AppError::Validation)?;
+                descriptor.clone()
+            }
+            ProviderDescriptor::ArchiveExtractor(_) => {
+                crate::wasmtime_host::archive_component_describe(wasm_bytes)
+                    .map_err(AppError::Validation)?
+            }
+            ProviderDescriptor::Subtitle(_) => {
+                crate::wasmtime_host::subtitle_component_describe(wasm_bytes)
+                    .map_err(AppError::Validation)?
+            }
+            ProviderDescriptor::DownloadClient(_) => {
+                crate::wasmtime_host::download_client_component_describe(wasm_bytes)
+                    .map_err(AppError::Validation)?
+            }
+            ProviderDescriptor::Notification(_) => {
+                crate::wasmtime_host::notification_component_describe(wasm_bytes)
+                    .map_err(AppError::Validation)?
+            }
+        };
+        if serde_json::to_value(&initialized_descriptor).ok()
+            != serde_json::to_value(&descriptor).ok()
+        {
+            return Err(AppError::Validation(
+                "Initialized component descriptor differs from embedded metadata".into(),
+            ));
+        }
+        Ok(descriptor)
+    }
 }
 
 // ── Notification plugin provider ───────────────────────────────────────
@@ -4235,6 +4305,13 @@ mod tests {
             serde_json::to_value(embedded).unwrap()
         );
         assert_eq!(loaded_wasm, wasm);
+        let error = WasmPluginDescriptorLoader
+            .validate_startup_component(&wasm)
+            .expect_err("startup repair must compare the initialized descriptor too");
+        assert!(
+            error.to_string().contains("differs from embedded metadata"),
+            "{error}"
+        );
     }
 
     /// The hard cut at the loader's own door: a pre-component artifact — even
@@ -4313,6 +4390,18 @@ mod tests {
                 .expect("embedded builtin descriptor should parse");
             validate_plugin_descriptor_sdk_contract(&descriptor, SDK_VERSION)
                 .expect("embedded builtin should match current SDK line");
+        }
+    }
+
+    #[test]
+    fn startup_component_validation_instantiates_bundled_indexers() {
+        for asset in [NEWZNAB, TORZNAB] {
+            let bytes = crate::builtins::decode_builtin_wasm(asset).unwrap();
+            let descriptor = WasmPluginDescriptorLoader
+                .validate_startup_component(&bytes)
+                .expect("trusted replacement must initialize with the current host");
+            let expected: PluginDescriptor = serde_json::from_str(asset.descriptor_json).unwrap();
+            assert_eq!(descriptor.id, expected.id);
         }
     }
 

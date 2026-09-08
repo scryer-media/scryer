@@ -2898,17 +2898,51 @@ mod tests {
             .await
             .expect("missing scope candidates should load");
 
-        let scoped = media_files.list_missing_scope_candidates_for_title(Some(&title.id))
-            .await.expect("title-filtered candidates");
-        assert_eq!(scoped.episodes.len(), missing.episodes.iter().filter(|item| item.title_id == title.id).count());
-        assert_eq!(scoped.titles.len(), missing.titles.iter().filter(|item| item.title_id == title.id).count());
-        assert_eq!(scoped.series_movie_links.len(), missing.series_movie_links.iter().filter(|item| item.title_id == title.id).count());
+        let scoped = media_files
+            .list_missing_scope_candidates_for_title(Some(&title.id))
+            .await
+            .expect("title-filtered candidates");
+        assert_eq!(
+            scoped.episodes.len(),
+            missing
+                .episodes
+                .iter()
+                .filter(|item| item.title_id == title.id)
+                .count()
+        );
+        assert_eq!(
+            scoped.titles.len(),
+            missing
+                .titles
+                .iter()
+                .filter(|item| item.title_id == title.id)
+                .count()
+        );
+        assert_eq!(
+            scoped.series_movie_links.len(),
+            missing
+                .series_movie_links
+                .iter()
+                .filter(|item| item.title_id == title.id)
+                .count()
+        );
         assert!(scoped.episodes.iter().all(|item| item.title_id == title.id));
         assert!(scoped.titles.iter().all(|item| item.title_id == title.id));
-        assert!(scoped.series_movie_links.iter().all(|item| item.title_id == title.id));
-        let absent = media_files.list_missing_scope_candidates_for_title(Some("absent-title"))
-            .await.expect("absent title");
-        assert!(absent.episodes.is_empty() && absent.titles.is_empty() && absent.series_movie_links.is_empty());
+        assert!(
+            scoped
+                .series_movie_links
+                .iter()
+                .all(|item| item.title_id == title.id)
+        );
+        let absent = media_files
+            .list_missing_scope_candidates_for_title(Some("absent-title"))
+            .await
+            .expect("absent title");
+        assert!(
+            absent.episodes.is_empty()
+                && absent.titles.is_empty()
+                && absent.series_movie_links.is_empty()
+        );
 
         let episode_candidate = missing
             .episodes

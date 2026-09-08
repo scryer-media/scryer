@@ -107,7 +107,7 @@ impl AppUseCase {
         &self,
         proxy_config_id: Option<&str>,
     ) -> AppResult<Option<scryer_domain::ProxyConfig>> {
-        let Some(id) = proxy_config_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        let Some(id) = proxy_config_id else {
             return Ok(None);
         };
         let config = self

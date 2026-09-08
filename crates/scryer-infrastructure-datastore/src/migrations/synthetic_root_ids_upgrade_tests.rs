@@ -160,6 +160,92 @@ async fn the_upgrade_rekeys_path_derived_roots_and_carries_their_titles_along() 
 }
 
 #[tokio::test]
+async fn failed_root_reference_update_rolls_back_and_can_be_retried() {
+    let pool = pre_upgrade_pool().await;
+    let legacy =
+        seed_path_derived_root(&pool, "movie_default_library", "/mnt/rollback/movies").await;
+    seed_title(&pool, "rollback-title", "movie_default_library", &legacy).await;
+    sqlx::raw_sql(
+        "CREATE TRIGGER reject_root_rekey BEFORE UPDATE OF root_folder_id ON titles
+        BEGIN SELECT RAISE(ABORT, 'synthetic root reference failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        crate::migrations::run_migrations(&pool, crate::MigrationMode::Apply)
+            .await
+            .is_err()
+    );
+    assert!(root_exists(&pool, &legacy).await);
+    assert_eq!(title_root(&pool, "rollback-title").await, legacy);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 215 AND success = 1"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::raw_sql("DROP TRIGGER reject_root_rekey")
+        .execute(&pool)
+        .await
+        .unwrap();
+    apply_upgrade(&pool).await;
+    apply_upgrade(&pool).await;
+    assert_eq!(
+        title_root(&pool, "rollback-title").await,
+        synthetic_root_id_from_legacy_id(&legacy)
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn root_upgrade_preserves_library_assignment_default_choice_and_normalized_paths() {
+    let pool = pre_upgrade_pool().await;
+    let mut roots = Vec::new();
+    for (library, path, default) in [
+        ("movie_default_library", "/mnt/archive/movies/", true),
+        ("movie_default_library", "/mnt/other/movies", false),
+        ("series_default_library", "/mnt/archive/series/", true),
+    ] {
+        let id = seed_path_derived_root(&pool, library, path).await;
+        if default {
+            sqlx::query("UPDATE library_roots SET is_default = 0 WHERE library_id = ?")
+                .bind(library)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE library_roots SET is_default = 1 WHERE id = ?")
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        roots.push((id, library, path, default));
+    }
+    apply_upgrade(&pool).await;
+    for (legacy, library, path, default) in roots {
+        let row = sqlx::query(
+            "SELECT library_id, path, normalized_path, is_default FROM library_roots WHERE id = ?",
+        )
+        .bind(synthetic_root_id_from_legacy_id(&legacy))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("library_id"), library);
+        assert_eq!(row.get::<String, _>("path"), path);
+        assert_eq!(
+            row.get::<String, _>("normalized_path"),
+            normalize_library_root_path(path)
+        );
+        assert_eq!(row.get::<bool, _>("is_default"), default);
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn the_upgrade_retains_the_legacy_id_for_diagnostics_and_lookup() {
     let pool = pre_upgrade_pool().await;
     let legacy_id =

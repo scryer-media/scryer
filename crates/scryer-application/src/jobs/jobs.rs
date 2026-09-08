@@ -1833,11 +1833,21 @@ impl AppUseCase {
                 }
             }
             JobKey::FullHashBackfill => {
-                let summary = self.run_full_hash_backfill_job().await?;
-                Ok(JobExecutionOutcome::new(
+                use futures_util::FutureExt;
+                // Keep a panicking backfill from leaving an active tracker
+                // entry that would block every later manual/scheduled retry.
+                let summary = std::panic::AssertUnwindSafe(self.run_full_hash_backfill_job())
+                    .catch_unwind()
+                    .await
+                    .map_err(|_| AppError::Repository("Full-hash backfill panicked".into()))??;
+                let mut outcome = JobExecutionOutcome::new(
                     Some(summary.summary_text()),
                     serde_json::to_string(&summary).ok(),
-                ))
+                );
+                if summary.cancelled {
+                    outcome.status_override = Some(JobRunStatus::Warning);
+                }
+                Ok(outcome)
             }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
             JobKey::ArtworkEncoding => {

@@ -8,6 +8,9 @@
 //! dormant lease claim of the length they asked for.
 
 use super::*;
+
+#[path = "request_rules_failure_tests.rs"]
+mod failure_tests;
 use scryer_domain::{
     LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState, MediaRequestStatus,
     RequestDecisionOutcome, RequestRuleEvaluationMode,
@@ -940,6 +943,32 @@ async fn an_enforced_denial_rejects_the_request_with_no_human_resolver() {
         .expect("a rejection event is published");
     assert_eq!(rejected.decided_by_rule_set_ids, vec![detail.rule_set.id]);
     assert_eq!(rejected.decision_reason_codes, vec!["policy_denied"]);
+}
+
+#[tokio::test]
+async fn trace_write_failure_does_not_disarm_an_enforced_denial() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Deny everything", DENY_EVERYTHING).await;
+    arm(
+        &harness,
+        &detail.rule_set.id,
+        RequestRuleEvaluationMode::Enforce,
+    )
+    .await;
+    enable_gate(&harness).await;
+    harness
+        .request_rule_decisions
+        .fail_writes
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    submit(&harness, &library_id, 9047, Some(7)).await;
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Rejected
+    );
+    assert!(harness.titles.store.lock().await.is_empty());
+    assert!(harness.lifecycle_claims.all().await.is_empty());
+    assert!(harness.request_rule_decisions.recorded().await.is_empty());
 }
 
 #[tokio::test]

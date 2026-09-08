@@ -261,6 +261,7 @@ pub use app_usecase_integration::derive_download_queue_display_state;
 pub use app_usecase_integration::enrich_download_queue_items_from_submissions;
 pub use app_usecase_integration::matches_download_activity_filter;
 pub use app_usecase_integration::matches_download_queue_filter;
+pub use app_usecase_integration::validate_persisted_proxy_config;
 pub use app_usecase_integration::{
     DownloadQueuePollerOptions, start_download_queue_poller,
     start_download_queue_poller_with_options,

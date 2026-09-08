@@ -73,9 +73,7 @@ impl AppUseCase {
                         )
                     })?;
                 provider.remove_runtime_plugin(provider_type).map_err(|e| {
-                    AppError::Repository(format!(
-                        "failed to remove archive extractor plugin: {e}"
-                    ))
+                    AppError::Repository(format!("failed to remove archive extractor plugin: {e}"))
                 })?;
             }
             other => {
@@ -106,6 +104,49 @@ impl AppUseCase {
         runtime_touched: bool,
     ) -> AppResult<()> {
         let plugin_types = plugin_types.into_iter().collect::<Vec<_>>();
+        // A successful manual repair must clear its startup diagnostic without
+        // requiring a restart. Recheck only blocked installations; unrelated
+        // mutations must not clear another provider's blocker.
+        let blocked = self
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in blocked {
+            let installation = self
+                .services
+                .customization
+                .plugin_installations
+                .get_plugin_installation(&id)
+                .await?;
+            let recovered = match installation {
+                None => true,
+                Some(ref installation) => {
+                    match self
+                        .load_runtime_plugin_for_installation(installation)
+                        .await
+                    {
+                        Ok(runtime) => self
+                            .validate_component_upgrade_runtime(installation, &runtime)
+                            .await
+                            .is_ok(),
+                        Err(_) => false,
+                    }
+                }
+            };
+            if recovered {
+                self.runtime
+                    .plugins
+                    .compatibility_blockers
+                    .write()
+                    .await
+                    .remove(&id);
+            }
+        }
         if runtime_touched
             && plugin_types
                 .iter()
@@ -178,7 +219,7 @@ impl AppUseCase {
                     .unwrap_or_else(|| {
                         builtin_by_key
                             .contains_key(&builtin_lookup_key(&plugin_type, &entry.provider_type))
-                });
+                    });
                 let selected = resolved_by_id.get(&entry.id);
                 let selected_release = selected.map(|value| value.release.clone());
                 let active_release =
@@ -194,9 +235,8 @@ impl AppUseCase {
                     .map(|release| release.version.clone())
                     .or_else(|| inst.map(|installation| installation.version.clone()))
                     .unwrap_or_default();
-                let update_available = inst
-                    .zip(selected)
-                    .is_some_and(|(installation, resolved)| {
+                let update_available =
+                    inst.zip(selected).is_some_and(|(installation, resolved)| {
                         catalog_plugin_update_available(installation, resolved)
                     });
 
@@ -350,6 +390,10 @@ impl AppUseCase {
             }
         }
 
+        let blockers = self.runtime.plugins.compatibility_blockers.read().await;
+        for plugin in &mut result {
+            plugin.blocked_reason = blockers.get(&plugin.id).cloned();
+        }
         Ok(result)
     }
 }

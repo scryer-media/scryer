@@ -2,6 +2,9 @@
 
 mod common;
 
+#[path = "import_persistence_tests.rs"]
+mod persistence_tests;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, RwLock};
