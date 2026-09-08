@@ -187,8 +187,9 @@ impl ProxyConfigRepository for NullProxyConfigRepository {
         _id: &str,
         _fingerprint: &str,
         _pinned_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<()> {
-        Ok(())
+        _expected_updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        Ok(true)
     }
 
     async fn clear_host_key(&self, _id: &str) -> AppResult<()> {

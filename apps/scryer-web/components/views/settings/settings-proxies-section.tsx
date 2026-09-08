@@ -53,7 +53,6 @@ import {
   formatProxyProvider,
   groupProxiesByFamily,
   isProxyProviderType,
-  isTunnelProxyProvider,
   isWireguardProxyProvider,
   supportsProxyCredentials,
   supportsProxyHostKey,
@@ -188,7 +187,7 @@ export function SettingsProxiesSection({
   const acceptsCredentials = supportsProxyCredentials(proxyDraft.providerType);
   const acceptsRemoteDns = supportsProxyRemoteDns(proxyDraft.providerType);
   const acceptsPrivateKey = supportsProxyPrivateKey(proxyDraft.providerType);
-  const isTunnelDraft = isTunnelProxyProvider(proxyDraft.providerType);
+  const isTunnelDraft = proxyDraft.providerType === "ssh_tunnel";
   // The tunnel family splits in two: an SSH tunnel has credentials, a key
   // passphrase and a pinned host key; WireGuard has none of those and six
   // fields of its own. The API refuses each half on the other, so the editor
@@ -500,7 +499,7 @@ export function SettingsProxiesSection({
                       className="mb-2 block"
                       htmlFor="settings-indexer-proxy-base-url"
                     >
-                      {isTunnelDraft ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
+                      {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
                     </Label>
                     <Input
                       id="settings-indexer-proxy-base-url"
@@ -547,12 +546,14 @@ export function SettingsProxiesSection({
                     <span>{t("label.enabled")}</span>
                   </label>
                 </div>
-                {isTunnelDraft ? (
+                {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? (
                   <p
                     id="settings-indexer-proxy-endpoint-help"
                     className="text-xs text-muted-foreground"
                   >
-                    {isWireguardDraft
+                    {proxyDraft.providerType === "http3"
+                      ? t("settings.proxyEndpointHelpHttp3")
+                      : isWireguardDraft
                       ? t("settings.proxyEndpointHelpWireguard")
                       : t("settings.proxyEndpointHelp")}
                   </p>
@@ -591,34 +592,34 @@ export function SettingsProxiesSection({
                             }
                           />
                         </label>
-                        <label>
-                          <Label
-                            className="mb-2 block"
-                            htmlFor="settings-indexer-proxy-password"
-                          >
-                            {t("settings.proxyPassword")}
-                          </Label>
-                          <Input
-                            id="settings-indexer-proxy-password"
-                            type="password"
-                            autoComplete="new-password"
-                            value={proxyDraft.password}
-                            disabled={
-                              proxyDraft.clearCredentials || proxyDraft.clearPassword
-                            }
-                            placeholder={
-                              proxyDraft.hasStoredCredentials
-                                ? t("settings.proxyCredentialUnchanged")
-                                : undefined
-                            }
-                            onChange={(event) =>
-                              setProxyDraft((prev) => ({
-                                ...prev,
-                                password: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
+                        {!isTunnelDraft ? (
+                          <label>
+                            <Label
+                              className="mb-2 block"
+                              htmlFor="settings-indexer-proxy-password"
+                            >
+                              {t("settings.proxyPassword")}
+                            </Label>
+                            <Input
+                              id="settings-indexer-proxy-password"
+                              type="password"
+                              autoComplete="new-password"
+                              value={proxyDraft.password}
+                              disabled={proxyDraft.clearCredentials}
+                              placeholder={
+                                proxyDraft.hasStoredCredentials
+                                  ? t("settings.proxyCredentialUnchanged")
+                                  : undefined
+                              }
+                              onChange={(event) =>
+                                setProxyDraft((prev) => ({
+                                  ...prev,
+                                  password: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                        ) : null}
                       </>
                     ) : null}
                     <div className="flex flex-col justify-end gap-2 pb-2">
@@ -656,22 +657,7 @@ export function SettingsProxiesSection({
                           <span>{t("settings.proxyClearCredentials")}</span>
                         </label>
                       ) : null}
-                      {isTunnelDraft && proxyDraft.hasStoredCredentials ? (
-                        <label className="flex items-center gap-2">
-                          <Checkbox
-                            id="settings-indexer-proxy-clear-password"
-                            checked={proxyDraft.clearPassword}
-                            onCheckedChange={(value) =>
-                              setProxyDraft((prev) => ({
-                                ...prev,
-                                clearPassword: value === true,
-                                password: "",
-                              }))
-                            }
-                          />
-                          <span>{t("settings.proxyClearPassword")}</span>
-                        </label>
-                      ) : null}
+
                     </div>
                     <p className="text-xs text-muted-foreground md:col-span-3">
                       {isTunnelDraft ? t("settings.proxyTunnelAuthHelp") : null}
@@ -736,6 +722,7 @@ export function SettingsProxiesSection({
                           spellCheck={false}
                           autoComplete="off"
                           rows={8}
+                          required={!proxyDraft.hasStoredPrivateKey}
                           value={proxyDraft.privateKey}
                           disabled={proxyDraft.clearPrivateKey}
                           placeholder={
@@ -762,27 +749,7 @@ export function SettingsProxiesSection({
                         ? t("settings.proxyPrivateKeyHelpWireguard")
                         : t("settings.proxyPrivateKeyHelp")}
                     </p>
-                    {/* A WireGuard tunnel cannot exist without its key, so
-                        "clear it" is a state the API refuses; the toggle is
-                        withheld the same way a tunnel's mandatory username
-                        is. To rotate the key, paste a new one. */}
-                    {proxyDraft.hasStoredPrivateKey && !isWireguardDraft ? (
-                      <label className="flex items-center gap-2">
-                        <Checkbox
-                          id="settings-indexer-proxy-clear-private-key"
-                          checked={proxyDraft.clearPrivateKey}
-                          onCheckedChange={(value) =>
-                            setProxyDraft((prev) => ({
-                              ...prev,
-                              clearPrivateKey: value === true,
-                              privateKey: "",
-                              privateKeyPassphrase: "",
-                            }))
-                          }
-                        />
-                        <span>{t("settings.proxyClearPrivateKey")}</span>
-                      </label>
-                    ) : null}
+                    {/* Every tunnel requires a key. Paste a replacement to rotate it. */}
                     {showPassphrase ? (
                       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                         <label>

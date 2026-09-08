@@ -9,7 +9,6 @@ members = [
     "crates/scryer-application",
     "crates/scryer-webauthn",
     "crates/scryer-outbound-http",
-    "crates/scryer-tunnel",
     "crates/scryer-release-parser",
     "crates/scryer-infrastructure-sql",
     "crates/scryer-infrastructure-crypto",
@@ -52,6 +51,7 @@ resolver = "2"
 edition = "2024"
 
 [workspace.dependencies]
+scryer-tunnel = { package = "proxy-tunnels", git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0", features = ["http3"] }
 tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

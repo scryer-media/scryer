@@ -379,7 +379,6 @@ jobs:
             -p scryer-plugins \
             -p scryer-release-parser \
             -p scryer-rules \
-            -p scryer-tunnel \
             -- -D warnings 2>&1 | tee rust-clippy.log
 
       - name: Show ending disk usage

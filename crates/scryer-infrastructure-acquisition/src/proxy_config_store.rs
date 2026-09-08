@@ -162,8 +162,6 @@ impl ProxyConfigRepository for ProxyConfigStore {
             SqlArg::OptText(join_tunnel_list(&config.tunnel_dns_servers)),
             SqlArg::OptI64(config.tunnel_mtu.map(i64::from)),
             SqlArg::OptI64(config.tunnel_keepalive_seconds.map(i64::from)),
-            SqlArg::OptText(config.host_key_fingerprint.clone()),
-            SqlArg::OptTimestamp(config.host_key_pinned_at),
             SqlArg::OptText(
                 config
                     .last_health_status
@@ -177,6 +175,7 @@ impl ProxyConfigRepository for ProxyConfigStore {
         SqlRuntime::run_in_transaction(&self.datastore, "update_proxy_config", move |tx| {
             let config = config.clone();
             let args = args.clone();
+            let encryption_key = encryption_key.clone();
             Box::pin(async move {
                 let rows = SqlRuntime::execute(
                     SqlExec::Tx(tx),
@@ -190,7 +189,6 @@ impl ProxyConfigRepository for ProxyConfigStore {
                             tunnel_public_key = {}, tunnel_addresses = {},
                             tunnel_dns_servers = {}, tunnel_mtu = {},
                             tunnel_keepalive_seconds = {},
-                            host_key_fingerprint = {}, host_key_pinned_at = {},
                             last_health_status = {}, last_error_message = {},
                             last_error_at = {}, updated_at = {}
                          WHERE id = {}",
@@ -200,7 +198,16 @@ impl ProxyConfigRepository for ProxyConfigStore {
                 if rows == 0 {
                     return Err(AppError::NotFound(format!("proxy config {}", config.id)));
                 }
-                Ok(config)
+                // Pinning/reset are the only writers of trust columns. Return
+                // their live value rather than the caller's stale snapshot.
+                fetch_optional_proxy_config(
+                    SqlExec::Tx(tx),
+                    &format!("SELECT {PROXY_COLUMNS} FROM proxy_configs WHERE id = {{}}"),
+                    &[SqlArg::Text(config.id.clone())],
+                    encryption_key.as_ref(),
+                )
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("proxy config {}", config.id)))
             })
         })
         .await
@@ -261,28 +268,42 @@ impl ProxyConfigRepository for ProxyConfigStore {
         id: &str,
         fingerprint: &str,
         pinned_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<()> {
-        // A host key is public, so it is stored in the clear. `updated_at` is
-        // left alone on purpose: the engine pins right after the connect that
-        // succeeded, and bumping the cache revision there would evict that very
-        // session on every first connect.
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        // Compare decoded timestamps first, then use the exact database text
+        // in the atomic write. SQLite migrations and ordinary writes can use
+        // different timestamp spellings; PostgreSQL also normalizes precision.
+        let Some(row) = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT updated_at, CAST(updated_at AS TEXT) AS revision_text
+             FROM proxy_configs WHERE id = {}",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        if row.timestamp("updated_at")? != expected_updated_at {
+            return Ok(false);
+        }
+        let revision = row.text("revision_text")?;
         let rows = SqlRuntime::execute_write(
             &self.datastore,
             "pin_proxy_host_key",
             "UPDATE proxy_configs SET
-                    host_key_fingerprint = {}, host_key_pinned_at = {}
-                 WHERE id = {}",
+                    host_key_fingerprint = {}, host_key_pinned_at = COALESCE(host_key_pinned_at, {})
+                 WHERE id = {} AND CAST(updated_at AS TEXT) = {}
+                   AND (host_key_fingerprint IS NULL OR host_key_fingerprint = {})",
             vec![
                 SqlArg::Text(fingerprint.to_string()),
                 SqlArg::Timestamp(pinned_at),
                 SqlArg::Text(id.to_string()),
+                SqlArg::Text(revision),
+                SqlArg::Text(fingerprint.to_string()),
             ],
         )
         .await?;
-        if rows == 0 {
-            return Err(AppError::NotFound(format!("proxy config {id}")));
-        }
-        Ok(())
+        Ok(rows != 0)
     }
 
     async fn clear_host_key(&self, id: &str) -> AppResult<()> {
@@ -691,6 +712,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn key_only_migration_removes_ssh_passwords_and_preserves_configuration() {
+        let (store, pool) = proxy_store().await;
+        for (id, provider, key) in [
+            ("password-only", ProxyProviderType::SshTunnel, None),
+            (
+                "empty-key",
+                ProxyProviderType::SshTunnel,
+                Some(String::new()),
+            ),
+            (
+                "key-and-password",
+                ProxyProviderType::SshTunnel,
+                Some("key-material".to_string()),
+            ),
+            ("http", ProxyProviderType::Http, None),
+        ] {
+            let mut config = tunnel_config();
+            config.id = id.to_string();
+            config.provider_type = provider;
+            config.private_key_encrypted = key;
+            config.password_encrypted = Some("saved-password".to_string());
+            config.host_key_fingerprint = Some("SHA256:pinned".to_string());
+            config.last_health_status = Some(ProxyHealthStatus::Healthy);
+            store.create(config).await.expect("insert legacy config");
+        }
+        sqlx::raw_sql(include_str!(
+            "../../scryer/src/db/migrations/0227_ssh_key_only.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("migrate SSH credentials");
+
+        for id in ["password-only", "empty-key", "key-and-password", "http"] {
+            // Legacy malformed rows remain editable; runtime routing validates them.
+            let config = store.get_for_edit(id).await.unwrap().unwrap();
+            assert!(config.is_enabled, "assignments must stay fail-closed");
+            assert_eq!(
+                config.host_key_fingerprint.as_deref(),
+                Some("SHA256:pinned")
+            );
+            assert_eq!(config.username_encrypted.as_deref(), Some("operator"));
+            if id == "http" {
+                assert_eq!(config.password_encrypted.as_deref(), Some("saved-password"));
+            } else {
+                assert!(config.password_encrypted.is_none());
+            }
+            if id == "password-only" || id == "empty-key" {
+                assert_eq!(
+                    config.last_health_status,
+                    Some(ProxyHealthStatus::Unhealthy)
+                );
+                assert!(
+                    config
+                        .last_error_message
+                        .unwrap()
+                        .contains("require an Ed25519 private key")
+                );
+                assert!(config.last_error_at.is_some());
+            } else {
+                assert_eq!(config.last_health_status, Some(ProxyHealthStatus::Healthy));
+            }
+            if id == "key-and-password" {
+                assert_eq!(
+                    config.private_key_encrypted.as_deref(),
+                    Some("key-material")
+                );
+                assert_eq!(
+                    config.private_key_passphrase_encrypted.as_deref(),
+                    Some("phrase")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn tunnel_key_material_round_trips_and_the_host_key_pin_is_operator_visible() {
         let (store, pool) = proxy_store().await;
         let config = tunnel_config();
@@ -721,7 +817,7 @@ mod tests {
         // the cache revision (`updated_at`) has to survive it.
         let pinned_at = chrono::Utc::now();
         store
-            .pin_host_key("tunnel-1", "SHA256:abc", pinned_at)
+            .pin_host_key("tunnel-1", "SHA256:abc", pinned_at, loaded.updated_at)
             .await
             .expect("pin should succeed");
         let pinned = store
@@ -748,6 +844,156 @@ mod tests {
         assert_eq!(cleared.host_key_pinned_at, None);
         assert!(cleared.updated_at > loaded.updated_at);
         pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_host_key_pins_are_atomic_first_wins_and_idempotent() {
+        let (store, _pool) = proxy_store().await;
+        let config = store
+            .create({
+                let mut config = tunnel_config();
+                config.private_key_encrypted =
+                    Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.into());
+                config
+            })
+            .await
+            .unwrap();
+        let pinned_at = chrono::Utc::now();
+        let (one, two) = tokio::join!(
+            store.pin_host_key(&config.id, "SHA256:one", pinned_at, config.updated_at),
+            store.pin_host_key(&config.id, "SHA256:two", pinned_at, config.updated_at)
+        );
+        assert_ne!(one.unwrap(), two.unwrap(), "exactly one competing key wins");
+        let winner = store.get_by_id(&config.id).await.unwrap().unwrap();
+        assert!(
+            store
+                .pin_host_key(
+                    &config.id,
+                    winner.host_key_fingerprint.as_deref().unwrap(),
+                    pinned_at + chrono::Duration::seconds(1),
+                    config.updated_at
+                )
+                .await
+                .unwrap()
+        );
+        let unchanged = store.get_by_id(&config.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.host_key_pinned_at, winner.host_key_pinned_at);
+    }
+
+    #[tokio::test]
+    async fn stale_pins_and_settings_snapshots_cannot_undo_pinning_or_reset() {
+        let (store, _pool) = proxy_store().await;
+        let original = store
+            .create({
+                let mut config = tunnel_config();
+                config.private_key_encrypted =
+                    Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.into());
+                config
+            })
+            .await
+            .unwrap();
+        assert!(
+            store
+                .pin_host_key(
+                    &original.id,
+                    "SHA256:original",
+                    chrono::Utc::now(),
+                    original.updated_at
+                )
+                .await
+                .unwrap()
+        );
+        let mut stale_unpinned = original.clone();
+        stale_unpinned.updated_at += chrono::Duration::seconds(1);
+        let edited = store.update(stale_unpinned).await.unwrap();
+        assert_eq!(
+            edited.host_key_fingerprint.as_deref(),
+            Some("SHA256:original")
+        );
+        assert!(
+            !store
+                .pin_host_key(
+                    &original.id,
+                    "SHA256:late",
+                    chrono::Utc::now(),
+                    original.updated_at
+                )
+                .await
+                .unwrap()
+        );
+
+        store.clear_host_key(&original.id).await.unwrap();
+        let cleared = store.get_by_id(&original.id).await.unwrap().unwrap();
+        assert!(
+            !store
+                .pin_host_key(
+                    &original.id,
+                    "SHA256:original",
+                    chrono::Utc::now(),
+                    edited.updated_at
+                )
+                .await
+                .unwrap()
+        );
+        let mut stale_pinned = edited;
+        stale_pinned.updated_at = cleared.updated_at + chrono::Duration::seconds(1);
+        let still_cleared = store.update(stale_pinned).await.unwrap();
+        assert!(still_cleared.host_key_fingerprint.is_none());
+        assert!(still_cleared.host_key_pinned_at.is_none());
+        assert!(
+            store
+                .pin_host_key(
+                    &original.id,
+                    "SHA256:replacement",
+                    chrono::Utc::now(),
+                    still_cleared.updated_at
+                )
+                .await
+                .unwrap()
+        );
+        store.delete(&original.id).await.unwrap();
+        assert!(
+            !store
+                .pin_host_key(
+                    &original.id,
+                    "SHA256:replacement",
+                    chrono::Utc::now(),
+                    still_cleared.updated_at
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn host_key_compare_and_set_accepts_legacy_sqlite_timestamp_encoding() {
+        let (store, pool) = proxy_store().await;
+        let config = store
+            .create({
+                let mut config = tunnel_config();
+                config.private_key_encrypted =
+                    Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.into());
+                config
+            })
+            .await
+            .unwrap();
+        sqlx::query("UPDATE proxy_configs SET updated_at = datetime('now') WHERE id = ?")
+            .bind(&config.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let loaded = store.get_by_id(&config.id).await.unwrap().unwrap();
+        assert!(
+            store
+                .pin_host_key(
+                    &config.id,
+                    "SHA256:legacy",
+                    chrono::Utc::now(),
+                    loaded.updated_at
+                )
+                .await
+                .unwrap()
+        );
     }
 
     fn wireguard_config() -> ProxyConfig {
@@ -880,6 +1126,34 @@ mod tests {
         // row unloadable.
         assert_eq!(opt_u16_from_stored(Some(-1)), None);
         assert_eq!(opt_u16_from_stored(Some(100_000)), None);
+    }
+
+    #[tokio::test]
+    async fn http3_proxy_credentials_roundtrip_encrypted_without_tunnel_keys() {
+        let (store, pool) = proxy_store().await;
+        *store.encryption_key.write().unwrap() = Some(EncryptionKey::from_bytes([7; 32]));
+        let mut config = tunnel_config();
+        config.provider_type = ProxyProviderType::Http3;
+        config.base_url = "https://proxy.example:443".into();
+        config.password_encrypted = Some("http3-fixture-secret".into());
+        config.private_key_encrypted = None;
+        config.private_key_passphrase_encrypted = None;
+        store.create(config).await.unwrap();
+        let ciphertext: String = sqlx::query_scalar(
+            "SELECT password_encrypted FROM proxy_configs WHERE id = 'tunnel-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!ciphertext.contains("http3-fixture-secret"));
+        let loaded = store.get_by_id("tunnel-1").await.unwrap().unwrap();
+        assert_eq!(loaded.provider_type, ProxyProviderType::Http3);
+        assert_eq!(
+            loaded.password_encrypted.as_deref(),
+            Some("http3-fixture-secret")
+        );
+        assert!(loaded.private_key_encrypted.is_none());
+        pool.close().await;
     }
 
     #[tokio::test]

@@ -1315,6 +1315,8 @@ pub enum ProxyProviderType {
     Socks4,
     Socks5,
     SshTunnel,
+    /// Multiplexed HTTP/3 CONNECT over an authenticated QUIC connection.
+    Http3,
     /// A userspace WireGuard tunnel Scryer brings up itself. Same family as
     /// [`Self::SshTunnel`] — it owns credentials and a lifecycle — but it
     /// authenticates with keys alone and has no trust-on-first-use step, so it
@@ -1328,6 +1330,7 @@ impl ProxyProviderType {
             Self::Byparr => "byparr",
             Self::Trawl => "trawl",
             Self::Http => "http",
+            Self::Http3 => "http3",
             Self::Socks4 => "socks4",
             Self::Socks5 => "socks5",
             Self::SshTunnel => "ssh_tunnel",
@@ -1340,6 +1343,7 @@ impl ProxyProviderType {
             "byparr" => Some(Self::Byparr),
             "trawl" => Some(Self::Trawl),
             "http" => Some(Self::Http),
+            "http3" => Some(Self::Http3),
             "socks4" => Some(Self::Socks4),
             "socks5" => Some(Self::Socks5),
             "ssh_tunnel" => Some(Self::SshTunnel),
@@ -1355,7 +1359,7 @@ impl ProxyProviderType {
         match self {
             Self::Byparr | Self::Trawl => ProxyKind::ChallengeSolver,
             Self::Http | Self::Socks4 | Self::Socks5 => ProxyKind::Transport,
-            Self::SshTunnel | Self::WireGuard => ProxyKind::Tunnel,
+            Self::SshTunnel | Self::WireGuard | Self::Http3 => ProxyKind::Tunnel,
         }
     }
 

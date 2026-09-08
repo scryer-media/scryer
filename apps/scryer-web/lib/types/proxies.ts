@@ -11,6 +11,7 @@ export const PROXY_PROVIDER_TYPES = [
   "byparr",
   "trawl",
   "http",
+  "http3",
   "socks4",
   "socks5",
   "ssh_tunnel",
@@ -32,6 +33,7 @@ const PROXY_PROVIDER_FAMILY: Record<ProxyProviderTypeValue, ProxyFamily> = {
   byparr: "solver",
   trawl: "solver",
   http: "standard",
+  http3: "tunnel",
   socks4: "standard",
   socks5: "standard",
   ssh_tunnel: "tunnel",
@@ -62,6 +64,7 @@ const PROXY_PROVIDER_LABELS: Record<ProxyProviderTypeValue, string> = {
   byparr: "Byparr",
   trawl: "Trawl",
   http: "HTTP",
+  http3: "HTTP/3 CONNECT",
   socks4: "SOCKS4",
   socks5: "SOCKS5",
   ssh_tunnel: "SSH tunnel",
@@ -127,15 +130,16 @@ export function isWireguardProxyProvider(providerType: string): boolean {
 }
 
 /**
- * Which providers accept a username and password. Challenge solvers take none;
+ * Which providers accept a username. Challenge solvers take none;
  * SOCKS4 is rejected too, because the HTTP client builds its SOCKS4 connector
  * without auth and a credential would be silently dropped on the wire. An SSH
- * tunnel takes them as SSH credentials, and its username is mandatory —
+ * tunnel requires a username and authenticates exclusively with a private key —
  * WireGuard authenticates with keys and rejects both outright.
  */
 export function supportsProxyCredentials(providerType: string): boolean {
   return (
     providerType === "http" ||
+    providerType === "http3" ||
     providerType === "socks5" ||
     isSshTunnelProxyProvider(providerType)
   );
@@ -157,7 +161,7 @@ export function supportsProxyRemoteDns(providerType: string): boolean {
  * for WireGuard.
  */
 export function supportsProxyPrivateKey(providerType: string): boolean {
-  return isTunnelProxyProvider(providerType);
+  return isSshTunnelProxyProvider(providerType) || isWireguardProxyProvider(providerType);
 }
 
 /**
@@ -278,6 +282,7 @@ const PROXY_URL_SCHEMES: Record<ProxyProviderTypeValue, string> = {
   byparr: "http",
   trawl: "http",
   http: "http",
+  http3: "https",
   socks4: "socks4",
   socks5: "socks5",
   ssh_tunnel: "ssh",
@@ -436,11 +441,7 @@ export type ProxyDraft = {
   hasStoredCredentials: boolean;
   /** Standard proxies: drop the stored username and password outright. */
   clearCredentials: boolean;
-  /**
-   * Tunnels: drop the stored password alone. A tunnel's username is mandatory,
-   * so it can never be cleared the way a standard proxy's pair can.
-   */
-  clearPassword: boolean;
+
   /** Write-only PEM private key for a tunnel; blank means unchanged. */
   privateKey: string;
   privateKeyPassphrase: string;
@@ -492,6 +493,7 @@ export const PROXY_DEFAULT_BASE_URLS: Record<ProxyProviderTypeValue, string> = {
   byparr: "http://localhost:8191",
   trawl: "http://localhost:8191",
   http: "http://localhost:3128",
+  http3: "https://localhost:443",
   socks4: "socks4://localhost:1080",
   socks5: "socks5://localhost:1080",
   ssh_tunnel: "ssh://localhost:22",
@@ -507,7 +509,6 @@ export const PROXY_INITIAL_DRAFT: ProxyDraft = {
   password: "",
   hasStoredCredentials: false,
   clearCredentials: false,
-  clearPassword: false,
   privateKey: "",
   privateKeyPassphrase: "",
   hasStoredPrivateKey: false,
