@@ -38,6 +38,20 @@ const proxyDraft = {
   isEnabled: true,
 };
 
+test("HTTP/3 sends optional credentials without SSH or WireGuard settings", () => {
+  const draft = { ...proxyDraft, providerType: "http3" as const, baseUrl: "proxy.example:443", username: "user", password: "secret", privateKey: "stale", remoteDns: true };
+  const input = buildCreateProxyInput(draft);
+  assert.equal(input.providerType, "http3");
+  assert.equal(input.baseUrl, "https://proxy.example:443");
+  assert.equal(input.username, "user");
+  assert.equal(input.password, "secret");
+  assert.equal(input.privateKey, undefined);
+  assert.equal(input.remoteDns, undefined);
+  const cleared = buildUpdateProxyInput("http3-proxy", { ...draft, hasStoredCredentials: true, clearCredentials: true });
+  assert.equal(cleared.username, null);
+  assert.equal(cleared.password, null);
+});
+
 const tunnelProxyDraft = {
   ...proxyDraft,
   providerType: "ssh_tunnel" as const,
@@ -215,7 +229,7 @@ test("creates never send a credential clear", () => {
   assert.equal("password" in input, false);
 });
 
-test("tunnels send their SSH credentials and key material", () => {
+test("tunnels send SSH username and key material without passwords", () => {
   const input = buildCreateProxyInput({
     ...tunnelProxyDraft,
     username: "  operator  ",
@@ -224,7 +238,7 @@ test("tunnels send their SSH credentials and key material", () => {
   });
 
   assert.equal(input.username, "operator");
-  assert.equal(input.password, "hunter2");
+  assert.equal("password" in input, false);
   assert.equal(
     input.privateKey,
     "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----",
@@ -260,18 +274,17 @@ test("a passphrase without a key is withheld, because the API rejects it", () =>
   assert.equal("privateKey" in withStoredKey, false);
 });
 
-test("a tunnel drops its password alone, never its mandatory username", () => {
+test("SSH updates ignore stale passwords and preserve the mandatory username", () => {
   const input = buildUpdateProxyInput("proxy-1", {
     ...tunnelProxyDraft,
     hasStoredCredentials: true,
     hasStoredPrivateKey: true,
     username: "operator",
     password: "typed",
-    clearPassword: true,
   });
 
   assert.equal(input.username, "operator");
-  assert.equal(input.password, null);
+  assert.equal("password" in input, false);
 });
 
 test("clearing a tunnel key sends explicit nulls for the key and its passphrase", () => {

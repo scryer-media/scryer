@@ -66,6 +66,7 @@ pub fn solver_provider_name(provider: scryer_domain::ProxyProviderType) -> &'sta
         scryer_domain::ProxyProviderType::Byparr => "Byparr",
         scryer_domain::ProxyProviderType::Trawl => "Trawl",
         scryer_domain::ProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::ProxyProviderType::Http3 => "HTTP/3 CONNECT proxy",
         scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
         scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
@@ -78,11 +79,13 @@ pub fn solver_error_message(
     kind: SolverErrorKind,
 ) -> &'static str {
     use scryer_domain::ProxyProviderType::{
-        Byparr, Http, Socks4, Socks5, SshTunnel, Trawl, WireGuard,
+        Byparr, Http, Http3, Socks4, Socks5, SshTunnel, Trawl, WireGuard,
     };
 
     match (provider, kind) {
-        (Http | Socks4 | Socks5 | SshTunnel | WireGuard, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
+        (Http | Http3 | Socks4 | Socks5 | SshTunnel | WireGuard, _) => {
+            TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE
+        }
         (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
         (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
         (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
@@ -144,6 +147,7 @@ pub fn solver_solve_request(
         // harmless reading if a caller ever gets here by mistake.
         scryer_domain::ProxyProviderType::Byparr
         | scryer_domain::ProxyProviderType::Http
+        | scryer_domain::ProxyProviderType::Http3
         | scryer_domain::ProxyProviderType::Socks4
         | scryer_domain::ProxyProviderType::Socks5
         | scryer_domain::ProxyProviderType::SshTunnel
@@ -684,41 +688,30 @@ async fn flush_tunnel_host_key_ledger(
     ledger: &crate::tunnel_proxy::TunnelHostKeyLedger,
 ) {
     for pin in ledger.pending() {
-        match repo.get_by_id(&pin.proxy_config_id).await {
-            // Already pinned — by the health probe, which owns a repository
-            // handle and writes directly, or by an earlier flush. Trust on
-            // *first* use means a queued observation never overwrites an
-            // existing pin: once the row has one, the row is the authority.
-            Ok(Some(existing)) if existing.host_key_fingerprint.is_some() => {
-                ledger.acknowledge(&pin);
-                continue;
-            }
-            Ok(Some(_)) => {}
-            // The row was deleted between the handshake and the flush.
-            Ok(None) => {
-                ledger.acknowledge(&pin);
-                continue;
+        match repo
+            .pin_host_key(
+                &pin.proxy_config_id,
+                &pin.fingerprint,
+                pin.pinned_at,
+                pin.updated_at,
+            )
+            .await
+        {
+            Ok(true) => ledger.acknowledge(&pin),
+            Ok(false) => {
+                ledger.reject(&pin);
+                tracing::warn!(
+                    proxy_config_id = pin.proxy_config_id.as_str(),
+                    "rejected a stale or conflicting tunnel host key pin"
+                );
             }
             Err(error) => {
                 tracing::warn!(
                     proxy_config_id = pin.proxy_config_id.as_str(),
                     error = %error,
-                    "failed to load proxy config for a host key pin"
+                    "failed to persist a tunnel host key pin"
                 );
-                continue;
             }
-        }
-        if let Err(error) = repo
-            .pin_host_key(&pin.proxy_config_id, &pin.fingerprint, pin.pinned_at)
-            .await
-        {
-            tracing::warn!(
-                proxy_config_id = pin.proxy_config_id.as_str(),
-                error = %error,
-                "failed to persist a tunnel host key pin"
-            );
-        } else {
-            ledger.acknowledge(&pin);
         }
     }
 }
@@ -732,20 +725,13 @@ mod tests {
     struct FailingPinRepository {
         row: std::sync::Mutex<scryer_domain::ProxyConfig>,
         ledger: std::sync::Arc<crate::tunnel_proxy::TunnelHostKeyLedger>,
-        fail_read: std::sync::atomic::AtomicBool,
         fail_write: std::sync::atomic::AtomicBool,
+        cancel_write: bool,
     }
 
     #[async_trait::async_trait]
     impl ProxyConfigRepository for FailingPinRepository {
         async fn get_by_id(&self, _: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
-            self.ledger.record("proxy-tunnel", "SHA256:later");
-            if self
-                .fail_read
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                return Err(AppError::Repository("injected read failure".into()));
-            }
             Ok(Some(self.row.lock().unwrap().clone()))
         }
         async fn pin_host_key(
@@ -753,18 +739,26 @@ mod tests {
             _: &str,
             fingerprint: &str,
             pinned_at: DateTime<Utc>,
-        ) -> AppResult<()> {
-            self.ledger.record("proxy-tunnel", "SHA256:later");
+            updated_at: DateTime<Utc>,
+        ) -> AppResult<bool> {
+            assert!(
+                self.ledger
+                    .record("proxy-tunnel", updated_at, "SHA256:later")
+                    .is_err()
+            );
             if self
                 .fail_write
                 .swap(false, std::sync::atomic::Ordering::SeqCst)
             {
                 return Err(AppError::Repository("injected write failure".into()));
             }
+            if self.cancel_write {
+                std::future::pending::<()>().await;
+            }
             let mut row = self.row.lock().unwrap();
             row.host_key_fingerprint = Some(fingerprint.into());
             row.host_key_pinned_at = Some(pinned_at);
-            Ok(())
+            Ok(true)
         }
         async fn list(
             &self,
@@ -803,25 +797,53 @@ mod tests {
 
     #[tokio::test]
     async fn failed_host_key_flush_retries_the_original_observation_and_timestamp() {
-        for fail_read in [true, false] {
-            let ledger = std::sync::Arc::new(crate::tunnel_proxy::TunnelHostKeyLedger::default());
-            ledger.record("proxy-tunnel", "SHA256:first");
-            let first = ledger.pending().pop().unwrap();
-            let repo = FailingPinRepository {
-                row: std::sync::Mutex::new(crate::tunnel_proxy::tests::tunnel_config()),
-                ledger: ledger.clone(),
-                fail_read: fail_read.into(),
-                fail_write: (!fail_read).into(),
-            };
-            flush_tunnel_host_key_ledger(&repo, &ledger).await;
-            assert_eq!(ledger.pending(), vec![first.clone()]);
-            assert!(repo.row.lock().unwrap().host_key_fingerprint.is_none());
-            flush_tunnel_host_key_ledger(&repo, &ledger).await;
-            assert!(ledger.pending().is_empty());
-            let row = repo.row.lock().unwrap();
-            assert_eq!(row.host_key_fingerprint.as_deref(), Some("SHA256:first"));
-            assert_eq!(row.host_key_pinned_at, Some(first.pinned_at));
-        }
+        let ledger = std::sync::Arc::new(crate::tunnel_proxy::TunnelHostKeyLedger::default());
+        let config = crate::tunnel_proxy::tests::tunnel_config();
+        ledger.register(&config).unwrap();
+        ledger
+            .record(&config.id, config.updated_at, "SHA256:first")
+            .unwrap();
+        let first = ledger.pending().pop().unwrap();
+        let repo = FailingPinRepository {
+            row: std::sync::Mutex::new(config),
+            ledger: ledger.clone(),
+            fail_write: true.into(),
+            cancel_write: false,
+        };
+        flush_tunnel_host_key_ledger(&repo, &ledger).await;
+        assert_eq!(ledger.pending(), vec![first.clone()]);
+        assert!(repo.row.lock().unwrap().host_key_fingerprint.is_none());
+        flush_tunnel_host_key_ledger(&repo, &ledger).await;
+        assert!(ledger.pending().is_empty());
+        let row = repo.row.lock().unwrap();
+        assert_eq!(row.host_key_fingerprint.as_deref(), Some("SHA256:first"));
+        assert_eq!(row.host_key_pinned_at, Some(first.pinned_at));
+    }
+
+    #[tokio::test]
+    async fn cancelled_host_key_flush_preserves_the_original_pending_pin() {
+        let ledger = std::sync::Arc::new(crate::tunnel_proxy::TunnelHostKeyLedger::default());
+        let config = crate::tunnel_proxy::tests::tunnel_config();
+        ledger.register(&config).unwrap();
+        ledger
+            .record(&config.id, config.updated_at, "SHA256:first")
+            .unwrap();
+        let first = ledger.pending();
+        let repo = FailingPinRepository {
+            row: std::sync::Mutex::new(config),
+            ledger: ledger.clone(),
+            fail_write: false.into(),
+            cancel_write: true,
+        };
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                flush_tunnel_host_key_ledger(&repo, &ledger)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(ledger.pending(), first);
     }
 
     fn solution_from_json(value: serde_json::Value) -> ChallengeSolverSolution {

@@ -39,11 +39,9 @@ pub fn transport_proxy_egress_url(config: &ProxyConfig) -> String {
 /// username is the presence test; a username without a password authenticates
 /// with an empty one.
 pub fn transport_proxy_credentials(config: &ProxyConfig) -> Option<TransportProxyCredentials<'_>> {
-    // A tunnel's username and password are *SSH* credentials, consumed by the
-    // engine when it establishes the session. What the HTTP client dials is our
-    // own loopback SOCKS5 front, which accepts no authentication at all —
-    // offering it these would put the SSH password on a socket with no use for
-    // it.
+    // Persisted tunnel credentials belong to the tunnel protocol, never the
+    // loopback front. Tunnel clients instead use the ephemeral credentials
+    // returned with their resolved endpoint.
     if config.is_tunnel() {
         return None;
     }
@@ -120,9 +118,24 @@ pub fn transport_proxied_reqwest_client_with_redirect_policy(
     extra_ca_bundle_pem: &str,
     redirect_policy: reqwest::redirect::Policy,
 ) -> Result<reqwest::Client, String> {
+    let tunnel = config
+        .is_tunnel()
+        .then(|| crate::tunnel_proxy::resolve_tunnel_endpoint(config))
+        .transpose()?;
+    let url = match &tunnel {
+        Some(endpoint) => endpoint.egress_url.clone(),
+        None => proxy_egress_url(config)?,
+    };
+    let credentials = tunnel
+        .as_ref()
+        .map(|endpoint| TransportProxyCredentials {
+            username: endpoint.credentials.username(),
+            password: endpoint.credentials.password(),
+        })
+        .or_else(|| transport_proxy_credentials(config));
     scryer_outbound_http::transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
-        &proxy_egress_url(config)?,
-        transport_proxy_credentials(config),
+        &url,
+        credentials,
         transport_proxy_request_timeout(config),
         extra_ca_bundle_pem,
         redirect_policy,
@@ -149,9 +162,24 @@ pub fn blocking_transport_proxied_reqwest_client_with_redirect_policy(
     extra_ca_bundle_pem: &str,
     redirect_policy: reqwest::redirect::Policy,
 ) -> Result<reqwest::blocking::Client, String> {
+    let tunnel = config
+        .is_tunnel()
+        .then(|| crate::tunnel_proxy::resolve_tunnel_endpoint(config))
+        .transpose()?;
+    let url = match &tunnel {
+        Some(endpoint) => endpoint.egress_url.clone(),
+        None => proxy_egress_url(config)?,
+    };
+    let credentials = tunnel
+        .as_ref()
+        .map(|endpoint| TransportProxyCredentials {
+            username: endpoint.credentials.username(),
+            password: endpoint.credentials.password(),
+        })
+        .or_else(|| transport_proxy_credentials(config));
     scryer_outbound_http::blocking_transport_proxy_reqwest_client_with_redirect_policy(
-        &proxy_egress_url(config)?,
-        transport_proxy_credentials(config),
+        &url,
+        credentials,
         transport_proxy_request_timeout(config),
         extra_ca_bundle_pem,
         redirect_policy,

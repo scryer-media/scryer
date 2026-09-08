@@ -3684,7 +3684,8 @@ pub trait ProxyConfigRepository: Send + Sync {
         error_message: Option<String>,
         error_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<()>;
-    /// Pin a tunnel host key on trust-on-first-use.
+    /// Atomically pin a host key for the expected config revision. Returns false
+    /// for a stale/deleted row or a conflicting existing pin; matching pins are idempotent.
     ///
     /// Like `record_health` this deliberately leaves `updated_at` alone. The
     /// tunnel engine pins immediately after the connect that just succeeded;
@@ -3695,7 +3696,8 @@ pub trait ProxyConfigRepository: Send + Sync {
         id: &str,
         fingerprint: &str,
         pinned_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<()>;
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool>;
     /// Drop the pin so the next connect trusts the server afresh, after a
     /// legitimate rekey.
     ///

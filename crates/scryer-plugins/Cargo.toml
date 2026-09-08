@@ -45,5 +45,5 @@ wat = "1"
 wat = "1"
 # The in-process SSH server double, so tunnel tests prove egress really
 # travelled through a tunnel rather than merely failing to go direct.
-scryer-tunnel = { path = "../scryer-tunnel", features = ["test-support"] }
+scryer-tunnel = { workspace = true, features = ["test-support"] }
 wiremock = { workspace = true }

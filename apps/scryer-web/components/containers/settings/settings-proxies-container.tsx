@@ -140,7 +140,6 @@ export function SettingsProxiesContainer() {
           username: "",
           password: "",
           clearCredentials: false,
-          clearPassword: false,
           privateKey: "",
           privateKeyPassphrase: "",
           clearPrivateKey: false,
@@ -222,8 +221,8 @@ export function SettingsProxiesContainer() {
 
   /**
    * The same rules the API enforces, so an obviously unusable tunnel is
-   * refused before a round trip: an SSH tunnel needs a username and either a
-   * password or a key; a WireGuard tunnel needs both halves of a key pair and
+   * refused before a round trip: an SSH tunnel needs a username and a private
+   * key; a WireGuard tunnel needs both halves of a key pair and
    * at least one address.
    */
   const tunnelValidationMessage = useCallback(
@@ -234,17 +233,9 @@ export function SettingsProxiesContainer() {
         if (draft.username.trim() === "" && !keepsUsername) {
           return t("settings.proxyValidationTunnelUsername");
         }
-        const keepsPassword =
-          draft.hasStoredCredentials &&
-          !draft.clearCredentials &&
-          !draft.clearPassword;
         const keepsPrivateKey =
           draft.hasStoredPrivateKey && !draft.clearPrivateKey;
-        const hasAuth =
-          draft.password.trim() !== "" ||
-          draft.privateKey.trim() !== "" ||
-          keepsPassword ||
-          keepsPrivateKey;
+        const hasAuth = draft.privateKey.trim() !== "" || keepsPrivateKey;
         return hasAuth ? null : t("settings.proxyValidationTunnelAuth");
       }
       if (isWireguardProxyProvider(draft.providerType)) {

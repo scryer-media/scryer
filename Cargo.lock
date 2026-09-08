@@ -192,7 +192,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -203,7 +203,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -673,7 +673,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -906,7 +906,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes 3.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -923,7 +923,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -1986,7 +1986,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2265,7 +2265,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2762,7 +2762,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "typed-builder",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "x25519-dalek",
  "zerocopy",
 ]
@@ -2839,6 +2839,32 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "h3"
+version = "0.0.8"
+source = "git+https://github.com/scryer-media/proxy-tunnels.git?tag=v0.1.0#01481be7fca27a7864fe40e9a4b95fcfa9698ce2"
+dependencies = [
+ "bytes",
+ "fastrand",
+ "futures-util",
+ "http",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "h3-quinn"
+version = "0.0.10"
+source = "git+https://github.com/scryer-media/proxy-tunnels.git?tag=v0.1.0#01481be7fca27a7864fe40e9a4b95fcfa9698ce2"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "quinn",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3545,15 +3571,6 @@ name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -4278,7 +4295,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4399,7 +4416,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -5288,6 +5305,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "proxy-tunnels"
+version = "0.1.0"
+source = "git+https://github.com/scryer-media/proxy-tunnels.git?tag=v0.1.0#01481be7fca27a7864fe40e9a4b95fcfa9698ce2"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "gotatun",
+ "h3",
+ "h3-quinn",
+ "http",
+ "ipnetwork",
+ "quinn",
+ "russh",
+ "rustls",
+ "smoltcp",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
 name = "pulley-interpreter"
 version = "48.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5355,6 +5395,7 @@ checksum = "0c1a41e437b6bbd489372cd4971de128e85c855f56c57f283d20ff016cf7c0a8"
 dependencies = [
  "bytes",
  "cfg_aliases",
+ "futures-io",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
@@ -5401,7 +5442,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5958,7 +5999,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6026,7 +6067,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6224,6 +6265,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "brotli",
+ "bytes",
  "chardetng",
  "chrono",
  "const-oid 0.10.2",
@@ -6231,14 +6273,20 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "futures-util",
+ "h3",
+ "h3-quinn",
+ "http",
  "jsonwebtoken 11.0.0",
  "libc",
  "metrics",
  "metrics-util",
+ "proxy-tunnels",
  "quick-xml",
+ "quinn",
  "rand_core 0.10.1",
  "regex",
  "reqwest",
+ "rustls",
  "rustls-pki-types",
  "rustls-webpki",
  "scryer-domain",
@@ -6249,7 +6297,6 @@ dependencies = [
  "scryer-release-parser",
  "scryer-rules",
  "scryer-runtime-info",
- "scryer-tunnel",
  "scryer-webauthn",
  "semver",
  "serde",
@@ -6304,6 +6351,7 @@ dependencies = [
  "graphql-parser",
  "metrics",
  "metrics-util",
+ "proxy-tunnels",
  "quick-xml",
  "reqwest",
  "scryer-application",
@@ -6313,7 +6361,6 @@ dependencies = [
  "scryer-outbound-http",
  "scryer-plugin-sdk",
  "scryer-rules",
- "scryer-tunnel",
  "serde",
  "serde_json",
  "sqlx",
@@ -6845,6 +6892,7 @@ dependencies = [
  "glob",
  "libc",
  "postcard",
+ "proxy-tunnels",
  "quick-xml",
  "reqwest",
  "rustls",
@@ -6854,7 +6902,6 @@ dependencies = [
  "scryer-outbound-http",
  "scryer-plugin-sdk",
  "scryer-rules",
- "scryer-tunnel",
  "semver",
  "serde",
  "serde_json",
@@ -6902,21 +6949,6 @@ dependencies = [
 [[package]]
 name = "scryer-runtime-info"
 version = "0.20.0"
-
-[[package]]
-name = "scryer-tunnel"
-version = "0.20.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "gotatun",
- "ipnetwork",
- "russh",
- "smoltcp",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "scryer-webauthn"
@@ -7550,7 +7582,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7994,7 +8026,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9315,7 +9347,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

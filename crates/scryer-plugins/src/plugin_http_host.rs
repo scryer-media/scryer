@@ -1829,7 +1829,8 @@ mod tests {
         );
         policy.config.id = "tunnel-blocking-host".to_string();
         policy.config.username_encrypted = Some("operator".to_string());
-        policy.config.password_encrypted = Some("s3cret".to_string());
+        policy.config.private_key_encrypted =
+            Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.to_string());
 
         let host_for_request = origin_authority.clone();
         let response = tokio::task::spawn_blocking(move || {
@@ -1969,7 +1970,8 @@ mod tests {
         );
         policy.config.id = "tunnel-blocking-host-dead".to_string();
         policy.config.username_encrypted = Some("operator".to_string());
-        policy.config.password_encrypted = Some("s3cret".to_string());
+        policy.config.private_key_encrypted =
+            Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.to_string());
 
         let host_for_request = host_port.clone();
         let error = tokio::task::spawn_blocking(move || {

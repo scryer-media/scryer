@@ -1718,10 +1718,19 @@ pub fn proxy_health_reqwest_client(timeout: Duration) -> Result<Client, reqwest:
 }
 
 /// Egress credentials for an operator-configured transport proxy.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct TransportProxyCredentials<'a> {
     pub username: &'a str,
     pub password: &'a str,
+}
+
+impl std::fmt::Debug for TransportProxyCredentials<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportProxyCredentials")
+            .field("username", &"<redacted>")
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Builds a client whose every request is carried through an operator-managed
@@ -1782,6 +1791,9 @@ pub fn transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
         .timeout(timeout)
         .redirect(redirect_policy)
         .user_agent(PROXY_USER_AGENT)
+        .pool_max_idle_per_host(4)
+        .pool_idle_timeout(Duration::from_secs(60))
+        .no_proxy()
         .proxy(proxy);
     if !extra_ca_bundle_pem.trim().is_empty() {
         builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
@@ -1823,6 +1835,9 @@ pub fn blocking_transport_proxy_reqwest_client_with_redirect_policy(
         .timeout(timeout)
         .redirect(redirect_policy)
         .user_agent(PROXY_USER_AGENT)
+        .pool_max_idle_per_host(4)
+        .pool_idle_timeout(Duration::from_secs(60))
+        .no_proxy()
         .proxy(proxy);
     if !extra_ca_bundle_pem.trim().is_empty() {
         builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
@@ -2893,6 +2908,18 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn transport_proxy_credentials_are_redacted_in_debug_output() {
+        let credentials = TransportProxyCredentials {
+            username: "private-username",
+            password: "private-password",
+        };
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains(credentials.username));
+        assert!(!debug.contains(credentials.password));
+        assert!(debug.contains("<redacted>"));
+    }
 
     #[test]
     fn transport_proxy_egress_url_maps_remote_dns_onto_the_scheme() {

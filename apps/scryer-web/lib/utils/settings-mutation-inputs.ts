@@ -6,7 +6,6 @@ import type {
 // Imported from the module rather than the barrel: these are runtime values,
 // and the barrel's extensionless re-exports only resolve for erased types.
 import {
-  isTunnelProxyProvider,
   normalizeProxyDraft,
   splitTunnelList,
   supportsProxyCredentials,
@@ -40,9 +39,7 @@ function buildProxyRemoteDnsInput(draft: ProxyDraft) {
  * omitted field keeps whatever is stored, an explicit null clears it, and a
  * value replaces it. Challenge solvers and SOCKS4 take no credentials at all.
  *
- * A tunnel's username is mandatory, so a tunnel can only ever drop its
- * password; clearing the pair the way a standard proxy does would leave a
- * configuration the API rejects.
+ * SSH requires a username and private key. Its password field is never sent.
  */
 function buildProxyCredentialInput(
   draft: ProxyDraft,
@@ -51,15 +48,15 @@ function buildProxyCredentialInput(
   if (!supportsProxyCredentials(draft.providerType)) {
     return {};
   }
-  const isTunnel = isTunnelProxyProvider(draft.providerType);
+  const isTunnel = draft.providerType === "ssh_tunnel";
   const username = draft.username.trim();
   const password = draft.password.trim();
 
   if (allowClear && !isTunnel && draft.clearCredentials) {
     return { username: null, password: null };
   }
-  if (allowClear && isTunnel && draft.clearPassword) {
-    return { ...(username ? { username } : {}), password: null };
+  if (isTunnel) {
+    return username ? { username } : {};
   }
 
   return {

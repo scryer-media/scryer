@@ -2252,7 +2252,7 @@ input CreateProxyConfigInput {
 	"""
 	name: String!
 	"""
-	Proxy provider implementation identifier.
+	Proxy provider identifier: byparr, trawl, http, http3, socks4, socks5, ssh_tunnel, or wireguard.
 	"""
 	providerType: String!
 	"""
@@ -2275,7 +2275,7 @@ input CreateProxyConfigInput {
 	username: String
 	"""
 	Transport-proxy password. Write-only: stored encrypted and never read
-	back. Requires a username; challenge solvers reject it.
+	back. Requires a username; challenge solvers and SSH tunnels reject it.
 	"""
 	password: String
 	"""
@@ -2286,7 +2286,7 @@ input CreateProxyConfigInput {
 	"""
 	Private key for a tunnel provider: PEM for an SSH tunnel, base64 for
 	WireGuard. Write-only: stored encrypted and never read back. An SSH
-	tunnel needs either this or a password; WireGuard requires it.
+	tunnel and WireGuard both require a private key.
 	"""
 	privateKey: String
 	"""
@@ -26221,8 +26221,8 @@ input UpdateProxyConfigInput {
 	"""
 	username: String
 	"""
-	Replacement transport-proxy password. Write-only: omission preserves
-	the stored value, null clears it, and it is never read back.
+	Replacement transport-proxy password. SSH tunnels reject passwords.
+	Write-only: omission preserves the stored value, null clears it.
 	"""
 	password: String
 	"""

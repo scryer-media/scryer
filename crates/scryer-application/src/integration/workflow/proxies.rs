@@ -279,11 +279,13 @@ impl AppUseCase {
         validate_persisted_proxy_config(&config)?;
         config.updated_at = Utc::now();
 
-        self.services
-            .integrations
-            .proxy_configs
-            .update(config)
-            .await
+        let config = self.services.integrations.proxy_configs.update(config).await?;
+        crate::tunnel_proxy::activate_tunnel_config(&config);
+        if config.provider_type == scryer_domain::ProxyProviderType::SshTunnel {
+            crate::tunnel_proxy::TunnelHostKeyLedger::shared().register(&config)
+                .map_err(AppError::Repository)?;
+        }
+        Ok(config)
     }
 
     pub async fn delete_proxy_config(&self, actor: &User, id: &str) -> AppResult<()> {
@@ -323,10 +325,9 @@ impl AppUseCase {
             ));
         }
         self.services.integrations.proxy_configs.delete(id).await?;
-        // A deleted tunnel has no configuration left to justify its session.
-        // (An *edited* one needs no help: the revision moves, so the next
-        // request restarts it.) No-op for every other kind.
-        crate::tunnel_proxy::stop_tunnel(id);
+        // Reject retained snapshots as well as closing the current front.
+        crate::tunnel_proxy::forget_tunnel_config(id);
+        crate::tunnel_proxy::TunnelHostKeyLedger::shared().forget(id);
         Ok(())
     }
 
@@ -355,9 +356,9 @@ impl AppUseCase {
             .get_by_id(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
-        if !config.is_tunnel() {
+        if !config.is_tunnel() || config.provider_type == scryer_domain::ProxyProviderType::Http3 {
             return Err(AppError::Validation(
-                "only tunnel proxies pin a host key".into(),
+                "only SSH tunnel proxies pin a host key".into(),
             ));
         }
         // WireGuard is a tunnel with no trust-on-first-use step: the peer's
@@ -368,17 +369,19 @@ impl AppUseCase {
                 "WireGuard tunnels have no host key to reset".into(),
             ));
         }
+        crate::tunnel_proxy::TunnelHostKeyLedger::shared().begin_reset(&config)
+            .map_err(AppError::Repository)?;
         self.services
             .integrations
             .proxy_configs
             .clear_host_key(&config.id)
             .await?;
-        self.services
-            .integrations
-            .proxy_configs
-            .get_by_id(&config.id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))
+        let config = self.services.integrations.proxy_configs.get_by_id(&config.id).await?
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+        crate::tunnel_proxy::TunnelHostKeyLedger::shared().register(&config)
+            .map_err(AppError::Repository)?;
+        crate::tunnel_proxy::stop_tunnel(&config.id);
+        Ok(config)
     }
 
     pub async fn test_proxy_config(&self, actor: &User, id: &str) -> AppResult<ProxyTestResult> {
@@ -470,6 +473,11 @@ impl AppUseCase {
                     config.clone(),
                     self.probe_wireguard_handshake(config).await?,
                 )
+            } else if config.provider_type == scryer_domain::ProxyProviderType::Http3 {
+                if destination.is_none() {
+                    return Err(AppError::Validation("Assign an indexer to test HTTP/3 CONNECT through its destination".into()));
+                }
+                (config.clone(), "HTTP/3 CONNECT".to_string())
             } else {
                 self.probe_ssh_handshake(config).await?
             };
@@ -551,15 +559,22 @@ impl AppUseCase {
         let mut config = config.clone();
         let message = if handshake.newly_pinned {
             let pinned_at = Utc::now();
-            self.services
-                .integrations
-                .proxy_configs
-                .pin_host_key(&config.id, &handshake.fingerprint, pinned_at)
-                .await?;
+            let pin = crate::tunnel_proxy::PendingHostKeyPin {
+                proxy_config_id: config.id.clone(),
+                fingerprint: handshake.fingerprint.clone(),
+                pinned_at,
+                updated_at: config.updated_at,
+            };
+            if !self.services.integrations.proxy_configs.pin_host_key(
+                &config.id, &handshake.fingerprint, pinned_at, config.updated_at,
+            ).await? {
+                crate::tunnel_proxy::TunnelHostKeyLedger::shared().reject(&pin);
+                return Err(AppError::Repository("SSH host key pin conflicts with the current configuration; retry with the current settings".into()));
+            }
             // The handshake also queued this pin on the ledger the egress paths
             // use; take it back rather than leave a duplicate write for the
             // next flush.
-            crate::tunnel_proxy::TunnelHostKeyLedger::shared().take(&config.id);
+            crate::tunnel_proxy::TunnelHostKeyLedger::shared().take_revision(&config.id, config.updated_at);
             config.host_key_fingerprint = Some(handshake.fingerprint.clone());
             config.host_key_pinned_at = Some(pinned_at);
             format!(
@@ -687,6 +702,7 @@ fn default_proxy_scheme(provider_type: scryer_domain::ProxyProviderType) -> &'st
         Provider::Socks4 => "socks4",
         Provider::Socks5 => "socks5",
         Provider::SshTunnel => "ssh",
+        Provider::Http3 => "https",
         Provider::WireGuard => "wireguard",
     }
 }
@@ -790,6 +806,13 @@ fn normalize_proxy_endpoint(
     }
 
     match (provider_type, parsed.scheme()) {
+        (Provider::Http3, "https") => {
+            if !matches!(parsed.path(), "" | "/") || parsed.query().is_some() || parsed.fragment().is_some() || parsed.port() == Some(0) {
+                return Err(AppError::Validation("HTTP/3 CONNECT endpoint must be https://host[:port] without a path, query or fragment".into()));
+            }
+            Ok(NormalizedProxyEndpoint { base_url: trimmed, scheme_remote_dns: None })
+        }
+        (Provider::Http3, _) => Err(AppError::Validation("HTTP/3 CONNECT requires an https endpoint".into())),
         (Provider::Http, "http" | "https") => Ok(NormalizedProxyEndpoint {
             base_url: trimmed,
             scheme_remote_dns: None,
@@ -925,6 +948,10 @@ fn validate_proxy_credentials(
             "SOCKS4 proxies do not carry credentials; use SOCKS5 for an authenticated proxy".into(),
         ));
     }
+    if provider_type == scryer_domain::ProxyProviderType::Http3 && let Some(username) = username {
+        scryer_tunnel::Http3ProxyCredentials::new(username.into(), password.unwrap_or_default().into())
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+    }
     if password.is_some() && username.is_none() {
         return Err(AppError::Validation(
             "proxy password requires a username".into(),
@@ -1020,7 +1047,7 @@ fn validate_tunnel_auth(
             "only SSH tunnels take a private key passphrase".into(),
         ));
     }
-    if !provider_type.is_tunnel() && fields.private_key.is_some() {
+    if !matches!(provider_type, Provider::SshTunnel | Provider::WireGuard) && fields.private_key.is_some() {
         return Err(AppError::Validation(
             "only tunnels take a private key".into(),
         ));
@@ -1039,9 +1066,14 @@ fn validate_ssh_tunnel_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
             "SSH tunnels require a username".into(),
         ));
     }
-    if fields.password.is_none() && fields.private_key.is_none() {
+    if fields.password.is_some() {
         return Err(AppError::Validation(
-            "SSH tunnels require a password or a private key".into(),
+            "SSH tunnels do not accept passwords; use an Ed25519 private key".into(),
+        ));
+    }
+    if fields.private_key.is_none() {
+        return Err(AppError::Validation(
+            "SSH tunnels require an Ed25519 private key; password authentication is no longer supported".into(),
         ));
     }
     if fields.private_key_passphrase.is_some() && fields.private_key.is_none() {
@@ -1384,6 +1416,7 @@ pub const TRANSPORT_PROXY_DOWNSTREAM_MESSAGE: &str =
 fn transport_proxy_name(provider_type: scryer_domain::ProxyProviderType) -> &'static str {
     match provider_type {
         scryer_domain::ProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::ProxyProviderType::Http3 => "HTTP/3 CONNECT proxy",
         scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
         scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
@@ -1402,6 +1435,7 @@ fn proxy_default_port(provider_type: scryer_domain::ProxyProviderType) -> Option
             Some(1080)
         }
         scryer_domain::ProxyProviderType::SshTunnel => Some(22),
+        scryer_domain::ProxyProviderType::Http3 => Some(443),
         // WireGuard's own default listen port, and what every `wg-quick`
         // server config uses unless the operator changed it.
         scryer_domain::ProxyProviderType::WireGuard => Some(51820),
@@ -1687,7 +1721,7 @@ mod proxy_tests {
     }
 
     #[test]
-    fn ssh_tunnels_require_a_username_and_one_form_of_authentication() {
+    fn ssh_tunnels_require_a_username_and_key_and_reject_passwords() {
         const PEM: &str = scryer_tunnel::test_support::CLIENT_ED25519_PEM;
 
         // Username is not optional: there is no "current user" to fall back to.
@@ -1706,14 +1740,13 @@ mod proxy_tests {
             )
             .is_err()
         );
-        // Either alone is enough, and both together is allowed (WP6 prefers the
-        // key).
+        // Passwords are rejected even if a valid key is supplied.
         assert!(
             validate_tunnel_auth(
                 Provider::SshTunnel,
                 &ssh_auth(Some("operator"), Some("s3cret"), None, None)
             )
-            .is_ok()
+            .is_err()
         );
         assert!(
             validate_tunnel_auth(
@@ -1732,7 +1765,7 @@ mod proxy_tests {
                     Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM_PASSPHRASE)
                 )
             )
-            .is_ok()
+            .is_err()
         );
         // A passphrase without a key protects nothing.
         assert!(
@@ -2253,6 +2286,22 @@ mod proxy_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn http3_requires_https_and_accepts_only_optional_basic_credentials() {
+        let config = transport_config(Provider::Http3, "https://proxy.example");
+        assert!(validate_persisted_proxy_config(&config).is_ok());
+        assert_eq!(transport_proxy_endpoint(&config).unwrap(), ("proxy.example".into(), 443));
+        for endpoint in ["http://proxy.example", "https://proxy.example/path", "https://proxy.example?key=secret", "https://user:pass@proxy.example", "https://proxy.example:0"] {
+            assert!(normalize_proxy_endpoint(Provider::Http3, endpoint).is_err(), "{endpoint}");
+        }
+        assert!(validate_proxy_credentials(Provider::Http3, Some("user"), Some("secret")).is_ok());
+        assert!(validate_proxy_credentials(Provider::Http3, None, Some("secret")).is_err());
+        assert!(validate_proxy_credentials(Provider::Http3, Some("user:other"), None).is_err());
+        let mut config = config;
+        config.private_key_encrypted = Some("not applicable".into());
+        assert!(validate_persisted_proxy_config(&config).is_err());
     }
 
     #[test]

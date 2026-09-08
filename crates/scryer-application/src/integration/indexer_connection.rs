@@ -1742,8 +1742,14 @@ mod tests {
         ) -> AppResult<()> {
             Ok(())
         }
-        async fn pin_host_key(&self, _: &str, _: &str, _: chrono::DateTime<Utc>) -> AppResult<()> {
-            Ok(())
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(true)
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())
