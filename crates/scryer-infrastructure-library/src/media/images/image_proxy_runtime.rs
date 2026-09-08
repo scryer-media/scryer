@@ -819,7 +819,7 @@ impl ImageProxyCacheControl for ImageProxyRuntime {
             };
             let width = match (source.image_kind.as_str(), entry.variant.as_str()) {
                 ("poster", "w70") => 70,
-                ("poster", _) => 250,
+                ("poster", _) => 300,
                 ("fanart", _) => 1280,
                 ("episode_still", _) => 300,
                 ("person", _) => 185,
@@ -1124,7 +1124,7 @@ mod tests {
     #[async_trait]
     impl scryer_application::TitleImageProcessor for GatedJpegProcessor {
         async fn encode_cached_jpeg(&self, _bytes: Vec<u8>, width: u32) -> AppResult<Vec<u8>> {
-            assert_eq!(width, 250);
+            assert_eq!(width, 300);
             self.started.notify_one();
             self.release.acquire().await.unwrap().forget();
             Ok([&[0, 0, 0, 0x1c][..], b"ftypavif", &[0u8; 16]].concat())

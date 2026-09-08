@@ -349,8 +349,11 @@ fn encode_proxy_jpeg(bytes: &[u8], width: u32) -> AppResult<Vec<u8>> {
     let rgba = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1)).to_rgba8();
     let width = width.min(rgba.width());
     let height = scaled_height(rgba.width(), rgba.height(), width);
-    // Disposable proxy thumbnails use a cheap box resize; library artwork retains its preset.
-    let resized = image::imageops::thumbnail(&rgba, width, height);
+    let resized = if width == rgba.width() {
+        rgba
+    } else {
+        image::imageops::resize(&rgba, width, height, image::imageops::FilterType::Lanczos3)
+    };
     encode_avif(&resized, PROXY_AVIF_SPEED, PROXY_AVIF_QUALITY)
 }
 
@@ -606,8 +609,9 @@ mod tests {
         let processor = HttpTitleImageProcessor::new();
         processor.configure_encoding_workers(2).await.unwrap();
         for (w, h, target, expected) in [
-            (500, 750, 250, (250, 375)),
-            (40, 60, 250, (40, 60)),
+            (600, 900, 300, (300, 450)),
+            (300, 450, 300, (300, 450)),
+            (40, 60, 300, (40, 60)),
             (1600, 900, 1280, (1280, 720)),
         ] {
             let rgb = image::RgbImage::from_pixel(w, h, image::Rgb([45, 89, 120]));
@@ -624,7 +628,7 @@ mod tests {
         }
         assert!(
             processor
-                .encode_cached_jpeg(b"not a JPEG".to_vec(), 250)
+                .encode_cached_jpeg(b"not a JPEG".to_vec(), 300)
                 .await
                 .is_err()
         );
