@@ -1431,7 +1431,7 @@ mod tests {
             &store,
             &user.id,
             UiSettingsUpdate {
-                theme: UiTheme::Pride,
+                theme: UiTheme::Dark,
                 date_time_format: UiDateTimeFormat::Iso24h,
                 highlight_color: Some("#ff3366".to_string()),
                 secondary_color: Some("#2277aa".to_string()),
@@ -1462,12 +1462,30 @@ mod tests {
         .await
         .expect("upsert UI settings");
         assert_eq!(stored.user_id, user.id);
-        assert_eq!(stored.theme, UiTheme::Pride);
+        assert_eq!(stored.theme, UiTheme::Dark);
         assert_eq!(stored.date_time_format, UiDateTimeFormat::Iso24h);
         assert!(stored.hide_sponsor_button);
         assert_eq!(stored.table_columns.len(), 2);
         assert_eq!(stored.table_columns[0].column_id, "name");
         assert_eq!(stored.table_columns[1].column_id, "episodes");
+
+        // Existing databases can retain the retired value until the next save.
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("expected SQLite test store");
+        };
+        sqlx::query("UPDATE user_ui_settings SET theme = 'pride' WHERE user_id = ?")
+            .bind(&user.id)
+            .execute(pool)
+            .await
+            .expect("seed legacy theme");
+        let legacy = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load legacy UI settings")
+            .expect("UI settings exist");
+        assert_eq!(legacy.theme, UiTheme::Dark);
+        assert_eq!(legacy.theme.as_str(), "dark");
+        assert_eq!(legacy.table_columns, stored.table_columns);
+        assert_eq!(legacy.highlight_color, stored.highlight_color);
 
         let replaced = UserUiSettingsRepository::upsert(
             &store,

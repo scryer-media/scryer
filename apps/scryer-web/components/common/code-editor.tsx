@@ -346,19 +346,6 @@ const scryerDark = EditorView.theme({
   ".cm-line": { padding: "0 4px" },
 }, { dark: true });
 
-const prideTheme = EditorView.theme({
-  "&": { backgroundColor: "#100d20", color: "#fff0fb" },
-  ".cm-content": { fontFamily: CODE_FONT, caretColor: "#ff5ca8", paddingLeft: "8px" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#ff5ca8" },
-  ".cm-gutters": { backgroundColor: "#0d0a1b", color: "#9587b7", borderRight: "1px solid rgba(255,255,255,0.14)", fontFamily: CODE_FONT, paddingRight: "8px" },
-  ".cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.05)", color: "#ffd8f0" },
-  ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.04)" },
-  "&.cm-focused": { outline: "2px solid var(--ring)" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(255,92,168,0.24)" },
-  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(255,92,168,0.35)" },
-  ".cm-line": { padding: "0 4px" },
-}, { dark: true });
-
 function languageExtensions(language: CodeEditorLanguage): Extension[] {
   if (language === "javascript") {
     return [javascript()];
@@ -431,7 +418,6 @@ export default function CodeEditor({
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const usePrideTheme = resolvedTheme === "pride";
     const useDarkTheme = isDarkTheme(resolvedTheme);
 
     const updateListener = EditorView.updateListener.of((update) => {
@@ -439,7 +425,7 @@ export default function CodeEditor({
         onChangeRef.current(update.state.doc.toString());
       }
     });
-    const editorTheme = usePrideTheme ? prideTheme : useDarkTheme ? scryerDark : lightTheme;
+    const editorTheme = useDarkTheme ? scryerDark : lightTheme;
     const extensions = [
       lineNumbers(),
       ...languageExtensions(language),

@@ -25473,9 +25473,9 @@ enum UiThemeValue {
 	"""
 	DARK
 	"""
-	Pride theme.
+	Legacy input alias for the dark theme.
 	"""
-	PRIDE
+	PRIDE @deprecated(reason: "use DARK; this legacy value is normalized to DARK")
 	"""
 	Follow the system theme.
 	"""

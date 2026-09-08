@@ -258,7 +258,8 @@ pub enum UiThemeValue {
     Light,
     /// Dark theme.
     Dark,
-    /// Pride theme.
+    /// Legacy input alias for the dark theme.
+    #[graphql(deprecation = "use DARK; this legacy value is normalized to DARK")]
     Pride,
     /// Follow the system theme.
     System,

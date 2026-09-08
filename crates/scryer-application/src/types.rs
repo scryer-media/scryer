@@ -3597,7 +3597,6 @@ pub enum UiTheme {
     Light,
     #[default]
     Dark,
-    Pride,
     System,
 }
 
@@ -3606,7 +3605,6 @@ impl UiTheme {
         match self {
             Self::Light => "light",
             Self::Dark => "dark",
-            Self::Pride => "pride",
             Self::System => "system",
         }
     }
@@ -3614,8 +3612,8 @@ impl UiTheme {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "light" => Some(Self::Light),
-            "dark" => Some(Self::Dark),
-            "pride" => Some(Self::Pride),
+            // Normalize the retired theme when reading existing preferences.
+            "dark" | "pride" => Some(Self::Dark),
             "system" => Some(Self::System),
             _ => None,
         }

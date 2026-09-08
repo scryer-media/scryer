@@ -159,6 +159,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_ui_theme_inputs_normalize_to_dark() {
+        assert_eq!(
+            to_app_ui_theme(UiThemeValue::Pride),
+            scryer_application::UiTheme::Dark
+        );
+        assert!(from_ui_theme(to_app_ui_theme(UiThemeValue::Pride)) == UiThemeValue::Dark);
+        for theme in [
+            UiThemeValue::Light,
+            UiThemeValue::Dark,
+            UiThemeValue::System,
+        ] {
+            assert!(from_ui_theme(to_app_ui_theme(theme)) == theme);
+        }
+    }
+
+    #[test]
     fn external_auth_runtime_settings_maps_clean_connections() {
         let payload = from_external_auth_runtime_settings(
             scryer_application::ExternalAuthRuntimeSettings {
@@ -320,7 +336,6 @@ fn from_ui_theme(theme: scryer_application::UiTheme) -> UiThemeValue {
     match theme {
         scryer_application::UiTheme::Light => UiThemeValue::Light,
         scryer_application::UiTheme::Dark => UiThemeValue::Dark,
-        scryer_application::UiTheme::Pride => UiThemeValue::Pride,
         scryer_application::UiTheme::System => UiThemeValue::System,
     }
 }
@@ -328,8 +343,7 @@ fn from_ui_theme(theme: scryer_application::UiTheme) -> UiThemeValue {
 fn to_app_ui_theme(theme: UiThemeValue) -> scryer_application::UiTheme {
     match theme {
         UiThemeValue::Light => scryer_application::UiTheme::Light,
-        UiThemeValue::Dark => scryer_application::UiTheme::Dark,
-        UiThemeValue::Pride => scryer_application::UiTheme::Pride,
+        UiThemeValue::Dark | UiThemeValue::Pride => scryer_application::UiTheme::Dark,
         UiThemeValue::System => scryer_application::UiTheme::System,
     }
 }
