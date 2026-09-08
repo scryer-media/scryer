@@ -40,6 +40,7 @@ test("facet settings sections that consume media settings trigger loading", () =
 
 test("canonical route families resolve to typed application state", () => {
   for (const path of [
+    "/api-explorer",
     "/dashboard",
     "/movies",
     "/series",

@@ -110,6 +110,8 @@ pub struct PluginHttpTrustedCertificatePayload {
 #[derive(SimpleObject, Clone)]
 /// General service settings, including effective image-cache limits and trusted certificate data.
 pub struct GeneralSettingsPayload {
+    /// Whether administrators may use the API explorer.
+    pub api_explorer_enabled: bool,
     /// Whether surfaces that are still being finished are shown on this instance.
     pub experimental_features_enabled: bool,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
@@ -919,6 +921,8 @@ pub struct UpdateServiceSettingsInput {
 #[derive(InputObject, Clone)]
 /// General retention, cache, and plugin trust settings.
 pub struct UpdateGeneralSettingsInput {
+    /// Whether administrators may use the API explorer. Omission preserves the saved setting.
+    pub api_explorer_enabled: Option<bool>,
     /// Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
     pub experimental_features_enabled: Option<bool>,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery. Omission preserves the saved setting.

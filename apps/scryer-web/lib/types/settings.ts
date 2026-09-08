@@ -31,6 +31,7 @@ export type AcquisitionSettings = {
 };
 
 export type GeneralSettings = {
+  apiExplorerEnabled: boolean;
   experimentalFeaturesEnabled: boolean;
   personalizedDiscoveryEnabled: boolean;
   srrdbFilenameRecoveryEnabled: boolean;
@@ -47,6 +48,7 @@ export type GeneralSettings = {
 export type GeneralSettingsUpdate = Partial<
   Pick<
     GeneralSettings,
+    | "apiExplorerEnabled"
     | "experimentalFeaturesEnabled"
     | "personalizedDiscoveryEnabled"
     | "srrdbFilenameRecoveryEnabled"
@@ -64,6 +66,7 @@ export type GeneralSettingsUpdate = Partial<
  * `generalSettings`, which is limited to system-settings administrators.
  */
 export type InstanceFeatures = {
+  apiExplorerEnabled: boolean;
   experimentalFeaturesEnabled: boolean;
   personalizedDiscoveryEnabled: boolean;
 };

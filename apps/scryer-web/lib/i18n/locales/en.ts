@@ -1063,6 +1063,14 @@ const en: LocaleDictionary = {
   "settings.historyRetentionExternalHelp":
     "Operational cleanup for acquisition scratch data still runs, and this does not control history retained by SABnzbd, NZBGet, or Weaver.",
   "settings.featuresHeader": "Features",
+  "settings.apiExplorerLabel": "Enable API explorer",
+  "settings.apiExplorerHelp": "Adds GraphiQL to the API navigation item for users with Manage System Settings. Requests run with API-key or OAuth library permissions.",
+  "apiExplorer.accessMode": "Access as",
+  "apiExplorer.apiKey": "API Key",
+  "apiExplorer.oauth": "OAuth App",
+  "apiExplorer.apiKeyHelp": "Your app and library permissions, without interactive account access. Subscriptions are unavailable.",
+  "apiExplorer.oauthHelp": "Your library permissions only. App settings and account operations are unavailable.",
+  "apiExplorer.sessionHelp": "Uses your current session. No credentials or client setup required.",
   "settings.experimentalFeaturesLabel": "Enable experimental features",
   "settings.experimentalFeaturesHelp":
     "Shows features that are still being finished for everyone on this instance: moving titles between libraries and roots, and maintenance rules.",
