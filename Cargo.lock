@@ -6430,6 +6430,7 @@ dependencies = [
  "fast_image_resize",
  "image",
  "kamadak-exif",
+ "rayon",
  "reqwest",
  "scryer-application",
  "scryer-domain",

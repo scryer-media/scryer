@@ -579,6 +579,7 @@ const en: LocaleDictionary = {
   "jobs.column.status": "Status",
   "jobs.action.run": "Run",
   "jobs.action.runNow": "Run now",
+  "jobs.action.runArtworkNow": "Run now (override schedule)",
   "jobs.status.idle": "Idle",
   "jobs.status.queued": "Queued",
   "jobs.status.discovering": "Discovering",

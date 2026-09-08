@@ -2340,6 +2340,11 @@ pub trait ImageProxyCacheControl: Send + Sync {
 
 #[async_trait]
 pub trait TitleImageProcessor: Send + Sync {
+    /// Configure the shared CPU budget before an exclusive artwork run starts.
+    async fn configure_encoding_workers(&self, _workers: usize) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn fetch_and_process_image(
         &self,
         kind: TitleImageKind,

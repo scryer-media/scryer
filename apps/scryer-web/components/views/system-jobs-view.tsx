@@ -494,6 +494,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           <div className="space-y-1">
             <p className="font-medium text-[var(--scry-ink2)]">{job.displayName}</p>
             <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{job.description}</p>
+            {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
+              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{lastRun.summaryText}</p>
+            ) : null}
           </div>
         </TableCell>
         <TableCell className={`w-[14rem] max-w-[14rem] ${JOBS_MUTED_TEXT_CLASS}`}>
@@ -512,7 +515,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         <TableCell className="w-[7.5rem] min-w-[7.5rem]">
           <span className={runStatusTone(status)}>{runStatusLabel(status, t)}</span>
         </TableCell>
-        <TableCell className="w-[6rem] min-w-[6rem] text-right">
+        <TableCell className="min-w-[6rem] text-right">
           {job.manualTriggerAllowed ? (
             <Button
               size="sm"
@@ -523,7 +526,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 onTriggerJob(job.key);
               }}
             >
-              {t("jobs.action.run")}
+              {t(job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run")}
             </Button>
           ) : null}
         </TableCell>
@@ -556,6 +559,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               <p className={`text-xs leading-relaxed ${JOBS_MUTED_TEXT_CLASS}`}>
                 {job.description}
               </p>
+              {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
+                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{lastRun.summaryText}</p>
+              ) : null}
             </div>
             <span
               className={cn(
@@ -615,7 +621,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 onTriggerJob(job.key);
               }}
             >
-              {t("jobs.action.run")}
+              {t(job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run")}
             </Button>
           ) : null}
         </div>
@@ -751,7 +757,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                         onClick={() => onTriggerJob(selectedJob.key)}
                         disabled={isDisabled}
                       >
-                        {t("jobs.action.runNow")}
+                        {t(selectedJob.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.runNow")}
                       </Button>
                     );
                   })()}

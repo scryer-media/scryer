@@ -140,6 +140,12 @@ impl AppUseCase {
         .await
     }
 
+    pub(crate) async fn artwork_cpu_performance(&self) -> (RuntimePerformanceClass, Option<u64>) {
+        tokio::task::spawn_blocking(probe_cpu_performance)
+            .await
+            .unwrap_or((RuntimePerformanceClass::Slow, None))
+    }
+
     pub fn warm_runtime_performance(&self) {
         let app = self.clone();
         tokio::spawn(async move {

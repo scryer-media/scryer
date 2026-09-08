@@ -68,6 +68,39 @@ pub fn nice_thread() {
 #[cfg(not(unix))]
 pub fn nice_thread() {}
 
+/// Set priority once on a dedicated background worker, never on a shared runtime thread.
+pub fn background_worker_priority() -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let result = unsafe {
+            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_BACKGROUND, 0)
+        };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result));
+        }
+        let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+        let mut relative_priority = 0;
+        let result = unsafe {
+            libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative_priority)
+        };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result));
+        }
+        if !matches!(class, libc::qos_class_t::QOS_CLASS_BACKGROUND) {
+            return Err(std::io::Error::other("background QoS did not take effect"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux PRIO_PROCESS with id 0 addresses the calling thread.
+        let current = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        if unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, current.max(10)) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
     let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
     let Ok(mut url) = url::Url::parse(raw) else {

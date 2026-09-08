@@ -173,6 +173,7 @@ pub enum JobKey {
     StagedNzbPrune,
     FullHashBackfill,
     DiscoverySync,
+    ArtworkEncoding,
     TitleImageCacheRefresh,
     TitleDeletion,
     TitleRename,
@@ -207,6 +208,7 @@ impl JobKey {
             Self::StagedNzbPrune => "staged_nzb_prune",
             Self::FullHashBackfill => "full_hash_backfill",
             Self::DiscoverySync => "discovery_sync",
+            Self::ArtworkEncoding => "artwork_encoding",
             Self::TitleImageCacheRefresh => "title_image_cache_refresh",
             Self::TitleDeletion => "title_deletion",
             Self::TitleRename => "title_rename",
@@ -241,6 +243,7 @@ impl JobKey {
             "staged_nzb_prune" => Some(Self::StagedNzbPrune),
             "full_hash_backfill" => Some(Self::FullHashBackfill),
             "discovery_sync" => Some(Self::DiscoverySync),
+            "artwork_encoding" => Some(Self::ArtworkEncoding),
             "title_image_cache_refresh" => Some(Self::TitleImageCacheRefresh),
             "title_deletion" => Some(Self::TitleDeletion),
             "title_rename" => Some(Self::TitleRename),
@@ -276,6 +279,7 @@ impl JobKey {
             Self::StagedNzbPrune => "Staged NZB Prune",
             Self::FullHashBackfill => "Full Hash Backfill",
             Self::DiscoverySync => "Discovery Sync",
+            Self::ArtworkEncoding => "Artwork Encoding",
             Self::TitleImageCacheRefresh => "Title Image Cache Refresh",
             Self::TitleDeletion => "Title Deletion",
             Self::TitleRename => "Title Rename",
@@ -326,6 +330,9 @@ impl JobKey {
             Self::DiscoverySync => {
                 "Evaluate local discovery freshness and refresh SMG discovery snapshots."
             }
+            Self::ArtworkEncoding => {
+                "Encode pending artwork overnight; Run now overrides the nightly window."
+            }
             Self::TitleImageCacheRefresh => {
                 "Refresh remote artwork URLs from SMG and rebuild locally processed title images."
             }
@@ -368,6 +375,7 @@ impl JobKey {
             Self::PluginRegistryRefresh
             | Self::HealthChecks
             | Self::AutoBackup
+            | Self::ArtworkEncoding
             | Self::DiscoverySync
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
@@ -413,7 +421,7 @@ impl JobKey {
             | Self::LifecycleActionHandling
             | Self::MediaServerSignalSync => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
-            Self::AutoBackup => JobScheduleKind::DailyAtTime,
+            Self::AutoBackup | Self::ArtworkEncoding => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
             | Self::LibraryScanAnime
@@ -442,6 +450,7 @@ impl JobKey {
             Self::Housekeeping => "Every 24 hours",
             Self::HealthChecks => "Every 6 hours",
             Self::AutoBackup => "Daily at configured local time",
+            Self::ArtworkEncoding => "Daily 03:00–09:00 host local time",
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
             Self::FullHashBackfill => "Every 30 minutes",
@@ -526,7 +535,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 20] = [
+pub const ALL_JOB_KEYS: [JobKey; 21] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -543,6 +552,7 @@ pub const ALL_JOB_KEYS: [JobKey; 20] = [
     JobKey::StagedNzbPrune,
     JobKey::FullHashBackfill,
     JobKey::DiscoverySync,
+    JobKey::ArtworkEncoding,
     JobKey::TitleImageCacheRefresh,
     JobKey::MaintenanceRuleEvaluation,
     JobKey::LifecycleActionHandling,

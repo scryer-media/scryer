@@ -424,9 +424,9 @@ pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 24;
 pub use acquisition::release_search::release_strategy_kind_for_label;
 pub use helpers::{
     HashDomain, MAX_USER_TAGS_PER_TITLE, MAX_USER_TITLE_TAG_LEN, RESERVED_TITLE_TAG_PREFIX,
-    accepted_inputs_for_client, blake3_identity_hex, is_reserved_title_tag, nice_thread,
-    normalize_release_name, normalize_release_password, normalize_user_title_tag,
-    normalize_user_title_tags,
+    accepted_inputs_for_client, background_worker_priority, blake3_identity_hex,
+    is_reserved_title_tag, nice_thread, normalize_release_name, normalize_release_password,
+    normalize_user_title_tag, normalize_user_title_tags,
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,

@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::sync::Arc;
 
 use super::{normalize_title_image_source_url, title_image_blob_digest};
 use async_trait::async_trait;
@@ -18,13 +19,47 @@ use scryer_outbound_http::{
 const MAX_SOURCE_BYTES: usize = 20 * 1024 * 1024;
 const AVIF_SPEED: u8 = 4;
 const AVIF_QUALITY: u8 = 85;
-const AVIF_ENCODER_THREADS: usize = 1;
+
+fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
+    if !matches!(workers, 2 | 4) {
+        return Err(AppError::Validation(
+            "artwork worker count must be two or four".into(),
+        ));
+    }
+    let (ready, results) = std::sync::mpsc::channel();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .thread_name(|index| format!("scryer-artwork-{index}"))
+        .start_handler(move |index| {
+            let result = scryer_application::background_worker_priority();
+            match &result {
+                Ok(()) => tracing::debug!(index, "artwork worker priority initialized"),
+                Err(error) => tracing::error!(index, %error, "artwork worker priority failed"),
+            }
+            let _ = ready.send(result);
+        })
+        .build()
+        .map_err(|error| AppError::Repository(format!("artwork pool creation failed: {error}")))?;
+    for _ in 0..workers {
+        results
+            .recv()
+            .map_err(|error| {
+                AppError::Repository(format!("artwork worker startup failed: {error}"))
+            })?
+            .map_err(|error| {
+                AppError::Repository(format!("artwork worker priority failed: {error}"))
+            })?;
+    }
+    tracing::info!(workers, "dedicated artwork pool ready");
+    Ok(pool)
+}
 
 #[derive(Clone)]
 pub struct HttpTitleImageProcessor {
     outbound_http: OutboundHttpClient,
     max_source_bytes: usize,
     avif_enabled: bool,
+    encoding_pool: Arc<tokio::sync::RwLock<Option<Arc<rayon::ThreadPool>>>>,
 }
 
 impl HttpTitleImageProcessor {
@@ -36,6 +71,7 @@ impl HttpTitleImageProcessor {
             ),
             max_source_bytes: MAX_SOURCE_BYTES,
             avif_enabled: true,
+            encoding_pool: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -48,6 +84,7 @@ impl HttpTitleImageProcessor {
             ),
             max_source_bytes: MAX_SOURCE_BYTES,
             avif_enabled,
+            encoding_pool: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -207,7 +244,8 @@ impl HttpTitleImageProcessor {
         bytes: &[u8],
         variant_specs: Vec<TitleImageVariantSpec>,
     ) -> AppResult<TitleImageSourceResult> {
-        self.process_bytes(kind, source_url, bytes, None, None, variant_specs)
+        artwork_pool(2)?
+            .install(|| self.process_bytes(kind, source_url, bytes, None, None, variant_specs))
     }
 }
 
@@ -229,6 +267,16 @@ impl Default for HttpTitleImageProcessor {
 
 #[async_trait]
 impl TitleImageProcessor for HttpTitleImageProcessor {
+    async fn configure_encoding_workers(&self, workers: usize) -> AppResult<()> {
+        let pool = tokio::task::spawn_blocking(move || artwork_pool(workers))
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("artwork pool startup failed: {error}"))
+            })??;
+        *self.encoding_pool.write().await = Some(Arc::new(pool));
+        Ok(())
+    }
+
     async fn fetch_and_process_image(
         &self,
         kind: TitleImageKind,
@@ -238,12 +286,21 @@ impl TitleImageProcessor for HttpTitleImageProcessor {
         let requested_source_url = source_url.to_string();
         let (source_url, bytes, etag, last_modified) = self.fetch_source(source_url).await?;
         let this = self.clone();
-        let mut result = tokio::task::spawn_blocking(move || {
-            scryer_application::nice_thread();
-            this.process_bytes(kind, &source_url, &bytes, etag, last_modified, variants)
-        })
-        .await
-        .map_err(|err| AppError::Repository(format!("image encode task failed: {err}")))??;
+        let pool = self.encoding_pool.read().await.clone().ok_or_else(|| {
+            AppError::Repository("artwork workers have not been configured".into())
+        })?;
+        let (send, receive) = tokio::sync::oneshot::channel();
+        pool.spawn(move || {
+            // Keep a panic confined to this image instead of Rayon aborting the process.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                this.process_bytes(kind, &source_url, &bytes, etag, last_modified, variants)
+            }))
+            .unwrap_or_else(|_| Err(AppError::Repository("image encode task panicked".into())));
+            let _ = send.send(result);
+        });
+        let mut result = receive
+            .await
+            .map_err(|err| AppError::Repository(format!("image encode task failed: {err}")))??;
         result.requested_source_url = requested_source_url;
         Ok(result)
     }
@@ -361,9 +418,18 @@ fn linear_to_srgb_u8(value: f32) -> u8 {
 }
 
 fn encode_avif(image: &RgbaImage, speed: u8, quality: u8) -> AppResult<Vec<u8>> {
+    if !std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with("scryer-artwork-"))
+    {
+        return Err(AppError::Repository(
+            "AVIF encoding requires an artwork worker".into(),
+        ));
+    }
     let mut bytes = Vec::new();
     AvifEncoder::new_with_speed_quality(&mut bytes, speed, quality)
-        .with_num_threads(Some(AVIF_ENCODER_THREADS))
+        // None keeps ravif/rav1e's nested Rayon work in our current pool.
+        .with_num_threads(None)
         .write_image(
             image.as_raw(),
             image.width(),
@@ -438,6 +504,54 @@ mod tests {
     use super::*;
     use crate::media::images::synthesize_local_title_image_url;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn avif_nested_work_stays_on_background_pool_when_global_pool_is_busy() {
+        // Nextest runs this test in its own process. A blocked, normal-priority global
+        // worker detects accidental fallback anywhere in image -> ravif -> rav1e.
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build_global()
+            .unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let (started, ready) = std::sync::mpsc::channel();
+        rayon::spawn(move || {
+            started.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        ready.recv().unwrap();
+        let encode = tokio::task::spawn_blocking(|| {
+            for workers in [2, 4] {
+                let pool = artwork_pool(workers).unwrap();
+                let names = pool.broadcast(|_| {
+                    // Reapplying and reading back QoS is checked on macOS by this helper.
+                    scryer_application::background_worker_priority().unwrap();
+                    std::thread::current().name().unwrap().to_string()
+                });
+                assert_eq!(names.len(), workers);
+                assert!(names.iter().all(|name| name.starts_with("scryer-artwork-")));
+                pool.install(|| {
+                    for alpha in [255, 96] {
+                        let mut pixels = RgbaImage::new(64, 96);
+                        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+                            *pixel = image::Rgba([x as u8, y as u8, 180, alpha]);
+                        }
+                        let bytes = encode_avif(&pixels, AVIF_SPEED, AVIF_QUALITY).unwrap();
+                        assert!(!bytes.is_empty());
+                        assert_eq!(image::guess_format(&bytes).unwrap(), ImageFormat::Avif);
+                        // ravif's color/alpha join and all nested parallel operations
+                        // share this pool's fixed total worker budget.
+                        assert_eq!(rayon::current_num_threads(), workers);
+                    }
+                });
+            }
+        });
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(30), encode).await;
+        let _ = release.send(());
+        outcome
+            .expect("AVIF must finish without the global pool")
+            .unwrap();
+    }
 
     fn test_image() -> RgbaImage {
         let mut image = RgbaImage::new(800, 1200);

@@ -1,300 +1,442 @@
 use super::*;
-use std::sync::Arc;
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Timelike, Utc};
+use serde::Serialize;
 use std::time::Duration;
-use tokio::sync::Notify;
-use tracing::{debug, info, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 
-const IMAGE_COLLECT_WINDOW: Duration = Duration::from_millis(50);
-const IMAGE_MAX_BATCH: usize = 256;
-const IMAGE_WRITE_CHUNK_SIZE: usize = 8;
+const SCHEDULE_POLL: Duration = Duration::from_secs(60);
 
-pub async fn start_background_title_image_loop(
-    app: AppUseCase,
-    token: tokio_util::sync::CancellationToken,
-) {
-    start_background_image_loop(app, token).await
+pub(crate) fn artwork_window_open<T: TimeZone>(now: &DateTime<T>) -> bool {
+    (3..9).contains(&now.hour())
 }
 
-async fn wait_for_image_loop_to_resume(
-    app: &AppUseCase,
-    token: &tokio_util::sync::CancellationToken,
-) -> bool {
-    let active_scans = app.runtime.library.library_scan_tracker.list_active().await;
-    if active_scans.is_empty() {
-        return true;
+/// Resolve each calendar day's opening independently so DST never becomes a 24-hour timer.
+pub(crate) fn next_artwork_window<T: TimeZone>(
+    now: &DateTime<T>,
+    include_current: bool,
+) -> Option<DateTime<Utc>> {
+    if include_current && artwork_window_open(now) {
+        return Some(now.with_timezone(&Utc));
     }
-
-    debug!(
-        active_scans = active_scans.len(),
-        "image loop: pausing while library scan is active"
-    );
-
-    tokio::select! {
-        _ = token.cancelled() => false,
-        _ = app.runtime.library.library_scan_tracker.wait_until_idle() => {
-            debug!("image loop: resuming after library scan");
-            true
-        }
+    let zone = now.timezone();
+    let mut date = now.date_naive();
+    if now.hour() >= 3 {
+        date = date.succ_opt()?;
     }
-}
-
-fn image_task_label(task: &TitleImageSyncTask) -> String {
-    let variants = task
-        .variants
-        .iter()
-        .map(|variant| variant.variant_key.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("{}:{variants}", task.kind.as_str())
-}
-
-async fn process_image_refresh_chunk(
-    app: &AppUseCase,
-    chunk: &[TitleImageSyncTask],
-) -> (usize, Vec<TitleImageSyncTask>, usize) {
-    let mut join_set = tokio::task::JoinSet::new();
-
-    for task in chunk.iter().cloned() {
-        let app = app.clone();
-        join_set.spawn(async move {
-            let _permit = app
-                .runtime
-                .catalog
-                .image_processing_limit
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("image processing semaphore should not be closed");
-            let started_at = std::time::Instant::now();
-            let label = image_task_label(&task);
-            match task.kind {
-                TitleImageKind::Poster => debug!(
-                    title_id = %task.title_id,
-                    poster_url = %task.source_url,
-                    target = %label,
-                    "image loop: refreshing"
-                ),
-                TitleImageKind::Fanart => debug!(
-                    title_id = %task.title_id,
-                    background_url = %task.source_url,
-                    target = %label,
-                    "image loop: refreshing"
-                ),
+    for _ in 0..3 {
+        // If 03:00 does not exist, use the first valid minute within the window.
+        for minute in 3 * 60..9 * 60 {
+            let local = date.and_hms_opt(minute / 60, minute % 60, 0)?;
+            if let Some(candidate) = zone.from_local_datetime(&local).earliest()
+                && candidate > *now
+            {
+                return Some(candidate.with_timezone(&Utc));
             }
-            match app
+        }
+        date = date.succ_opt()?;
+    }
+    None
+}
+
+pub(crate) fn artwork_workers(class: RuntimePerformanceClass) -> usize {
+    match class {
+        RuntimePerformanceClass::Fast => 4,
+        RuntimePerformanceClass::Slow => 2,
+    }
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct ArtworkEncodingSummary {
+    pub concurrency: usize,
+    pub processed: usize,
+    pub failed: usize,
+    pub reason: String,
+}
+
+impl ArtworkEncodingSummary {
+    pub(crate) fn text(&self) -> String {
+        format!(
+            "{}; {} concurrent images; {} processed, {} failed",
+            self.reason, self.concurrency, self.processed, self.failed
+        )
+    }
+}
+
+impl AppUseCase {
+    pub(crate) async fn artwork_progress(
+        &self,
+        run: &JobRunRecord,
+        summary: &ArtworkEncodingSummary,
+    ) -> AppResult<()> {
+        let mut current = run.clone();
+        current.progress_json = Some(
+            serde_json::to_string(summary)
+                .map_err(|error| AppError::Repository(error.to_string()))?,
+        );
+        current.summary_text = Some(summary.text());
+        current.updated_at = Utc::now();
+        let current = self
+            .services
+            .events
+            .job_runs
+            .update_job_run(&current)
+            .await?;
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&current, None))
+            .await;
+        *self.runtime.catalog.artwork_wait_reason.write().await = summary.text();
+        Ok(())
+    }
+
+    pub(crate) async fn run_artwork_encoding(
+        &self,
+        run: &JobRunRecord,
+    ) -> AppResult<ArtworkEncodingSummary> {
+        let (class, elapsed) = self.artwork_cpu_performance().await;
+        let workers = artwork_workers(class);
+        info!(cpu_class = %class, cpu_probe_elapsed_ms = elapsed, workers, "artwork run CPU budget selected");
+        self.services
+            .library
+            .title_image_processor
+            .configure_encoding_workers(workers)
+            .await?;
+        self.run_artwork_encoding_with_workers(
+            run,
+            workers,
+            &self.runtime.catalog.artwork_shutdown,
+            &|| self.runtime.environment.now().with_timezone(&Local),
+        )
+        .await
+    }
+
+    pub(crate) async fn run_artwork_encoding_with_workers(
+        &self,
+        run: &JobRunRecord,
+        workers: usize,
+        token: &CancellationToken,
+        now: &(dyn Fn() -> DateTime<Local> + Send + Sync),
+    ) -> AppResult<ArtworkEncodingSummary> {
+        let manual = run.trigger_source == JobTriggerSource::Manual;
+        let mut summary = ArtworkEncodingSummary {
+            concurrency: workers,
+            ..Default::default()
+        };
+        let mut skipped = Vec::new();
+        loop {
+            if token.is_cancelled() {
+                summary.reason = "Stopped for shutdown; remaining artwork is pending".into();
+                break;
+            }
+            if !manual && !artwork_window_open(&now()) {
+                summary.reason = "Waiting for the next nightly window".into();
+                break;
+            }
+            if !self
+                .runtime
+                .library
+                .library_scan_tracker
+                .list_active()
+                .await
+                .is_empty()
+            {
+                summary.reason = "Waiting for library scans".into();
+                self.artwork_progress(run, &summary).await?;
+                tokio::select! {
+                    _ = token.cancelled() => {},
+                    _ = self.runtime.library.library_scan_tracker.wait_until_idle() => {},
+                    _ = tokio::time::sleep(SCHEDULE_POLL) => {},
+                }
+                continue;
+            }
+            // A waiting maintenance writer gets a turn after every bounded group.
+            let maintenance = tokio::select! {
+                _ = token.cancelled() => continue,
+                _ = tokio::time::sleep(SCHEDULE_POLL) => continue,
+                guard = self.runtime.catalog.title_image_maintenance_lock.read() => guard,
+            };
+            if token.is_cancelled() || (!manual && !artwork_window_open(&now())) {
+                continue;
+            }
+            let batch = self
                 .services
                 .library
-                .title_image_processor
-                .fetch_and_process_image(task.kind, &task.source_url, task.variants.clone())
-                .await
-            {
-                Ok(result) => {
-                    match app
+                .title_images
+                .list_title_image_refresh_work(workers, &skipped)
+                .await?;
+            if batch.is_empty() {
+                summary.reason = if summary.failed == 0 {
+                    "Artwork backlog drained"
+                } else {
+                    "Artwork drained; failed images remain pending for a later run"
+                }
+                .into();
+                break;
+            }
+
+            summary.reason = "Encoding artwork".into();
+            self.artwork_progress(run, &summary).await?;
+            let mut tasks = tokio::task::JoinSet::new();
+            for task in batch.into_iter().take(workers) {
+                // Fetching is part of admission: decoded inputs cannot accumulate outside the budget.
+                if token.is_cancelled() || (!manual && !artwork_window_open(&now())) {
+                    break;
+                }
+                let app = self.clone();
+                tasks.spawn(async move {
+                    let result = app
                         .services
                         .library
-                        .title_images
-                        .upsert_title_image_source_result(&task.title_id, result, None)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(error) => {
-                            match task.kind {
-                                TitleImageKind::Poster => warn!(
-                                    error = %error,
-                                    elapsed_ms = started_at.elapsed().as_millis(),
-                                    title_id = %task.title_id,
-                                    poster_url = %task.source_url,
-                                    target = %label,
-                                    "image loop: failed to store processed image"
-                                ),
-                                TitleImageKind::Fanart => warn!(
-                                    error = %error,
-                                    elapsed_ms = started_at.elapsed().as_millis(),
-                                    title_id = %task.title_id,
-                                    background_url = %task.source_url,
-                                    target = %label,
-                                    "image loop: failed to store processed image"
-                                ),
-                            }
-                            return (task, false);
-                        }
+                        .title_image_processor
+                        .fetch_and_process_image(task.kind, &task.source_url, task.variants.clone())
+                        .await;
+                    let result = match result {
+                        Ok(image) => app
+                            .services
+                            .library
+                            .title_images
+                            .upsert_title_image_source_result(&task.title_id, image, None)
+                            .await
+                            .map(|_| ()),
+                        Err(error) => Err(error),
                     };
-
-                    debug!(
-                        elapsed_ms = started_at.elapsed().as_millis(),
-                        title_id = %task.title_id,
-                        target = %label,
-                        "image loop: cached"
-                    );
-                    (task, true)
-                }
-                Err(error) => {
-                    match task.kind {
-                        TitleImageKind::Poster => warn!(
-                            error = %error,
-                            title_id = %task.title_id,
-                            poster_url = %task.source_url,
-                            target = %label,
-                            "image loop: fetch/process failed"
-                        ),
-                        TitleImageKind::Fanart => warn!(
-                            error = %error,
-                            title_id = %task.title_id,
-                            background_url = %task.source_url,
-                            target = %label,
-                            "image loop: fetch/process failed"
-                        ),
+                    (task, result)
+                });
+            }
+            // The nightly cutoff drains admitted images; shutdown abandons them for a later run.
+            let mut panic_error = None;
+            loop {
+                let result = tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        tasks.abort_all();
+                        break;
+                    },
+                    result = tasks.join_next() => result,
+                };
+                let Some(result) = result else { break };
+                match result {
+                    Ok((_, Ok(()))) => summary.processed += 1,
+                    Ok((task, Err(error))) => {
+                        warn!(title_id = %task.title_id, %error, "artwork image failed; deferring");
+                        skipped.push(task);
+                        summary.failed += 1;
                     }
-                    (task, false)
+                    Err(error) => {
+                        summary.failed += 1;
+                        panic_error = Some(error);
+                    }
                 }
             }
-        });
-    }
-
-    let mut succeeded = 0usize;
-    let mut failed = Vec::new();
-    let mut unknown_failures = 0usize;
-    while let Some(result) = join_set.join_next().await {
-        match result {
-            Ok((_, true)) => {
-                succeeded += 1;
-            }
-            Ok((task, false)) => {
-                failed.push(task);
-            }
-            Err(err) => {
-                warn!(error = %err, "image loop: task panicked");
-                unknown_failures += 1;
+            drop(maintenance);
+            self.artwork_progress(run, &summary).await?;
+            if let Some(error) = panic_error {
+                // Without a task identity we cannot safely exclude a panicking item and keep draining.
+                return Err(AppError::Repository(format!(
+                    "artwork worker task failed: {error}"
+                )));
             }
         }
+        self.artwork_progress(run, &summary).await?;
+        info!(processed = summary.processed, failed = summary.failed, workers, reason = %summary.reason, "artwork run settled");
+        Ok(summary)
     }
-
-    (succeeded, failed, unknown_failures)
 }
 
-async fn start_background_image_loop(app: AppUseCase, token: tokio_util::sync::CancellationToken) {
-    let poster_wake: Arc<Notify> = app.runtime.catalog.poster_wake.clone();
-    let fanart_wake: Arc<Notify> = app.runtime.catalog.fanart_wake.clone();
+pub async fn start_background_title_image_loop(app: AppUseCase, token: CancellationToken) {
+    // The job runner also serves manual requests. Both kinds observe this shutdown signal.
+    let shutdown = app.runtime.catalog.artwork_shutdown.clone();
+    let shutdown_watch = token.clone();
+    tokio::spawn(async move {
+        shutdown_watch.cancelled().await;
+        shutdown.cancel();
+    });
 
-    info!(
-        collect_window_ms = IMAGE_COLLECT_WINDOW.as_millis(),
-        max_batch = IMAGE_MAX_BATCH,
-        write_chunk_size = IMAGE_WRITE_CHUNK_SIZE,
-        shared_concurrent_workers = app
-            .runtime
-            .catalog
-            .image_processing_limit
-            .available_permits(),
-        "background title image loop started"
-    );
-
+    let mut pending_wake = true;
+    let mut consecutive_failures = 0;
+    let mut previous_open = false;
+    let mut previous_date: Option<NaiveDate> = None;
     loop {
-        tokio::select! {
-            _ = token.cancelled() => {
-                info!("background title image loop shutting down");
-                return;
-            }
-            _ = poster_wake.notified() => {}
-            _ = fanart_wake.notified() => {}
+        if token.is_cancelled() {
+            return;
         }
+        let now = app.runtime.environment.now().with_timezone(&Local);
+        let open = artwork_window_open(&now);
+        if open && (!previous_open || previous_date != Some(now.date_naive())) {
+            pending_wake = true;
+            consecutive_failures = 0;
+        }
+        previous_open = open;
+        previous_date = Some(now.date_naive());
 
-        let mut skipped_work = Vec::new();
-        'drain: loop {
-            if !wait_for_image_loop_to_resume(&app, &token).await {
-                return;
-            }
-
-            tokio::select! {
-                _ = token.cancelled() => return,
-                _ = tokio::time::sleep(IMAGE_COLLECT_WINDOW) => {}
-            }
-
-            if !wait_for_image_loop_to_resume(&app, &token).await {
-                return;
-            }
-
-            let (batch_len, succeeded, failed, unknown_failures) = {
-                let batch_result = {
-                    let _maintenance_guard = tokio::select! {
-                        _ = token.cancelled() => return,
-                        guard = app.runtime.catalog.title_image_maintenance_lock.read() => guard,
-                    };
-
-                    app.services
-                        .library
-                        .title_images
-                        .list_title_image_refresh_work(IMAGE_MAX_BATCH, &skipped_work)
-                        .await
-                };
-                let batch = match batch_result {
-                    Ok(batch) => batch,
-                    Err(error) => {
-                        warn!(error = %error, "image loop: failed to list pending image sync work");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                        continue 'drain;
-                    }
-                };
-
-                if batch.is_empty() {
-                    debug!("image loop: no pending work");
-                    break 'drain;
-                }
-
-                let batch_len = batch.len();
-                debug!(
-                    count = batch_len,
-                    target = %image_task_label(&batch[0]),
-                    "image loop: processing batch"
-                );
-
-                let mut succeeded = 0usize;
-                let mut failed = Vec::new();
-                let mut unknown_failures = 0usize;
-                for chunk in batch.chunks(IMAGE_WRITE_CHUNK_SIZE) {
-                    if !wait_for_image_loop_to_resume(&app, &token).await {
-                        return;
-                    }
-
-                    let _maintenance_guard = tokio::select! {
-                        _ = token.cancelled() => return,
-                        guard = app.runtime.catalog.title_image_maintenance_lock.read() => guard,
-                    };
-                    let (chunk_succeeded, mut chunk_failed, chunk_unknown_failures) =
-                        process_image_refresh_chunk(&app, chunk).await;
-                    succeeded += chunk_succeeded;
-                    failed.append(&mut chunk_failed);
-                    unknown_failures += chunk_unknown_failures;
-                }
-
-                let failed_count = failed.len() + unknown_failures;
-                debug!(
-                    processed = batch_len,
-                    succeeded,
-                    failed = failed_count,
-                    skipped_until_next_wake = failed.len(),
-                    target = %image_task_label(&batch[0]),
-                    "image loop: batch complete"
-                );
-
-                (batch_len, succeeded, failed, unknown_failures)
+        let active = app
+            .runtime
+            .jobs
+            .job_run_tracker
+            .has_active_job(JobKey::ArtworkEncoding)
+            .await;
+        if !active {
+            let reason = if !open {
+                "Waiting for the nightly window"
+            } else if !app
+                .runtime
+                .library
+                .library_scan_tracker
+                .list_active()
+                .await
+                .is_empty()
+            {
+                "Waiting for library scans"
+            } else {
+                "Waiting for pending artwork"
             };
-
-            if !failed.is_empty() || unknown_failures > 0 {
-                info!(
-                    processed = batch_len,
-                    succeeded,
-                    failed = failed.len() + unknown_failures,
-                    skipped_until_next_wake = failed.len(),
-                    unknown_failures,
-                    "image loop: some images failed, skipping failed work until next wake"
-                );
-                skipped_work.extend(failed);
+            *app.runtime.catalog.artwork_wait_reason.write().await = reason.into();
+            let next = next_artwork_window(&now, open && pending_wake);
+            if let Some(next) = next
+                && app
+                    .runtime
+                    .jobs
+                    .job_run_tracker
+                    .next_run_at(JobKey::ArtworkEncoding)
+                    .await
+                    != Some(next)
+            {
+                app.set_job_next_run_at(JobKey::ArtworkEncoding, next).await;
+            }
+            if open
+                && pending_wake
+                && app
+                    .runtime
+                    .library
+                    .library_scan_tracker
+                    .list_active()
+                    .await
+                    .is_empty()
+            {
+                pending_wake = false;
+                let result = match app
+                    .services
+                    .library
+                    .title_images
+                    .list_title_image_refresh_work(1, &[])
+                    .await
+                {
+                    Ok(batch) if !batch.is_empty() => {
+                        app.run_scheduled_job_now(
+                            JobKey::ArtworkEncoding,
+                            JobTriggerSource::ScheduledDaily,
+                        )
+                        .await
+                    }
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = result {
+                    consecutive_failures += 1;
+                    pending_wake = consecutive_failures < 3;
+                    warn!(%error, consecutive_failures, retrying = pending_wake, "scheduled artwork attempt failed");
+                    *app.runtime.catalog.artwork_wait_reason.write().await = if pending_wake {
+                        "Waiting one minute to retry after an artwork job error"
+                    } else {
+                        "Waiting for the next window or artwork wake after repeated job errors"
+                    }
+                    .into();
+                    // Keep transient failures retryable without spinning on a broken repository.
+                    // Every retry returns through the wall-clock, scan, and shutdown gates.
+                    tokio::select! {
+                        _ = token.cancelled() => return,
+                        _ = tokio::time::sleep(SCHEDULE_POLL) => {},
+                    }
+                } else {
+                    consecutive_failures = 0;
+                }
+                continue;
             }
         }
+        tokio::select! {
+            _ = token.cancelled() => return,
+            _ = app.runtime.catalog.poster_wake.notified() => pending_wake = true,
+            _ = app.runtime.catalog.fanart_wake.notified() => pending_wake = true,
+            _ = tokio::time::sleep(SCHEDULE_POLL) => {},
+        }
+    }
+}
 
-        debug!(
-            skipped_until_next_wake = skipped_work.len(),
-            "image loop: queue drained, parking"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::FixedOffset;
+
+    #[test]
+    fn window_boundaries_and_next_day_follow_local_wall_clock() {
+        let zone = FixedOffset::west_opt(6 * 3600).unwrap();
+        for (hour, minute, open) in [(2, 59, false), (3, 0, true), (8, 59, true), (9, 0, false)] {
+            let now = zone.with_ymd_and_hms(2026, 9, 7, hour, minute, 0).unwrap();
+            assert_eq!(artwork_window_open(&now), open);
+            let next = next_artwork_window(&now, true)
+                .unwrap()
+                .with_timezone(&zone);
+            if open {
+                assert_eq!(next, now);
+            } else {
+                assert_eq!(next.hour(), 3);
+                assert_eq!(
+                    next.date_naive(),
+                    now.date_naive() + chrono::Duration::days(i64::from(hour >= 9))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slow_or_fast_cpu_selects_the_run_budget() {
+        assert_eq!(artwork_workers(RuntimePerformanceClass::Slow), 2);
+        assert_eq!(artwork_workers(RuntimePerformanceClass::Fast), 4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artwork_local_calendar_handles_dst_without_mutating_parent_timezone() {
+        const CHILD: &str = "SCRYER_ARTWORK_DST_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "catalog::title_images::tests::artwork_local_calendar_handles_dst_without_mutating_parent_timezone", "--nocapture"])
+                .env(CHILD, "1")
+                .env("TZ", "Europe/Helsinki")
+                .output().unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        // Helsinki skips 03:00 in spring and repeats it in autumn.
+        let before_gap = Local.with_ymd_and_hms(2026, 3, 29, 2, 59, 0).unwrap();
+        let opening = next_artwork_window(&before_gap, true)
+            .unwrap()
+            .with_timezone(&Local);
+        assert_eq!(opening.hour(), 4);
+        assert!(artwork_window_open(&opening));
+        let next_day = next_artwork_window(&opening, false)
+            .unwrap()
+            .with_timezone(&Local);
+        assert_eq!(next_day.hour(), 3);
+        assert_eq!(
+            next_day.date_naive(),
+            opening.date_naive().succ_opt().unwrap()
         );
+
+        let repeated = Local.with_ymd_and_hms(2026, 10, 25, 3, 30, 0);
+        let first = repeated.earliest().unwrap();
+        let second = repeated.latest().unwrap();
+        assert_ne!(first.offset(), second.offset());
+        assert!(artwork_window_open(&first));
+        assert!(artwork_window_open(&second));
+        let at_end = Local.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap();
+        assert!(!artwork_window_open(&at_end));
     }
 }

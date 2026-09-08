@@ -136,6 +136,29 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     };
   }, [client, setGlobalStatus]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refreshSchedule = async () => {
+      const { data, error } = await client
+        .query(jobsQuery, {}, { requestPolicy: "network-only" })
+        .toPromise();
+      if (cancelled || error) return;
+      setJobs(
+        ((Array.isArray(data?.jobs) ? data.jobs : []) as unknown[])
+          .map(normalizeJobDefinition)
+          .filter((job): job is JobDefinition => job !== null),
+      );
+    };
+    // Host time and the next nightly window can change without a job event.
+    const timer = window.setInterval(refreshSchedule, 60_000);
+    window.addEventListener("focus", refreshSchedule);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshSchedule);
+    };
+  }, [client]);
+
   useDeferredWsSubscription<{ data?: { jobRunEvents?: unknown } }>({
     requestKey: "jobRunEvents.jobsPage",
     request: { query: jobRunEventsSubscription },

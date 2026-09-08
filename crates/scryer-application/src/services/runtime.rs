@@ -58,7 +58,9 @@ pub struct AppRuntimeCatalogState {
     pub(crate) title_recommendation_refresh_queue:
         Arc<tokio::sync::Mutex<crate::catalog_workflow::TitleRecommendationRefreshQueue>>,
     pub(crate) title_recommendation_refresh_wake: Arc<tokio::sync::Notify>,
-    pub image_processing_limit: Arc<Semaphore>,
+    pub(crate) artwork_job_start_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) artwork_shutdown: tokio_util::sync::CancellationToken,
+    pub(crate) artwork_wait_reason: Arc<tokio::sync::RwLock<String>>,
     pub title_image_maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub title_image_cache_clear_scheduled: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) media_request_enrichment: MediaRequestEnrichmentCache,
@@ -2104,7 +2106,11 @@ impl AppRuntimeState {
                     crate::catalog_workflow::TitleRecommendationRefreshQueue::default(),
                 )),
                 title_recommendation_refresh_wake: Arc::new(tokio::sync::Notify::new()),
-                image_processing_limit: Arc::new(Semaphore::new(4)),
+                artwork_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                artwork_shutdown: tokio_util::sync::CancellationToken::new(),
+                artwork_wait_reason: Arc::new(tokio::sync::RwLock::new(
+                    "Waiting for the nightly window".to_string(),
+                )),
                 title_image_maintenance_lock: Arc::new(tokio::sync::RwLock::new(())),
                 title_image_cache_clear_scheduled: Arc::new(std::sync::atomic::AtomicBool::new(
                     false,

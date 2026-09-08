@@ -1,4 +1,5 @@
 use super::*;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn clear_title_image_cache_collapses_duplicate_requests_and_waits_for_scans() {
@@ -91,6 +92,8 @@ impl ImageProxyCacheControl for RecordingImageProxyCacheControl {
 
 struct ChunkedTitleImageRepo {
     pending: Mutex<Vec<TitleImageSyncTask>>,
+    list_failures: AtomicUsize,
+    list_calls: AtomicUsize,
 }
 
 impl ChunkedTitleImageRepo {
@@ -106,6 +109,8 @@ impl ChunkedTitleImageRepo {
                     })
                     .collect(),
             ),
+            list_failures: AtomicUsize::new(0),
+            list_calls: AtomicUsize::new(0),
         }
     }
 
@@ -119,13 +124,32 @@ impl TitleImageRepository for ChunkedTitleImageRepo {
     async fn list_title_image_refresh_work(
         &self,
         limit: usize,
-        _skipped: &[TitleImageSyncTask],
+        skipped: &[TitleImageSyncTask],
     ) -> AppResult<Vec<TitleImageSyncTask>> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
+        if self
+            .list_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(AppError::Repository(
+                "temporary artwork lookup failure".into(),
+            ));
+        }
         Ok(self
             .pending
             .lock()
             .await
             .iter()
+            .filter(|task| {
+                !skipped.iter().any(|skip| {
+                    skip.title_id == task.title_id
+                        && skip.kind == task.kind
+                        && skip.source_url == task.source_url
+                })
+            })
             .take(limit)
             .cloned()
             .collect())
@@ -183,7 +207,7 @@ impl TitleImageProcessor for ChunkGatedTitleImageProcessor {
         source_url: &str,
         _variants: Vec<TitleImageVariantSpec>,
     ) -> AppResult<TitleImageSourceResult> {
-        const CHUNK_SIZE: usize = 8;
+        const CHUNK_SIZE: usize = 4;
 
         let index = self.started.fetch_add(1, Ordering::SeqCst);
         let gate = if index < CHUNK_SIZE {
@@ -224,8 +248,8 @@ async fn wait_for_image_processor_starts(
 }
 
 #[tokio::test]
-async fn background_image_loop_yields_maintenance_lock_between_eight_item_chunks() {
-    const CHUNK_SIZE: usize = 8;
+async fn artwork_job_yields_maintenance_lock_between_bounded_groups() {
+    const CHUNK_SIZE: usize = 4;
 
     let (app, _) = bootstrap_with_user_repo(Arc::new(MockUserRepo::default()));
     let title_images = Arc::new(ChunkedTitleImageRepo::new(CHUNK_SIZE * 2));
@@ -234,15 +258,21 @@ async fn background_image_loop_yields_maintenance_lock_between_eight_item_chunks
         services
             .with_title_images(title_images.clone())
             .with_title_image_processor(processor.clone())
+            .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
     });
     let cancellation = tokio_util::sync::CancellationToken::new();
-    let image_loop = tokio::spawn(
-        crate::catalog::title_images::start_background_title_image_loop(
-            app.clone(),
-            cancellation.clone(),
-        ),
-    );
-    app.runtime.catalog.poster_wake.notify_one();
+    let task_app = app.clone();
+    let task_token = cancellation.clone();
+    let image_loop = tokio::spawn(async move {
+        task_app
+            .run_artwork_encoding_with_workers(
+                &artwork_test_run(JobTriggerSource::Manual),
+                4,
+                &task_token,
+                &chrono::Local::now,
+            )
+            .await
+    });
     wait_for_image_processor_starts(&processor, 4).await;
 
     let writer_acquired = Arc::new(Notify::new());
@@ -283,5 +313,524 @@ async fn background_image_loop_yields_maintenance_lock_between_eight_item_chunks
     timeout(Duration::from_secs(5), image_loop)
         .await
         .expect("image loop should stop after cancellation")
-        .expect("image loop task should not panic");
+        .expect("image loop task should not panic")
+        .expect("artwork job should succeed");
+}
+
+fn artwork_test_run(trigger_source: JobTriggerSource) -> JobRunRecord {
+    let now = Utc::now();
+    JobRunRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        job_key: JobKey::ArtworkEncoding,
+        operation_type: "artwork_encoding".into(),
+        trigger_source,
+        actor_user_id: None,
+        status: JobRunStatus::Running,
+        progress_json: None,
+        summary_json: None,
+        summary_text: None,
+        error_text: None,
+        started_at: now,
+        completed_at: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn artwork_local_time(hour: u32, minute: u32) -> chrono::DateTime<Utc> {
+    use chrono::TimeZone;
+    chrono::Local
+        .with_ymd_and_hms(2026, 9, 7, hour, minute, 0)
+        .earliest()
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+#[tokio::test]
+async fn artwork_cutoff_finishes_admitted_images_and_resumes_pending_work() {
+    for workers in [2, 4] {
+        let (app, _) = bootstrap();
+        let images = Arc::new(ChunkedTitleImageRepo::new(8));
+        let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_title_images(images.clone())
+                .with_title_image_processor(processor.clone())
+                .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+        });
+        app.runtime
+            .environment
+            .set_fixed_now_for_tests(Some(artwork_local_time(8, 59)));
+        let task_app = app.clone();
+        let task = tokio::spawn(async move {
+            task_app
+                .run_artwork_encoding_with_workers(
+                    &artwork_test_run(JobTriggerSource::ScheduledDaily),
+                    workers,
+                    &CancellationToken::new(),
+                    &|| {
+                        task_app
+                            .runtime
+                            .environment
+                            .now()
+                            .with_timezone(&chrono::Local)
+                    },
+                )
+                .await
+                .unwrap()
+        });
+        wait_for_image_processor_starts(&processor, workers).await;
+        sleep(Duration::from_millis(25)).await;
+        assert_eq!(processor.started.load(Ordering::SeqCst), workers);
+        app.runtime
+            .environment
+            .set_fixed_now_for_tests(Some(artwork_local_time(9, 0)));
+        processor.first_chunk_gate.add_permits(4);
+        let summary = timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.processed, workers);
+        assert_eq!(images.pending_count().await, 8 - workers);
+        assert!(summary.reason.contains("nightly"));
+
+        app.runtime
+            .environment
+            .set_fixed_now_for_tests(Some(artwork_local_time(4, 0) + chrono::Duration::days(1)));
+        processor.first_chunk_gate.add_permits(4);
+        processor.second_chunk_gate.add_permits(4);
+        let summary = app
+            .run_artwork_encoding_with_workers(
+                &artwork_test_run(JobTriggerSource::ScheduledDaily),
+                workers,
+                &CancellationToken::new(),
+                &|| app.runtime.environment.now().with_timezone(&chrono::Local),
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary.processed, 8 - workers);
+        assert_eq!(processor.started.load(Ordering::SeqCst), 8);
+        assert_eq!(images.pending_count().await, 0);
+    }
+}
+
+#[tokio::test]
+async fn artwork_manual_and_scheduled_triggers_share_one_run_even_at_noon() {
+    let (app, admin) = bootstrap();
+    let images = Arc::new(ChunkedTitleImageRepo::new(8));
+    let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+    let jobs = Arc::new(RecordingJobRunRepo::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_title_images(images.clone())
+            .with_title_image_processor(processor.clone())
+            .with_job_runs(jobs.clone())
+    });
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(artwork_local_time(12, 0)));
+    let (first, second) = tokio::join!(
+        app.trigger_job(&admin, JobKey::ArtworkEncoding),
+        app.trigger_job(&admin, JobKey::ArtworkEncoding),
+    );
+    assert_eq!(first.unwrap().id, second.unwrap().id);
+    app.run_scheduled_job_now(JobKey::ArtworkEncoding, JobTriggerSource::ScheduledDaily)
+        .await
+        .unwrap();
+    wait_for_image_processor_starts(&processor, 2).await;
+    assert_eq!(jobs.runs.lock().await.len(), 1);
+    processor.first_chunk_gate.add_permits(4);
+    processor.second_chunk_gate.add_permits(4);
+    timeout(Duration::from_secs(5), async {
+        while app
+            .runtime
+            .jobs
+            .job_run_tracker
+            .has_active_job(JobKey::ArtworkEncoding)
+            .await
+        {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(images.pending_count().await, 0);
+    let records = jobs.runs.lock().await;
+    assert_eq!(records[0].status, JobRunStatus::Completed);
+}
+
+#[tokio::test]
+async fn artwork_scheduler_does_not_turn_daytime_wakeups_into_encoding() {
+    let (app, _) = bootstrap();
+    let images = Arc::new(ChunkedTitleImageRepo::new(8));
+    let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+    let jobs = Arc::new(RecordingJobRunRepo::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_title_images(images)
+            .with_title_image_processor(processor.clone())
+            .with_job_runs(jobs.clone())
+    });
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(artwork_local_time(12, 0)));
+    let token = CancellationToken::new();
+    let worker = tokio::spawn(
+        crate::catalog::title_images::start_background_title_image_loop(app.clone(), token.clone()),
+    );
+    app.runtime.catalog.poster_wake.notify_one();
+    app.runtime.catalog.fanart_wake.notify_one();
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(processor.started.load(Ordering::SeqCst), 0);
+    assert!(jobs.runs.lock().await.is_empty());
+    let next = app
+        .runtime
+        .jobs
+        .job_run_tracker
+        .next_run_at(JobKey::ArtworkEncoding)
+        .await
+        .unwrap();
+    assert_eq!(next, artwork_local_time(3, 0) + chrono::Duration::days(1));
+    token.cancel();
+    worker.await.unwrap();
+}
+
+#[tokio::test]
+async fn artwork_scheduler_retries_transient_errors_without_bypassing_cutoff() {
+    for cutoff in [false, true] {
+        let (app, _) = bootstrap();
+        let images = Arc::new(ChunkedTitleImageRepo::new(8));
+        images.list_failures.store(1, Ordering::SeqCst);
+        let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_title_images(images.clone())
+                .with_title_image_processor(processor.clone())
+                .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+        });
+        app.runtime
+            .environment
+            .set_fixed_now_for_tests(Some(artwork_local_time(8, 59)));
+        tokio::time::pause();
+        let token = CancellationToken::new();
+        let worker = tokio::spawn(
+            crate::catalog::title_images::start_background_title_image_loop(
+                app.clone(),
+                token.clone(),
+            ),
+        );
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(images.list_calls.load(Ordering::SeqCst), 1);
+        tokio::time::advance(Duration::from_secs(59)).await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            images.list_calls.load(Ordering::SeqCst),
+            1,
+            "retry must back off"
+        );
+        if cutoff {
+            app.runtime
+                .environment
+                .set_fixed_now_for_tests(Some(artwork_local_time(9, 0)));
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::resume();
+        if cutoff {
+            assert_eq!(images.list_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(processor.started.load(Ordering::SeqCst), 0);
+        } else {
+            wait_for_image_processor_starts(&processor, 2).await;
+            assert!(
+                images.list_calls.load(Ordering::SeqCst) >= 3,
+                "retry should inspect backlog and start the job without another wake"
+            );
+        }
+        token.cancel();
+        timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn artwork_scheduler_bounds_retries_of_persistent_repository_errors() {
+    let (app, _) = bootstrap();
+    let images = Arc::new(ChunkedTitleImageRepo::new(8));
+    images.list_failures.store(100, Ordering::SeqCst);
+    let app = app.with_test_overrides(|services| services.with_title_images(images.clone()));
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(artwork_local_time(4, 0)));
+    let token = CancellationToken::new();
+    let worker = tokio::spawn(
+        crate::catalog::title_images::start_background_title_image_loop(app.clone(), token.clone()),
+    );
+    for attempt in 1..=3 {
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(images.list_calls.load(Ordering::SeqCst), attempt);
+        tokio::time::advance(Duration::from_secs(60)).await;
+    }
+    tokio::time::advance(Duration::from_secs(600)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(images.list_calls.load(Ordering::SeqCst), 3);
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(artwork_local_time(4, 0) + chrono::Duration::days(1)));
+    app.runtime.catalog.poster_wake.notify_one();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        images.list_calls.load(Ordering::SeqCst),
+        4,
+        "the next local day gets another attempt"
+    );
+    token.cancel();
+    worker.await.unwrap();
+}
+
+#[tokio::test]
+async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_abandons_active_images() {
+    for shutdown in [false, true] {
+        let (app, _) = bootstrap();
+        let images = Arc::new(ChunkedTitleImageRepo::new(8));
+        let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_title_images(images.clone())
+                .with_title_image_processor(processor.clone())
+                .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+        });
+        app.runtime
+            .environment
+            .set_fixed_now_for_tests(Some(artwork_local_time(8, 59)));
+        let token = CancellationToken::new();
+        let task_token = token.clone();
+        let task_app = app.clone();
+        let task = tokio::spawn(async move {
+            task_app
+                .run_artwork_encoding_with_workers(
+                    &artwork_test_run(JobTriggerSource::ScheduledDaily),
+                    2,
+                    &task_token,
+                    &|| {
+                        task_app
+                            .runtime
+                            .environment
+                            .now()
+                            .with_timezone(&chrono::Local)
+                    },
+                )
+                .await
+                .unwrap()
+        });
+        wait_for_image_processor_starts(&processor, 2).await;
+        let scan = app
+            .runtime
+            .library
+            .library_scan_tracker
+            .start_session(MediaFacet::Movie)
+            .await
+            .unwrap();
+        if shutdown {
+            token.cancel();
+        } else {
+            processor.first_chunk_gate.add_permits(4);
+            sleep(Duration::from_millis(50)).await;
+            assert_eq!(processor.started.load(Ordering::SeqCst), 2);
+            app.runtime
+                .environment
+                .set_fixed_now_for_tests(Some(artwork_local_time(9, 0)));
+        }
+        app.runtime
+            .library
+            .library_scan_tracker
+            .fail_session(&scan.session_id)
+            .await
+            .unwrap();
+        let summary = timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.processed, if shutdown { 0 } else { 2 });
+        assert_eq!(images.pending_count().await, if shutdown { 8 } else { 6 });
+        assert_eq!(processor.started.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[tokio::test]
+async fn artwork_scheduler_starts_inside_window_and_after_a_sleep_or_clock_jump() {
+    for initially_open in [false, true] {
+        let (app, _) = bootstrap();
+        let images = Arc::new(ChunkedTitleImageRepo::new(8));
+        let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_title_images(images.clone())
+                .with_title_image_processor(processor.clone())
+                .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+        });
+        app.runtime
+            .environment
+            .set_fixed_now_for_tests(Some(artwork_local_time(
+                if initially_open { 4 } else { 12 },
+                0,
+            )));
+        let token = CancellationToken::new();
+        let worker = tokio::spawn(
+            crate::catalog::title_images::start_background_title_image_loop(
+                app.clone(),
+                token.clone(),
+            ),
+        );
+        if !initially_open {
+            sleep(Duration::from_millis(50)).await;
+            assert_eq!(processor.started.load(Ordering::SeqCst), 0);
+            app.runtime.environment.set_fixed_now_for_tests(Some(
+                artwork_local_time(4, 0) + chrono::Duration::days(1),
+            ));
+            app.runtime.catalog.poster_wake.notify_one();
+        }
+        wait_for_image_processor_starts(&processor, 2).await;
+        sleep(Duration::from_millis(25)).await;
+        let admitted = processor.started.load(Ordering::SeqCst);
+        assert!(matches!(admitted, 2 | 4));
+        token.cancel();
+        app.runtime.catalog.artwork_shutdown.cancelled().await;
+        timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(processor.started.load(Ordering::SeqCst), admitted);
+        assert_eq!(images.pending_count().await, 8);
+    }
+}
+
+#[tokio::test]
+async fn artwork_shutdown_abandons_in_flight_images_and_closes_future_admission() {
+    let (app, admin) = bootstrap();
+    let images = Arc::new(ChunkedTitleImageRepo::new(8));
+    let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_title_images(images.clone())
+            .with_title_image_processor(processor.clone())
+            .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+    });
+    app.trigger_job(&admin, JobKey::ArtworkEncoding)
+        .await
+        .unwrap();
+    wait_for_image_processor_starts(&processor, 2).await;
+    app.runtime.catalog.artwork_shutdown.cancel();
+    let admitted = processor.started.load(Ordering::SeqCst);
+    timeout(Duration::from_secs(5), async {
+        while app
+            .runtime
+            .jobs
+            .job_run_tracker
+            .has_active_job(JobKey::ArtworkEncoding)
+            .await
+        {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The processor gates stay closed: shutdown must not wait for encoding.
+    assert_eq!(images.pending_count().await, 8);
+    assert!(
+        app.trigger_job(&admin, JobKey::ArtworkEncoding)
+            .await
+            .is_err()
+    );
+    app.run_scheduled_job_now(JobKey::ArtworkEncoding, JobTriggerSource::ScheduledDaily)
+        .await
+        .unwrap();
+    assert_eq!(processor.started.load(Ordering::SeqCst), admitted);
+}
+
+struct FailingArtworkProcessor {
+    startup_error: bool,
+    attempts: AtomicUsize,
+}
+
+#[async_trait]
+impl TitleImageProcessor for FailingArtworkProcessor {
+    async fn configure_encoding_workers(&self, _: usize) -> AppResult<()> {
+        if self.startup_error {
+            Err(AppError::Repository("worker priority setup failed".into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn fetch_and_process_image(
+        &self,
+        _: TitleImageKind,
+        _: &str,
+        _: Vec<TitleImageVariantSpec>,
+    ) -> AppResult<TitleImageSourceResult> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        Err(AppError::Repository("unavailable artwork".into()))
+    }
+}
+
+#[tokio::test]
+async fn artwork_failures_remain_pending_and_priority_failure_never_starts_images() {
+    for startup_error in [false, true] {
+        let (app, admin) = bootstrap();
+        let images = Arc::new(ChunkedTitleImageRepo::new(8));
+        let processor = Arc::new(FailingArtworkProcessor {
+            startup_error,
+            attempts: AtomicUsize::new(0),
+        });
+        let jobs = Arc::new(RecordingJobRunRepo::default());
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_title_images(images.clone())
+                .with_title_image_processor(processor.clone())
+                .with_job_runs(jobs.clone())
+        });
+        app.trigger_job(&admin, JobKey::ArtworkEncoding)
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(5), async {
+            while app
+                .runtime
+                .jobs
+                .job_run_tracker
+                .has_active_job(JobKey::ArtworkEncoding)
+                .await
+            {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(images.pending_count().await, 8);
+        assert_eq!(
+            processor.attempts.load(Ordering::SeqCst),
+            if startup_error { 0 } else { 8 }
+        );
+        assert_eq!(
+            jobs.runs.lock().await[0].status,
+            if startup_error {
+                JobRunStatus::Failed
+            } else {
+                JobRunStatus::Warning
+            }
+        );
+    }
 }

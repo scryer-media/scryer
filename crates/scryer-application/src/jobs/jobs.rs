@@ -738,7 +738,23 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let next_runs = self.runtime.jobs.job_run_tracker.all_next_runs().await;
-        Ok(crate::jobs::all_job_definitions(&next_runs))
+        let mut definitions = crate::jobs::all_job_definitions(&next_runs);
+        if let Some(job) = definitions
+            .iter_mut()
+            .find(|job| job.key == JobKey::ArtworkEncoding)
+        {
+            let now = self.runtime.environment.now().with_timezone(&chrono::Local);
+            job.schedule.description = format!(
+                "Daily 03:00–09:00 host local time; host now {} (UTC{})",
+                now.format("%Y-%m-%d %H:%M"),
+                now.format("%:z")
+            );
+            job.description = format!(
+                "Encode pending artwork. Run now overrides the nightly window. {}.",
+                self.runtime.catalog.artwork_wait_reason.read().await,
+            );
+        }
+        Ok(definitions)
     }
 
     async fn actor_can_view_interactive_job_run(
@@ -1013,6 +1029,26 @@ impl AppUseCase {
     pub async fn trigger_job(&self, actor: &User, job_key: JobKey) -> AppResult<JobRun> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        let artwork_start = if job_key == JobKey::ArtworkEncoding {
+            let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
+            if self.runtime.catalog.artwork_shutdown.is_cancelled() {
+                return Err(AppError::Validation(
+                    "Artwork encoding is shutting down".into(),
+                ));
+            }
+            if let Some(active) = self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .active_run_for_job(job_key)
+                .await
+            {
+                return Ok(active);
+            }
+            Some(guard)
+        } else {
+            None
+        };
         if !job_key.manual_trigger_allowed() {
             return Err(AppError::Validation(format!(
                 "{} can only run on its configured schedule",
@@ -1036,6 +1072,7 @@ impl AppUseCase {
             .upsert_active_run(run_payload.clone())
             .await;
         let event_actor = DomainEventActor::from(actor);
+        drop(artwork_start);
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 event_actor.clone(),
@@ -1072,6 +1109,24 @@ impl AppUseCase {
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
+        let artwork_start = if job_key == JobKey::ArtworkEncoding {
+            let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
+            if self.runtime.catalog.artwork_shutdown.is_cancelled() {
+                return Ok(());
+            }
+            if self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .has_active_job(job_key)
+                .await
+            {
+                return Ok(());
+            }
+            Some(guard)
+        } else {
+            None
+        };
         if is_background_library_refresh_job(job_key) {
             return self
                 .run_scheduled_background_library_refresh_jobs_now(job_key, trigger_source)
@@ -1088,6 +1143,7 @@ impl AppUseCase {
             .job_run_tracker
             .upsert_active_run(run_payload)
             .await;
+        drop(artwork_start);
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 None,
@@ -1727,6 +1783,17 @@ impl AppUseCase {
                 ))
             }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
+            JobKey::ArtworkEncoding => {
+                let summary = self.run_artwork_encoding(run).await?;
+                let mut outcome = JobExecutionOutcome::new(
+                    Some(summary.text()),
+                    serde_json::to_string(&summary).ok(),
+                );
+                if summary.failed > 0 {
+                    outcome.status_override = Some(JobRunStatus::Warning);
+                }
+                Ok(outcome)
+            }
             JobKey::TitleImageCacheRefresh => {
                 let summary = self.run_title_image_cache_refresh().await?;
                 Ok(JobExecutionOutcome::new(
