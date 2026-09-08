@@ -1237,6 +1237,7 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
       scoringLog {
         code
         delta
+        kind
         source
         ruleSetName
       }

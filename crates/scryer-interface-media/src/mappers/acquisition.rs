@@ -193,6 +193,7 @@ pub fn from_quality_profile_decision(
                 ScoringEntryPayload {
                     code: e.code,
                     delta: e.delta,
+                    kind: e.kind.as_str().to_string(),
                     source,
                     rule_set_name,
                 }

@@ -335,6 +335,7 @@ impl RulesMutations {
                             code: entry.code,
                             delta: entry.delta,
                             blocked: entry.blocked,
+                            kind: entry.kind.as_str().to_string(),
                         })
                         .collect(),
                     messages: rule_set.messages,

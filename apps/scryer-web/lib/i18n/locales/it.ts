@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const it: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Requisito obbligatorio non soddisfatto",
+  "scoring.finalScoreRejection": "Punteggio finale rifiutato",
+  "settings.refFnBlockScore": "Restituisce -10000 come penalità compensabile da altri punteggi",
+  "settings.arrImportBlockScoreHelp": "Il punteggio totale deve superare -9000 e raggiungere il minimo del profilo. I requisiti obbligatori restano validi.",
   "label.ready": "Pronto",
   "label.moreInfo": "Altre informazioni",
   "label.search": "Ricerca",

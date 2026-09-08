@@ -360,6 +360,7 @@ mod tests {
                 code: "quality_tier_0".to_string(),
                 delta: 1200,
                 source: ScoringSource::Builtin,
+                kind: crate::quality_profile::ScoringEntryKind::ScoreContribution,
             }],
             allowed: true,
             block_codes: vec![],

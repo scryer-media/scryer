@@ -2346,6 +2346,7 @@ export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInpu
         code
         delta
         blocked
+        kind
       }
       messages
     }

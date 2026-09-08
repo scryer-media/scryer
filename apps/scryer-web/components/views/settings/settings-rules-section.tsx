@@ -304,7 +304,8 @@ import rego.v1
 
 # Return a map of score codes to point deltas.
 # Positive values boost the release, negative values penalize it.
-# Use scryer.block_score() to hard-block a release.
+# scryer.block_score() contributes -10000; other rules can offset it.
+# Mandatory profile requirements still apply.
 
 score_entry["dual_audio_bonus"] := 500 if {
     input.release.is_dual_audio

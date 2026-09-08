@@ -54,13 +54,15 @@ fn corpus_decision(raw: &str, category: Option<&str>) -> QualityProfileDecision 
         &profile.criteria.scoring_overrides,
         category,
     );
-    evaluate_against_profile_for_category(
+    let mut decision = evaluate_against_profile_for_category(
         &profile,
         &parse_release_metadata(raw),
         false,
         &weights,
         category,
-    )
+    );
+    crate::quality_profile::apply_min_score_gate(&profile, &mut decision);
+    decision
 }
 
 fn scoring_log(decision: &QualityProfileDecision) -> Vec<(String, i32)> {
@@ -191,6 +193,7 @@ fn evaluate_locale_pack(
         );
     }
     entries.sort();
+    crate::quality_profile::apply_min_score_gate(&profile, &mut decision);
     (entries, decision)
 }
 
@@ -481,8 +484,7 @@ fn french_vf_ranks_a_tiered_multi_release_above_an_untiered_one() {
     );
 }
 
-/// `language-not-french` is a veto under `french-multi-vf`, which
-/// is the whole point of the "I want French audio" pack.
+/// An uncompensated language penalty crosses the final score threshold.
 #[test]
 fn french_vf_vetoes_a_release_with_no_french_audio() {
     let english_only = LocaleCase {
@@ -502,7 +504,7 @@ fn french_vf_vetoes_a_release_with_no_french_audio() {
         decision
             .block_codes
             .iter()
-            .any(|code| code == "trash_lang_not_french")
+            .any(|code| code == "score_at_or_below_block_threshold")
     );
 }
 

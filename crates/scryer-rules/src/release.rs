@@ -49,23 +49,21 @@ pub struct UserPolicy {
     pub applied_facets: Vec<String>,
 }
 
-/// Score delta at or below this value is treated as a hard block.
-/// Matches `scryer.block_score()` builtin which returns -10000.
+/// A completed release total at or below this value is rejected by score.
+/// Individual deltas are never rejection signals.
 pub const BLOCK_SCORE_THRESHOLD: i32 = -9000;
 
-/// The veto sentinel itself, as returned by the `scryer.block_score()` builtin
-/// and as upstream TRaSH Guides spells its own vetoes.
+/// Strong recoverable penalty returned by `scryer.block_score()`.
 pub const BLOCK_SCORE: i32 = -10000;
 
 /// Managed policies rank within this band. The bounds match the ceiling the
 /// normalized TRaSH scores are compressed into, so a pack can express its full
-/// range without reaching the veto sentinel by accident.
+/// range without emitting the strong penalty by accident.
 pub const MANAGED_POLICY_MIN_SCORE: i32 = -1000;
 pub const MANAGED_POLICY_MAX_SCORE: i32 = 1000;
 
-/// Ranking entries from one managed policy sum within this band. Vetoes are
-/// excluded: a veto is decisive on its own, so aggregating it with rankings
-/// would compare two different currencies.
+/// Legacy managed-policy validation bounds. Packs using the strong penalty
+/// retain their existing aggregate exemption; this is not release eligibility.
 pub const MANAGED_POLICY_MIN_AGGREGATE_SCORE: i64 = -3000;
 pub const MANAGED_POLICY_MAX_AGGREGATE_SCORE: i64 = 3000;
 
@@ -234,7 +232,9 @@ pub struct ContextDoc {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuiltinScoreDoc {
+    /// Built-in numeric subtotal, including every penalty, before rules run.
     pub total: i32,
+    /// Mandatory built-in failures only; no provisional score threshold.
     pub blocked: bool,
     pub codes: Vec<String>,
 }
@@ -603,7 +603,7 @@ impl UserRulesEvaluator {
 
 /// Enforce the managed-policy score contract at evaluation time.
 ///
-/// Managed packs are opt-in, so a pack the user enabled may veto.
+/// Managed packs may emit a strong recoverable penalty.
 /// A managed entry is therefore either a ranking inside
 /// `[MANAGED_POLICY_MIN_SCORE, MANAGED_POLICY_MAX_SCORE]` or exactly the veto
 /// sentinel. Nothing lives in between: a value below the ranking band but above
@@ -623,8 +623,8 @@ fn validate_managed_entries(entries: &[UserRuleEntry]) -> Result<(), String> {
         ));
     }
 
-    // A veto decides the release on its own, so there is no ranking total left
-    // to bound.
+    // Preserve the legacy validation exemption for strong-penalty packs.
+    // Every accepted entry still contributes to the finalized release score.
     if entries.iter().any(|entry| is_veto(entry.delta)) {
         return Ok(());
     }
@@ -847,8 +847,7 @@ mod tests {
         assert_eq!(result.entries[0].origin, PolicyOrigin::System);
     }
 
-    /// An opt-in managed pack may veto, and the builtin is the
-    /// canonical spelling of that veto.
+    /// An opt-in managed pack may emit the standard recoverable penalty.
     #[test]
     fn managed_rule_accepts_block_builtin_source() {
         let policy = UserPolicy {

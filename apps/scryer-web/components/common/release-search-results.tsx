@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
+import { scoringEntryText } from "@/lib/utils/release-decision-explanation";
 import { releaseCoversMultipleEpisodes } from "@/lib/utils/release-queue-scope";
 import {
   releaseSearchResultQueueAdditionalId,
@@ -135,13 +136,12 @@ function ScoringLogPanel({
               </span>
               <span
                 className={
-                  entry.delta < 0
+                  entry.delta < 0 || entry.kind === "mandatory_rejection" || entry.kind === "final_score_rejection"
                     ? "text-[var(--scry-danger-text-soft)]"
                     : "text-[var(--scry-success-text-soft)]"
                 }
               >
-                {entry.delta > 0 ? "+" : ""}
-                {entry.delta}
+                {scoringEntryText(entry, t)}
               </span>
             </div>
           );

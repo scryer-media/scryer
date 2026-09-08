@@ -98,6 +98,6 @@ test("size conversion preserves unknown values and rejects unsafe bytes", () => 
 
 test("preview operation asks for structured evaluation errors", () => {
   assert.match(testRuleSetMutation, /errors \{\s+code\s+message\s+ruleSetId\s+\}/);
-  assert.match(testRuleSetMutation, /entries \{\s+code\s+delta\s+blocked\s+\}/);
+  assert.match(testRuleSetMutation, /entries \{\s+code\s+delta\s+blocked\s+kind\s+\}/);
   assert.match(testRuleSetMutation, /releaseGroup[\s\S]*videoCodec[\s\S]*audioLanguages/);
 });
