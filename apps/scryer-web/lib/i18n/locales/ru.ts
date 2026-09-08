@@ -1086,7 +1086,6 @@ const ru: LocaleDictionary = {
 
     "theme.light": "Светлая",
     "theme.dark": "Тёмная",
-    "theme.pride": "Прайд",
     "theme.system": "Системная",
     "theme.switchLabel": "Сменить тему (текущая: {{theme}})",
 

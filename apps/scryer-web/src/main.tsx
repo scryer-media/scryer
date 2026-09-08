@@ -4,7 +4,7 @@ import { RouterProvider } from "react-router/dom";
 import { Provider as UrqlProvider } from "urql";
 import { ThemeProvider } from "next-themes";
 import { backendClient } from "@/lib/graphql/urql-client";
-import { SELECTABLE_THEMES } from "@/lib/theme";
+import { migrateStoredTheme, SELECTABLE_THEMES, THEME_CLASS_NAMES } from "@/lib/theme";
 import { UiSettingsProvider } from "@/lib/context/ui-settings-context";
 import { InstanceFeaturesProvider } from "@/lib/context/instance-features-context";
 import { PageShellFallback } from "@/components/root/page-shell-fallback";
@@ -48,6 +48,11 @@ root.render(<PageShellFallback />);
 
 async function bootstrap() {
   try {
+    migrateStoredTheme(window.localStorage);
+  } catch {
+    // The provider's class mapping also handles legacy values if storage is read-only.
+  }
+  try {
     await loadLocaleDictionary(initialUiLanguage());
   } catch (error) {
     console.error("Failed to load the initial translation dictionary.", error);
@@ -55,7 +60,7 @@ async function bootstrap() {
 
   root.render(
     <StrictMode>
-      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem themes={[...SELECTABLE_THEMES]}>
+      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem themes={[...SELECTABLE_THEMES]} value={THEME_CLASS_NAMES}>
         <UrqlProvider value={backendClient}>
           <UiSettingsProvider>
             <InstanceFeaturesProvider>
