@@ -5764,6 +5764,21 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(MissingScopeCandidates::default())
     }
 
+    async fn list_missing_scope_candidates_for_title(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<MissingScopeCandidates> {
+        let mut candidates = self.list_missing_scope_candidates().await?;
+        if let Some(title_id) = title_id {
+            candidates.episodes.retain(|item| item.title_id == title_id);
+            candidates.titles.retain(|item| item.title_id == title_id);
+            candidates
+                .series_movie_links
+                .retain(|item| item.title_id == title_id);
+        }
+        Ok(candidates)
+    }
+
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],

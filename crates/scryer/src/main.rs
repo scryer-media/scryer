@@ -1838,6 +1838,10 @@ async fn bootstrap_application(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
+    tokio::spawn(scryer_application::start_full_hash_backfill_worker(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
     tokio::spawn(start_background_library_refresh_loop(
         app_use_case.clone(),
         shutdown_token.child_token(),

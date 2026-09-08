@@ -1909,6 +1909,9 @@ pub struct AppRuntimeLibraryState {
 #[derive(Clone)]
 pub struct AppRuntimeJobState {
     pub job_run_tracker: JobRunTracker,
+    pub(crate) full_hash_start_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) full_hash_execution_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) full_hash_shutdown: tokio_util::sync::CancellationToken,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
     pub interactive_operation_guards: InteractiveOperationGuardTable,
@@ -2160,6 +2163,9 @@ impl AppRuntimeState {
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),
+                full_hash_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                full_hash_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
+                full_hash_shutdown: tokio_util::sync::CancellationToken::new(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
                 interactive_operation_guards: InteractiveOperationGuardTable::default(),

@@ -17,13 +17,17 @@ use scryer_domain::{normalize_library_root_path, root_folder_id_for_normalized_p
 use super::synthetic_root_ids::synthetic_root_id_from_legacy_id;
 
 /// Version the catalog is replayed to before the new migrations are applied.
-const PRE_UPGRADE_VERSION: i64 = 203;
+const PRE_UPGRADE_VERSION: i64 = 210;
 
 fn path_derived_id(path: &str) -> String {
     root_folder_id_for_normalized_path(&normalize_library_root_path(path))
 }
 
 async fn pre_upgrade_pool() -> SqlitePool {
+    pre_upgrade_pool_at(PRE_UPGRADE_VERSION).await
+}
+
+async fn pre_upgrade_pool_at(version: i64) -> SqlitePool {
     crate::spellfix::register_spellfix_auto_extension()
         .expect("spellfix extension should register before the migration fixture");
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -31,13 +35,9 @@ async fn pre_upgrade_pool() -> SqlitePool {
         .connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite should open");
-    crate::migrations::replay_source_catalog_for_fresh_install(
-        &pool,
-        Some(PRE_UPGRADE_VERSION),
-        true,
-    )
-    .await
-    .expect("pre-upgrade migration fixture should apply");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(version), true)
+        .await
+        .expect("pre-upgrade migration fixture should apply");
     pool
 }
 
@@ -45,7 +45,7 @@ async fn apply_upgrade(pool: &SqlitePool) {
     crate::migrations::run_migrations(pool, crate::MigrationMode::Apply)
         .await
         .expect("synthetic-root-id upgrade should apply");
-    for version in [210, 211, 212] {
+    for version in [215, 216, 217] {
         let applied: i64 =
             sqlx::query_scalar("SELECT success FROM _sqlx_migrations WHERE version = ?1")
                 .bind(version)
@@ -55,6 +55,32 @@ async fn apply_upgrade(pool: &SqlitePool) {
         assert_eq!(
             applied, 1,
             "{version} must be recorded as successfully applied"
+        );
+    }
+}
+
+#[tokio::test]
+async fn older_and_current_upgrade_baselines_are_idempotent() {
+    for version in [203, PRE_UPGRADE_VERSION] {
+        let pool = pre_upgrade_pool_at(version).await;
+        let legacy =
+            seed_path_derived_root(&pool, "movie_default_library", "/mnt/legacy/movies").await;
+        seed_title(&pool, "legacy-title", "movie_default_library", &legacy).await;
+        apply_upgrade(&pool).await;
+        let id = title_root(&pool, "legacy-title").await;
+        assert_eq!(id, synthetic_root_id_from_legacy_id(&legacy));
+        let aliases: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM library_root_id_remaps")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        apply_upgrade(&pool).await;
+        assert_eq!(title_root(&pool, "legacy-title").await, id);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM library_root_id_remaps")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            aliases
         );
     }
 }

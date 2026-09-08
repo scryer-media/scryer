@@ -434,6 +434,100 @@ async fn the_job_pauses_between_files() {
 
 // ── FR-046: scan-side invalidation ──────────────────────────────────────────
 
+#[tokio::test]
+async fn cancellation_preserves_completed_progress_and_retries_the_remaining_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_unhashed_files(&media_files, dir.path(), 2).await;
+    let app = bootstrap_backfill(media_files.clone());
+    let running = app.clone();
+    let task = tokio::spawn(async move {
+        running
+            .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+                file_pause: Duration::from_secs(3600),
+                ..FullHashBackfillOptions::unthrottled()
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while hashed_ids(&media_files).await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        app.run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("already running")
+    );
+    // Other scheduler work can run while the hash job is deliberately parked.
+    app.runtime.acquisition.acquisition_wake.notify_one();
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        app.runtime.acquisition.acquisition_wake.notified(),
+    )
+    .await
+    .unwrap();
+    app.runtime.jobs.full_hash_shutdown.cancel();
+    let summary = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(summary.cancelled);
+    assert_eq!(summary.hashed, 1);
+    assert_eq!(summary.resume_after_id.as_deref(), Some("file-000"));
+    assert_eq!(hashed_ids(&media_files).await, vec!["file-000"]);
+
+    // A new process has fresh coordination and the same durable stores.
+    let restarted = AppUseCase {
+        runtime: crate::services::AppRuntimeState::default(),
+        ..app
+    };
+    let summary = restarted
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .unwrap();
+    assert_eq!(summary.hashed, 1);
+    assert!(summary.completed_sweep);
+    assert_eq!(hashed_ids(&media_files).await.len(), 2);
+}
+
+#[tokio::test]
+async fn dropping_a_hash_run_releases_its_guard_and_keeps_completed_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_unhashed_files(&media_files, dir.path(), 2).await;
+    let app = bootstrap_backfill(media_files.clone());
+    let running = app.clone();
+    let task = tokio::spawn(async move {
+        running
+            .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+                file_pause: Duration::from_secs(3600),
+                ..FullHashBackfillOptions::unthrottled()
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while hashed_ids(&media_files).await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let resumed = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .unwrap();
+    assert_eq!(resumed.hashed, 1);
+    assert_eq!(hashed_ids(&media_files).await.len(), 2);
+}
+
 /// Seeds a scanned movie file with persisted full hashes and returns
 /// (app, user, title, path, file id).
 async fn seed_scanned_movie_with_hashes(
