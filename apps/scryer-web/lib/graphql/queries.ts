@@ -1005,6 +1005,19 @@ export const seriesCollectionEpisodesQuery = `query SeriesCollectionEpisodes($id
   }
 }`;
 
+/** Minimal collection lookup used by the rule-editor scoring preview. */
+export const ruleSetTestTitleCollectionsQuery = `query RuleSetTestTitleCollections($id: ID!) {
+  title(id: $id) {
+    id
+    collections {
+      id
+      label
+      collectionIndex
+      collectionType
+    }
+  }
+}`;
+
 export const episodeCollectionRefQuery = `query EpisodeCollectionRef($titleId: ID!, $episodeId: ID!) {
   episode(titleId: $titleId, episodeId: $episodeId) {
     id
@@ -3455,6 +3468,22 @@ export const ruleSetsQuery = `query RuleSets {
     id
     name
     description
+    enabled
+    priority
+    appliedFacets
+    isManaged
+    managedKey
+    managedTagFilter
+    createdAt
+    updatedAt
+  }
+}`;
+
+export const ruleSetQuery = `query RuleSet($id: ID!) {
+  ruleSet(id: $id) {
+    id
+    name
+    description
     regoSource
     enabled
     priority
@@ -3783,8 +3812,32 @@ export const rulePackTemplatesQuery = `query RulePackTemplates($packId: String!)
     title
     description
     category
-    regoSource
     appliedFacets
+  }
+}`;
+
+export const trackedRulePacksQuery = `query TrackedRulePacks {
+  trackedRulePacks {
+    packId
+    name
+    version
+    digest
+    revision
+    availableVersion
+    autoUpdate
+    autoUpdateAvailable
+    lastError
+    lastUpdated
+    members {
+      templateId
+      ruleSetId
+      removed
+      enabled
+      priority
+      name
+      description
+      appliedFacets
+    }
   }
 }`;
 

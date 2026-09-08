@@ -49,6 +49,7 @@ mod oauth;
 mod permissions_users_shows;
 mod plugins;
 mod request_rules;
+mod rule_packs;
 mod scope_indexer_coverage;
 mod settings_and_writer;
 mod sql_runtime_gated_write;

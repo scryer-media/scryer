@@ -97,6 +97,87 @@ pub struct RulePackTemplatePayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// One installed rule pack and its locally editable member settings.
+pub struct TrackedRulePackPayload {
+    /// Immutable registry rule-pack ID.
+    pub pack_id: String,
+    /// Display name recorded from the verified manifest.
+    pub name: String,
+    /// Installed immutable source version.
+    pub version: String,
+    /// Verified source digest for the installed version.
+    pub digest: String,
+    /// Optimistic-concurrency token for pack changes.
+    pub revision: Long,
+    /// Whether scheduled updates are enabled for this pack.
+    pub auto_update: bool,
+    /// Newer compatible registry version, or null when the installed version is current.
+    pub available_version: Option<String>,
+    /// Whether an automatic update is currently eligible for this pack.
+    pub auto_update_available: bool,
+    /// Most recent automatic-update failure, or null when none is recorded.
+    pub last_error: Option<String>,
+    /// UTC timestamp of the last successful installation or update.
+    pub last_updated: DateTime<Utc>,
+    /// Source templates and their local rule-set bindings.
+    pub members: Vec<TrackedRulePackMemberPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Local state of one source-template binding in a tracked rule pack.
+pub struct TrackedRulePackMemberPayload {
+    /// Stable template ID from the source pack.
+    pub template_id: String,
+    /// Local rule-set ID retained across source updates.
+    pub rule_set_id: ID,
+    /// Whether the template is absent from the current upstream version.
+    pub removed: bool,
+    /// Local enabled state, or null when the retained rule no longer exists.
+    pub enabled: Option<bool>,
+    /// Local evaluation priority, or null when the retained rule no longer exists.
+    pub priority: Option<i32>,
+    /// Local rule name, or null when the retained rule no longer exists.
+    pub name: Option<String>,
+    /// Local rule description, or null when the retained rule no longer exists.
+    pub description: Option<String>,
+    /// Local facet scope; empty when the retained rule no longer exists.
+    pub applied_facets: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Preview of the exact source version that a tracked-pack update would apply.
+pub struct TrackedRulePackPreviewPayload {
+    /// Candidate immutable source version.
+    pub version: String,
+    /// Candidate verified source digest.
+    pub digest: String,
+    /// Revision that must be supplied to apply this preview.
+    pub revision: Long,
+    /// Template IDs newly introduced by the candidate version.
+    pub added_template_ids: Vec<String>,
+    /// Template IDs whose source content changed in the candidate version.
+    pub changed_template_ids: Vec<String>,
+    /// Template IDs removed by the candidate version.
+    pub removed_template_ids: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Identifier returned after uninstalling a tracked rule pack.
+pub struct DeleteTrackedRulePackPayload {
+    /// Immutable registry rule-pack ID.
+    pub pack_id: String,
+}
+
+#[derive(InputObject, Clone)]
+/// Priority to retain for one tracked source template.
+pub struct TrackedRulePackPriorityInput {
+    /// Stable template ID from the source pack.
+    pub template_id: String,
+    /// Local evaluation priority.
+    pub priority: i32,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Installed plugin identity, trust metadata, artifact digests, and timestamps.
 pub struct PluginInstallationPayload {
     /// Installation record ID.

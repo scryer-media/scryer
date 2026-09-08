@@ -1487,6 +1487,8 @@ mod tests {
             "download_clients",
             "subtitle_provider_configs",
             "rule_sets",
+            "rule_pack_installations",
+            "rule_pack_members",
             "post_processing_scripts",
             "post_processing_script_runs",
             "plugin_installations",

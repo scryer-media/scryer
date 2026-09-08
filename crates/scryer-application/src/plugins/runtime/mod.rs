@@ -52,4 +52,8 @@ include!("install.rs");
 include!("manual_install.rs");
 include!("restore.rs");
 include!("auto_update.rs");
+include!("rule_pack_auto_update.rs");
 include!("tests.rs");
+
+#[cfg(test)]
+mod tracked_pack_tests;

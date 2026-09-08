@@ -1996,10 +1996,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           .mutation(updateRuleSetMutation, {
             input: {
               id: ruleSetId,
-              name: rule.name,
-              description: rule.description,
-              regoSource: rule.regoSource,
-              priority: rule.priority,
               appliedFacets: nextFacets,
             },
           })

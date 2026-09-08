@@ -132,7 +132,11 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
     validate_backup_catalog(pool).await?;
     let export_tables = ordered_export_tables(pool).await?;
     let restore_tables = ordered_restore_tables(pool).await?;
-    validate_restore_manifest_table_set(&payload.manifest().row_counts, &export_tables)?;
+    validate_restore_manifest_table_set(
+        &payload.manifest().row_counts,
+        &export_tables,
+        payload.manifest().source_migration_key.as_deref(),
+    )?;
 
     let mut conn = pool.acquire().await.map_err(|error| {
         AppError::Repository(format!("failed to acquire restore connection: {error}"))
@@ -165,7 +169,10 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
                 })?;
         }
 
-        for table in &export_tables {
+        for table in export_tables
+            .iter()
+            .filter(|table| payload.manifest().row_counts.contains_key(*table))
+        {
             import_table_part(
                 &mut conn,
                 table,
@@ -182,7 +189,10 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
             )));
         }
 
-        for table in &export_tables {
+        for table in export_tables
+            .iter()
+            .filter(|table| payload.manifest().row_counts.contains_key(*table))
+        {
             let expected_rows = payload.manifest().row_counts.get(table).ok_or_else(|| {
                 AppError::Validation(format!(
                     "backup bundle table set does not match the current restore catalog: missing [{}], unexpected []",

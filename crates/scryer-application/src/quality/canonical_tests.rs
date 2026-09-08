@@ -1319,6 +1319,75 @@ fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
 }
 
 #[test]
+fn scoring_preview_preserves_canonical_scores_and_blocks() {
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    for source in [
+        r#"score_entry["bonus"] := 200"#,
+        r#"score_entry["bonus"] := 200
+           score_entry["veto"] := scryer.block_score()"#,
+    ] {
+        let engine = rule_engine("preview", source);
+        let mut context = ctx(&profile, &weights, &[]);
+        context.rules = Some(&engine);
+        let evidence = announced(8.0);
+        let normal = score_release(&evidence, &context);
+        let preview = score_release_preview(&evidence, &context);
+        assert_eq!(preview.scored.total, normal.total);
+        assert_eq!(
+            preview.scored.announced_decision.allowed,
+            normal.announced_decision.allowed
+        );
+        assert_eq!(
+            preview.scored.announced_decision.block_codes,
+            normal.announced_decision.block_codes
+        );
+        assert_eq!(
+            preview.scored.announced_decision.scoring_log,
+            normal.announced_decision.scoring_log,
+        );
+        assert!(preview.rule_errors.is_empty());
+        assert!(preview.engine_error.is_none());
+    }
+}
+
+#[test]
+fn scoring_preview_reports_rule_failures_without_retaining_normal_batch_diagnostics() {
+    let engine = rule_engine(
+        "broken_preview",
+        r#"score_entry["broken"] := lower(input.release.year)"#,
+    );
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let mut context = ctx(&profile, &weights, &[]);
+    context.rules = Some(&engine);
+    let evidence = announced(8.0);
+    let preview = score_release_preview(&evidence, &context);
+    assert_eq!(preview.rule_errors.len(), 1);
+    assert_eq!(preview.rule_errors[0].rule_set_id, "broken_preview");
+    assert!(!preview.rule_errors[0].message.is_empty());
+    assert!(preview.engine_error.is_none());
+    let mut batch = RuleEvaluationBatch::from_context(&context);
+    let context = context.without_rules();
+    for _ in 0..3 {
+        let normal = score_release_in_batch(&evidence, &context, &mut batch);
+        assert_eq!(normal.total, preview.scored.total);
+        assert!(
+            normal
+                .announced_decision
+                .scoring_log
+                .iter()
+                .any(|entry| entry.code == "user_rule_error")
+        );
+        assert!(
+            batch.errors.is_empty(),
+            "production batches must not retain preview diagnostics"
+        );
+        assert!(batch.engine_error.is_none());
+    }
+}
+
+#[test]
 fn batch_rule_evaluator_replaces_input_for_each_candidate() {
     let engine = rule_engine(
         "batch_title",

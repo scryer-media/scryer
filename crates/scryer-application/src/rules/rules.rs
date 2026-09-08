@@ -63,6 +63,7 @@ impl AppUseCase {
             .await?;
 
         let id = Id::new_rego_safe().0;
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
 
         // Rewrite the package declaration to match the system-assigned ID.
         let rewritten_source = scryer_rules::rewrite_package_declaration(&rego_source, &id);
@@ -108,7 +109,7 @@ impl AppUseCase {
             )
             .await?;
 
-        self.rebuild_user_rules_engine().await?;
+        self.rebuild_user_rules_engine_filtered(false).await?;
         Ok(rule_set)
     }
 
@@ -140,6 +141,7 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
         let mut rule_set = self
             .services
             .customization
@@ -147,6 +149,19 @@ impl AppUseCase {
             .get_rule_set(&id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("rule set {id} not found")))?;
+
+        let tracked_pack = self
+            .services
+            .customization
+            .rule_sets
+            .find_rule_pack_installation_by_rule_set_id(&rule_set.id)
+            .await?;
+
+        if tracked_pack.is_some() {
+            return Err(AppError::Validation(
+                "This rule is tracked by a community pack. Change its settings through the tracked pack so membership revisions remain atomic, or copy it to customize its content.".into(),
+            ));
+        }
 
         if rule_set.is_managed {
             if edits_authored_fields {
@@ -207,13 +222,27 @@ impl AppUseCase {
             )
             .await?;
 
-        self.rebuild_user_rules_engine().await?;
+        self.rebuild_user_rules_engine_filtered(false).await?;
         Ok(rule_set)
     }
 
     pub async fn delete_rule_set(&self, actor: &User, id: &str) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
+
+        if self
+            .services
+            .customization
+            .rule_sets
+            .find_rule_pack_installation_by_rule_set_id(id)
+            .await?
+            .is_some()
+        {
+            return Err(AppError::Validation(
+                "This rule is tracked by a community pack. Uninstall the pack or copy the rule to customize it.".into(),
+            ));
+        }
 
         if let Some(rule_set) = self
             .services
@@ -239,7 +268,7 @@ impl AppUseCase {
             .record_rule_set_history(id, "deleted", None, Some(&actor.id))
             .await?;
 
-        self.rebuild_user_rules_engine().await?;
+        self.rebuild_user_rules_engine_filtered(false).await?;
         Ok(())
     }
 
@@ -251,6 +280,7 @@ impl AppUseCase {
     ) -> AppResult<RuleSet> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
 
         let mut rule_set = self
             .services
@@ -259,6 +289,19 @@ impl AppUseCase {
             .get_rule_set(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("rule set {id} not found")))?;
+
+        if self
+            .services
+            .customization
+            .rule_sets
+            .find_rule_pack_installation_by_rule_set_id(&rule_set.id)
+            .await?
+            .is_some()
+        {
+            return Err(AppError::Validation(
+                "This rule is tracked by a community pack. Change its settings through the tracked pack so membership revisions remain atomic.".into(),
+            ));
+        }
 
         if enabled && !rule_set.enabled {
             self.ensure_no_conflicting_french_pack(&rule_set).await?;
@@ -279,7 +322,7 @@ impl AppUseCase {
             .record_rule_set_history(&rule_set.id, action, None, Some(&actor.id))
             .await?;
 
-        self.rebuild_user_rules_engine().await?;
+        self.rebuild_user_rules_engine_filtered(false).await?;
         Ok(rule_set)
     }
 
@@ -318,6 +361,7 @@ impl AppUseCase {
     }
 
     pub async fn migrate_legacy_persona_preferences(&self) -> AppResult<()> {
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
         const SYSTEM_SCOPE: &str = "system";
 
         let mut existing_rules = self
@@ -480,7 +524,10 @@ impl AppUseCase {
     pub async fn reconcile_and_activate_managed_trash_rule_packs(
         &self,
     ) -> AppResult<ManagedRuleReconciliation> {
-        self.rebuild_user_rules_engine_filtered(true).await?;
+        {
+            let _mutation = self.services.customization.rule_mutation_lock.lock().await;
+            self.rebuild_user_rules_engine_filtered(true).await?;
+        }
         let reconciliation = self.reconcile_managed_trash_rule_packs(false).await?;
         self.rebuild_user_rules_engine().await?;
         Ok(reconciliation)
@@ -491,6 +538,7 @@ impl AppUseCase {
         packs: &[managed_trash::ManagedTrashRulePack],
         rebuild_engine: bool,
     ) -> AppResult<ManagedRuleReconciliation> {
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
         validate_managed_trash_rule_packs(packs)?;
         let expected_keys = packs
             .iter()
@@ -635,13 +683,14 @@ impl AppUseCase {
         }
 
         if rebuild_engine {
-            self.rebuild_user_rules_engine().await?;
+            self.rebuild_user_rules_engine_filtered(false).await?;
         }
 
         Ok(reconciliation)
     }
 
     pub async fn rebuild_user_rules_engine(&self) -> AppResult<()> {
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
         self.rebuild_user_rules_engine_filtered(false).await
     }
 
@@ -649,26 +698,59 @@ impl AppUseCase {
         &self,
         exclude_managed_trash: bool,
     ) -> AppResult<()> {
-        let enabled = self
+        let mut enabled = self
             .services
             .customization
             .rule_sets
             .list_enabled_rule_sets()
             .await?;
 
-        let mut policies: Vec<scryer_rules::UserPolicy> = enabled
-            .iter()
-            .filter(|rule_set| {
-                !exclude_managed_trash
-                    || !rule_set
-                        .managed_key
-                        .as_deref()
-                        .is_some_and(|key| key.starts_with(managed_trash::MANAGED_TRASH_KEY_PREFIX))
-            })
+        enabled.retain(|rule_set| {
+            !exclude_managed_trash
+                || !rule_set
+                    .managed_key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with(managed_trash::MANAGED_TRASH_KEY_PREFIX))
+        });
+        let engine = self.prepare_user_rules_engine(enabled).await?;
+        self.swap_user_rules_engine(engine);
+        Ok(())
+    }
+
+    pub(crate) async fn prepare_user_rules_engine(
+        &self,
+        rule_sets: Vec<RuleSet>,
+    ) -> AppResult<scryer_rules::UserRulesEngine> {
+        let plugin_policies = self
+            .services
+            .integrations
+            .plugin_provider
+            .available()
+            .map(|provider| provider.scoring_policies())
+            .unwrap_or_default();
+        Self::build_user_rules_engine(rule_sets, plugin_policies)
+    }
+
+    /// Build an engine from an already captured policy snapshot. This is pure
+    /// CPU work so previews can call it from `spawn_blocking` after releasing
+    /// the rule mutation lock.
+    pub(crate) fn build_user_rules_engine(
+        mut rule_sets: Vec<RuleSet>,
+        plugin_policies: Vec<scryer_rules::UserPolicy>,
+    ) -> AppResult<scryer_rules::UserRulesEngine> {
+        rule_sets.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let mut policies: Vec<scryer_rules::UserPolicy> = rule_sets
+            .into_iter()
+            .filter(|rule| rule.enabled)
             .map(|rs| scryer_rules::UserPolicy {
-                id: rs.id.clone(),
-                name: rs.name.clone(),
-                rego_source: rs.rego_source.clone(),
+                id: rs.id,
+                name: rs.name,
+                rego_source: rs.rego_source,
                 origin: if rs.is_managed {
                     scryer_rules::PolicyOrigin::System
                 } else {
@@ -687,38 +769,35 @@ impl AppUseCase {
         // Append scoring policies from loaded WASM plugins.
         // Rewrite package declarations so the Rego package path matches the
         // system-assigned ID, same as we do for user-authored rules.
-        if let Some(pp) = self.services.integrations.plugin_provider.available() {
-            let plugin_policies = pp.scoring_policies();
-            if !plugin_policies.is_empty() {
-                tracing::info!(
-                    plugin_policy_count = plugin_policies.len(),
-                    "including plugin-supplied scoring policies"
-                );
-                for mut p in plugin_policies {
-                    p.rego_source =
-                        scryer_rules::rewrite_package_declaration(&p.rego_source, &p.id);
-                    policies.push(p);
-                }
+        if !plugin_policies.is_empty() {
+            tracing::info!(
+                plugin_policy_count = plugin_policies.len(),
+                "including plugin-supplied scoring policies"
+            );
+            for mut p in plugin_policies {
+                p.rego_source = scryer_rules::rewrite_package_declaration(&p.rego_source, &p.id);
+                policies.push(p);
             }
         }
 
         let engine = scryer_rules::UserRulesEngine::build(&policies)
             .map_err(|e| AppError::Validation(format!("failed to build rules engine: {e}")))?;
 
-        let mut guard = self
-            .services
-            .customization
-            .user_rules
-            .write()
-            .map_err(|e| AppError::Repository(format!("rules engine lock poisoned: {e}")))?;
-        *guard = engine;
-
         tracing::info!(
             user_rule_count = user_count,
             total_rule_count = policies.len(),
-            "user rules engine rebuilt"
+            "user rules engine prepared"
         );
-        Ok(())
+        Ok(engine)
+    }
+
+    pub(crate) fn swap_user_rules_engine(&self, engine: scryer_rules::UserRulesEngine) {
+        let lock = &self.services.customization.user_rules;
+        let mut guard = lock
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = engine;
+        lock.clear_poison();
     }
 
     /// The three French packs read score sets that contradict each
@@ -829,7 +908,8 @@ fn is_legacy_prefer_dual_audio_cleanup_candidate(rule_set: &RuleSet) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    include!("tracked_pack_workflow_tests.rs");
     use super::*;
     use crate::null_repositories::test_nulls::{
         NullDownloadClient, NullDownloadClientConfigRepository, NullIndexerClient,
@@ -901,16 +981,20 @@ mod tests {
         deletes: usize,
     }
 
-    struct TestRuleSetRepo {
+    pub(crate) struct TestRuleSetRepo {
         rules: Mutex<Vec<RuleSet>>,
+        packs: Mutex<Vec<scryer_domain::RulePackInstallation>>,
+        fail_pack_apply: std::sync::atomic::AtomicBool,
         mutations: Mutex<RuleSetMutationCounts>,
         fail_on_create: Option<usize>,
     }
 
     impl TestRuleSetRepo {
-        fn new(rules: Vec<RuleSet>) -> Self {
+        pub(crate) fn new(rules: Vec<RuleSet>) -> Self {
             Self {
                 rules: Mutex::new(rules),
+                packs: Mutex::new(Vec::new()),
+                fail_pack_apply: std::sync::atomic::AtomicBool::new(false),
                 mutations: Mutex::new(RuleSetMutationCounts::default()),
                 fail_on_create: None,
             }
@@ -919,6 +1003,8 @@ mod tests {
         fn failing_on_create(rules: Vec<RuleSet>, create_number: usize) -> Self {
             Self {
                 rules: Mutex::new(rules),
+                packs: Mutex::new(Vec::new()),
+                fail_pack_apply: std::sync::atomic::AtomicBool::new(false),
                 mutations: Mutex::new(RuleSetMutationCounts::default()),
                 fail_on_create: Some(create_number),
             }
@@ -927,10 +1013,119 @@ mod tests {
         async fn mutation_counts(&self) -> RuleSetMutationCounts {
             self.mutations.lock().await.clone()
         }
+
+        pub(crate) async fn rules_snapshot(&self) -> Vec<RuleSet> {
+            self.rules.lock().await.clone()
+        }
     }
 
     #[async_trait]
     impl RuleSetRepository for TestRuleSetRepo {
+        async fn list_rule_pack_installations(
+            &self,
+        ) -> AppResult<Vec<scryer_domain::RulePackInstallation>> {
+            Ok(self.packs.lock().await.clone())
+        }
+        async fn get_rule_pack_installation(
+            &self,
+            id: &str,
+        ) -> AppResult<Option<scryer_domain::RulePackInstallation>> {
+            Ok(self
+                .packs
+                .lock()
+                .await
+                .iter()
+                .find(|pack| pack.pack_id == id)
+                .cloned())
+        }
+        async fn find_rule_pack_installation_by_rule_set_id(
+            &self,
+            id: &str,
+        ) -> AppResult<Option<scryer_domain::RulePackInstallation>> {
+            Ok(self
+                .packs
+                .lock()
+                .await
+                .iter()
+                .find(|pack| pack.members.iter().any(|member| member.rule_set_id == id))
+                .cloned())
+        }
+        async fn apply_rule_pack_installation(
+            &self,
+            pack: &scryer_domain::RulePackInstallation,
+            revision: Option<i64>,
+            changed: &[RuleSet],
+            _history: &[RuleSetHistoryChange],
+        ) -> AppResult<bool> {
+            if self
+                .fail_pack_apply
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(AppError::Repository("injected pack commit failure".into()));
+            }
+            let mut packs = self.packs.lock().await;
+            if packs
+                .iter()
+                .find(|old| old.pack_id == pack.pack_id)
+                .map(|old| old.revision)
+                != revision
+            {
+                return Ok(false);
+            }
+            let mut rules = self.rules.lock().await;
+            rules.retain(|rule| !changed.iter().any(|new| new.id == rule.id));
+            rules.extend_from_slice(changed);
+            packs.retain(|old| old.pack_id != pack.pack_id);
+            packs.push(pack.clone());
+            Ok(true)
+        }
+        async fn uninstall_rule_pack(
+            &self,
+            id: &str,
+            revision: i64,
+            _history: &[RuleSetHistoryChange],
+        ) -> AppResult<bool> {
+            let mut packs = self.packs.lock().await;
+            let Some(pack) = packs
+                .iter()
+                .find(|pack| pack.pack_id == id && pack.revision == revision)
+            else {
+                return Ok(false);
+            };
+            self.rules.lock().await.retain(|rule| {
+                !pack
+                    .members
+                    .iter()
+                    .any(|member| member.rule_set_id == rule.id)
+            });
+            packs.retain(|pack| pack.pack_id != id);
+            Ok(true)
+        }
+        async fn copy_rule_pack_rule_set_to_custom(
+            &self,
+            id: &str,
+            source: &str,
+            custom: &RuleSet,
+            revision: i64,
+            _history: &[RuleSetHistoryChange],
+        ) -> AppResult<bool> {
+            let mut packs = self.packs.lock().await;
+            let Some(pack) = packs
+                .iter_mut()
+                .find(|pack| pack.pack_id == id && pack.revision == revision)
+            else {
+                return Ok(false);
+            };
+            let mut rules = self.rules.lock().await;
+            rules
+                .iter_mut()
+                .find(|rule| rule.id == source)
+                .unwrap()
+                .enabled = false;
+            rules.push(custom.clone());
+            pack.revision += 1;
+            Ok(true)
+        }
         async fn list_rule_sets(&self) -> AppResult<Vec<RuleSet>> {
             Ok(self.rules.lock().await.clone())
         }

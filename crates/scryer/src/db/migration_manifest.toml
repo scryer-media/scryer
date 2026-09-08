@@ -2038,4 +2038,19 @@ scope = "all"
 kind = "sql"
 file = "postgres/migrations/0223_media_request_policy.sql"
 engine = "postgres"
+
+[[migration]]
+version = 224
+description = "tracked_rule_packs"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0224_tracked_rule_packs.sql"
+engine = "sqlite"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0224_tracked_rule_packs.sql"
+engine = "postgres"
 scope = "all"

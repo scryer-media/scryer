@@ -1029,6 +1029,14 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "rule_pack_installations",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "rule_pack_members",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "rule_sets",
         classification: BackupTableClassification::Export,
     },

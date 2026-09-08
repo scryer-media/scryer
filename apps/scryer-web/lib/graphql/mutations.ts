@@ -2306,6 +2306,109 @@ export const validateRuleSetMutation = `mutation ValidateRuleSet($input: Validat
   }
 }`;
 
+export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInput!) {
+  testRuleSet(input: $input) {
+    score
+    allowed
+    blocked
+    minimumScoreMet
+    profileName
+    context {
+      titleName
+      libraryName
+      facet
+      language
+      tags
+      episodeLabel
+    }
+    parsed {
+      releaseGroup
+      quality
+      source
+      season
+      episode
+      edition
+      videoCodec
+      audio
+      year
+      audioLanguages
+      sizeBytes
+    }
+    ruleSets {
+      ruleSetId
+      ruleSetName
+      origin
+      score
+      matched
+      blocked
+      isDraft
+      entries {
+        code
+        delta
+        blocked
+      }
+      messages
+    }
+    draftContribution {
+      score
+      matched
+      blocked
+      applies
+      enabled
+      message
+    }
+    errors {
+      code
+      message
+      ruleSetId
+    }
+  }
+}`;
+
+export const installTrackedRulePackMutation = `mutation InstallTrackedRulePack($packId: String!, $templateIds: [String!]!) {
+  installTrackedRulePack(packId: $packId, templateIds: $templateIds) {
+    packId
+    revision
+  }
+}`;
+
+export const previewTrackedRulePackUpdateMutation = `mutation PreviewTrackedRulePackUpdate($packId: String!) {
+  previewTrackedRulePackUpdate(packId: $packId) {
+    version
+    digest
+    revision
+    addedTemplateIds
+    changedTemplateIds
+    removedTemplateIds
+  }
+}`;
+
+export const updateTrackedRulePackMutation = `mutation UpdateTrackedRulePack($packId: String!, $version: String!, $digest: String!, $revision: Long!) {
+  updateTrackedRulePack(packId: $packId, version: $version, digest: $digest, revision: $revision) {
+    packId
+    revision
+  }
+}`;
+
+export const setTrackedRulePackSettingsMutation = `mutation SetTrackedRulePackSettings($packId: String!, $enabledTemplateIds: [String!]!, $priorities: [TrackedRulePackPriorityInput!]!, $autoUpdate: Boolean!, $expectedRevision: Long!) {
+  setTrackedRulePackSettings(packId: $packId, enabledTemplateIds: $enabledTemplateIds, priorities: $priorities, autoUpdate: $autoUpdate, expectedRevision: $expectedRevision) {
+    packId
+    revision
+  }
+}`;
+
+export const copyTrackedRulePackRuleMutation = `mutation CopyTrackedRulePackRule($ruleSetId: ID!, $name: String!, $description: String!, $regoSource: String!, $appliedFacets: [String!]!, $priority: Int!) {
+  copyTrackedRulePackRule(ruleSetId: $ruleSetId, name: $name, description: $description, regoSource: $regoSource, appliedFacets: $appliedFacets, priority: $priority) {
+    id
+  }
+}`;
+
+export const uninstallTrackedRulePackMutation = `mutation UninstallTrackedRulePack($packId: String!, $revision: Long!) {
+  uninstallTrackedRulePack(packId: $packId, revision: $revision) {
+    packId
+  }
+}`;
+
 // ── Maintenance Rules ─────────────────────────────────────────────────
 //
 // Maintenance rule sets are saved disabled and nothing evaluates or executes

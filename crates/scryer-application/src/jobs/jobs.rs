@@ -1521,9 +1521,28 @@ impl AppUseCase {
             )),
             JobKey::PluginRegistryRefresh => {
                 self.refresh_plugin_catalog_internal().await?;
-                Ok(plugin_registry_refresh_outcome(
-                    self.run_scheduled_plugin_auto_update().await,
-                ))
+                let mut outcome =
+                    plugin_registry_refresh_outcome(self.run_scheduled_plugin_auto_update().await);
+                let packs = self.run_scheduled_rule_pack_auto_update().await;
+                if !packs.updated.is_empty() || !packs.failed.is_empty() {
+                    let message = outcome.summary_text.get_or_insert_with(String::new);
+                    message.push_str(&format!(
+                        "; auto-updated {} rule pack(s); {} pack update(s) failed",
+                        packs.updated.len(),
+                        packs.failed.len()
+                    ));
+                    let mut summary = outcome
+                        .summary_json
+                        .as_deref()
+                        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                        .unwrap_or_else(|| json!({}));
+                    summary["rulePacks"] = json!(packs);
+                    outcome.summary_json = serde_json::to_string(&summary).ok();
+                    if !packs.failed.is_empty() {
+                        outcome.status_override = Some(JobRunStatus::Warning);
+                    }
+                }
+                Ok(outcome)
             }
             JobKey::Housekeeping => {
                 let report = self.run_scheduled_housekeeping().await?;

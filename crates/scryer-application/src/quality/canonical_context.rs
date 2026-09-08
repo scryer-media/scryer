@@ -286,6 +286,27 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
     ) -> ResolvedScoringContext {
+        self.resolve_canonical_scoring_context_impl(title, profile, true)
+            .await
+    }
+
+    /// Preview compilation supplies its own temporary engine, so it does not
+    /// need to clone the active engine only to replace it before evaluation.
+    pub(crate) async fn resolve_canonical_scoring_context_without_rules(
+        &self,
+        title: &Title,
+        profile: &QualityProfile,
+    ) -> ResolvedScoringContext {
+        self.resolve_canonical_scoring_context_impl(title, profile, false)
+            .await
+    }
+
+    async fn resolve_canonical_scoring_context_impl(
+        &self,
+        title: &Title,
+        profile: &QualityProfile,
+        include_rules: bool,
+    ) -> ResolvedScoringContext {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet).to_string();
 
         let required_audio_languages = self
@@ -323,13 +344,16 @@ impl AppUseCase {
             }
         };
 
-        let rules = self
-            .services
-            .customization
-            .user_rules
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty());
+        let rules = if include_rules {
+            self.services
+                .customization
+                .user_rules
+                .read()
+                .map(|guard| guard.clone())
+                .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty())
+        } else {
+            scryer_rules::UserRulesEngine::empty()
+        };
 
         ResolvedScoringContext {
             profile: profile.clone(),
