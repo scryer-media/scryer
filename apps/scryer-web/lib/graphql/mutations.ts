@@ -858,6 +858,7 @@ export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSett
 
 export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
   updateGeneralSettings(input: $input) {
+    apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
     srrdbFilenameRecoveryEnabled

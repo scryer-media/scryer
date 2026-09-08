@@ -37,6 +37,7 @@ import {
   Bell,
   BookOpen,
   Captions,
+  Code2,
   ChevronDown,
   Database,
   Download,
@@ -71,7 +72,7 @@ import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
 import { setMyUiSettingsMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
+import { useExperimentalFeaturesEnabled, useInstanceFeatures } from "@/lib/context/instance-features-context";
 import {
   useUiSettings,
   uiSettingsInputFromSettings,
@@ -86,6 +87,7 @@ import {
 } from "@/lib/utils/permissions";
 import type { AppPermission, LibraryPermission } from "@/lib/utils/permissions";
 import {
+  canAccessApiExplorer,
   canAccessDashboard,
   canAccessSystemSection,
 } from "@/lib/utils/routes";
@@ -637,6 +639,7 @@ function RootSidebarContent({
   const client = useClient();
   const t = useTranslate();
   const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const { apiExplorerEnabled } = useInstanceFeatures();
   const setGlobalStatus = useGlobalStatus();
   const { isMobile, setOpenMobile } = useSidebar();
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -1612,6 +1615,21 @@ function RootSidebarContent({
           })}
         </SidebarContent>
         <SidebarFooter className="space-y-1.5 border-t border-[var(--scry-border3)] px-3.5 py-2.5">
+          {canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled) && (
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  id="root-sidebar-api-explorer"
+                  tooltip="API"
+                  isActive={view === "api-explorer"}
+                  onClick={(event) => handleNavigate(event, "api-explorer")}
+                >
+                  <Code2 />
+                  <span>API</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          )}
           <div
             className={cn(
               "grid grid-cols-2 gap-1.5 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center",

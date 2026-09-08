@@ -262,6 +262,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "false",
             is_sensitive: false,
         },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::API_EXPLORER_ENABLED_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
         // Instance-wide switch for sending the library context to the metadata
         // gateway. Seeded true so existing installs keep personalized
         // discovery working with no data change.

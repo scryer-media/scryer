@@ -13,6 +13,7 @@ import type { InstanceFeatures } from "@/lib/types/settings";
  * appears on an instance that has it on.
  */
 export const DEFAULT_INSTANCE_FEATURES: InstanceFeatures = {
+  apiExplorerEnabled: false,
   experimentalFeaturesEnabled: false,
   personalizedDiscoveryEnabled: true,
 };
@@ -30,6 +31,7 @@ function normalizeInstanceFeatures(
   features: Partial<InstanceFeatures> | null | undefined,
 ): InstanceFeatures {
   return {
+    apiExplorerEnabled: features?.apiExplorerEnabled ?? false,
     experimentalFeaturesEnabled:
       features?.experimentalFeaturesEnabled ??
       DEFAULT_INSTANCE_FEATURES.experimentalFeaturesEnabled,
@@ -73,6 +75,7 @@ export function InstanceFeaturesProvider({
         .query<{ instanceFeatures?: Partial<InstanceFeatures> | null }>(
           instanceFeaturesQuery,
           {},
+          { requestPolicy: "network-only" },
         )
         .toPromise();
       if (error) {
@@ -103,16 +106,21 @@ export function InstanceFeaturesProvider({
     }
 
     const handleAuthSessionChanged = () => {
+      setInstanceFeatures(DEFAULT_INSTANCE_FEATURES);
+      setInstanceFeaturesLoaded(false);
       void loadInstanceFeatures();
     };
+    const handleFocus = () => { void loadInstanceFeatures(); };
 
     window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleAuthSessionChanged);
+    window.addEventListener("focus", handleFocus);
     const cancelScheduledQuery = scheduleAfterFirstPaint(() => {
       void loadInstanceFeatures();
     });
     return () => {
       requestSequenceRef.current += 1;
       cancelScheduledQuery();
+      window.removeEventListener("focus", handleFocus);
       window.removeEventListener(
         AUTH_SESSION_CHANGED_EVENT,
         handleAuthSessionChanged,

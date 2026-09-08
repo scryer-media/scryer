@@ -1,4 +1,5 @@
 export type ViewId =
+  | "api-explorer"
   | "dashboard"
   | "movies"
   | "series"

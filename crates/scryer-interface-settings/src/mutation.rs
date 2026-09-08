@@ -114,6 +114,7 @@ fn from_acquisition_settings(
 
 fn from_general_settings(settings: scryer_application::GeneralSettings) -> GeneralSettingsPayload {
     GeneralSettingsPayload {
+        api_explorer_enabled: settings.api_explorer_enabled,
         experimental_features_enabled: settings.experimental_features_enabled,
         personalized_discovery_enabled: settings.personalized_discovery_enabled,
         srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
@@ -893,6 +894,7 @@ impl SettingsMutations {
             .update_general_settings(
                 &actor,
                 AppUpdateGeneralSettings {
+                    api_explorer_enabled: input.api_explorer_enabled,
                     experimental_features_enabled: input.experimental_features_enabled,
                     personalized_discovery_enabled: input.personalized_discovery_enabled,
                     srrdb_filename_recovery_enabled: input.srrdb_filename_recovery_enabled,

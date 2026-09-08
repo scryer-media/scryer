@@ -40,6 +40,7 @@ use tracing::{Instrument, warn};
 use uuid::Uuid;
 
 use crate::base_path::BasePath;
+mod api_explorer;
 use crate::http_error::ErrorResponse;
 use crate::rate_limit::{
     AuthenticationRequestAnalysis, GraphqlRateLimitClass, HttpRateLimitClass, RateLimitDecision,
@@ -1069,14 +1070,9 @@ pub(crate) async fn graphql_ws_handler(
             .expect("connection log context lock must not be poisoned")
             .clone(),
     );
-    let initial_data = graphql_ws_connection_data(
-        connection_epoch,
-        if authless_proof_required {
-            None
-        } else {
-            initial_actor.clone()
-        },
-    );
+    // Authentication markers come only from connection_init. Initial data is merged,
+    // so inserting browser privileges here would survive explorer restrictions.
+    let initial_data = graphql_ws_connection_data(connection_epoch, None);
     let oauth_session = Arc::new(StdRwLock::new(if authless_proof_required {
         None
     } else {
@@ -1093,6 +1089,7 @@ pub(crate) async fn graphql_ws_handler(
     let connection_context_for_init = connection_context.clone();
     let oauth_session_for_init = oauth_session.clone();
     let rate_limit_user_id_for_init = rate_limit_user_id.clone();
+    let (explorer_sender, explorer_session) = tokio::sync::watch::channel(None);
 
     ws.max_message_size(GRAPHQL_MAX_MESSAGE_BYTES)
         .max_frame_size(GRAPHQL_MAX_MESSAGE_BYTES)
@@ -1111,6 +1108,7 @@ pub(crate) async fn graphql_ws_handler(
             let rate_limit_user_id_for_init = rate_limit_user_id_for_init.clone();
             let rate_limiter = rate_limiter.clone();
             let executor = ContextualGraphqlExecutor::new(ContextualGraphqlExecutorConfig {
+                explorer_session: explorer_session.clone(),
                 schema,
                 app: app.clone(),
                 connection_context: connection_context.clone(),
@@ -1119,7 +1117,7 @@ pub(crate) async fn graphql_ws_handler(
                 rate_limiter,
                 rate_limit_provenance,
             });
-            GraphQLWebSocket::new(stream, executor, protocol)
+            let connection = GraphQLWebSocket::new(stream, executor, protocol)
                 .with_data(initial_data)
                 .on_connection_init(move |value: serde_json::Value| {
                     let connection_span = connection_span_for_init.clone();
@@ -1130,6 +1128,7 @@ pub(crate) async fn graphql_ws_handler(
                     let initial_actor = initial_actor.clone();
                     let proof_state = proof_state.clone();
                     let headers_for_init = headers_for_init.clone();
+                    let explorer_sender = explorer_sender.clone();
                     async move {
                         let auth_value = value.get("Authorization").and_then(|v| v.as_str());
                         let proof_value = value
@@ -1150,6 +1149,27 @@ pub(crate) async fn graphql_ws_handler(
                             },
                         )
                         .await?;
+                        let mut actor = actor;
+                        if let Some(value) = value.get(api_explorer::HEADER) {
+                            let mode =
+                                api_explorer::AccessMode::parse(value.as_str().unwrap_or(""))
+                                    .map_err(|error| {
+                                        async_graphql::Error::new(error.to_string())
+                                    })?;
+                            if mode == api_explorer::AccessMode::ApiKey {
+                                return Err(async_graphql::Error::new(
+                                    "API keys are not supported for WebSocket connections",
+                                ));
+                            }
+                            let actor = actor.as_mut().ok_or_else(|| {
+                                async_graphql::Error::new("API explorer requires a web session")
+                            })?;
+                            let original = actor.clone();
+                            api_explorer::masquerade(&app_for_init, actor, mode)
+                                .await
+                                .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+                            let _ = explorer_sender.send(Some(original));
+                        }
                         *oauth_session
                             .write()
                             .expect("OAuth session lock must not be poisoned") =
@@ -1174,13 +1194,17 @@ pub(crate) async fn graphql_ws_handler(
                     }
                 })
                 .serve()
-                .instrument(connection_span)
-                .await;
+                .instrument(connection_span);
+            tokio::select! {
+                _ = connection => {}
+                _ = api_explorer::until_revoked(app, explorer_session) => {}
+            }
         })
 }
 
 #[derive(Clone)]
 struct ContextualGraphqlExecutor {
+    explorer_session: tokio::sync::watch::Receiver<Option<ResolvedActor>>,
     schema: scryer_interface::ApiSchema,
     app: AppUseCase,
     connection_context: Arc<StdRwLock<LogContext>>,
@@ -1191,6 +1215,7 @@ struct ContextualGraphqlExecutor {
 }
 
 struct ContextualGraphqlExecutorConfig {
+    explorer_session: tokio::sync::watch::Receiver<Option<ResolvedActor>>,
     schema: scryer_interface::ApiSchema,
     app: AppUseCase,
     connection_context: Arc<StdRwLock<LogContext>>,
@@ -1203,6 +1228,7 @@ struct ContextualGraphqlExecutorConfig {
 impl ContextualGraphqlExecutor {
     fn new(config: ContextualGraphqlExecutorConfig) -> Self {
         Self {
+            explorer_session: config.explorer_session,
             schema: config.schema,
             app: config.app,
             connection_context: config.connection_context,
@@ -1281,6 +1307,7 @@ impl Executor for ContextualGraphqlExecutor {
         let schema = self.schema.clone();
         let app = self.app.clone();
         let oauth_session = self.oauth_session.clone();
+        let explorer_session = self.explorer_session.clone();
         let rate_limiter = self.rate_limiter.clone();
         let rate_limit_user_id = self
             .rate_limit_user_id
@@ -1306,6 +1333,9 @@ impl Executor for ContextualGraphqlExecutor {
             if validate_ws_oauth_session(&app, &oauth_session)
                 .await
                 .is_err()
+                || api_explorer::validate_session(&app, &explorer_session)
+                    .await
+                    .is_err()
             {
                 return oauth_access_revoked_response();
             }
@@ -1352,6 +1382,7 @@ impl Executor for ContextualGraphqlExecutor {
         ));
         let app = self.app.clone();
         let oauth_session = self.oauth_session.clone();
+        let explorer_session = self.explorer_session.clone();
         Box::pin(ContextualGraphqlResponseStream {
             inner: Box::pin(stream::unfold(
                 (
@@ -1359,16 +1390,20 @@ impl Executor for ContextualGraphqlExecutor {
                     Executor::execute_stream(&self.schema, request, session_data),
                     app,
                     oauth_session,
+                    explorer_session,
                 ),
-                |(active, mut inner, app, oauth_session)| async move {
+                |(active, mut inner, app, oauth_session, explorer_session)| async move {
                     if !active
                         || validate_ws_oauth_session(&app, &oauth_session)
+                            .await
+                            .is_err()
+                        || api_explorer::validate_session(&app, &explorer_session)
                             .await
                             .is_err()
                     {
                         return active.then_some((
                             oauth_access_revoked_response(),
-                            (false, inner, app, oauth_session),
+                            (false, inner, app, oauth_session, explorer_session),
                         ));
                     }
 
@@ -1376,6 +1411,9 @@ impl Executor for ContextualGraphqlExecutor {
                     let response = if validate_ws_oauth_session(&app, &oauth_session)
                         .await
                         .is_ok()
+                        && api_explorer::validate_session(&app, &explorer_session)
+                            .await
+                            .is_ok()
                     {
                         response
                     } else {
@@ -1383,7 +1421,10 @@ impl Executor for ContextualGraphqlExecutor {
                     };
                     let keep_active =
                         !response_has_error_code(&response, AUTHENTICATION_REQUIRED_CODE);
-                    Some((response, (keep_active, inner, app, oauth_session)))
+                    Some((
+                        response,
+                        (keep_active, inner, app, oauth_session, explorer_session),
+                    ))
                 },
             )),
             span,
@@ -1580,6 +1621,22 @@ pub(crate) async fn graphql_handler(
         return authless_web_client_forbidden_response(
             "Scryer web client proof is required for unauthenticated access",
         );
+    }
+    let mut actor = actor;
+    match api_explorer::http_mode(&headers) {
+        Ok(Some(mode)) => {
+            let Some(actor) = actor.as_mut() else {
+                return api_explorer::http_error();
+            };
+            if api_explorer::masquerade(&state.app, actor, mode)
+                .await
+                .is_err()
+            {
+                return api_explorer::http_error();
+            }
+        }
+        Ok(None) => {}
+        Err(_) => return api_explorer::http_error(),
     }
     let rate_limit_key =
         rate_limit_provenance.key(actor.as_ref().map(|actor| actor.user.id.as_str()));
@@ -1933,6 +1990,7 @@ enum ResolvedActorSource {
     AuthenticatedToken,
     ApiKey,
     AuthlessDefault,
+    Explorer(api_explorer::AccessMode),
 }
 
 impl ResolvedActorSource {
@@ -1941,6 +1999,7 @@ impl ResolvedActorSource {
             Self::AuthenticatedToken => "authenticated_token",
             Self::ApiKey => "api_key",
             Self::AuthlessDefault => "authless_default",
+            Self::Explorer(mode) => mode.audit_source(),
         }
     }
 }
@@ -2332,15 +2391,17 @@ async fn attach_resolved_actor(
     let mut user = app.attach_user_authorization(user).await?;
     user.authorization.actor_capabilities = match source {
         ResolvedActorSource::AuthenticatedToken => token_claims.actor_capabilities,
-        ResolvedActorSource::ApiKey => ActorCapabilityMask::NONE,
+        ResolvedActorSource::ApiKey | ResolvedActorSource::Explorer(_) => ActorCapabilityMask::NONE,
         ResolvedActorSource::AuthlessDefault => ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
     };
+    if source == ResolvedActorSource::ApiKey {
+        api_explorer::AccessMode::ApiKey.restrict(&mut user);
+    }
     if token_claims.is_oauth_access_token() {
         if token_claims.oauth_authorization_source == OAuthAuthorizationSource::Authless {
             user = anonymous_user(user);
         }
-        user.authorization.app = AppPermissionMask::NONE;
-        user.authorization.actor_capabilities = ActorCapabilityMask::NONE;
+        api_explorer::AccessMode::OAuth.restrict(&mut user);
     }
     Ok(ResolvedActor {
         user,

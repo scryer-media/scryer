@@ -663,7 +663,7 @@ export function resolveAppRoute(
     );
   }
 
-  if (root === "discovery" || root === "requests" || root === "calendar") {
+  if (root === "discovery" || root === "requests" || root === "calendar" || root === "api-explorer") {
     if (rawSegments.length !== 1) {
       return { kind: "not-found" };
     }

@@ -2721,6 +2721,7 @@ export const acquisitionSettingsQuery = `query AcquisitionSettings {
 
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
     srrdbFilenameRecoveryEnabled
@@ -3277,6 +3278,7 @@ export const scryerVersionQuery = `query ScryerVersion {
 
 export const instanceFeaturesQuery = `query InstanceFeatures {
   instanceFeatures {
+    apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
   }
