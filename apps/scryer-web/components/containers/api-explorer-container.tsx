@@ -5,6 +5,7 @@ import "graphiql/style.css";
 import "./api-explorer.css";
 import { SquareTerminal } from "lucide-react";
 import { ApiExplorerEditorFont } from "./api-explorer-editor-font";
+import { ApiExplorerRenameTab } from "./api-explorer-rename-tab";
 import { useTheme } from "next-themes";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useRefreshInstanceFeatures } from "@/lib/context/instance-features-context";
@@ -22,16 +23,21 @@ function Editor({ mode }: { mode: ApiExplorerMode }) {
   const { resolvedTheme } = useTheme();
   const refresh = useRefreshInstanceFeatures();
   const [transport, setTransport] = useState<ExplorerTransport | null>(null);
-  // Keep query history within this editor session, including any sensitive variables.
+  // Preserve drafts across navigation and refresh, limited to this browser tab's session.
   const storage = useMemo(() => {
-    const values = new Map<string, string>();
-    return {
-      get length() { return values.size; },
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => { values.set(key, value); },
-      removeItem: (key: string) => { values.delete(key); },
-      clear: () => values.clear(),
-    };
+    try {
+      return window.sessionStorage;
+    } catch {
+      // Retain in-memory editing when browser privacy policies block storage.
+      const values = new Map<string, string>();
+      return {
+        get length() { return values.size; },
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => { values.set(key, value); },
+        removeItem: (key: string) => { values.delete(key); },
+        clear: () => values.clear(),
+      };
+    }
   }, []);
   useEffect(() => {
     const next = createApiExplorerTransport({
@@ -57,6 +63,7 @@ function Editor({ mode }: { mode: ApiExplorerMode }) {
       defaultEditorToolsVisibility="variables"
     >
       <ApiExplorerEditorFont />
+      <ApiExplorerRenameTab />
     </GraphiQL>
   );
 }

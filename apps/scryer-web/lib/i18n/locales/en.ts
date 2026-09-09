@@ -1066,6 +1066,8 @@ const en: LocaleDictionary = {
   "settings.apiExplorerLabel": "Enable API explorer",
   "settings.apiExplorerHelp": "Adds GraphiQL to the API navigation item for users with Manage System Settings. Requests run with API-key or OAuth library permissions.",
   "apiExplorer.accessMode": "Access as",
+  "apiExplorer.renameTab": "Rename tab",
+  "apiExplorer.tabName": "Tab name",
   "apiExplorer.apiKey": "API Key",
   "apiExplorer.oauth": "OAuth App",
   "apiExplorer.apiKeyHelp": "Your app and library permissions, without interactive account access. Subscriptions are unavailable.",
