@@ -515,7 +515,7 @@ export function SettingsProxiesSection({
                   </label>
                   <label>
                     <Label className="mb-2 block" htmlFor="settings-indexer-proxy-timeout">
-                      {t("settings.proxyTimeout")}
+                      {t("settings.proxyTimeout")} <span className="text-muted-foreground">(s)</span>
                     </Label>
                     <Input
                       id="settings-indexer-proxy-timeout"
@@ -571,6 +571,9 @@ export function SettingsProxiesSection({
                             htmlFor="settings-indexer-proxy-username"
                           >
                             {t("settings.proxyUsername")}
+                            {!isTunnelDraft ? (
+                              <span className="text-muted-foreground"> (optional)</span>
+                            ) : null}
                           </Label>
                           <Input
                             id="settings-indexer-proxy-username"
@@ -599,6 +602,7 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-password"
                             >
                               {t("settings.proxyPassword")}
+                              <span className="text-muted-foreground"> (optional)</span>
                             </Label>
                             <Input
                               id="settings-indexer-proxy-password"
@@ -660,17 +664,13 @@ export function SettingsProxiesSection({
                       ) : null}
 
                     </div>
-                    <p className="text-xs text-muted-foreground md:col-span-3">
-                      {isTunnelDraft ? t("settings.proxyTunnelAuthHelp") : null}
-                      {isTunnelDraft && acceptsCredentials ? " " : null}
-                      {acceptsCredentials
-                        ? proxyDraft.hasStoredCredentials
-                          ? t("settings.proxyCredentialsStoredHelp")
-                          : t("settings.proxyCredentialsHelp")
-                        : null}
-                      {acceptsCredentials && acceptsRemoteDns ? " " : null}
-                      {acceptsRemoteDns ? t("settings.proxyRemoteDnsHelp") : null}
-                    </p>
+                    {isTunnelDraft || acceptsRemoteDns ? (
+                      <p className="text-xs text-muted-foreground md:col-span-3">
+                        {isTunnelDraft ? t("settings.proxyTunnelAuthHelp") : null}
+                        {isTunnelDraft && acceptsRemoteDns ? " " : null}
+                        {acceptsRemoteDns ? t("settings.proxyRemoteDnsHelp") : null}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
                 {acceptsPrivateKey ? (
