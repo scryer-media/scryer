@@ -572,6 +572,15 @@ fn decode_grab_result(
             )));
         }
     };
+    // Shipped Newznab-family plugins report unknown actions with an empty
+    // object. Treat only that legacy reply as Unsupported; nonempty malformed
+    // replies must still fail instead of triggering another download.
+    if payload
+        .as_object()
+        .is_some_and(|payload| payload.is_empty())
+    {
+        return Ok(None);
+    }
     let payload: IndexerGrabPayload = serde_json::from_value(payload).map_err(|error| {
         AppError::Repository(format!(
             "indexer download resolution returned an invalid grab payload: {error}"
@@ -1783,6 +1792,33 @@ mod tests {
             ResolvedDownloadArtifact::TorrentFile { bytes, file_name: Some(name), .. }
                 if bytes == vec![1, 2, 3] && name == "release.torrent"
         ));
+    }
+
+    #[test]
+    fn grab_empty_legacy_reply_keeps_host_fetch_available() {
+        // Newznab, Torznab, and AnimeTosho return {} for unknown actions.
+        let resolved = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({}),
+        }))
+        .expect("a legacy unsupported grab must retain the host fetch path");
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn grab_nonempty_malformed_replies_do_not_fall_back() {
+        for payload in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!({"body": [100, 101]}),
+            serde_json::json!({"url": null}),
+            serde_json::json!({"error": "authentication failed"}),
+        ] {
+            assert!(
+                decode_grab_result(PluginResult::Ok(PluginActionResponse { payload })).is_err(),
+                "a malformed grab response must not trigger a second download"
+            );
+        }
     }
 
     #[test]
