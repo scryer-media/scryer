@@ -456,6 +456,12 @@ export function SettingsProxiesSection({
                       htmlFor="settings-indexer-proxy-base-url"
                     >
                       {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
+                      {isTunnelDraft ? (
+                        <InfoHelp
+                          ariaLabel={t("settings.proxyEndpoint")}
+                          text={t("settings.proxyEndpointHelp")}
+                        />
+                      ) : null}
                     </Label>
                     <Input
                       id="settings-indexer-proxy-base-url"
@@ -565,14 +571,12 @@ export function SettingsProxiesSection({
                     </div>
                   </div>
                 ) : null}
-                {showProxyDetails && (isTunnelDraft || isWireguardDraft) ? (
+                {showProxyDetails && isWireguardDraft ? (
                   <p
                     id="settings-indexer-proxy-endpoint-help"
                     className="text-xs text-muted-foreground"
                   >
-                    {isWireguardDraft
-                      ? t("settings.proxyEndpointHelpWireguard")
-                      : t("settings.proxyEndpointHelp")}
+                    {t("settings.proxyEndpointHelpWireguard")}
                   </p>
                 ) : null}
                 {acceptsCredentials || acceptsRemoteDns ? (
