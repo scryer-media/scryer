@@ -95,10 +95,11 @@ const PARSED_FIELDS = [
 ] as const;
 
 function episodeLabel(episode: Episode): string {
-  return episode.episodeLabel ||
-    `S${String(episode.seasonNumber ?? 0).padStart(2, "0")}E${String(
-      episode.episodeNumber ?? 0,
-    ).padStart(2, "0")}${episode.title ? ` — ${episode.title}` : ""}`;
+  const prefix = `S${String(episode.seasonNumber ?? 0).padStart(2, "0")}E${String(
+    episode.episodeNumber ?? 0,
+  ).padStart(2, "0")}`;
+  const title = episode.title || episode.episodeLabel;
+  return title?.startsWith(prefix) ? title : title ? `${prefix} - ${title}` : prefix;
 }
 
 function parsedLines(parsed: Record<string, unknown> | null | undefined) {
