@@ -208,22 +208,18 @@ async fn terminal_download_item_is_still_visible(
     download_client_item_id: &str,
     is_history: bool,
 ) -> bool {
-    let lookup = if is_history {
-        app.services
-            .integrations
-            .download_client
-            .list_history()
-            .await
-    } else {
-        app.services.integrations.download_client.list_queue().await
-    };
+    let locator =
+        crate::ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
+    let lookup = app
+        .services
+        .integrations
+        .download_client
+        .observe_download(&locator, 0)
+        .await;
 
     match lookup {
-        Ok(items) => items.iter().any(|item| {
-            item.download_client_item_id == download_client_item_id
-                && item.client_type.eq_ignore_ascii_case(client_type)
-                && (client_id.is_empty() || item.client_id.trim() == client_id)
-        }),
+        Ok(crate::DownloadClientObservation::Absent) => false,
+        Ok(_) => true,
         Err(error) => {
             tracing::warn!(
                 error = %error,
@@ -542,6 +538,41 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
     state: TrackedDownloadState,
     cache: Option<&TerminalCleanupTickCache>,
 ) -> TerminalDownloadCleanup {
+    match app
+        .services
+        .workflow
+        .download_submissions
+        .claim_download_cleanup(&tracked.download_id)
+        .await
+    {
+        Ok(crate::DownloadCleanupClaim::Unmanaged) => {
+            reconcile_unclaimed_terminal_cleanup(app, tracked, state, cache, None).await
+        }
+        Ok(crate::DownloadCleanupClaim::Claimed(record)) => {
+            run_claimed_download_cleanup(app, record, cache)
+                .await
+                .map(|(_, _, cleanup)| cleanup)
+                .unwrap_or_else(|| {
+                    TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure)
+                })
+        }
+        Ok(crate::DownloadCleanupClaim::Deferred) => {
+            TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure)
+        }
+        Err(error) => {
+            tracing::warn!(download_id = %tracked.download_id, error = %error, "failed to claim terminal cleanup");
+            TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure)
+        }
+    }
+}
+
+async fn reconcile_unclaimed_terminal_cleanup(
+    app: &AppUseCase,
+    tracked: &crate::tracked_downloads::TrackedDownload,
+    state: TrackedDownloadState,
+    cache: Option<&TerminalCleanupTickCache>,
+    record: Option<&crate::DownloadCleanupRecord>,
+) -> TerminalDownloadCleanup {
     let (library_id, resolved_facet) =
         cleanup_routing_scope_for_title_id_cached(app, tracked.title_id.as_deref(), cache).await;
     let facet = resolved_facet.or_else(|| facet_from_tracked_label(tracked.facet.as_deref()));
@@ -588,8 +619,176 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
         // rather than the answer that first parked the row.
         crate::seeding_gate::observation_from_queue_item(&tracked.client_item),
         cache,
+        record,
     )
     .await
+}
+
+pub(crate) async fn run_claimed_download_cleanup(
+    app: &AppUseCase,
+    record: crate::DownloadCleanupRecord,
+    cache: Option<&TerminalCleanupTickCache>,
+) -> Option<(
+    scryer_domain::download_identity::DownloadId,
+    Option<crate::tracked_downloads::TrackedDownload>,
+    TerminalDownloadCleanup,
+)> {
+    let locator = crate::ClientJobLocator::new(
+        Some(&record.client_id),
+        &record.client_type,
+        &record.item_id,
+    );
+    let result = async {
+        let persisted = app.services.workflow.download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(), Some(&locator),
+            ).await?;
+        if persisted.as_deref().is_some_and(|state| {
+            !matches!(state, "imported" | "imported_seeding" | "failed")
+        }) {
+            return Err(AppError::Validation("import is no longer settled; cleanup deferred".into()));
+        }
+        let Some(state) = TrackedDownloadState::from_str_opt(&record.tracked_state) else {
+            return Err(AppError::Validation("invalid durable cleanup state".into()));
+        };
+        let title = match record.title_id.as_deref() {
+            Some(id) => app.services.catalog.titles.get_by_id(id).await?,
+            None => None,
+        };
+        let library_id = title.as_ref().map(|title| title.library_id.as_str());
+        let facet = title.as_ref().map(|title| title.facet.clone())
+            .or_else(|| facet_from_tracked_label(record.facet.as_deref()))
+            .ok_or_else(|| AppError::Validation("cleanup has no valid routing attribution".into()))?;
+        let policy = app.read_download_client_routing_entry(
+            library_id, &facet, &record.client_id,
+        ).await?.unwrap_or_else(crate::catalog_helpers::default_download_client_routing_entry);
+        let remove = if state.counts_as_imported() { policy.remove_completed } else { policy.remove_failed };
+        if !remove {
+            if !finish_cleanup_attempt(app, &record, "policy_retained", true, 0, None).await {
+                return Ok(None);
+            }
+            tracing::info!(download_id = %record.download_id, "terminal download retained by removal policy");
+            return Ok(Some((record.download_id, None,
+                TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::NotConfigured))));
+        }
+        let item = match app.services.integrations.download_client
+            .observe_download(&locator, record.history_offset).await? {
+            crate::DownloadClientObservation::Present(item) => *item,
+            crate::DownloadClientObservation::Absent => {
+                let payload_removed = record.payload_checkpoint.as_deref()
+                    .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                    .is_some_and(|checkpoint| checkpoint.get("payload_removed").and_then(|v| v.as_bool()) == Some(true));
+                if payload_removed {
+                    if state == TrackedDownloadState::ImportedSeeding {
+                        app.services.workflow.download_submissions.record_identity_tracked_state_for_download(
+                            Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(),
+                            Some(&locator), "imported", Some("seeding_complete"), None,
+                        ).await?;
+                    }
+                    if !finish_cleanup_attempt(app, &record, "payload_removed_entry_absent", true, 0, None).await {
+                        return Ok(None);
+                    }
+                    tracing::info!(download_id = %record.download_id, client_id = %record.client_id,
+                        "cleanup recovered: payload deletion checkpointed and entry absent");
+                    return Ok(Some((record.download_id, None,
+                        TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::AlreadyGone))));
+                }
+                return Err(AppError::Validation(
+                    "entry absent; payload deletion has not been verified".into()));
+            }
+            crate::DownloadClientObservation::Unknown { reason, next_history_offset } => {
+                finish_cleanup_attempt(app, &record, "observation_unknown", false,
+                    next_history_offset, Some(&reason)).await;
+                return Ok(None);
+            }
+        };
+        let active = app.services.workflow.download_registry
+            .find_active_binding_by_locator(&locator).await?;
+        let token = item.download_id.as_deref()
+            .and_then(scryer_domain::download_identity::DownloadId::from_wire);
+        if crate::ClientJobLocator::new(Some(&item.client_id), &item.client_type,
+            &item.download_client_item_id) != locator
+            || token.is_some_and(|id| id != record.download_id)
+            || active.as_ref().is_some_and(|binding| binding.download_id != record.download_id)
+            || (token != Some(record.download_id)
+                && !(active.as_ref().is_some_and(|binding| binding.download_id == record.download_id)
+                    && record.source_title.as_deref().is_some_and(|name| name == item.title_name)))
+        {
+            return Err(AppError::Validation("cleanup locator is reused or identity is ambiguous".into()));
+        }
+        let mut tracked = crate::tracked_downloads::TrackedDownloadService::build_new_tracked_download(
+            app, record.download_id,
+            crate::tracked_downloads::tracked_download_id(
+                Some(&record.client_id), &record.client_type, &record.item_id,
+            ), item,
+        ).await;
+        tracked.title_id = record.title_id.clone();
+        tracked.facet = record.facet.clone();
+        tracked.source_title = record.source_title.clone();
+        tracked.state = state;
+        let cleanup = reconcile_unclaimed_terminal_cleanup(app, &tracked, state, cache, Some(&record)).await;
+        let complete = terminal_download_cleanup_is_complete(cleanup.outcome);
+        let outcome = match cleanup.outcome {
+            TerminalDownloadCleanupOutcome::Removed => "payload_and_entry_removed",
+            TerminalDownloadCleanupOutcome::AlreadyGone => "entry_absent",
+            TerminalDownloadCleanupOutcome::NotConfigured => "policy_retained",
+            TerminalDownloadCleanupOutcome::HeldForSeeding => "seeding_hold",
+            TerminalDownloadCleanupOutcome::SeedingEntryKept => "seeding_entry_kept",
+            TerminalDownloadCleanupOutcome::HandedOff => "handed_off",
+            TerminalDownloadCleanupOutcome::RetryableFailure => "cleanup_failed",
+        };
+        let error = (cleanup.outcome == TerminalDownloadCleanupOutcome::RetryableFailure)
+            .then_some("required payload or entry operation failed; see client cleanup log");
+        if !finish_cleanup_attempt(app, &record, outcome, complete, 0, error).await {
+            return Ok(None);
+        }
+        if complete {
+            tracing::info!(download_id = %record.download_id, client_id = %record.client_id,
+                item_id = %record.item_id, outcome, "terminal download cleanup completed");
+        }
+        Ok(Some((record.download_id, Some(tracked), cleanup)))
+    }.await;
+    match result {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(download_id = %record.download_id, client_id = %record.client_id,
+                error = %error, "terminal cleanup remains pending");
+            finish_cleanup_attempt(
+                app,
+                &record,
+                "cleanup_failed",
+                false,
+                record.history_offset,
+                Some(&error.to_string()),
+            )
+            .await;
+            None
+        }
+    }
+}
+
+async fn finish_cleanup_attempt(
+    app: &AppUseCase,
+    record: &crate::DownloadCleanupRecord,
+    outcome: &str,
+    complete: bool,
+    offset: usize,
+    error: Option<&str>,
+) -> bool {
+    let delay = (30_i64 * (1_i64 << record.attempts.saturating_sub(1).min(4))).min(300);
+    match app
+        .services
+        .workflow
+        .download_submissions
+        .finish_download_cleanup(&record.download_id, outcome, complete, delay, offset, error)
+        .await
+    {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(download_id = %record.download_id, error = %error, "failed to persist cleanup outcome");
+            false
+        }
+    }
 }
 /// Scryer's own transient markers on a *non-`Failed`* import result.
 ///
@@ -602,11 +801,8 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
 /// represented by `ImportSkipReason`, never their message text.
 fn completed_import_error_message_is_retryable(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
-    const SCRYER_TRANSIENT_PHRASES: &[&str] = &[
-        "source changed",
-        "temporarily",
-        "not found or inaccessible",
-    ];
+    const SCRYER_TRANSIENT_PHRASES: &[&str] =
+        &["source changed", "temporarily", "not found or inaccessible"];
     SCRYER_TRANSIENT_PHRASES
         .iter()
         .any(|needle| normalized.contains(needle))

@@ -1787,6 +1787,23 @@ file = "migrations/0210_compress_post_processing_output_post.sql"
 engine = "sqlite"
 scope = "all"
 
+[[migration]]
+version = 211
+description = "durable download cleanup"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0211_durable_download_cleanup.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0211_durable_download_cleanup.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

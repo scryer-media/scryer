@@ -478,7 +478,7 @@ impl TrackedDownloadService {
     }
 
     /// Build a new TrackedDownload, resolving title and reconstructing state.
-    async fn build_new_tracked_download(
+    pub(crate) async fn build_new_tracked_download(
         app: &AppUseCase,
         download_id: DownloadId,
         id: String,
@@ -524,6 +524,10 @@ impl TrackedDownloadService {
 
     #[cfg(test)]
     pub(crate) fn insert_for_tests(&mut self, tracked: TrackedDownload) -> DownloadId {
+        self.restore_cleanup_download(tracked)
+    }
+
+    pub(crate) fn restore_cleanup_download(&mut self, tracked: TrackedDownload) -> DownloadId {
         let download_id = tracked.download_id;
         self.last_seen_at.insert(download_id, Utc::now());
         self.cache.insert(download_id, tracked);

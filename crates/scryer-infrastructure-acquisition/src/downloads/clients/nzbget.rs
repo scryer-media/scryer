@@ -648,7 +648,9 @@ impl NzbgetDownloadClient {
 
     async fn list_queue_for_client(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let result = self.rpc_call("listgroups", vec![]).await?;
-        let groups = extract_result_array(result, "Groups").unwrap_or_default();
+        let groups = extract_result_array(result, "Groups")
+            .ok_or_else(|| AppError::Repository("invalid NZBGet queue response".into()))?;
+        validate_nzbget_job_ids(&groups)?;
 
         let mut items: Vec<DownloadQueueItem> = groups
             .into_iter()
@@ -944,8 +946,9 @@ impl NzbgetDownloadClient {
 
     async fn list_history_for_client(&self) -> AppResult<Vec<DownloadQueueItem>> {
         let result = self.rpc_call("history", vec![json!(false)]).await?;
-        let entries = extract_result_array(result, "History").unwrap_or_default();
-        let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
+        let entries = extract_result_array(result, "History")
+            .ok_or_else(|| AppError::Repository("invalid NZBGet history response".into()))?;
+        validate_nzbget_job_ids(&entries)?;
 
         Ok(entries
             .into_iter()
@@ -969,12 +972,6 @@ impl NzbgetDownloadClient {
                 let (state, attention_reason) = map_history_state(&status_upper, entry);
                 let history_ts =
                     extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
-                if let Some(ts) = history_ts
-                    && ts < cutoff_ts
-                {
-                    return None;
-                }
-
                 let title_name = entry
                     .get("Name")
                     .or_else(|| entry.get("name"))
@@ -1318,6 +1315,26 @@ impl DownloadClient for NzbgetDownloadClient {
         self.list_queue_for_client().await
     }
 
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        _offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        for item in self
+            .list_queue()
+            .await?
+            .into_iter()
+            .chain(self.list_history().await?)
+        {
+            if item.download_client_item_id == locator.item_id {
+                return Ok(scryer_application::DownloadClientObservation::Present(
+                    Box::new(item),
+                ));
+            }
+        }
+        Ok(scryer_application::DownloadClientObservation::Absent)
+    }
+
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
         self.list_history_for_client().await
     }
@@ -1618,6 +1635,20 @@ fn extract_nzbget_parameters(entry: &serde_json::Map<String, Value>) -> Extracte
         is_scryer,
         download_id: observed_identity.download_id,
     }
+}
+
+fn validate_nzbget_job_ids(items: &[Value]) -> AppResult<()> {
+    if items.iter().any(|item| {
+        extract_i64_value(item.get("NZBID"))
+            .or_else(|| extract_i64_value(item.get("nzbId")))
+            .or_else(|| extract_i64_value(item.get("ID")))
+            .is_none_or(|id| id <= 0)
+    }) {
+        return Err(AppError::Repository(
+            "NZBGet listing contains an invalid job identity".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn extract_result_array(value: Value, preferred_key: &str) -> Option<Vec<Value>> {

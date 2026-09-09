@@ -296,6 +296,9 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     pub(super) identity_state_reasons: Arc<Mutex<HashMap<String, String>>>,
     pub(super) identity_state_details: Arc<Mutex<HashMap<String, String>>>,
     pub(super) tracked_states: TrackedDownloadStates,
+    pub(super) pending_cleanup: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
+    pub(super) cleanup_checkpoints:
+        Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
 }
@@ -727,6 +730,25 @@ pub(super) fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn checkpoint_download_cleanup_payload(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        checkpoint: &str,
+    ) -> AppResult<()> {
+        self.cleanup_checkpoints
+            .lock()
+            .await
+            .insert(*id, checkpoint.into());
+        Ok(())
+    }
+
+    async fn has_pending_download_cleanup(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<bool> {
+        Ok(self.pending_cleanup.lock().await.contains(id))
+    }
+
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
         if let Some(message) = self.record_submission_error.lock().await.clone() {
             return Err(AppError::Repository(message));
@@ -1739,6 +1761,8 @@ impl StubSubmitError {
 
 #[derive(Default, Clone)]
 pub(super) struct StubDownloadClient {
+    pub(super) native_data_removal: bool,
+    pub(super) observation_error: Arc<Mutex<Option<String>>>,
     pub(super) queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
@@ -1782,6 +1806,7 @@ pub(super) struct StubDownloadClient {
     /// `StopSeeding` seeding profile stops a finished torrent uploading, so the
     /// gate's non-removal actions are observable.
     pub(super) paused_requests: PausedDownloadRequests,
+    pub(super) pause_error: Arc<Mutex<Option<String>>>,
 }
 
 impl StubDownloadClient {
@@ -1862,6 +1887,46 @@ impl StubDownloadClient {
 
 #[async_trait]
 impl DownloadClient for StubDownloadClient {
+    fn supports_native_data_removal(&self) -> bool {
+        self.native_data_removal
+    }
+    async fn observe_download(
+        &self,
+        locator: &crate::ClientJobLocator,
+        _offset: usize,
+    ) -> AppResult<crate::DownloadClientObservation> {
+        if let Some(error) = self.observation_error.lock().await.as_ref() {
+            return Err(AppError::Repository(error.clone()));
+        }
+        let authoritative = self.snapshot_authoritative_client_ids.lock().await;
+        if !authoritative.is_empty()
+            && !locator
+                .client_id
+                .as_ref()
+                .is_some_and(|id| authoritative.contains(id))
+        {
+            return Ok(crate::DownloadClientObservation::Unknown {
+                reason: "fixture client is unavailable".into(),
+                next_history_offset: 0,
+            });
+        }
+        drop(authoritative);
+        // The fixture's vectors are complete client listings.
+        for item in self
+            .list_queue()
+            .await?
+            .into_iter()
+            .chain(self.list_history().await?)
+        {
+            if item.download_client_item_id == locator.item_id
+                && (item.client_id.is_empty()
+                    || locator.client_id.as_deref() == Some(item.client_id.as_str()))
+            {
+                return Ok(crate::DownloadClientObservation::Present(Box::new(item)));
+            }
+        }
+        Ok(crate::DownloadClientObservation::Absent)
+    }
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -2129,6 +2194,9 @@ impl DownloadClient for StubDownloadClient {
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
+        if let Some(error) = self.pause_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         self.paused_requests
             .lock()
             .await
@@ -2137,6 +2205,9 @@ impl DownloadClient for StubDownloadClient {
     }
 
     async fn pause_queue_item_for_client(&self, client_id: &str, id: &str) -> AppResult<()> {
+        if let Some(error) = self.pause_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         self.paused_requests
             .lock()
             .await

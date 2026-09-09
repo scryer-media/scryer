@@ -208,7 +208,7 @@ impl AppUseCase {
     /// the canonical default — the explicit fallback site — so the read path
     /// stays a thin lookup over normalized data. Legacy installs converge via
     /// the startup `normalize_routing_settings` pass.
-    async fn read_download_client_routing_entry(
+    pub(crate) async fn read_download_client_routing_entry(
         &self,
         library_id: Option<&str>,
         facet: &MediaFacet,

@@ -304,7 +304,19 @@ fn submission_blocks_search_for_wanted_item(
     // An unobservable queue reads as "possibly active" everywhere else too
     // (`DownloadClientSnapshot::is_active`); with no way to build honest queued
     // pseudo-incumbents, the old whole-scope skip is the safe answer.
-    if dl_snapshot.queue_listing_failed() {
+    if (dl_snapshot.client_unreadable(submission.download_client_id.as_deref())
+        || (!submission_is_active(submission, dl_snapshot)
+            && !submission_is_completed(submission, dl_snapshot)))
+        && (!tracked_state.is_some_and(|state| state.is_import_settled())
+            || (!scope_is_occupied
+                && tracked_state.is_some_and(|state| state.counts_as_imported())))
+    {
+        tracing::info!(
+            client_id = ?submission.download_client_id,
+            download_id = %submission.download_id,
+            title_id = %item.title_id,
+            "client state unknown; acquisition deferred"
+        );
         return true;
     }
 
@@ -334,8 +346,7 @@ fn submission_blocks_search_for_wanted_item(
             submission.download_client_id.as_deref(),
             &submission.download_client_item_id,
         )
-        && (tracked_submission_is_live
-            || submission_is_active(submission, dl_snapshot))
+        && (tracked_submission_is_live || submission_is_active(submission, dl_snapshot))
     {
         return true;
     }
@@ -646,7 +657,9 @@ async fn arbitrate_and_commit_title_grabs(
     // would be comparing unrelated things here.
     proposals.sort_by(
         |left, right| match (left.best_candidate(), right.best_candidate()) {
-            (Some(left), Some(right)) => crate::acquisition::scoring::RankHead::compare(left, right),
+            (Some(left), Some(right)) => {
+                crate::acquisition::scoring::RankHead::compare(left, right)
+            }
             // A proposal with no candidate cannot win; it sorts last rather than
             // being dropped, so nothing it still owes gets skipped.
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -1211,10 +1224,9 @@ async fn plan_series_pack_for_title(
         .and_then(|candidate| candidate.parsed_release_metadata.as_ref())
     {
         Some(parsed) => {
-            let scope = crate::acquisition_coverage::resolve_release_coverage(
-                parsed, &episodes, &[], None,
-            )
-            .submission_scope();
+            let scope =
+                crate::acquisition_coverage::resolve_release_coverage(parsed, &episodes, &[], None)
+                    .submission_scope();
             let mut episode_ids = recovered_scope_episode_ids(app, &scope).await;
             episode_ids.sort();
             episode_ids.dedup();
@@ -1411,21 +1423,17 @@ async fn commit_season_pack_proposal(
             let pack_title = Some(best_pack.title.clone());
             let pack_hint = normalize_release_attempt_hint(pack_url.as_deref());
             let pack_title_norm = normalize_release_name(pack_title.as_deref());
-            let pack_password =
-                normalize_release_password(best_pack.password_hint.as_deref());
+            let pack_password = normalize_release_password(best_pack.password_hint.as_deref());
             let request_signature = normalize_release_selection_signature(
                 pack_url.as_deref(),
                 pack_title.as_deref(),
                 best_pack.source_kind,
             );
             let info_hash_hint = best_pack.info_hash().map(str::to_string);
-            let seed_minimums =
-                crate::ReleaseSeedMinimums::from_release_extra(&best_pack.extra);
+            let seed_minimums = crate::ReleaseSeedMinimums::from_release_extra(&best_pack.extra);
             let download_id = scryer_domain::download_identity::DownloadId::new();
-            let submission_scope = collection_download_submission_scope_for_wanted_item(
-                item,
-                episode.as_ref(),
-            );
+            let submission_scope =
+                collection_download_submission_scope_for_wanted_item(item, episode.as_ref());
 
             let canonical_result = app
                 .submit_canonical_download(CanonicalDownloadSubmissionIntent {
@@ -1450,11 +1458,9 @@ async fn commit_season_pack_proposal(
                         seed_goal_ratio: None,
                         seed_goal_seconds: None,
                         tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
-                        tracker_min_seed_time_minutes: seed_minimums
-                            .min_seed_time_minutes,
+                        tracker_min_seed_time_minutes: seed_minimums.min_seed_time_minutes,
                         season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,
-                        season_pack_seed_time_minutes: seed_minimums
-                            .season_pack_seed_time_minutes,
+                        season_pack_seed_time_minutes: seed_minimums.season_pack_seed_time_minutes,
                         is_recent,
                         season_pack: Some(true),
                     },
@@ -1467,9 +1473,7 @@ async fn commit_season_pack_proposal(
                 .await;
 
             let canonical_submission = match canonical_result {
-                Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => {
-                    Ok(submission)
-                }
+                Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
                 Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
                     break 'season_pack_candidates;
                 }
@@ -1508,9 +1512,7 @@ async fn commit_season_pack_proposal(
                         SubmissionScope::Episode { episode_id } => {
                             vec![episode_id.clone()]
                         }
-                        SubmissionScope::EpisodeSet { episode_ids } => {
-                            episode_ids.clone()
-                        }
+                        SubmissionScope::EpisodeSet { episode_ids } => episode_ids.clone(),
                         SubmissionScope::Collection { collection_id } => app
                             .services
                             .catalog
@@ -1574,9 +1576,7 @@ async fn commit_season_pack_proposal(
                         now,
                         &failed_routes,
                         &pack_blocklist,
-                        |candidate| {
-                            candidate_is_season_pack_for_season(candidate, season_num)
-                        },
+                        |candidate| candidate_is_season_pack_for_season(candidate, season_num),
                     )
                     .await;
                     let pack_score = best_pack
@@ -1585,34 +1585,25 @@ async fn commit_season_pack_proposal(
                         .map(|d| d.preference_score)
                         .unwrap_or(0);
                     let mut grab_meta = HashMap::new();
-                    grab_meta.insert(
-                        "title_name".to_string(),
-                        serde_json::json!(title.name),
-                    );
+                    grab_meta.insert("title_name".to_string(), serde_json::json!(title.name));
                     grab_meta.insert(
                         "release_title".to_string(),
                         serde_json::json!(best_pack.title),
                     );
-                    grab_meta.insert(
-                        "indexer".to_string(),
-                        serde_json::json!(best_pack.source),
-                    );
-                    grab_meta
-                        .insert("score".to_string(), serde_json::json!(pack_score));
+                    grab_meta.insert("indexer".to_string(), serde_json::json!(best_pack.source));
+                    grab_meta.insert("score".to_string(), serde_json::json!(pack_score));
                     let _ = app
                         .append_domain_event(new_title_domain_event(
                             None,
                             title,
-                            DomainEventPayload::ReleaseGrabbed(
-                                ReleaseGrabbedEventData {
-                                    title: title_context_snapshot(title),
-                                    source_title: Some(best_pack.title.clone()),
-                                    source_hint: Some(best_pack.source.clone()),
-                                    source_provider: Some(best_pack.source.clone()),
-                                    download_id: Some(download_job_id),
-                                    episode_ids: grabbed_episode_ids.clone(),
-                                },
-                            ),
+                            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                                title: title_context_snapshot(title),
+                                source_title: Some(best_pack.title.clone()),
+                                source_hint: Some(best_pack.source.clone()),
+                                source_provider: Some(best_pack.source.clone()),
+                                download_id: Some(download_job_id),
+                                episode_ids: grabbed_episode_ids.clone(),
+                            }),
                         ))
                         .await;
                     info!(
@@ -1666,7 +1657,8 @@ async fn commit_season_pack_proposal(
                             pack_password,
                         )
                         .await;
-                    if !defer && let Some(release_name) = pack_title_norm
+                    if !defer
+                        && let Some(release_name) = pack_title_norm
                         && let Err(error) = app
                             .services
                             .workflow
@@ -1674,22 +1666,19 @@ async fn commit_season_pack_proposal(
                             .block(&NewBlocklistEntry {
                                 title_id: title.id.clone(),
                                 release_name,
-                                indexer_id: best_pack
-                                    .indexer_id
-                                    .clone()
-                                    .unwrap_or_default(),
+                                indexer_id: best_pack.indexer_id.clone().unwrap_or_default(),
                                 info_hash: best_pack.info_hash().map(str::to_string),
                                 reason: Some(format!("season pack grab failed: {err}")),
                             })
                             .await
-                        {
-                            warn!(
-                                error = %error,
-                                title_id = title.id.as_str(),
-                                release = best_pack.title.as_str(),
-                                "failed to persist blocklist entry for failed season pack grab"
-                            );
-                        }
+                    {
+                        warn!(
+                            error = %error,
+                            title_id = title.id.as_str(),
+                            release = best_pack.title.as_str(),
+                            "failed to persist blocklist entry for failed season pack grab"
+                        );
+                    }
                     if !submit_unavailable {
                         break 'season_pack_candidates;
                     }
@@ -3608,8 +3597,9 @@ async fn commit_scope_grab(
             score = candidate_score,
             // Re-read rather than carried from the evaluation: a route another
             // candidate burned moments ago is part of why this one is next.
-            decision = effective_auto_decision_code_for_route(candidate, failed_routes, db_blocklist)
-                .as_str(),
+            decision =
+                effective_auto_decision_code_for_route(candidate, failed_routes, db_blocklist)
+                    .as_str(),
             attempt = grab_attempts,
             "auto-grabbing release"
         );
@@ -4434,6 +4424,56 @@ mod task_runner_tests {
     }
 
     #[test]
+    fn history_outage_and_recent_history_omission_preserve_unresolved_claims() {
+        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+        let submission = episode_submission(
+            &item.title_id,
+            item.episode_id.as_deref().unwrap(),
+            "job-old",
+        );
+        let mut snapshot = snapshot_with_job("another-job", false);
+        for occupied in [false, true] {
+            assert!(submission_blocks_search_for_wanted_item(
+                &submission,
+                &item,
+                None,
+                &snapshot,
+                None,
+                occupied
+            ));
+            snapshot.history_listing_failed = true;
+            assert!(submission_blocks_search_for_wanted_item(
+                &submission,
+                &item,
+                None,
+                &snapshot,
+                Some(scryer_domain::TrackedDownloadState::Downloading),
+                occupied
+            ));
+        }
+        let unrelated = wanted_episode_item("another-title", "Another", 1);
+        assert!(
+            submission_blocks_search_for_wanted_item(
+                &submission,
+                &item,
+                None,
+                &snapshot,
+                Some(scryer_domain::TrackedDownloadState::Imported),
+                false,
+            ),
+            "an import awaiting catalog visibility must not be replaced during an outage"
+        );
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &unrelated,
+            None,
+            &snapshot,
+            None,
+            false
+        ));
+    }
+
+    #[test]
     fn failed_submission_does_not_block_completed_initial_wanted_search() {
         let item = wanted_episode_item("title-bluey", "Bluey", 1);
         let episode_id = item.episode_id.as_deref().expect("episode id");
@@ -4534,7 +4574,10 @@ mod task_runner_tests {
         let mut stale = snapshot_with_job("job-stalled", false);
         stale
             .stale_downloading_client_ids
-            .insert(download_client_item_identity(Some("primary"), "job-stalled"));
+            .insert(download_client_item_identity(
+                Some("primary"),
+                "job-stalled",
+            ));
         stale
             .stale_downloading_raw_item_ids
             .insert("job-stalled".to_string());

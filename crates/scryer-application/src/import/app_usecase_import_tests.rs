@@ -2557,7 +2557,9 @@ async fn maybe_remove_completed_manual_import_download_deletes_history_for_colle
     let download_client = Arc::new(ManualImportCleanupDownloadClient::default());
     let app = build_manual_import_cleanup_app(vec![title], download_client.clone());
     let dir = tempfile::tempdir().expect("tempdir");
-    let completed = test_completed_download("Harbor.Pals.S01.Complete.1080p.WEB-DL", dir.path());
+    let mut completed =
+        test_completed_download("Harbor.Pals.S01.Complete.1080p.WEB-DL", dir.path());
+    completed.client_type = "weaver".into();
 
     maybe_remove_completed_manual_import_download(&app, Some(&completed), Some("series-1"), true)
         .await;
@@ -2580,6 +2582,7 @@ async fn maybe_remove_completed_manual_import_download_deletes_history_for_episo
     let mut completed =
         test_completed_download("Silver Horizon.S01E03-E04.1080p.WEB-DL", dir.path());
     completed.download_client_item_id = "job-episode-set".to_string();
+    completed.client_type = "weaver".into();
 
     maybe_remove_completed_manual_import_download(&app, Some(&completed), Some("anime-1"), true)
         .await;
@@ -3062,7 +3065,9 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     std::fs::copy(&video_fixture, &tiny_extra).expect("copy extra video fixture");
     // `EP04` in a movie's own name is installment shorthand, not an episode
     // label: a movie preview must never turn it into an episode suggestion.
-    let installment = dir.path().join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
+    let installment = dir
+        .path()
+        .join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
     std::fs::copy(&video_fixture, &installment).expect("copy installment video fixture");
     let mut completed = test_completed_download("Manual.Movie.2024.1080p.WEB-DL", dir.path());
     completed.release_name = Some("Manual.Movie.2024.1080p.WEB-DL".to_string());

@@ -357,7 +357,7 @@ impl AppUseCase {
                 })
             })
             .cloned();
-        let snapshot = if state.submissions.is_empty() {
+        let mut snapshot = if state.submissions.is_empty() {
             None
         } else {
             let guards = &self.runtime.acquisition.download_submission_guards;
@@ -387,13 +387,114 @@ impl AppUseCase {
                         .integrations
                         .download_client
                         .list_snapshot_outcome_excluding_client_types(100, &[])
-                        .await?;
+                        .await
+                        .map_err(|error| AppError::DownloadSubmitUnavailable(error.to_string()))?;
                     guards.store_client_snapshot(snapshot.clone());
                     snapshot
                 };
                 Some(snapshot)
             }
         };
+
+        // A cached positive sighting can protect a claim, but absence from
+        // queue + recent history cannot release one. Recheck the exact job
+        // before either the same-request retry or conflict admission forgets it.
+        if let Some(snapshot) = snapshot.as_mut() {
+            for submission in &state.submissions {
+                if !crate::catalog_workflow::submission_scopes_overlap(
+                    &title_id,
+                    &submission.scope,
+                    &intent.scope,
+                    &state.episodes,
+                ) || state
+                    .accepted_download_ids
+                    .contains(&submission.download_id)
+                {
+                    continue;
+                }
+                let locator = ClientJobLocator::from_submission(submission);
+                let durable_state = self
+                    .services
+                    .workflow
+                    .download_submissions
+                    .get_identity_tracked_state_for_download(
+                        Some(&submission.download_id),
+                        &DownloadSubmissionIdentity::default(),
+                        Some(&locator),
+                    )
+                    .await
+                    .map_err(|error| AppError::DownloadSubmitUnavailable(error.to_string()))?;
+                let imported = matches!(
+                    durable_state.as_deref(),
+                    Some("imported" | "imported_seeding")
+                );
+                let cleanup_pending = if imported {
+                    self.services
+                        .workflow
+                        .download_submissions
+                        .has_pending_download_cleanup(&submission.download_id)
+                        .await
+                        .map_err(|error| AppError::DownloadSubmitUnavailable(error.to_string()))?
+                } else {
+                    false
+                };
+                if matches!(durable_state.as_deref(), Some("failed" | "ignored"))
+                    || (imported && !cleanup_pending)
+                {
+                    continue;
+                }
+                match self
+                    .services
+                    .integrations
+                    .download_client
+                    .observe_download(&locator, 0)
+                    .await
+                {
+                    Ok(crate::DownloadClientObservation::Present(item)) => {
+                        snapshot
+                            .items
+                            .retain(|cached| !queue_item_matches_submission(cached, submission));
+                        snapshot.items.push(*item);
+                        if let Some(client_id) = locator.client_id.as_ref() {
+                            snapshot.authoritative_client_ids.insert(client_id.clone());
+                        }
+                    }
+                    Ok(crate::DownloadClientObservation::Absent) => {
+                        let binding = self
+                            .services
+                            .workflow
+                            .download_registry
+                            .find_active_binding_by_locator(&locator)
+                            .await
+                            .map_err(|error| {
+                                AppError::DownloadSubmitUnavailable(error.to_string())
+                            })?;
+                        if binding.is_some() {
+                            return Err(AppError::DownloadSubmitUnavailable(
+                                "download absence is awaiting lifecycle reconciliation; acquisition deferred".into()));
+                        }
+                        snapshot
+                            .items
+                            .retain(|cached| !queue_item_matches_submission(cached, submission));
+                        if let Some(client_id) = locator.client_id.as_ref() {
+                            snapshot.authoritative_client_ids.insert(client_id.clone());
+                        }
+                    }
+                    Ok(crate::DownloadClientObservation::Unknown { reason, .. }) => {
+                        return Err(AppError::DownloadSubmitUnavailable(format!(
+                            "client state unknown; acquisition deferred for {}: {reason}",
+                            submission.download_id
+                        )));
+                    }
+                    Err(error) => {
+                        return Err(AppError::DownloadSubmitUnavailable(format!(
+                            "client state unknown; acquisition deferred for {}: {error}",
+                            submission.download_id
+                        )));
+                    }
+                }
+            }
+        }
 
         if let Some(existing) = existing {
             let snapshot = snapshot

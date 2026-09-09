@@ -392,6 +392,61 @@ async fn maybe_remove_completed_manual_import_download(
         return;
     };
 
+    if app
+        .services
+        .workflow
+        .download_submissions
+        .supports_durable_download_cleanup()
+    {
+        let locator = crate::ClientJobLocator::new(
+            Some(&completed.client_id),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        );
+        let result = async {
+            let binding = app
+                .services
+                .workflow
+                .download_registry
+                .find_active_binding_by_locator(&locator)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "verified manual import has no durable client binding".into(),
+                    )
+                })?;
+            app.services
+                .workflow
+                .download_submissions
+                .record_identity_tracked_state_for_download(
+                    Some(&binding.download_id),
+                    &crate::DownloadSubmissionIdentity::default(),
+                    Some(&locator),
+                    "imported",
+                    Some("manual_import_completed"),
+                    None,
+                )
+                .await?;
+            if let crate::DownloadCleanupClaim::Claimed(record) = app
+                .services
+                .workflow
+                .download_submissions
+                .claim_download_cleanup(&binding.download_id)
+                .await?
+            {
+                run_claimed_download_cleanup(app, record, None).await;
+            }
+            Ok::<(), AppError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(client_id = %completed.client_id,
+                item_id = %completed.download_client_item_id, error = %error,
+                "verified manual import cleanup remains unresolved");
+        }
+        return;
+    }
+
     // No tracked row on this path, so the client entry is assumed present and
     // the seeding gate decides on the client's own evidence. A torrent still
     // working off its goal is left alone; the tracked poller picks it up and
@@ -411,6 +466,7 @@ async fn maybe_remove_completed_manual_import_download(
         // No tracked row here, so the gate reads the published snapshot.
         None,
         // Outside the reconcile tick: no shared prefetch, per-row reads.
+        None,
         None,
     )
     .await;
@@ -1179,7 +1235,10 @@ async fn preview_manual_import(
         // Several readings fit equally well: suggest nothing rather than the
         // wrong episode, and let the user pick.
         let numbering_ambiguous = numbering.is_ambiguous()
-            || matches!(numbering, crate::anime_numbering::NumberingResolution::UnresolvedPack);
+            || matches!(
+                numbering,
+                crate::anime_numbering::NumberingResolution::UnresolvedPack
+            );
         if let Some(summary) = numbering.ambiguity_summary() {
             tracing::debug!(
                 title_id = %title_id,
@@ -1206,7 +1265,10 @@ async fn preview_manual_import(
                 .season
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "1".to_string());
-            if let Some(ep_num) = ep_meta.episode_numbers.first().filter(|_| !numbering_ambiguous)
+            if let Some(ep_num) = ep_meta
+                .episode_numbers
+                .first()
+                .filter(|_| !numbering_ambiguous)
             {
                 let ep_str = ep_num.to_string();
                 if let Ok(Some(episode)) = app
@@ -1294,18 +1356,19 @@ async fn preview_manual_import(
         let is_grabbed_fallback_path = grabbed_fallback_path
             .as_ref()
             .is_some_and(|fallback| fallback == path);
-        let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous).then(|| {
-            manual_episode_suggestion_for_grabbed_scope(
-                suggested_episode_id.clone(),
-                &grabbed_episode_ids,
-                !exact_pack_scope
-                    && manual_grabbed_episode_fallback_applies(
-                        is_grabbed_fallback_path,
-                        parsed.episode.as_ref(),
-                    ),
-            )
-        })
-        .flatten();
+        let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous)
+            .then(|| {
+                manual_episode_suggestion_for_grabbed_scope(
+                    suggested_episode_id.clone(),
+                    &grabbed_episode_ids,
+                    !exact_pack_scope
+                        && manual_grabbed_episode_fallback_applies(
+                            is_grabbed_fallback_path,
+                            parsed.episode.as_ref(),
+                        ),
+                )
+            })
+            .flatten();
         if scoped_suggestion != suggested_episode_id {
             suggested_episode_label = scoped_suggestion.as_deref().and_then(|episode_id| {
                 available_episodes
@@ -1368,18 +1431,14 @@ pub(crate) async fn preview_manual_import_suggested_episode_ids_for_tests(
     release_evidence: &ReleaseEvidence,
     available_episodes: &[scryer_domain::Episode],
 ) -> AppResult<Vec<Option<String>>> {
-    Ok(preview_manual_import(
-        app,
-        source_dir,
-        title,
-        release_evidence,
-        available_episodes,
+    Ok(
+        preview_manual_import(app, source_dir, title, release_evidence, available_episodes)
+            .await?
+            .files
+            .into_iter()
+            .map(|file| file.suggested_episode_id)
+            .collect(),
     )
-    .await?
-    .files
-    .into_iter()
-    .map(|file| file.suggested_episode_id)
-    .collect())
 }
 
 #[cfg(test)]

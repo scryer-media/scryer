@@ -1287,6 +1287,23 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
         }
     };
 
+    // Recent activity windows are not complete history. Only the adapter's
+    // exact/complete observation may turn a missing snapshot row into failure.
+    match app
+        .services
+        .integrations
+        .download_client
+        .observe_download(source_identity, 0)
+        .await
+    {
+        Ok(crate::DownloadClientObservation::Absent) => {}
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(download_id = %binding.download_id, error = %error,
+                "client state unknown; preserving download binding");
+            return;
+        }
+    }
     match authoritatively_absent_download_disposition(app, tracker, source_identity, &binding).await
     {
         AuthoritativelyAbsentDownloadDisposition::Preserve => return,
@@ -3113,6 +3130,17 @@ pub(crate) async fn finalize_tracked_terminal_state_with(
     )
     .await;
 
+    apply_terminal_cleanup_outcome(app, tracker, id, state, trigger, cleanup).await;
+}
+
+async fn apply_terminal_cleanup_outcome(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    id: &str,
+    state: TrackedDownloadState,
+    trigger: TerminalSettleTrigger,
+    cleanup: crate::import::import::TerminalDownloadCleanup,
+) {
     if cleanup.outcome == crate::import::import::TerminalDownloadCleanupOutcome::HeldForSeeding {
         if state == TrackedDownloadState::Failed
             && tracker
@@ -3332,6 +3360,63 @@ async fn reconcile_terminal_tracked_downloads(
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
 ) {
     reconcile_duplicate_terminal_source_states(tracker);
+
+    if app
+        .services
+        .workflow
+        .download_submissions
+        .supports_durable_download_cleanup()
+    {
+        use futures_util::StreamExt;
+        let repository = &app.services.workflow.download_submissions;
+        if let Err(error) = repository.seed_download_cleanup(100).await {
+            tracing::warn!(error = %error, "failed to discover durable cleanup work");
+            return;
+        }
+        let candidates = match repository.list_due_download_cleanup(100).await {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to load durable cleanup work");
+                return;
+            }
+        };
+        let mut work = futures_util::stream::iter(candidates).map(|candidate| async move {
+            match repository.claim_download_cleanup(&candidate.download_id).await {
+                Ok(crate::DownloadCleanupClaim::Claimed(record)) =>
+                    crate::import::import::run_claimed_download_cleanup(app, record, None).await,
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::warn!(download_id = %candidate.download_id, error = %error, "failed to claim cleanup");
+                    None
+                }
+            }
+        }).buffer_unordered(4);
+        while let Some(result) = work.next().await {
+            if let Some((download_id, tracked, cleanup)) = result {
+                let (id, state) = if let Some(tracked) = tracked {
+                    let id = tracked.id.clone();
+                    let state = tracked.state;
+                    tracker.restore_cleanup_download(tracked);
+                    (id, state)
+                } else if let Some(id) = tracker.cached_id_for_canonical_download_id(&download_id) {
+                    let state = tracker.find(&id).expect("cached cleanup download").state;
+                    (id, state)
+                } else {
+                    continue;
+                };
+                apply_terminal_cleanup_outcome(
+                    app,
+                    tracker,
+                    &id,
+                    state,
+                    TerminalSettleTrigger::Reconcile,
+                    cleanup,
+                )
+                .await;
+            }
+        }
+        return;
+    }
 
     // `ImportedSeeding` is not terminal, but it has to be re-offered to the
     // gate on every poll — that re-evaluation is what eventually releases the
@@ -3618,12 +3703,17 @@ mod poll_interval_tests {
 #[cfg(test)]
 mod ignored_submission_scope_release_tests {
     use super::scope_rows_released_by_ignored_submission;
-    use crate::{AcquisitionScopeState, AcquisitionScopeStatus, DownloadSubmission, SubmissionScope};
+    use crate::{
+        AcquisitionScopeState, AcquisitionScopeStatus, DownloadSubmission, SubmissionScope,
+    };
 
     const SPHD: &str = "Desert.Warrior.2025.1080p.BluRay.DD+5.1.x264-SPHD";
     const REMUX: &str = "Desert.Warrior.2025.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GRP";
 
-    fn ignored_submission(source_title: Option<&str>, scope: SubmissionScope) -> DownloadSubmission {
+    fn ignored_submission(
+        source_title: Option<&str>,
+        scope: SubmissionScope,
+    ) -> DownloadSubmission {
         DownloadSubmission {
             download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: "title-1".to_string(),
@@ -3664,7 +3754,12 @@ mod ignored_submission_scope_release_tests {
             series_movie_link_id: None,
             season_number: None,
             episode_number: None,
-            media_type: if episode_id.is_some() { "episode" } else { "movie" }.to_string(),
+            media_type: if episode_id.is_some() {
+                "episode"
+            } else {
+                "movie"
+            }
+            .to_string(),
             last_search_at: None,
             status,
             grabbed_release: grabbed_release.map(str::to_string),
@@ -3706,7 +3801,10 @@ mod ignored_submission_scope_release_tests {
             Some(&grabbed(SPHD)),
             None,
         )];
-        assert_eq!(released_ids(&submission, &rows), vec!["scope-1".to_string()]);
+        assert_eq!(
+            released_ids(&submission, &rows),
+            vec!["scope-1".to_string()]
+        );
     }
 
     /// A row grabbed for a *different* release belongs to that other download
@@ -3744,7 +3842,10 @@ mod ignored_submission_scope_release_tests {
     fn an_unreadable_comparison_releases_rather_than_holds() {
         let rows = vec![row("scope-1", AcquisitionScopeStatus::Grabbed, None, None)];
         let submission = ignored_submission(Some(SPHD), SubmissionScope::Title);
-        assert_eq!(released_ids(&submission, &rows), vec!["scope-1".to_string()]);
+        assert_eq!(
+            released_ids(&submission, &rows),
+            vec!["scope-1".to_string()]
+        );
 
         let rows = vec![row(
             "scope-1",
@@ -3753,7 +3854,10 @@ mod ignored_submission_scope_release_tests {
             None,
         )];
         let submission = ignored_submission(None, SubmissionScope::Title);
-        assert_eq!(released_ids(&submission, &rows), vec!["scope-1".to_string()]);
+        assert_eq!(
+            released_ids(&submission, &rows),
+            vec!["scope-1".to_string()]
+        );
     }
 
     /// Scope membership still applies: an episode download releases its own
@@ -3780,6 +3884,9 @@ mod ignored_submission_scope_release_tests {
                 Some("ep-2"),
             ),
         ];
-        assert_eq!(released_ids(&submission, &rows), vec!["scope-ep-1".to_string()]);
+        assert_eq!(
+            released_ids(&submission, &rows),
+            vec!["scope-ep-1".to_string()]
+        );
     }
 }

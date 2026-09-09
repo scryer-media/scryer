@@ -200,6 +200,15 @@ impl FeedbackTimeoutDownloadClient {
 
 #[async_trait]
 impl DownloadClient for FeedbackTimeoutDownloadClient {
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        self.run_feedback_read(self.inner.observe_download(locator, offset))
+            .await
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -1823,6 +1832,62 @@ impl PrioritizedDownloadClientRouter {
 
 #[async_trait]
 impl DownloadClient for PrioritizedDownloadClientRouter {
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        use scryer_application::DownloadClientObservation;
+        let clients = self.list_enabled_clients_by_priority_excluding(&[]).await?;
+        let Some(config) = clients.iter().find(|config| {
+            locator.client_id.as_deref() == Some(config.id.as_str())
+                && config
+                    .client_type
+                    .eq_ignore_ascii_case(&locator.client_type)
+        }) else {
+            return Ok(DownloadClientObservation::Unknown {
+                reason: "original download client is unavailable or ambiguous".into(),
+                next_history_offset: offset,
+            });
+        };
+        for kind in [
+            DownloadFeedbackReadKind::Queue,
+            DownloadFeedbackReadKind::History,
+        ] {
+            if self.feedback_backoff_remaining(&config.id, kind).is_some() {
+                return Ok(DownloadClientObservation::Unknown {
+                    reason: "original download client is in feedback backoff".into(),
+                    next_history_offset: offset,
+                });
+            }
+        }
+        let client = Self::client_from_config(
+            config,
+            self.staged_nzb_store.clone(),
+            self.staged_nzb_pipeline_limit.clone(),
+            self.plugin_provider.as_ref(),
+            self.feedback_read_timeout,
+        )?;
+        let started = Instant::now();
+        let mut observation = match client.observe_download(locator, offset).await {
+            Ok(observation) => observation,
+            Err(error) => {
+                self.record_feedback_read_failure(
+                    &config.id,
+                    DownloadFeedbackReadKind::History,
+                    started.elapsed(),
+                );
+                return Err(error);
+            }
+        };
+        if let DownloadClientObservation::Present(item) = &mut observation {
+            item.client_id.clone_from(&config.id);
+            item.client_name.clone_from(&config.name);
+            item.client_type.clone_from(&config.client_type);
+        }
+        Ok(observation)
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,

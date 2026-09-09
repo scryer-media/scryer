@@ -22,7 +22,9 @@ pub async fn retry_failed_import(
     }
 
     let payload: StoredCompletedImportRequestPayload = serde_json::from_str(&record.payload_json)
-        .map_err(|e| AppError::Repository(format!("failed to deserialize import payload: {e}")))?;
+        .map_err(|e| {
+        AppError::Repository(format!("failed to deserialize import payload: {e}"))
+    })?;
     let (mut completed, persisted) = match payload {
         StoredCompletedImportRequestPayload::Current(payload) => {
             (payload.completed.clone(), Some(payload))
@@ -63,8 +65,7 @@ pub async fn retry_failed_import(
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         });
-    if let Some(title_id) = authorization_title_id
-    {
+    if let Some(title_id) = authorization_title_id {
         let title = app
             .services
             .catalog
@@ -123,12 +124,7 @@ pub async fn retry_failed_import(
                 skip_reason,
                 error_message: Some(error.to_string()),
                 release_burned: false,
-                ..base_completed_import_result(
-                    import_id,
-                    &completed,
-                    &release_evidence,
-                    started_at,
-                )
+                ..base_completed_import_result(import_id, &completed, &release_evidence, started_at)
             };
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Failed, result_json)
@@ -214,6 +210,7 @@ async fn reconcile_terminal_download_cleanup(
     // The reconcile tick's shared reads, or `None` for callers outside a tick
     // (manual import), which take the per-row path.
     cache: Option<&TerminalCleanupTickCache>,
+    record: Option<&crate::DownloadCleanupRecord>,
 ) -> TerminalDownloadCleanup {
     let client_id = client_id.trim();
     let should_remove = match precomputed_should_remove {
@@ -331,8 +328,12 @@ async fn reconcile_terminal_download_cleanup(
                     )
                     .await;
                     return TerminalDownloadCleanup::gated(
-                        TerminalDownloadCleanupOutcome::SeedingEntryKept,
-                        report(decision.reason, Some(stopped)),
+                        if stopped.is_some() {
+                            TerminalDownloadCleanupOutcome::SeedingEntryKept
+                        } else {
+                            TerminalDownloadCleanupOutcome::RetryableFailure
+                        },
+                        report(decision.reason, stopped),
                     );
                 }
                 scryer_domain::SeedGoalMetAction::Keep => {
@@ -375,7 +376,7 @@ async fn reconcile_terminal_download_cleanup(
     // - A client-reported `Failed` never enters the gate — no private rail, no
     //   `never_remove`, no HandOff — so the client's own `can_remove` is the
     //   only rail there is. A torrent it will not release (or cannot answer
-    //   for) keeps today's entry-only removal.
+    //   for) retains both its entry and data for a later attempt.
     // - A burned import-gate `Failed` is a release failure, so torrents use
     //   the same gate and data behavior as imported torrents while Usenet
     //   history deletion includes its client-side data.
@@ -392,36 +393,41 @@ async fn reconcile_terminal_download_cleanup(
             .eq_ignore_ascii_case(crate::seeding_gate::TORRENT_BLACKHOLE_CLIENT_TYPE);
     let remove_data = match state {
         TrackedDownloadState::Imported | TrackedDownloadState::ImportedSeeding => {
-            torrent_data_removal_allowed
+            !is_torrent || torrent_data_removal_allowed
         }
         TrackedDownloadState::Failed
             if failure_origin == TerminalFailureOrigin::ImportGate && is_torrent =>
         {
             torrent_data_removal_allowed
         }
-        TrackedDownloadState::Failed
-            if failure_origin == TerminalFailureOrigin::ImportGate =>
-        {
-            true
-        }
+        TrackedDownloadState::Failed if failure_origin == TerminalFailureOrigin::ImportGate => true,
         TrackedDownloadState::Failed => {
             observed_can_remove == Some(true) && torrent_data_removal_allowed
         }
         _ => false,
     };
 
-    let host_managed_rtorrent_payload =
-        remove_data && client_type.trim().eq_ignore_ascii_case("rtorrent");
-    let rtorrent_cleanup_checkpoint = if host_managed_rtorrent_payload {
-        match remove_rtorrent_payload_before_entry_cleanup(
+    if state == TrackedDownloadState::Failed
+        && is_torrent
+        && failure_origin == TerminalFailureOrigin::ClientFailure
+        && observed_can_remove != Some(true)
+    {
+        return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
+    }
+    let host_managed_payload = remove_data
+        && client_type.trim() != "weaver"
+        && !plugin_has_native_data_removal(app, client_id).await;
+    let payload_cleanup_checkpoint = if host_managed_payload {
+        match remove_host_payload_before_entry_cleanup(
             app,
             client_id,
             client_type,
             download_client_item_id,
+            record,
         )
         .await
         {
-            Ok(checkpoint) => Some(checkpoint),
+            Ok(checkpoint) => checkpoint,
             Err(error) => {
                 tracing::warn!(
                     client_id,
@@ -429,7 +435,7 @@ async fn reconcile_terminal_download_cleanup(
                     download_client_item_id,
                     state = state.as_str(),
                     error = %error,
-                    "failed to remove rTorrent payload before removing the client entry"
+                    "failed to remove download client payload before removing the client entry"
                 );
                 let seeding = seeding_report.map(|report| SeedingGateReport {
                     action: Some(SeedingReleaseAction::Kept),
@@ -445,6 +451,18 @@ async fn reconcile_terminal_download_cleanup(
         None
     };
 
+    let payload_already_removed = record
+        .and_then(|record| record.payload_checkpoint.as_deref())
+        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+        .is_some_and(|checkpoint| {
+            checkpoint
+                .get("payload_removed")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        });
+    let client_remove_data = remove_data
+        && !payload_already_removed
+        && (!host_managed_payload || client_type == "sabnzbd");
     let delete_result = if client_id.is_empty() {
         app.services
             .integrations
@@ -453,7 +471,7 @@ async fn reconcile_terminal_download_cleanup(
                 client_type,
                 download_client_item_id,
                 is_history,
-                remove_data && !host_managed_rtorrent_payload,
+                client_remove_data,
             )
             .await
     } else {
@@ -464,22 +482,32 @@ async fn reconcile_terminal_download_cleanup(
                 client_id,
                 download_client_item_id,
                 is_history,
-                remove_data && !host_managed_rtorrent_payload,
+                client_remove_data,
             )
             .await
     };
 
     let outcome = match delete_result {
-        Ok(()) => TerminalDownloadCleanupOutcome::Removed,
-        Err(error) => {
-            if !terminal_download_item_is_still_visible(
-                app,
+        Ok(()) => {
+            tracing::info!(
                 client_id,
                 client_type,
                 download_client_item_id,
-                is_history,
-            )
-            .await
+                remove_data,
+                "terminal download entry removed"
+            );
+            TerminalDownloadCleanupOutcome::Removed
+        }
+        Err(error) => {
+            if !remove_data
+                && !terminal_download_item_is_still_visible(
+                    app,
+                    client_id,
+                    client_type,
+                    download_client_item_id,
+                    is_history,
+                )
+                .await
             {
                 tracing::debug!(
                     client_id,
@@ -507,8 +535,8 @@ async fn reconcile_terminal_download_cleanup(
     if matches!(
         outcome,
         TerminalDownloadCleanupOutcome::Removed | TerminalDownloadCleanupOutcome::AlreadyGone
-    ) && let Some(checkpoint) = rtorrent_cleanup_checkpoint.as_deref()
-        && let Err(error) = clear_rtorrent_payload_cleanup_checkpoint(checkpoint).await
+    ) && let Some(checkpoint) = payload_cleanup_checkpoint.as_deref()
+        && let Err(error) = clear_host_payload_cleanup_checkpoint(checkpoint).await
     {
         tracing::warn!(
             client_id,
@@ -516,7 +544,7 @@ async fn reconcile_terminal_download_cleanup(
             download_client_item_id,
             checkpoint = %checkpoint.display(),
             error = %error,
-            "failed to clear completed rTorrent payload cleanup checkpoint"
+            "failed to clear completed download client payload cleanup checkpoint"
         );
     }
 
@@ -533,20 +561,76 @@ async fn reconcile_terminal_download_cleanup(
     TerminalDownloadCleanup { outcome, seeding }
 }
 
-async fn remove_rtorrent_payload_before_entry_cleanup(
+async fn plugin_has_native_data_removal(app: &AppUseCase, client_id: &str) -> bool {
+    let Some(provider) = app
+        .services
+        .integrations
+        .download_client_plugin_provider
+        .available()
+    else {
+        return false;
+    };
+    let Ok(Some(config)) = app
+        .services
+        .integrations
+        .download_client_configs
+        .get_by_id(client_id)
+        .await
+    else {
+        return false;
+    };
+    provider
+        .client_for_config(&config)
+        .is_some_and(|client| client.supports_native_data_removal())
+}
+
+async fn remove_host_payload_before_entry_cleanup(
     app: &AppUseCase,
     client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
-) -> AppResult<std::path::PathBuf> {
+    record: Option<&crate::DownloadCleanupRecord>,
+) -> AppResult<Option<std::path::PathBuf>> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
         return Err(AppError::Validation(
-            "rTorrent payload cleanup requires a configured client id".to_string(),
+            "download client payload cleanup requires a configured client id".to_string(),
         ));
     }
 
-    let mut completed = app
+    let saved = record
+        .and_then(|record| record.payload_checkpoint.as_deref())
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .map_err(|error| AppError::Repository(format!("invalid payload checkpoint: {error}")))?;
+    if let Some(saved) = saved.as_ref()
+        && saved
+            .get("payload_removed")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    {
+        tracing::info!(
+            client_id,
+            client_type,
+            download_client_item_id,
+            "payload deletion already checkpointed; retrying entry operation only"
+        );
+        return Ok(saved
+            .get("filesystem_checkpoint")
+            .and_then(serde_json::Value::as_str)
+            .map(std::path::PathBuf::from));
+    }
+
+    let mut completed = if let Some(completed) = record
+        .and_then(|record| record.payload_checkpoint.as_deref())
+        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+        .and_then(|checkpoint| checkpoint.get("completed").cloned())
+        .and_then(|completed| {
+            serde_json::from_value::<scryer_domain::CompletedDownload>(completed).ok()
+        }) {
+        completed
+    } else {
+        app
         .services
         .integrations
         .download_client
@@ -554,9 +638,11 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         .await?
         .ok_or_else(|| {
             AppError::NotFound(format!(
-                "rTorrent completed download {download_client_item_id} is unavailable for payload cleanup"
+                "download client completed download {download_client_item_id} is unavailable for payload cleanup"
             ))
-        })?;
+        })?
+    };
+    let authoritative_completed = completed.clone();
     let config = app
         .services
         .integrations
@@ -585,7 +671,7 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
                     .any(|component| matches!(component, std::path::Component::ParentDir))
             {
                 return Err(AppError::Validation(format!(
-                    "rTorrent reported an unusable output root: {}",
+                    "download client reported an unusable output root: {}",
                     root.display()
                 )));
             }
@@ -594,14 +680,15 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         .collect::<AppResult<Vec<_>>>()?;
     if roots.is_empty() {
         return Err(AppError::Validation(
-            "rTorrent did not report an absolute local output root for payload cleanup".to_string(),
+            "download client did not report an absolute local output root for payload cleanup"
+                .to_string(),
         ));
     }
 
     let target = std::path::PathBuf::from(completed.dest_dir.trim());
     if !target.is_absolute() {
         return Err(AppError::Validation(format!(
-            "rTorrent payload path must be absolute: {}",
+            "download client payload path must be absolute: {}",
             target.display()
         )));
     }
@@ -610,27 +697,63 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(AppError::Validation(format!(
-            "rTorrent payload path must not contain traversal: {}",
+            "download client payload path must not contain traversal: {}",
             target.display()
         )));
     }
     let containing_root = crate::fs_safety::most_specific_containing_root(&target, &roots)
         .ok_or_else(|| {
             AppError::Validation(format!(
-                "rTorrent payload path {} is outside configured output roots",
+                "download client payload path {} is outside configured output roots",
                 target.display()
             ))
         })?;
     if target == containing_root {
         return Err(AppError::Validation(format!(
-            "refusing to delete rTorrent output root {}",
+            "refusing to delete download client output root {}",
             target.display()
         )));
     }
     crate::fs_safety::resolve_available_root_for_path(&target, &roots)?;
-    ensure_rtorrent_target_parents_are_not_symlinks(&containing_root, &target).await?;
+    ensure_payload_target_parents_are_not_symlinks(&containing_root, &target).await?;
 
     let libraries = app.services.catalog.libraries.list(None).await?;
+    let library_roots =
+        crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None);
+    // Protection must fail closed when the configured recycle path cannot be
+    // read. Display-oriented recycle configuration intentionally uses defaults
+    // on read errors and is not suitable as deletion authority.
+    let custom_recycle = app
+        .read_setting_string_value_for_scope(
+            crate::settings::keys::SETTINGS_SCOPE_MEDIA,
+            crate::settings::keys::RECYCLE_BIN_PATH_KEY,
+            None,
+        )
+        .await?;
+    let mut recycle_roots: Vec<std::path::PathBuf> = library_roots
+        .iter()
+        .map(|root| std::path::Path::new(&root.path).join(".scryer-recycle"))
+        .collect();
+    if let Some(path) = custom_recycle
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        recycle_roots.push(path.into());
+    }
+    if library_roots.is_empty() {
+        recycle_roots.push("/tmp/.scryer-recycle".into());
+    }
+    if recycle_roots.iter().any(|root| {
+        crate::catalog_workflow::library_root_paths_overlap(
+            &completed.dest_dir,
+            &root.to_string_lossy(),
+        )
+    }) {
+        return Err(AppError::Validation(
+            "payload overlaps a recycle root".into(),
+        ));
+    }
     if crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
         .iter()
         .any(|root| {
@@ -638,41 +761,76 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         })
     {
         return Err(AppError::Validation(format!(
-            "refusing to delete rTorrent payload {} because it overlaps a configured library root",
+            "refusing to delete download client payload {} because it overlaps a configured library root",
             target.display()
         )));
     }
 
-    let checkpoint = rtorrent_payload_cleanup_checkpoint(
+    let checkpoint = host_payload_cleanup_checkpoint(
         &containing_root,
         client_id,
         client_type,
         download_client_item_id,
         &target,
     );
-    ensure_rtorrent_payload_cleanup_checkpoint(&checkpoint).await?;
+    ensure_host_payload_cleanup_checkpoint(&checkpoint).await?;
 
+    if let Some(record) = record {
+        let plan = serde_json::json!({
+            "completed": authoritative_completed, "payload_removed": false
+        });
+        app.services
+            .workflow
+            .download_submissions
+            .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
+            .await?;
+    }
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
             crate::fs_safety::remove_file_safely_if_exists(&target).await
         }
         Ok(metadata) if metadata.is_dir() => {
+            let owned_name = target
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name == completed.name || completed.release_name.as_deref() == Some(name)
+                });
+            if !owned_name {
+                return Err(AppError::Validation(
+                    "payload directory ownership is unverified; refusing shared-directory deletion"
+                        .into(),
+                ));
+            }
             crate::fs_safety::remove_dir_all_safely_if_exists(&target).await
         }
         Ok(_) => Err(AppError::Validation(format!(
-            "rTorrent payload path {} is not a file, directory, or symlink",
+            "download client payload path {} is not a file, directory, or symlink",
             target.display()
         ))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(AppError::Repository(format!(
-            "failed to inspect rTorrent payload {}: {error}",
+            "failed to inspect download client payload {}: {error}",
             target.display()
         ))),
     }?;
-    Ok(checkpoint)
+    if let Some(record) = record {
+        let plan = serde_json::json!({
+            "completed": authoritative_completed, "payload_removed": true,
+            "filesystem_checkpoint": checkpoint
+        });
+        app.services
+            .workflow
+            .download_submissions
+            .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
+            .await?;
+    }
+    tracing::info!(client_id, client_type, download_client_item_id, path = %target.display(),
+        "terminal download payload removed");
+    Ok(Some(checkpoint))
 }
 
-fn rtorrent_payload_cleanup_checkpoint(
+fn host_payload_cleanup_checkpoint(
     root: &std::path::Path,
     client_id: &str,
     client_type: &str,
@@ -691,53 +849,51 @@ fn rtorrent_payload_cleanup_checkpoint(
     ))
 }
 
-async fn ensure_rtorrent_payload_cleanup_checkpoint(
-    checkpoint: &std::path::Path,
-) -> AppResult<()> {
+async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> AppResult<()> {
     match tokio::fs::create_dir(checkpoint).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = tokio::fs::symlink_metadata(checkpoint).await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to inspect rTorrent payload cleanup checkpoint {}: {error}",
-                    checkpoint.display()
-                ))
-            })?;
+            let metadata = tokio::fs::symlink_metadata(checkpoint)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to inspect download client payload cleanup checkpoint {}: {error}",
+                        checkpoint.display()
+                    ))
+                })?;
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err(AppError::Validation(format!(
-                    "rTorrent payload cleanup checkpoint {} is not a directory",
+                    "download client payload cleanup checkpoint {} is not a directory",
                     checkpoint.display()
                 )));
             }
             Ok(())
         }
         Err(error) => Err(AppError::Repository(format!(
-            "failed to create rTorrent payload cleanup checkpoint {}: {error}",
+            "failed to create download client payload cleanup checkpoint {}: {error}",
             checkpoint.display()
         ))),
     }
 }
 
-async fn clear_rtorrent_payload_cleanup_checkpoint(
-    checkpoint: &std::path::Path,
-) -> AppResult<()> {
+async fn clear_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) -> AppResult<()> {
     match tokio::fs::remove_dir(checkpoint).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(AppError::Repository(format!(
-            "failed to remove rTorrent payload cleanup checkpoint {}: {error}",
+            "failed to remove download client payload cleanup checkpoint {}: {error}",
             checkpoint.display()
         ))),
     }
 }
 
-async fn ensure_rtorrent_target_parents_are_not_symlinks(
+async fn ensure_payload_target_parents_are_not_symlinks(
     root: &std::path::Path,
     target: &std::path::Path,
 ) -> AppResult<()> {
     let relative = target.strip_prefix(root).map_err(|_| {
         AppError::Validation(format!(
-            "rTorrent payload path {} is outside output root {}",
+            "download client payload path {} is outside output root {}",
             target.display(),
             root.display()
         ))
@@ -754,7 +910,7 @@ async fn ensure_rtorrent_target_parents_are_not_symlinks(
         match tokio::fs::symlink_metadata(&candidate).await {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(AppError::Validation(format!(
-                    "rTorrent payload path {} traverses symlink {}",
+                    "download client payload path {} traverses symlink {}",
                     target.display(),
                     candidate.display()
                 )));
@@ -763,7 +919,7 @@ async fn ensure_rtorrent_target_parents_are_not_symlinks(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
                 return Err(AppError::Repository(format!(
-                    "failed to inspect rTorrent payload ancestor {}: {error}",
+                    "failed to inspect download client payload ancestor {}: {error}",
                     candidate.display()
                 )));
             }
@@ -777,16 +933,15 @@ async fn ensure_rtorrent_target_parents_are_not_symlinks(
 ///
 /// Pause is the only stop control the download-client port exposes
 /// (`DownloadControlAction::Pause` in the plugin SDK), and for a torrent that
-/// has finished downloading, paused *is* stopped seeding. A client that does
-/// not support pause degrades to `Keep`: the entry stays and nothing is
-/// removed, which is the safe direction.
+/// has finished downloading, paused *is* stopped seeding. A failed pause
+/// remains unresolved so a transient client outage does not discard the action.
 async fn stop_seeding_for_terminal_download(
     app: &AppUseCase,
     client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
     reason: &'static str,
-) -> SeedingReleaseAction {
+) -> Option<SeedingReleaseAction> {
     let paused = if client_id.is_empty() {
         app.services
             .integrations
@@ -810,7 +965,7 @@ async fn stop_seeding_for_terminal_download(
                 reason,
                 "seeding goal met; paused the torrent per profile policy"
             );
-            SeedingReleaseAction::Paused
+            Some(SeedingReleaseAction::Paused)
         }
         Err(error) => {
             tracing::warn!(
@@ -819,9 +974,9 @@ async fn stop_seeding_for_terminal_download(
                 download_client_item_id,
                 reason,
                 error = %error,
-                "seeding goal met but this client cannot stop the torrent; keeping the entry untouched"
+                "seeding goal met but pause failed; retaining cleanup for retry"
             );
-            SeedingReleaseAction::Kept
+            None
         }
     }
 }
