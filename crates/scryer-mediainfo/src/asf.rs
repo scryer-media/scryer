@@ -1026,6 +1026,25 @@ mod tests {
     }
 
     #[test]
+    fn wave_mp3_mono_layout_reaches_the_catalog_contract() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/media/wmv_wmv1_mp3_mono.wmv");
+        let analysis = crate::analyze_catalog_file(&path).unwrap();
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .unwrap();
+        assert_eq!(audio.codec.as_deref(), Some("mp3"));
+        assert_eq!(audio.channels, Some(1));
+        assert_eq!(audio.metadata.channel_layout.as_deref(), Some("mono"));
+        assert_eq!(audio.metadata.original_language.as_deref(), Some("en"));
+        assert_eq!(audio.language.as_deref(), Some("eng"));
+        assert!(audio.metadata.sample_format.is_none());
+    }
+
+    #[test]
     fn extensible_aac_uses_the_codec_configuration_after_the_wave_header() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/media/wmv_wmv1_aac_surround.wmv");

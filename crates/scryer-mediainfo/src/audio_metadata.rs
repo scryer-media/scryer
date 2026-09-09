@@ -35,6 +35,14 @@ pub(crate) fn wave_format(data: &[u8]) -> StreamMetadata {
         return metadata;
     };
     let mut valid_bits = bits;
+    if tag != 0xfffe {
+        // WAVEFORMATEX defines mono and stereo; larger layouts need a mask.
+        metadata.channel_layout = match channels {
+            1 => Some("mono".into()),
+            2 => Some("stereo".into()),
+            _ => None,
+        };
+    }
     if tag == 0xfffe {
         let Some(extra) = u16le(data, 16).filter(|size| *size >= 22) else {
             return metadata;
@@ -468,6 +476,39 @@ mod tests {
         assert_eq!(header.bitrate, Some(192_000));
         private[1] = 255;
         assert!(vorbis(&private).is_none());
+    }
+
+    #[test]
+    fn wave_channel_layout_uses_only_defined_header_semantics() {
+        let mut data = [0_u8; 40];
+        data[14..16].copy_from_slice(&16_u16.to_le_bytes());
+        for tag in [1_u16, 3, 0x55, 0x161] {
+            data[..2].copy_from_slice(&tag.to_le_bytes());
+            for (channels, layout) in [
+                (0_u16, None),
+                (1, Some("mono")),
+                (2, Some("stereo")),
+                (6, None),
+            ] {
+                data[2..4].copy_from_slice(&channels.to_le_bytes());
+                assert_eq!(wave_format(&data).channel_layout.as_deref(), layout);
+            }
+        }
+        data[..2].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        data[16..18].copy_from_slice(&22_u16.to_le_bytes());
+        data[24..40].copy_from_slice(&[
+            1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
+        ]);
+        for channels in [1_u16, 2, 6] {
+            data[2..4].copy_from_slice(&channels.to_le_bytes());
+            assert!(
+                wave_format(&data).channel_layout.is_none(),
+                "an explicit zero mask stays unknown"
+            );
+        }
+        data[2..4].copy_from_slice(&1_u16.to_le_bytes());
+        data[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        assert_eq!(wave_format(&data).channel_layout.as_deref(), Some("FL"));
     }
 
     #[test]

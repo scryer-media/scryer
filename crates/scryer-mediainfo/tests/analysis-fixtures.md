@@ -8,7 +8,7 @@ The AV1 and HEVC sequence fixtures contain one second of black 64×64 video at 2
 
 `ps_mpeg1_mp2.mpg` and `ps_mpeg2_mp2.vob` contain two seconds of 160×120 `testsrc2` at 25 fps and a 440 Hz mono tone sampled at 48 kHz. FFmpeg 8.1.1 generated them with video targets of 200 kbps and MP2 audio at 128 kbps, using the `mpeg` and `vob` muxers respectively. Native expectations require the correct MPEG video family, 8-bit 4:2:0, square pixels, rational timing, MPEG-2 Main profile, and mono MP2 metadata. Sequence-header bitrate sentinels remain unknown. These are ordinary program-stream fixtures, not authored DVD navigation.
 
-The application regression `canonical_catalog_and_import_paths_preserve_the_same_analysis_contract` runs 36 fixtures through `NativeMediaAnalyzer`, the actual post-download import gate, and the rule projection. It compares the complete analysis contract, excluding elapsed probe time. Coverage includes MPEG-PS, ASF, FLV, AC-3/E-AC-3, Opus, Vorbis, FLAC, and AVI stream sampling, alongside video sequence metadata and MP4 chapters.
+The application regression `canonical_catalog_and_import_paths_preserve_the_same_analysis_contract` runs 37 fixtures through `NativeMediaAnalyzer`, the actual post-download import gate, and the rule projection. It compares the complete analysis contract, excluding elapsed probe time. Coverage includes MPEG-PS, ASF, FLV, AC-3/E-AC-3, Opus, Vorbis, FLAC, and AVI stream sampling, alongside video sequence metadata and MP4 chapters.
 
 The supplemental fixture SHA-256 values are:
 
@@ -41,6 +41,8 @@ FFprobe's `sample_fmt` describes a decoder's chosen output representation. It is
 E-AC-3 frame-size/block-duration bitrate in transport streams and Matroska is compared as an estimate unless explicit stream statistics are present. The native estimate remains separate from measured bitrate. MP4 sample-table accounting and Matroska BPS statistics still require measured bitrate and its provenance; omitting both measured and estimated values remains a mismatch.
 
 FFprobe 8.1.1 reports MPEG-1's unspecified/VBR sequence bitrate code (`0x3ffff`) as 104,857,200 bps. The comparison retains that raw reference output but excludes that specific codec/value pair from required bitrate measurements. Neighboring valid declarations remain mandatory, and native fixtures require the unspecified bitrate to stay unknown.
+
+FFprobe's [ASF demuxer](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/asfdec_f.c) converts stored RFC 1766 language tags to ISO 639 codes and discards region information. For ASF only, the comparison accepts a known two-letter primary tag when its ISO 639-3 equivalent matches the reference. Missing or conflicting originals remain mismatches. Native fixtures independently require exact originals such as `en` and `ja-JP` alongside normalized values.
 
 The differential harness is deliberately strict and is also useful for tracking remaining gaps. A successful subset run does not establish complete-corpus parity or complete-file integrity.
 

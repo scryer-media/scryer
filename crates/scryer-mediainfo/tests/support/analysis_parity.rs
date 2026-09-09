@@ -310,12 +310,29 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
                 .as_str()
                 .filter(|value| !value.is_empty() && *value != "und")
             {
-                same(
-                    &mut differences,
-                    &format!("{label}.original_language"),
-                    &metadata["original_language"],
-                    &Value::String(language.into()),
-                );
+                // ASF's reference demuxer converts RFC 1766 tags to ISO 639
+                // and discards regions. Native fixtures separately require
+                // the exact original tag; this comparison checks its meaning.
+                let asf_alias = reference["format"]["format_name"] == "asf"
+                    && metadata["original_language"]
+                        .as_str()
+                        .is_some_and(|original| {
+                            let primary = original
+                                .split('-')
+                                .next()
+                                .unwrap_or(original)
+                                .to_ascii_lowercase();
+                            isolang::Language::from_639_1(&primary)
+                                .is_some_and(|value| value.to_639_3() == language)
+                        });
+                if !asf_alias {
+                    same(
+                        &mut differences,
+                        &format!("{label}.original_language"),
+                        &metadata["original_language"],
+                        &Value::String(language.into()),
+                    );
+                }
             }
             // FFprobe's zero role flags often mean no signal was found. Positive
             // roles are required facts; they may never disappear in projection.
@@ -540,6 +557,28 @@ mod tests {
                 &reference["streams"][0]
             ));
         }
+    }
+
+    #[test]
+    fn asf_reference_language_normalization_requires_a_matching_original() {
+        let mut native = serde_json::json!({"details":{"streams":[{"kind":"audio","codec":"mp3","metadata":{"original_language":"en-US"}}]}});
+        let mut reference = serde_json::json!({"format":{"format_name":"asf"},"streams":[{"codec_type":"audio","codec_name":"mp3","tags":{"language":"eng"}}]});
+        assert!(compare(&native, &reference).is_empty());
+        for original in [Value::Null, "".into(), "ja-JP".into()] {
+            native["details"]["streams"][0]["metadata"]["original_language"] = original;
+            assert!(
+                compare(&native, &reference)
+                    .iter()
+                    .any(|error| error.contains("original_language"))
+            );
+        }
+        native["details"]["streams"][0]["metadata"]["original_language"] = "en-US".into();
+        reference["format"]["format_name"] = "matroska,webm".into();
+        assert!(
+            compare(&native, &reference)
+                .iter()
+                .any(|error| error.contains("original_language"))
+        );
     }
 
     #[test]

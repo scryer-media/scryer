@@ -6336,6 +6336,7 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         "matrix_ts_005.ts",
         "wmv_wmv1_aac_surround.wmv",
         "wmv_wmv1_wmav1.wmv",
+        "wmv_wmv1_mp3_mono.wmv",
         "wmv_wmv2_video_only.wmv",
         "flv_flv1_pcm_s16le.flv",
         "flv_flv1_pcm_u8.flv",
