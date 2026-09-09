@@ -107,6 +107,34 @@ fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
 }
 
 #[test]
+fn short_transport_stream_audio_retains_separate_bitrate_estimates() {
+    for (name, expected) in [
+        ("h264_aac.ts", 129_042),
+        ("matrix_ts_001.ts", 4_970),
+        ("simd_dense_h264_aac.ts", 4_924),
+    ] {
+        let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.codec.as_deref() == Some("aac"))
+            .unwrap();
+        assert_eq!(
+            audio.metadata.estimated_bitrate_bps,
+            Some(expected),
+            "{name}"
+        );
+        assert!(audio.metadata.bitrate_bps.is_none());
+        assert_eq!(
+            audio.metadata.bitrate_provenance,
+            scryer_media_types::Provenance::Unknown
+        );
+        assert!(analysis.audio_bitrate_kbps.is_none());
+    }
+}
+
+#[test]
 fn flv_declared_frame_rates_do_not_claim_observed_timing() {
     for (name, fps) in [
         ("flv_flv1_video_only.flv", 24),

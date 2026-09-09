@@ -844,8 +844,19 @@ impl TsStreamProbeState {
     }
 
     fn finish(&mut self, track: &mut RawTrack, packet_budget_exhausted: bool) {
+        let stopped_on_budget =
+            !self.complete && (self.budget.exhausted() || packet_budget_exhausted);
+        if !self.complete
+            && self.codec_name.as_deref() == Some("aac")
+            && let Some(header) = find_adts_header_with_minimum(&self.buffer, 2)
+            && let Some(bitrate) = header.bit_rate_bps
+        {
+            // Keep the normal 128-frame sampling target while reads remain;
+            // expose a shorter final sample as an estimate, never a declaration.
+            track.metadata.estimated_bitrate_bps = Some(u64::from(bitrate));
+        }
         self.probe(track);
-        if !self.complete {
+        if !self.complete || stopped_on_budget {
             let exhausted = self.budget.exhausted() || packet_budget_exhausted;
             self.metadata_report.budget_exhausted |= exhausted;
             self.metadata_report.status = scryer_media_types::ProbeStatus::Incomplete;
@@ -1407,6 +1418,10 @@ pub(crate) struct DtsHeader {
 }
 
 fn find_adts_header(data: &[u8]) -> Option<AdtsHeader> {
+    find_adts_header_with_minimum(data, 128)
+}
+
+fn find_adts_header_with_minimum(data: &[u8], minimum_frames: usize) -> Option<AdtsHeader> {
     const ADTS_BITRATE_SAMPLE_FRAMES: usize = 128;
 
     if data.len() < 7 {
@@ -1487,7 +1502,7 @@ fn find_adts_header(data: &[u8]) -> Option<AdtsHeader> {
 
     let (channels, channel_layout) = detected_channels?;
     let bit_rate_bps = detected_sample_rate.and_then(|sample_rate| {
-        (frames >= ADTS_BITRATE_SAMPLE_FRAMES && total_samples > 0)
+        (frames >= minimum_frames && total_samples > 0)
             .then(|| (total_frame_bytes * 8 * u64::from(sample_rate)) / total_samples)
             .and_then(|bitrate| u32::try_from(bitrate).ok())
     });
@@ -2422,6 +2437,39 @@ mod tests {
                         "read-ahead must stay within one packet batch of the payload budget"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn short_aac_samples_are_estimated_only_when_enrichment_finishes() {
+        for (frames, exhausted) in [(1, false), (16, false), (16, true)] {
+            let mut track = RawTrack {
+                codec_name: Some("aac".into()),
+                ..Default::default()
+            };
+            let mut state = TsStreamProbeState::new(0, TrackKind::Audio, Some("aac".into()));
+            state.push_payload(
+                &[0xFF, 0xF1, 0x50, 0x80, 0x00, 0xFF, 0xFC].repeat(frames),
+                &mut track,
+            );
+            assert!(
+                !state.complete,
+                "continue collecting toward the regular 128-frame target"
+            );
+            assert!(track.metadata.estimated_bitrate_bps.is_none());
+            state.finish(&mut track, exhausted);
+            assert_eq!(
+                track.metadata.estimated_bitrate_bps,
+                (frames > 1).then_some(2411)
+            );
+            assert!(track.bit_rate_bps.is_none());
+            assert_eq!(state.metadata_report.budget_exhausted, exhausted);
+            if exhausted {
+                assert_eq!(
+                    state.metadata_report.status,
+                    scryer_media_types::ProbeStatus::Incomplete
+                );
             }
         }
     }

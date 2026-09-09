@@ -116,8 +116,8 @@ fn pixel_depth(format: &str) -> Option<f64> {
 }
 
 pub fn reference_bitrate_is_estimate(reference: &Value, stream: &Value) -> bool {
-    // FFmpeg's E-AC-3 parser derives this value from frame size and block
-    // duration; the syncframe has no average-stream bitrate declaration.
+    // These FFmpeg audio parsers average frame-header rates when the container
+    // has no bitrate declaration. Compare native bounded estimates in that case.
     // MP4 sample tables and explicit Matroska statistics remain accountable.
     let format = reference["format"]["format_name"]
         .as_str()
@@ -128,11 +128,14 @@ pub fn reference_bitrate_is_estimate(reference: &Value, stream: &Value) -> bool 
                 && number(value).is_some_and(|rate| rate > 0.0)
         })
     });
-    stream["codec_name"] == "eac3"
+    matches!(stream["codec_name"].as_str(), Some("aac" | "eac3" | "mp1" | "mp2" | "mp3"))
         && !has_statistics
+        // A Matroska WAVEFORMATEX codec tag can carry a declared byte rate.
+        && (!format.split(',').any(|name| name == "matroska")
+            || stream["codec_tag"].as_str().is_none_or(|tag| matches!(tag, "0x0000" | "0x00000000")))
         && format
             .split(',')
-            .any(|name| matches!(name, "matroska" | "mpegts"))
+            .any(|name| matches!(name, "matroska" | "mpegts" | "mpeg"))
 }
 
 pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
@@ -454,6 +457,67 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn estimated_reference_bitrates_still_require_native_values_and_preserve_declarations() {
+        for codec in ["aac", "eac3", "mp1", "mp2", "mp3"] {
+            let mut reference = serde_json::json!({"format":{"format_name":"mpegts"},"streams":[{
+                "codec_type":"audio", "codec_name":codec, "bit_rate":"64000"
+            }]});
+            assert!(reference_bitrate_is_estimate(
+                &reference,
+                &reference["streams"][0]
+            ));
+            let mut native = serde_json::json!({"details":{"streams":[{"kind":"audio","codec":codec,"metadata":{}}]}});
+            assert!(
+                compare(&native, &reference)
+                    .iter()
+                    .any(|error| error.contains("bitrate_bps"))
+            );
+            native["details"]["streams"][0]["metadata"]["estimated_bitrate_bps"] = 64000.into();
+            assert!(
+                !compare(&native, &reference)
+                    .iter()
+                    .any(|error| error.contains("bitrate"))
+            );
+            native["details"]["streams"][0]["metadata"]["estimated_bitrate_bps"] = 8000.into();
+            assert!(
+                compare(&native, &reference)
+                    .iter()
+                    .any(|error| error.contains("bitrate_bps"))
+            );
+            for format in ["matroska,webm", "mpegts", "mpeg"] {
+                reference["format"]["format_name"] = format.into();
+                assert!(reference_bitrate_is_estimate(
+                    &reference,
+                    &reference["streams"][0]
+                ));
+            }
+            reference["format"]["format_name"] = "mpegts".into();
+            reference["streams"][0]["codec_tag"] = "0x000f".into();
+            assert!(
+                reference_bitrate_is_estimate(&reference, &reference["streams"][0]),
+                "a TS codec tag is a stream type, not a WAVEFORMATEX declaration"
+            );
+            reference["streams"][0]["tags"] = serde_json::json!({"BPS":"64000"});
+            assert!(!reference_bitrate_is_estimate(
+                &reference,
+                &reference["streams"][0]
+            ));
+            reference["streams"][0]["tags"] = Value::Null;
+            reference["format"]["format_name"] = "mov,mp4,m4a,3gp,3g2,mj2".into();
+            assert!(!reference_bitrate_is_estimate(
+                &reference,
+                &reference["streams"][0]
+            ));
+            reference["format"]["format_name"] = "matroska,webm".into();
+            reference["streams"][0]["codec_tag"] = "0x0055".into();
+            assert!(!reference_bitrate_is_estimate(
+                &reference,
+                &reference["streams"][0]
+            ));
+        }
+    }
+
     #[test]
     fn missing_required_rich_values_are_mismatches() {
         let native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"hevc","metadata":{}}]}});
