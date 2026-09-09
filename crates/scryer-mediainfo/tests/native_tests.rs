@@ -78,6 +78,35 @@ fn mp4_chapter_lists_and_referenced_text_tracks_preserve_authored_titles() {
 }
 
 #[test]
+fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
+    let analysis =
+        scryer_mediainfo::analyze_catalog_file(&media("wmv_wmv1_aac_surround.wmv")).unwrap();
+    let video = analysis
+        .details
+        .streams
+        .iter()
+        .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+        .unwrap();
+    let audio = analysis
+        .details
+        .streams
+        .iter()
+        .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+        .unwrap();
+    assert_eq!(video.metadata.id.as_deref(), Some("1"));
+    assert_eq!(audio.metadata.id.as_deref(), Some("2"));
+    let observed = video.metadata.observed_frame_rate.unwrap();
+    assert!((observed.numerator as f64 / observed.denominator as f64 - 12.0).abs() < 0.05);
+    assert_eq!(video.metadata.variable_frame_rate, Some(false));
+    assert_eq!(audio.language.as_deref(), Some("spa"));
+    assert!(audio.metadata.original_language.is_some());
+    assert_eq!(
+        audio.metadata.language_provenance,
+        scryer_media_types::Provenance::Container
+    );
+}
+
+#[test]
 fn mpeg_dts_and_extensible_aac_preserve_audio_header_properties() {
     for (name, codec, channels, layout) in [
         ("matrix_mkv_001.mkv", "mp3", 2, "stereo"),

@@ -50,7 +50,9 @@ struct AsfState {
     duration_seconds: Option<f64>,
     chapters: Option<i32>,
     streams: BTreeMap<u16, StreamState>,
+    stream_order: Vec<u16>,
     languages: Vec<String>,
+    original_languages: Vec<String>,
     object_count: usize,
     max_packet_size: Option<u32>,
 }
@@ -60,7 +62,15 @@ struct StreamState {
     track: Option<RawTrack>,
     bit_rate_bps: Option<i64>,
     frame_rate_fps: Option<f64>,
+    declared_frame_rate: Option<scryer_media_types::Rational>,
     language_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AsfFrameTiming {
+    summary_fps: f64,
+    observed_rate: scryer_media_types::Rational,
+    variable: bool,
 }
 
 pub(crate) fn parse_asf_source(
@@ -121,18 +131,43 @@ pub(crate) fn parse_asf_source(
         .unwrap_or_default();
 
     let languages = state.languages;
+    let original_languages = state.original_languages;
     let mut tracks = Vec::new();
-    for (stream_number, stream) in state.streams {
+    for stream_number in state.stream_order {
+        let Some(stream) = state.streams.remove(&stream_number) else {
+            continue;
+        };
         if let Some(mut track) = stream.track {
+            track.metadata.id = Some(stream_number.to_string());
             track.bit_rate_bps = stream.bit_rate_bps.or(track.bit_rate_bps);
-            track.frame_rate_fps = stream
-                .frame_rate_fps
-                .or(track.frame_rate_fps)
-                .or_else(|| probed_frame_rates.get(&stream_number).copied());
+            if stream.bit_rate_bps.is_some() {
+                track.metadata.bitrate_provenance = scryer_media_types::Provenance::Container;
+            }
+            track.frame_rate_fps = stream.frame_rate_fps.or(track.frame_rate_fps).or_else(|| {
+                probed_frame_rates
+                    .get(&stream_number)
+                    .map(|timing| timing.summary_fps)
+            });
+            if track.kind == TrackKind::Video {
+                track.metadata.declared_frame_rate = stream.declared_frame_rate;
+                if let Some(timing) = probed_frame_rates.get(&stream_number) {
+                    track.metadata.observed_frame_rate = Some(timing.observed_rate);
+                    track.metadata.variable_frame_rate = Some(timing.variable);
+                }
+            }
             track.language = stream
                 .language_index
                 .and_then(|index| languages.get(index))
+                .filter(|language| !language.is_empty() && language.as_str() != "und")
                 .cloned();
+            track.metadata.original_language = stream
+                .language_index
+                .and_then(|index| original_languages.get(index))
+                .filter(|language| !language.is_empty())
+                .cloned();
+            if track.metadata.original_language.is_some() {
+                track.metadata.language_provenance = scryer_media_types::Provenance::Container;
+            }
             tracks.push(track);
         }
     }
@@ -211,8 +246,8 @@ fn parse_file_properties(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
         state.max_packet_size = Some(max_packet_size);
     }
     if flags & 1 == 0 {
-        let play_ms = play_time / 10_000;
-        state.duration_seconds = Some(play_ms.saturating_sub(preroll_ms) as f64 / 1_000.0);
+        state.duration_seconds =
+            Some((play_time as f64 / 10_000_000.0 - preroll_ms as f64 / 1_000.0).max(0.0));
     }
     Ok(())
 }
@@ -235,7 +270,11 @@ fn parse_stream_properties(data: &[u8], state: &mut AsfState) -> Result<(), Medi
     } else {
         return Ok(());
     };
-    state.streams.entry(stream_number).or_default().track = Some(track);
+    let stream = state.streams.entry(stream_number).or_default();
+    if stream.track.is_none() {
+        state.stream_order.push(stream_number);
+    }
+    stream.track = Some(track);
     Ok(())
 }
 
@@ -346,6 +385,8 @@ fn parse_extended_stream_properties(
     }
     if average_frame_time != 0 {
         stream.frame_rate_fps = Some(10_000_000.0 / average_frame_time as f64);
+        stream.declared_frame_rate =
+            scryer_media_types::Rational::new(10_000_000, average_frame_time);
     }
     stream.language_index = Some(language_index);
 
@@ -386,6 +427,7 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
         return Err(parse_error("too many ASF language records"));
     }
     let mut languages = Vec::with_capacity(count);
+    let mut original_languages = Vec::with_capacity(count);
     for _ in 0..count {
         let byte_len = r.u8()? as usize;
         if !byte_len.is_multiple_of(2) {
@@ -396,8 +438,10 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
             .chunks_exact(2)
             .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
             .collect::<Vec<_>>();
-        let language = String::from_utf16_lossy(&utf16)
+        let original_language = String::from_utf16_lossy(&utf16)
             .trim_matches('\0')
+            .to_owned();
+        let language = original_language
             .split(['-', '_'])
             .next()
             .unwrap_or_default()
@@ -407,8 +451,10 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
             .map(|language| language.to_639_3().to_owned())
             .unwrap_or(language);
         languages.push(language);
+        original_languages.push(original_language);
     }
     state.languages = languages;
+    state.original_languages = original_languages;
     Ok(())
 }
 
@@ -440,7 +486,7 @@ fn probe_asf_frame_rates(
     data_offset: u64,
     packet_size: u32,
     video_streams: &BTreeSet<u16>,
-) -> Option<BTreeMap<u16, f64>> {
+) -> Option<BTreeMap<u16, AsfFrameTiming>> {
     if video_streams.is_empty() || packet_size == 0 {
         return None;
     }
@@ -601,7 +647,7 @@ fn read_asf_packet_value(
     }
 }
 
-fn derive_frame_rate(timestamps: &[u32]) -> Option<f64> {
+fn derive_frame_rate(timestamps: &[u32]) -> Option<AsfFrameTiming> {
     if timestamps.len() < 3 {
         return None;
     }
@@ -614,9 +660,8 @@ fn derive_frame_rate(timestamps: &[u32]) -> Option<f64> {
         return None;
     }
     deltas.sort_unstable();
-    if deltas.last()?.saturating_sub(*deltas.first()?) > 1 {
-        return None;
-    }
+    // Millisecond timestamps alternate by one tick even for a fixed cadence.
+    let variable = deltas.last()?.saturating_sub(*deltas.first()?) > 1;
     let span = timestamps.last()?.checked_sub(*timestamps.first()?)?;
     if span == 0 {
         return None;
@@ -629,7 +674,16 @@ fn derive_frame_rate(timestamps: &[u32]) -> Option<f64> {
     if (frame_rate - rounded).abs() <= rounded * 0.01 {
         frame_rate = rounded;
     }
-    Some(frame_rate)
+    Some(AsfFrameTiming {
+        summary_fps: frame_rate,
+        observed_rate: scryer_media_types::Rational::new(
+            i64::try_from(timestamps.len() - 1)
+                .ok()?
+                .checked_mul(1_000)?,
+            u64::from(span),
+        )?,
+        variable,
+    })
 }
 
 fn map_video_fourcc(fourcc: [u8; 4]) -> Option<&'static str> {
@@ -790,6 +844,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stream_inventory_preserves_container_order_and_missing_language() {
+        let mut objects = Vec::new();
+        for id in [7_u16, 3] {
+            let mut properties = vec![0; 54 + 16];
+            properties[..16].copy_from_slice(&AUDIO_MEDIA_GUID);
+            properties[40..44].copy_from_slice(&16_u32.to_le_bytes());
+            properties[48..50].copy_from_slice(&id.to_le_bytes());
+            properties[54..56].copy_from_slice(&1_u16.to_le_bytes());
+            properties[56..58].copy_from_slice(&1_u16.to_le_bytes());
+            properties[58..62].copy_from_slice(&48_000_u32.to_le_bytes());
+            properties[62..66].copy_from_slice(&96_000_u32.to_le_bytes());
+            properties[66..68].copy_from_slice(&2_u16.to_le_bytes());
+            properties[68..70].copy_from_slice(&16_u16.to_le_bytes());
+            objects.extend(STREAM_PROPERTIES_GUID);
+            objects.extend((24 + properties.len() as u64).to_le_bytes());
+            objects.extend(properties);
+        }
+        let mut image = Vec::from(ASF_HEADER_GUID);
+        image.extend((30 + objects.len() as u64).to_le_bytes());
+        image.extend(2_u32.to_le_bytes());
+        image.extend([1, 2]);
+        image.extend(objects);
+        let container = parse_asf_source(&mut std::io::Cursor::new(image)).unwrap();
+        assert_eq!(
+            container
+                .tracks
+                .iter()
+                .map(|track| track.metadata.id.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("7"), Some("3")]
+        );
+        assert!(container.tracks.iter().all(|track| track.language.is_none() && track.metadata.original_language.is_none()));
+    }
+
+    #[test]
     fn extensible_aac_uses_the_codec_configuration_after_the_wave_header() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/media/wmv_wmv1_aac_surround.wmv");
@@ -878,7 +967,17 @@ mod tests {
                 Some(24)
             );
         }
-        assert_eq!(derive_frame_rate(&timestamps[&1]), Some(25.0));
+        let timing = derive_frame_rate(&timestamps[&1]).unwrap();
+        assert_eq!(timing.summary_fps, 25.0);
+        assert_eq!(
+            timing.observed_rate,
+            scryer_media_types::Rational::new(25, 1).unwrap()
+        );
+        assert!(!timing.variable);
+        assert!(derive_frame_rate(&[0, 40, 100]).unwrap().variable);
+        assert!(!derive_frame_rate(&[0, 33, 67, 100]).unwrap().variable);
+        assert!(derive_frame_rate(&[0, 40, 20]).is_none());
+        assert!(derive_frame_rate(&[0, 40]).is_none());
 
         let truncated = packet(4, 120);
         assert!(
@@ -913,6 +1012,9 @@ mod tests {
         let mut state = AsfState::default();
         parse_file_properties(&properties, &mut state).unwrap();
         assert_eq!(state.duration_seconds, Some(2.5));
+        properties[40..48].copy_from_slice(&30_001_234_u64.to_le_bytes());
+        parse_file_properties(&properties, &mut state).unwrap();
+        assert!((state.duration_seconds.unwrap() - 2.5001234).abs() < 1e-9);
     }
 
     #[test]
@@ -934,6 +1036,10 @@ mod tests {
         let stream = state.streams.get(&7).unwrap();
         assert_eq!(stream.bit_rate_bps, Some(128_000));
         assert_eq!(stream.frame_rate_fps, Some(25.0));
+        assert_eq!(
+            stream.declared_frame_rate,
+            scryer_media_types::Rational::new(25, 1)
+        );
         assert_eq!(stream.language_index, Some(1));
     }
 
@@ -941,12 +1047,13 @@ mod tests {
     fn normalizes_rfc1766_languages_to_iso_639_3() {
         let mut languages = Vec::new();
         languages.extend_from_slice(&1_u16.to_le_bytes());
-        languages.push(6);
-        for value in ['j' as u16, 'a' as u16, 0] {
+        languages.push(12);
+        for value in "ja-JP\0".encode_utf16() {
             languages.extend_from_slice(&value.to_le_bytes());
         }
         let mut state = AsfState::default();
         parse_languages(&languages, &mut state).unwrap();
         assert_eq!(state.languages, ["jpn"]);
+        assert_eq!(state.original_languages, ["ja-JP"]);
     }
 }
