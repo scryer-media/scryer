@@ -20,5 +20,3 @@
 ## Upgrading
 
 Migration 0211 adds the `download_cleanup` table on SQLite and PostgreSQL. Existing terminal downloads are seeded into it in bounded batches on startup and retried from there; no manual action is required. Payloads that cleanup leaves behind as partially retained or unverified are reported in the log with the client, job and retained paths so they can be swept by hand.
-
-Maintainers: release-NEXT already carries a migration numbered 0211. Renumber this one at the forward merge per the existing migration-renumbering recipe.
