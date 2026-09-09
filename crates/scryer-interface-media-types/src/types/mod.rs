@@ -1,4 +1,5 @@
 mod acquisition;
+mod analysis;
 mod discovery;
 mod events;
 mod external_import;
@@ -22,6 +23,7 @@ mod settings;
 mod subtitles;
 
 pub use acquisition::*;
+pub use analysis::*;
 pub use discovery::*;
 pub use events::*;
 pub use external_import::*;

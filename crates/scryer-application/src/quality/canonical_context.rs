@@ -424,7 +424,17 @@ impl AppUseCase {
                 context.default_runtime_minutes(),
             )
             .or_runtime(runtime_minutes);
-            let bar = self.incumbent_bar(file, context, incumbent_basis);
+            let scoring_episodes = covers
+                .iter()
+                .filter(|id| match scope {
+                    SubmissionScope::Episode { episode_id } => *id == episode_id,
+                    SubmissionScope::EpisodeSet { episode_ids } => episode_ids.contains(id),
+                    _ => true,
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let bar =
+                self.incumbent_bar_for_episodes(file, context, incumbent_basis, &scoring_episodes);
             (
                 Incumbent {
                     tier_index: bar.tier_index,
@@ -890,8 +900,22 @@ impl AppUseCase {
         context: &ResolvedScoringContext,
         size_basis: CoverageSizeBasis,
     ) -> IncumbentFacts {
+        self.incumbent_bar_for_episodes(file, context, size_basis, &[])
+    }
+
+    pub(crate) fn incumbent_bar_for_episodes(
+        &self,
+        file: &crate::TitleMediaFile,
+        context: &ResolvedScoringContext,
+        size_basis: CoverageSizeBasis,
+        episode_ids: &[String],
+    ) -> IncumbentFacts {
         let view = context.view(size_basis, false);
-        let scored = crate::canonical_scoring::score_media_file(file, &view);
+        let scored = if episode_ids.is_empty() {
+            crate::canonical_scoring::score_media_file(file, &view)
+        } else {
+            crate::canonical_scoring::score_media_file_for_episodes(file, episode_ids, &view)
+        };
         let tier_index = crate::quality_profile::quality_tier_index(
             &context.profile().criteria,
             scored

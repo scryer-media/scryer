@@ -262,6 +262,7 @@ pub(crate) fn file_doc_from_analysis(analysis: &crate::MediaFileAnalysis) -> scr
     );
 
     scryer_rules::FileDoc {
+        details: analysis.details.clone(),
         video_codec: analysis.video_codec.as_ref().map(ToString::to_string),
         video_width: analysis.video_width,
         video_height: analysis.video_height,

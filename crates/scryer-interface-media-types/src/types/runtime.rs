@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 /// Audio stream metadata for a media file.
 #[derive(SimpleObject, Clone)]
 pub struct AudioStreamDetailPayload {
+    pub profile: Option<String>,
+    pub name: Option<String>,
     /// Codec name, or null when unavailable.
     pub codec: Option<String>,
     /// Number of audio channels, or null when unavailable.

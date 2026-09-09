@@ -536,6 +536,8 @@ mod tests {
         analyzed: bool,
     ) -> TitleMediaFile {
         TitleMediaFile {
+            analysis_details: Default::default(),
+            analysis_attempt: None,
             id: "file-1".into(),
             title_id: "title-1".into(),
             episode_id: Some("episode-1".into()),

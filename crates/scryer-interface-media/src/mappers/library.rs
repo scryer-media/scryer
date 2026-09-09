@@ -887,6 +887,8 @@ pub fn from_calendar_episode(
 
 pub fn from_title_media_file(file: scryer_application::TitleMediaFile) -> TitleMediaFilePayload {
     TitleMediaFilePayload {
+        analysis: file.analysis_details.into(),
+        analysis_attempt: file.analysis_attempt.map(Into::into),
         id: file.id.into(),
         title_id: file.title_id.into(),
         episode_id: file.episode_id.map(Into::into),
@@ -917,6 +919,8 @@ pub fn from_title_media_file(file: scryer_application::TitleMediaFile) -> TitleM
             .audio_streams
             .into_iter()
             .map(|s| crate::types::AudioStreamDetailPayload {
+                profile: s.profile,
+                name: s.name,
                 codec: s.codec,
                 channels: s.channels,
                 language: s.language,

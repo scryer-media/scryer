@@ -683,6 +683,8 @@ pub struct MediaFileAssociations {
 
 #[derive(Clone, Debug)]
 pub struct TitleMediaFile {
+    pub analysis_details: scryer_media_types::AnalysisDetails,
+    pub analysis_attempt: Option<scryer_media_types::AnalysisAttempt>,
     pub id: String,
     pub title_id: String,
     pub episode_id: Option<String>,

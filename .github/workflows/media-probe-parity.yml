@@ -1,0 +1,60 @@
+name: media-probe-parity
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixtures:
+        description: Comma-separated fixture basenames; leave empty for the complete fixture corpus
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-probe-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install development reference and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg nasm mold
+      - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
+        with:
+          tool: nextest
+      - name: Record reference version and source revision
+        run: |
+          mkdir -p media-parity-results
+          ffprobe -version > media-parity-results/ffprobe-version.txt
+          git rev-parse HEAD > media-parity-results/source-revision.txt
+      - name: Check mandatory native fixtures and production projections
+        run: |
+          set -o pipefail
+          cargo nextest run --locked -p scryer-mediainfo -p scryer-application --features scryer-application/runtime-media-analysis --no-fail-fast -E 'binary(native_tests) | test(canonical_catalog_and_import_paths_preserve_the_same_analysis_contract)' 2>&1 | tee media-parity-results/native.txt
+      - name: Compare structured native metadata with FFprobe
+        if: ${{ !cancelled() }}
+        env:
+          SCRYER_PARITY_FIXTURES: ${{ inputs.fixtures }}
+          SCRYER_PARITY_REPORT: ${{ github.workspace }}/media-parity-results/comparison.json
+        run: |
+          set -o pipefail
+          cargo nextest run --locked -p scryer-mediainfo --run-ignored all -E 'test(compare_fixture_corpus_against_ffprobe)' --success-output immediate 2>&1 | tee media-parity-results/reference.txt
+      - name: Retain comparison evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: media-probe-parity-${{ github.run_id }}
+          path: media-parity-results
+          if-no-files-found: error
+          retention-days: 14

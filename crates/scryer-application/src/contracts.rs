@@ -1005,8 +1005,10 @@ pub struct SubtitleStreamDetail {
 }
 
 /// Mirrors `scryer_mediainfo::MediaAnalysis` without depending on that crate.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MediaFileAnalysis {
+    pub details: scryer_media_types::AnalysisDetails,
     pub video_codec: Option<crate::release_parser::VideoCodec>,
     pub video_width: Option<i32>,
     pub video_height: Option<i32>,
@@ -1037,9 +1039,40 @@ pub struct MediaFileAnalysis {
     pub container_format: Option<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct MediaAnalysisLabels {
+    pub resolution: Option<String>,
+    pub video_codec: Option<crate::release_parser::VideoCodec>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<String>,
+}
+
+impl MediaFileAnalysis {
+    pub fn derived_labels(&self) -> MediaAnalysisLabels {
+        let labels = crate::media::release_labels::resolve_release_labels_from_analysis(
+            self.video_width,
+            self.video_height,
+            self.video_codec.as_ref(),
+            self.audio_codec.as_deref(),
+            self.audio_profile.as_deref(),
+            self.audio_channels,
+            &self.audio_streams,
+            &self.details,
+        );
+        MediaAnalysisLabels {
+            resolution: labels.quality,
+            video_codec: self.video_codec.clone(),
+            audio_codec: labels.audio_codec,
+            audio_channels: labels.audio_channels,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum MediaAnalysisOutcome {
     Valid(Box<MediaFileAnalysis>),
+    /// Parsed metadata whose completeness cannot support automatic acceptance.
+    Inconclusive(Box<MediaFileAnalysis>),
     Invalid(String),
 }
 

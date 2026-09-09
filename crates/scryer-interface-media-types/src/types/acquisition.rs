@@ -1331,6 +1331,8 @@ pub struct ManualImportVideoFactsPayload {
     pub video_height: Option<i32>,
     /// Detected runtime in seconds, or null when unavailable.
     pub duration_seconds: Option<i32>,
+    pub disc: Option<super::MediaDiscMetadataPayload>,
+    pub report: super::MediaProbeReportPayload,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1380,6 +1382,8 @@ pub struct ManualImportCandidateMappingInput {
     pub episode_id: Option<ID>,
     /// Series-movie link ID for a series-movie import; null for an episode or movie import.
     pub series_movie_link_id: Option<ID>,
+    /// Explicit playback title and episode mappings for one intact ISO image.
+    pub disc_selection: Option<super::MediaDiscSelectionInput>,
 }
 
 // --- Wanted Items / Acquisition ---

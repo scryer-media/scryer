@@ -15,6 +15,8 @@ struct SeededFile {
 
 fn seed_row(id: &str, path: &Path, title_id: &str) -> TitleMediaFile {
     TitleMediaFile {
+        analysis_details: Default::default(),
+        analysis_attempt: None,
         id: id.to_string(),
         title_id: title_id.to_string(),
         episode_id: None,

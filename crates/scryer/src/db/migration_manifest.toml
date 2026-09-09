@@ -2088,3 +2088,20 @@ kind = "sql"
 file = "postgres/migrations/0226_pending_title_tag_renames.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 227
+description = "media analysis revision and attempts"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0227_media_analysis_revision.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0227_media_analysis_revision.sql"
+engine = "postgres"
+scope = "all"

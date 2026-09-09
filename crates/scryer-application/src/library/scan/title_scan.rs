@@ -1624,13 +1624,16 @@ async fn enumerate_library_scan_title_work(
     Ok(work)
 }
 
-type TitleScanAnalysisTaskResult =
-    AppResult<(PlannedTitleScanFile, MediaAnalysisOutcome, Duration)>;
+type TitleScanAnalysisTaskResult = AppResult<(
+    PlannedTitleScanFile,
+    crate::media::discs::CataloguedMediaAnalysis,
+    Duration,
+)>;
 
 fn launch_pending_title_scan_analysis_tasks(
     analysis_set: &mut tokio::task::JoinSet<TitleScanAnalysisTaskResult>,
     pending_analysis_plans: &mut std::collections::VecDeque<PlannedTitleScanFile>,
-    analyzer: std::sync::Arc<dyn MediaAnalyzer>,
+    app: AppUseCase,
     analysis_limit: std::sync::Arc<tokio::sync::Semaphore>,
     file_analysis_concurrency: usize,
     cancel_token: Option<&CancellationToken>,
@@ -1641,7 +1644,7 @@ fn launch_pending_title_scan_analysis_tasks(
         let Some(plan) = pending_analysis_plans.pop_front() else {
             break;
         };
-        let analyzer = analyzer.clone();
+        let app = app.clone();
         let analysis_limit = analysis_limit.clone();
         let file_path = plan.file.path.clone();
         analysis_set.spawn(async move {
@@ -1651,15 +1654,15 @@ fn launch_pending_title_scan_analysis_tasks(
                 .await
                 .map_err(|error| AppError::Repository(error.to_string()))?;
             let analysis_started = Instant::now();
-            let outcome = analyzer
-                .analyze_file(stored_path_to_path_buf(&file_path))
+            let file_id = match &plan.record {
+                PlannedTitleScanRecord::Existing { file_id, .. } => Some(file_id.as_str()),
+                PlannedTitleScanRecord::New => None,
+            };
+            let outcome = app
+                .analyze_catalogued_media_file(file_id, stored_path_to_path_buf(&file_path))
                 .await?;
             tracing::debug!(file_path = %file_path, "title scan analysis task: complete");
-            Ok::<(PlannedTitleScanFile, MediaAnalysisOutcome, Duration), AppError>((
-                plan,
-                outcome,
-                analysis_started.elapsed(),
-            ))
+            Ok::<_, AppError>((plan, outcome, analysis_started.elapsed()))
         });
     }
 }
@@ -2197,7 +2200,6 @@ impl AppUseCase {
         let mut external_subtitle_cache =
             crate::subtitles::ExternalSubtitleDirectoryCache::default();
         let actor_event = DomainEventActor::from(actor);
-        let analyzer = self.services.library.media_analyzer.clone();
         let mut analysis_set = tokio::task::JoinSet::new();
         let mut pending_analysis_plans = std::collections::VecDeque::new();
         let mut title_updated_since_emit = false;
@@ -2308,12 +2310,21 @@ impl AppUseCase {
                         LibraryFilenameFallbackPolicy::WhenNeeded
                     },
                 });
-                let target_episodes = filename_parse.target_episodes();
-                let series_movie_link_id = filename_parse
-                    .target_series_movie_link_id()
-                    .map(str::to_string);
+                let is_disc_image = scryer_domain::is_disc_image(&source_path);
+                let target_episodes = if is_disc_image {
+                    Vec::new()
+                } else {
+                    filename_parse.target_episodes()
+                };
+                let series_movie_link_id = if is_disc_image {
+                    None
+                } else {
+                    filename_parse
+                        .target_series_movie_link_id()
+                        .map(str::to_string)
+                };
 
-                if target_episodes.is_empty() && series_movie_link_id.is_none() {
+                if !is_disc_image && target_episodes.is_empty() && series_movie_link_id.is_none() {
                     let reason = filename_parse.unmatched_reason().unwrap_or_else(|| {
                         if filename_parse.episode_identity.is_some() {
                             "episode_lookup_failed"
@@ -2468,7 +2479,7 @@ impl AppUseCase {
                 launch_pending_title_scan_analysis_tasks(
                     &mut analysis_set,
                     &mut pending_analysis_plans,
-                    analyzer.clone(),
+                    self.clone(),
                     analysis_limit.clone(),
                     file_analysis_concurrency,
                     cancel_token.as_ref(),
@@ -2510,7 +2521,7 @@ impl AppUseCase {
             launch_pending_title_scan_analysis_tasks(
                 &mut analysis_set,
                 &mut pending_analysis_plans,
-                analyzer.clone(),
+                self.clone(),
                 analysis_limit.clone(),
                 file_analysis_concurrency,
                 cancel_token.as_ref(),

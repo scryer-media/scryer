@@ -8,7 +8,11 @@ pub(crate) async fn has_enabled_download_clients(app: &AppUseCase) -> bool {
         .unwrap_or(false)
 }
 impl AppUseCase {
-    pub async fn get_wanted_item(&self, actor: &User, id: &str) -> AppResult<Option<AcquisitionScopeState>> {
+    pub async fn get_wanted_item(
+        &self,
+        actor: &User,
+        id: &str,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
         let Some(item) = self
             .services
             .workflow
@@ -112,7 +116,8 @@ impl AppUseCase {
             return bars;
         }
 
-        let mut title_ids: Vec<String> = scopes.iter().map(|scope| scope.title_id.clone()).collect();
+        let mut title_ids: Vec<String> =
+            scopes.iter().map(|scope| scope.title_id.clone()).collect();
         title_ids.sort();
         title_ids.dedup();
 
@@ -215,7 +220,7 @@ impl AppUseCase {
             .unwrap_or_default();
 
         // One scoring context per title, reused by every scope that title owns.
-        let mut bars_by_index: HashMap<usize, i32> = HashMap::new();
+        let mut bars_by_scope: HashMap<(usize, Vec<String>), i32> = HashMap::new();
         for title in &titles {
             let title_indices: Vec<usize> = scored_indices
                 .iter()
@@ -236,29 +241,59 @@ impl AppUseCase {
                     continue;
                 }
             };
-            let context = self.resolve_canonical_scoring_context(title, &profile).await;
+            let context = self
+                .resolve_canonical_scoring_context(title, &profile)
+                .await;
             let no_episodes: Vec<scryer_domain::Episode> = Vec::new();
             let title_episodes = episodes_by_title
                 .get(title.id.as_str())
                 .unwrap_or(&no_episodes);
-            for index in title_indices {
-                // The gate's runtime basis (D4): the length of what *this file*
-                // holds, summed over its whole span.
-                let basis = crate::acquisition_coverage::episode_span_size_basis(
-                    title_episodes,
-                    &files[index].episode_ids,
-                    title.runtime_minutes,
-                );
-                let bar = self.incumbent_bar(&files[index].file, &context, basis);
-                bars_by_index.insert(index, bar.score);
-            }
-        }
-
-        for (bar, matches) in bars.iter_mut().zip(matches_by_scope.iter()) {
-            *bar = matches
+            for (scope_index, scope) in scopes
                 .iter()
-                .filter_map(|index| bars_by_index.get(index).copied())
-                .max();
+                .enumerate()
+                .filter(|(_, scope)| scope.title_id == title.id)
+            {
+                for &index in &matches_by_scope[scope_index] {
+                    let file = &files[index];
+                    let mut episode_ids = Vec::new();
+                    if file.file.analysis_details.disc.is_some() {
+                        if let Some(id) = LandedBarScope::non_empty(&scope.episode_id) {
+                            episode_ids.push(id.to_owned());
+                        } else if let Some(id) = LandedBarScope::non_empty(&scope.collection_id)
+                            && LandedBarScope::non_empty(&scope.series_movie_link_id).is_none()
+                        {
+                            episode_ids.extend(
+                                collection_members(&scope.title_id, id)
+                                    .into_iter()
+                                    .filter(|id| file.is_primary_for(id))
+                                    .map(str::to_owned),
+                            );
+                        }
+                        episode_ids.sort();
+                        episode_ids.dedup();
+                    }
+                    let score = *bars_by_scope
+                        .entry((index, episode_ids.clone()))
+                        .or_insert_with(|| {
+                            // Ordinary multi-episode files retain their whole-span
+                            // runtime basis. Disc title facts are scoped separately.
+                            let basis = crate::acquisition_coverage::episode_span_size_basis(
+                                title_episodes,
+                                &file.episode_ids,
+                                title.runtime_minutes,
+                            );
+                            self.incumbent_bar_for_episodes(
+                                &file.file,
+                                &context,
+                                basis,
+                                &episode_ids,
+                            )
+                            .score
+                        });
+                    bars[scope_index] =
+                        Some(bars[scope_index].map_or(score, |current| current.max(score)));
+                }
+            }
         }
         bars
     }
@@ -539,7 +574,10 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn wanted_item_submission_scope(&self, item: &AcquisitionScopeState) -> AppResult<SubmissionScope> {
+    async fn wanted_item_submission_scope(
+        &self,
+        item: &AcquisitionScopeState,
+    ) -> AppResult<SubmissionScope> {
         let episode = if let Some(episode_id) = item.episode_id.as_deref() {
             self.services
                 .catalog
@@ -584,7 +622,7 @@ impl AppUseCase {
             .list_episodes_for_title(title_id)
             .await?;
         let fake_submission = DownloadSubmission {
-    download_id: scryer_domain::download_identity::DownloadId::new(),
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: title_id.to_string(),
             // Scope matching only; this submission is never persisted.
             release_size_bytes: None,

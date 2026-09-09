@@ -226,6 +226,8 @@ impl FileImporter for ProgressReportingFileImporter {
 #[derive(Default, Clone)]
 pub(super) struct MockMediaFileRepo {
     pub(super) store: Arc<Mutex<Vec<TitleMediaFile>>>,
+    pub(super) pending_analysis_ids: Arc<Mutex<Vec<String>>>,
+    pub(super) analysis_attempts: Arc<Mutex<Vec<(String, MediaFileAnalysis)>>>,
     /// Optional bridge for the background acquisition cursor: when set, the
     /// derived missing-target sweep reads the seeded acquisition-state rows so a
     /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
@@ -249,12 +251,15 @@ impl MockMediaFileRepo {
             store: Arc::new(Mutex::new(Vec::new())),
             missing_scope_source: Some(source),
             missing_scope_titles: Some(titles),
+            ..Default::default()
         }
     }
 }
 
 fn mock_media_file(id: String, input: &InsertMediaFileInput) -> TitleMediaFile {
     TitleMediaFile {
+        analysis_details: Default::default(),
+        analysis_attempt: None,
         id,
         title_id: input.title_id.clone(),
         episode_id: None,
@@ -691,6 +696,95 @@ impl MediaFileRepository for MockMediaFileRepo {
         Ok(Vec::new())
     }
 
+    async fn list_media_files_needing_analysis(
+        &self,
+        _library_id: &str,
+        revision: u32,
+        _retry_before: chrono::DateTime<chrono::Utc>,
+        _limit: usize,
+    ) -> AppResult<Vec<TitleMediaFile>> {
+        let ids = self.pending_analysis_ids.lock().await.clone();
+        let rows = self.store.lock().await;
+        // Deliberately return duplicate and oversized batches so worker bounds
+        // are tested independently from datastore query limits.
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                rows.iter()
+                    .find(|row| row.id == *id && row.analysis_details.revision < revision)
+                    .cloned()
+            })
+            .collect())
+    }
+
+    async fn record_media_analysis_attempt(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: &MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let rows = self.store.lock().await;
+        let Some(entry) = rows.iter().find(|row| row.id == expected.id) else {
+            return Ok(false);
+        };
+        if entry.title_id != expected.title_id
+            || entry.file_path != expected.file_path
+            || entry.size_bytes != expected.size_bytes
+            || entry.source_signature_scheme != expected.source_signature_scheme
+            || entry.source_signature_value != expected.source_signature_value
+            || entry.analysis_details != expected.analysis_details
+        {
+            return Ok(false);
+        }
+        self.analysis_attempts
+            .lock()
+            .await
+            .push((expected.id.clone(), analysis.clone()));
+        Ok(true)
+    }
+
+    async fn update_media_file_analysis_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let Some(entry) = list.iter_mut().find(|entry| entry.id == expected.id) else {
+            return Ok(false);
+        };
+        if entry.file_path != expected.file_path
+            || entry.size_bytes != expected.size_bytes
+            || entry.source_signature_scheme != expected.source_signature_scheme
+            || entry.source_signature_value != expected.source_signature_value
+            || entry.analysis_details != expected.analysis_details
+        {
+            return Ok(false);
+        }
+        entry.scan_status = "scanned".to_string();
+        entry.analysis_details = analysis.details;
+        entry.audio_profile = analysis.audio_profile;
+        entry.video_codec = analysis.video_codec;
+        entry.video_width = analysis.video_width;
+        entry.video_height = analysis.video_height;
+        entry.video_bitrate_kbps = analysis.video_bitrate_kbps;
+        entry.video_bit_depth = analysis.video_bit_depth;
+        entry.video_hdr_format = analysis.video_hdr_format;
+        entry.video_frame_rate = analysis.video_frame_rate;
+        entry.video_profile = analysis.video_profile;
+        entry.audio_codec = analysis.audio_codec;
+        entry.audio_channels = analysis.audio_channels;
+        entry.audio_bitrate_kbps = analysis.audio_bitrate_kbps;
+        entry.audio_languages = analysis.audio_languages;
+        entry.audio_streams = analysis.audio_streams;
+        entry.subtitle_languages = analysis.subtitle_languages;
+        entry.subtitle_codecs = analysis.subtitle_codecs;
+        entry.subtitle_streams = analysis.subtitle_streams;
+        entry.has_multiaudio = analysis.has_multiaudio;
+        entry.duration_seconds = analysis.duration_seconds;
+        entry.num_chapters = analysis.num_chapters;
+        entry.container_format = analysis.container_format;
+        Ok(true)
+    }
+
     async fn update_media_file_analysis(
         &self,
         file_id: &str,
@@ -702,6 +796,8 @@ impl MediaFileRepository for MockMediaFileRepo {
             .find(|entry| entry.id == file_id)
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
         entry.scan_status = "scanned".to_string();
+        entry.analysis_details = analysis.details;
+        entry.audio_profile = analysis.audio_profile;
         entry.video_codec = analysis.video_codec;
         entry.video_width = analysis.video_width;
         entry.video_height = analysis.video_height;

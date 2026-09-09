@@ -265,7 +265,12 @@ pub(crate) async fn decide_import(
     // The verdict is about the release, so it is resolved before admission.
     // Automatic failures burn; operator-queued failures are held for review.
     let mut blocklist_after_import = None;
-    if !input.operator_intent {
+    if !input.operator_intent
+        || matches!(
+            scored.truth_verdict,
+            crate::canonical_scoring::TruthVerdict::ReviewRequired { .. }
+        )
+    {
         match resolve_truth_verdict_action_for_origin(
             &scored.truth_verdict,
             &input.scoring_context.profile().criteria,
@@ -273,6 +278,12 @@ pub(crate) async fn decide_import(
             input.origin,
         ) {
             crate::post_download_gate::TruthVerdictAction::Import => {}
+            crate::post_download_gate::TruthVerdictAction::Hold(rejection) => {
+                return ImportDecisionOutcome::Reject {
+                    rejection,
+                    disposition: RejectionDisposition::Hold,
+                };
+            }
             crate::post_download_gate::TruthVerdictAction::ImportAndBlocklist { code, reason } => {
                 blocklist_after_import = Some(BlocklistDirective { code, reason });
             }
@@ -460,7 +471,9 @@ pub(crate) fn prepare_rejection_disposition_for_origin(
     rejection: &ImportedFileRejection,
     origin: ImportOrigin,
 ) -> RejectionDisposition {
-    let _ = rejection;
+    if rejection.requires_review() {
+        return RejectionDisposition::Hold;
+    }
     origin.rejection_disposition()
 }
 

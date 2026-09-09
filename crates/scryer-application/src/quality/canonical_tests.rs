@@ -14,6 +14,166 @@ use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
 
 const GIB: i64 = 1024 * 1024 * 1024;
 
+#[test]
+fn disc_scoring_uses_each_mapped_title_and_ignores_whole_image_size() {
+    use scryer_media_types::{
+        DiscEpisodeMapping, DiscMetadata, DiscSelection, DiscTitle, ProbeReport, ProbeStatus,
+        StreamDetail, StreamKind, StreamMetadata,
+    };
+    let titles = [
+        ("00001", 3840, 2160, "ep-4k"),
+        ("00002", 1920, 1080, "ep-hd"),
+    ]
+    .map(|(id, width, height, _)| DiscTitle {
+        id: id.into(),
+        duration_seconds: Some(1800.0),
+        report: ProbeReport {
+            status: ProbeStatus::Complete,
+            ..Default::default()
+        },
+        streams: vec![
+            StreamDetail {
+                kind: StreamKind::Video,
+                codec: Some("hevc".into()),
+                width: Some(width),
+                height: Some(height),
+                metadata: StreamMetadata {
+                    id: Some("v0".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            StreamDetail {
+                kind: StreamKind::Audio,
+                codec: Some("aac".into()),
+                channels: Some(2),
+                language: Some("en".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    })
+    .to_vec();
+    let mut image = MediaFileAnalysis::default();
+    image.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    image.details.disc = Some(DiscMetadata {
+        titles: titles.clone(),
+        selected_title_id: Some("00001".into()),
+        selection: DiscSelection {
+            episode_mappings: [("00001", "ep-4k"), ("00002", "ep-hd")]
+                .map(|(disc, episode)| DiscEpisodeMapping {
+                    disc_title_id: disc.into(),
+                    episode_ids: vec![episode.into()],
+                })
+                .to_vec(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    image = crate::media::disc_analysis::for_title(&image, &titles[0]);
+    let mut facts = AnalyzedFacts {
+        rule_file_doc: Some(crate::user_rule_input::file_doc_from_analysis(&image)),
+        analysis: image,
+        actual_size_bytes: 50 * GIB,
+    };
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let tags = Vec::new();
+    let context = ctx(&profile, &weights, &tags);
+    let announced = ReleaseEvidence::announced(
+        parse_release_metadata("Series.S01.2160p.BluRay.HEVC"),
+        Some(50 * GIB),
+    );
+    let evidence = announced.clone().with_analysis(facts.clone());
+    let scored = score_release(&evidence, &context);
+    assert_eq!(
+        scored.parsed_quality.as_deref(),
+        Some("1080p"),
+        "the superior title cannot stand in for the HD episode"
+    );
+    assert_eq!(
+        scored.release_score,
+        score_release(&announced, &context).release_score
+    );
+    facts.actual_size_bytes = 100 * GIB;
+    assert_eq!(
+        scored.total,
+        score_release(&announced.clone().with_analysis(facts), &context).total
+    );
+    let row = media_row_as_import_would_write(&evidence, &scored);
+    let uhd = score_media_file_for_episodes(&row, &["ep-4k".into()], &context);
+    let hd = score_media_file_for_episodes(&row, &["ep-hd".into()], &context);
+    assert_eq!(uhd.parsed_quality.as_deref(), Some("2160p"));
+    assert_eq!(hd.parsed_quality.as_deref(), Some("1080p"));
+    assert_eq!(
+        hd.total, scored.total,
+        "the mapped episode's incumbent uses the import scoring path"
+    );
+
+    for invalid in [
+        "missing_title",
+        "incomplete_title",
+        "missing_mapping",
+        "duplicate_episode",
+        "invalid_override",
+    ] {
+        let mut changed = row.clone();
+        let disc = changed.analysis_details.disc.as_mut().unwrap();
+        match invalid {
+            "missing_title" => {
+                disc.titles.pop();
+            }
+            "incomplete_title" => {
+                disc.titles[1].report.status = ProbeStatus::Incomplete;
+            }
+            "missing_mapping" => {
+                disc.selection.episode_mappings.pop();
+            }
+            "duplicate_episode" => {
+                disc.selection.episode_mappings[0].episode_ids = vec!["ep-hd".into()];
+            }
+            "invalid_override" => {
+                disc.selection.title_id = Some("00999".into());
+            }
+            _ => unreachable!(),
+        }
+        let unresolved = score_media_file_for_episodes(&changed, &["ep-hd".into()], &context);
+        assert!(
+            matches!(
+                unresolved.truth_verdict,
+                TruthVerdict::ReviewRequired { .. }
+            ),
+            "{invalid}"
+        );
+        assert!(
+            unresolved.analyzed_decision.is_none(),
+            "{invalid} must not borrow the selected UHD title"
+        );
+        assert_eq!(
+            unresolved.truth_variance, 0,
+            "{invalid} is not a proven contradiction"
+        );
+        for origin in [
+            crate::import_decide::ImportOrigin::Automatic,
+            crate::import_decide::ImportOrigin::OperatorQueued,
+        ] {
+            let action = crate::post_download_gate::resolve_truth_verdict_action_for_origin(
+                &unresolved.truth_verdict,
+                &profile.criteria,
+                false,
+                origin,
+            );
+            let crate::post_download_gate::TruthVerdictAction::Hold(rejection) = action else {
+                panic!("{invalid} must preserve the source for {origin:?}: {action:?}");
+            };
+            assert_eq!(
+                rejection.recycle_reason,
+                crate::post_download_gate::DISC_REVIEW_REQUIRED_CODE
+            );
+        }
+    }
+}
+
 fn profile(json: &str) -> QualityProfile {
     QualityProfile::parse(json).expect("profile fixture should parse")
 }
@@ -428,6 +588,8 @@ fn media_row_as_import_would_write(
     .0;
 
     crate::TitleMediaFile {
+        analysis_details: analyzed.analysis.details.clone(),
+        analysis_attempt: None,
         id: "file-1".into(),
         title_id: "title-1".into(),
         episode_id: None,
@@ -1010,6 +1172,7 @@ fn a_file_doc_survives_mediainfo_to_row_to_re_derivation() {
     // Constructed rather than probed: the point is the conversion chain, and a
     // real probe would only exercise whatever the fixture file happens to hold.
     let mediainfo = scryer_mediainfo::MediaAnalysis {
+        details: Default::default(),
         video_codec: Some("h264".to_string()),
         video_width: Some(1920),
         video_height: Some(1080),

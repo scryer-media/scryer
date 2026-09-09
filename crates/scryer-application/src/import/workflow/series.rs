@@ -639,7 +639,9 @@ mod episode_import_summary_message_tests {
                 None,
             )
             .as_deref(),
-            Some("0 imported, 0 ignored, 0 skipped, 0 rejected, 1 failed. Last error: unexpected hardlink failure")
+            Some(
+                "0 imported, 0 ignored, 0 skipped, 0 rejected, 1 failed. Last error: unexpected hardlink failure"
+            )
         );
     }
 
@@ -647,13 +649,8 @@ mod episode_import_summary_message_tests {
     fn rejections_alongside_a_failure_report_both() {
         let reasons = BTreeMap::from([("held for manual import".to_string(), 1)]);
         assert_eq!(
-            episode_import_summary_message(
-                counts(1, 1, 1, 0),
-                &reasons,
-                Some("disk full"),
-                None,
-            )
-            .as_deref(),
+            episode_import_summary_message(counts(1, 1, 1, 0), &reasons, Some("disk full"), None,)
+                .as_deref(),
             Some(
                 "1 imported, 0 ignored, 0 skipped, 1 rejected, 1 failed. Rejected: 1 × held for manual import. Last error: disk full"
             )
@@ -1157,10 +1154,8 @@ async fn reconcile_unresolved_scene_episode_from_scoped_release(
     let Some(release_title) = release_evidence.release_title(None) else {
         return Ok(None);
     };
-    let release_metadata = normalize_release_title_signal(parse_import_release_for_title(
-        &release_title,
-        title,
-    ));
+    let release_metadata =
+        normalize_release_title_signal(parse_import_release_for_title(&release_title, title));
     let Some(release_episode) = release_metadata.episode.as_ref() else {
         return Ok(None);
     };
@@ -1221,7 +1216,10 @@ fn source_fuzzily_matches_catalog_episode_title(
     source_video: &Path,
     episode: &scryer_domain::Episode,
 ) -> bool {
-    let Some(expected_title) = episode.title.as_deref().filter(|value| !value.trim().is_empty())
+    let Some(expected_title) = episode
+        .title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
     else {
         return false;
     };
@@ -1261,11 +1259,7 @@ fn source_fuzzily_matches_catalog_episode_title(
         .max(1);
     for start in 0..unmatched_tokens.len() {
         let mut phrase = String::new();
-        for token in unmatched_tokens
-            .iter()
-            .skip(start)
-            .take(max_window_tokens)
-        {
+        for token in unmatched_tokens.iter().skip(start).take(max_window_tokens) {
             if !phrase.is_empty() {
                 phrase.push(' ');
             }
@@ -1517,7 +1511,7 @@ async fn import_single_episode_file(
                 episode_ids: resolved_episodes
                     .iter()
                     .map(|episode| episode.id.clone())
-                .collect(),
+                    .collect(),
             });
         }
         if matches!(
@@ -1688,7 +1682,14 @@ async fn import_single_episode_file(
             .unwrap_or(1);
         let episode_numbers = target_episodes
             .iter()
-            .filter_map(|episode| episode.episode_number.as_deref()?.trim().parse::<u32>().ok())
+            .filter_map(|episode| {
+                episode
+                    .episode_number
+                    .as_deref()?
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+            })
             .collect::<Vec<_>>();
         let episode_number = episode_number_token_for_import(
             &episode_numbers,
@@ -1748,6 +1749,7 @@ async fn import_single_episode_file(
         origin,
         release_evidence.announced_size_bytes(),
         additional_import,
+        None,
     )
     .await?;
 
@@ -2303,9 +2305,7 @@ pub(crate) async fn resolve_target_episodes_with_numbering(
         // imports it.
         NumberingResolution::Ambiguous(_)
         | NumberingResolution::UnresolvedPack
-        | NumberingResolution::Unchanged => {
-            (literal().await, resolution)
-        }
+        | NumberingResolution::Unchanged => (literal().await, resolution),
     }
 }
 
@@ -2829,7 +2829,9 @@ pub(crate) const ANIME_NUMBERING_AMBIGUOUS_REASON: &str = "anime_numbering_ambig
 /// between two anime numbering readings. Absent when the file system has no
 /// usable timestamp, in which case the tie simply stands.
 fn file_reference_date(source_video: &Path) -> Option<chrono::NaiveDate> {
-    let modified = std::fs::metadata(source_video).and_then(|meta| meta.modified()).ok()?;
+    let modified = std::fs::metadata(source_video)
+        .and_then(|meta| meta.modified())
+        .ok()?;
     Some(chrono::DateTime::<chrono::Utc>::from(modified).date_naive())
 }
 

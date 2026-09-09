@@ -1010,9 +1010,8 @@ fn title_evidence_candidates_from_video_files_uses_immediate_parent_for_obfuscat
         release_dir.join("aUUKqrO833LbSr7VlByumnR24y7ULADpVJ7K0FTnPhPMqpp0KIIaLSLYXJmyjm.mkv");
     std::fs::write(&file_path, b"movie").expect("write file");
 
-    let candidates = title_evidence_candidates_from_video_files(&[
-        ImportVideoFile::physical(file_path),
-    ]);
+    let candidates =
+        title_evidence_candidates_from_video_files(&[ImportVideoFile::physical(file_path)]);
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(
@@ -1030,9 +1029,8 @@ fn title_evidence_candidates_from_video_files_prefers_usable_file_name() {
     let file_path = release_dir.join("Paper.Lantern.2012.1080p.BluRay.x264-GRP.mkv");
     std::fs::write(&file_path, b"movie").expect("write file");
 
-    let candidates = title_evidence_candidates_from_video_files(&[
-        ImportVideoFile::physical(file_path),
-    ]);
+    let candidates =
+        title_evidence_candidates_from_video_files(&[ImportVideoFile::physical(file_path)]);
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].normalized_title, "PAPER LANTERN");
@@ -1165,6 +1163,7 @@ fn build_rename_tokens_includes_quality() {
 
 fn test_media_analysis(video_height: Option<i32>) -> crate::MediaFileAnalysis {
     crate::MediaFileAnalysis {
+        details: Default::default(),
         video_codec: Some(crate::release_parser::VideoCodec::H264),
         video_width: Some(1920),
         video_height,
@@ -1196,6 +1195,7 @@ fn test_rule_file_doc(
     dovi_bl_compat_id: Option<u8>,
 ) -> scryer_rules::FileDoc {
     scryer_rules::FileDoc {
+        details: Default::default(),
         video_codec: Some("hevc".to_string()),
         video_width: Some(3840),
         video_height: Some(2160),
@@ -1852,6 +1852,8 @@ fn scoped_media_file(
 ) -> crate::EpisodeScopedMediaFile {
     crate::EpisodeScopedMediaFile {
         media_file: crate::TitleMediaFile {
+            analysis_details: Default::default(),
+            analysis_attempt: None,
             id: id.to_string(),
             title_id: "title-1".to_string(),
             episode_id: episode_ids.first().map(|value| (*value).to_string()),
@@ -3067,7 +3069,9 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     std::fs::copy(&video_fixture, &tiny_extra).expect("copy extra video fixture");
     // `EP04` in a movie's own name is installment shorthand, not an episode
     // label: a movie preview must never turn it into an episode suggestion.
-    let installment = dir.path().join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
+    let installment = dir
+        .path()
+        .join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
     std::fs::copy(&video_fixture, &installment).expect("copy installment video fixture");
     let mut completed = test_completed_download("Manual.Movie.2024.1080p.WEB-DL", dir.path());
     completed.release_name = Some("Manual.Movie.2024.1080p.WEB-DL".to_string());

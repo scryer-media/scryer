@@ -1343,6 +1343,26 @@ impl ImportExecutionCoordinator {
         &self,
         destination: &std::path::Path,
     ) -> tokio::sync::OwnedMutexGuard<()> {
+        self.destination_permit(destination)
+            .await
+            .lock_owned()
+            .await
+    }
+
+    pub(crate) async fn try_acquire_destination(
+        &self,
+        destination: &std::path::Path,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.destination_permit(destination)
+            .await
+            .try_lock_owned()
+            .ok()
+    }
+
+    async fn destination_permit(
+        &self,
+        destination: &std::path::Path,
+    ) -> Arc<tokio::sync::Mutex<()>> {
         let stored_destination = crate::stored_paths::path_to_stored_string(destination);
         let key = crate::stored_paths::path_identity_key(&stored_destination)
             .unwrap_or(stored_destination);
@@ -1357,7 +1377,7 @@ impl ImportExecutionCoordinator {
                 permit
             }
         };
-        permit.lock_owned().await
+        permit
     }
 
     pub(crate) async fn acquire_preparation(&self) -> tokio::sync::OwnedSemaphorePermit {
@@ -1370,6 +1390,11 @@ impl ImportExecutionCoordinator {
 
     pub(crate) fn try_acquire_preparation(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.preparation_permit.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) fn has_foreground_work(&self) -> bool {
+        self.preparation_permit.available_permits() < MAX_CONCURRENT_IMPORT_PREPARATIONS
+            || self.finalization_permit.available_permits() < MAX_CONCURRENT_IMPORT_FINALIZATIONS
     }
 
     pub(crate) async fn acquire_finalization(&self) -> tokio::sync::OwnedSemaphorePermit {
@@ -1899,6 +1924,7 @@ pub struct AppRuntimeLibraryState {
         Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     pub library_scan_title_walk_limit: Arc<Semaphore>,
     pub library_scan_analysis_limit: Arc<Semaphore>,
+    pub(crate) media_analysis_refresh_lock: Arc<tokio::sync::Mutex<()>>,
     /// In-process fast path for the location ownership guard (FR-084, D7).
     pub location_ownership: crate::location::ownership_guard::LocationOwnershipRegistry,
     /// Which location operations have a runner alive in this process, so a
@@ -2158,6 +2184,7 @@ impl AppRuntimeState {
                 library_scan_analysis_limit: Arc::new(Semaphore::new(
                     GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
                 )),
+                media_analysis_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
                 location_ownership:
                     crate::location::ownership_guard::LocationOwnershipRegistry::new(),
                 location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),

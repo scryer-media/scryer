@@ -1406,6 +1406,7 @@ pub(crate) mod tests {
                 codes: vec![],
             },
             file: Some(scryer_rules::FileDoc {
+                details: Default::default(),
                 video_codec: Some("hevc".to_string()),
                 video_width: Some(3840),
                 video_height: Some(2160),

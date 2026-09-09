@@ -534,6 +534,7 @@ impl CountingValidMediaAnalyzer {
 
 fn test_valid_media_analysis() -> MediaFileAnalysis {
     MediaFileAnalysis {
+        details: Default::default(),
         video_codec: None,
         video_width: Some(1920),
         video_height: Some(1080),

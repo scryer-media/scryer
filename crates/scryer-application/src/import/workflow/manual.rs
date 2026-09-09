@@ -428,6 +428,8 @@ pub struct ManualImportVideoFacts {
     pub video_width: Option<i32>,
     pub video_height: Option<i32>,
     pub duration_seconds: Option<i32>,
+    pub disc: Option<scryer_media_types::DiscMetadata>,
+    pub report: scryer_media_types::ProbeReport,
 }
 
 struct ManualImportFilePreview {
@@ -484,6 +486,7 @@ pub struct ManualImportCandidateMapping {
     pub candidate_id: String,
     pub episode_id: Option<String>,
     pub series_movie_link_id: Option<String>,
+    pub disc_selection: Option<scryer_media_types::DiscSelection>,
 }
 
 async fn manual_import_preview_targets(
@@ -880,7 +883,8 @@ pub(crate) async fn qualify_manual_import_video_candidate(
         return Ok(None);
     }
 
-    if has_known_video_extension {
+    let is_disc_image = scryer_domain::is_disc_image(&canonical_path);
+    if has_known_video_extension && !is_disc_image {
         return Ok(Some(QualifiedManualImportVideo {
             source_entry_path: source_path.to_path_buf(),
             canonical_path,
@@ -889,7 +893,9 @@ pub(crate) async fn qualify_manual_import_video_candidate(
         }));
     }
 
-    if has_file_extension || metadata.len() < OPAQUE_MANUAL_IMPORT_PROBE_MIN_BYTES {
+    if !is_disc_image
+        && (has_file_extension || metadata.len() < OPAQUE_MANUAL_IMPORT_PROBE_MIN_BYTES)
+    {
         return Ok(None);
     }
 
@@ -898,12 +904,26 @@ pub(crate) async fn qualify_manual_import_video_candidate(
         let probe_path = canonical_path.clone();
         let analysis = tokio::task::spawn_blocking(move || {
             crate::nice_thread();
-            scryer_mediainfo::analyze_file_with_options(
-                &probe_path,
-                scryer_mediainfo::AnalyzeOptions {
-                    profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
-                },
-            )
+            let started = std::time::Instant::now();
+            let result = if is_disc_image {
+                scryer_mediainfo::analyze_disc_file(&probe_path, Default::default())
+            } else {
+                scryer_mediainfo::analyze_file_with_options(
+                    &probe_path,
+                    scryer_mediainfo::AnalyzeOptions {
+                        profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
+                    },
+                )
+            };
+            crate::media::metrics::record_probe(
+                crate::media::metrics::ProbeOperation::Discovery,
+                started.elapsed(),
+                result
+                    .as_ref()
+                    .ok()
+                    .map(|analysis| &analysis.details.report),
+            );
+            result
         })
         .await
         .map_err(|error| {
@@ -911,7 +931,7 @@ pub(crate) async fn qualify_manual_import_video_candidate(
         })?;
 
         match analysis {
-            Ok(analysis) if scryer_mediainfo::is_valid_video(&analysis) => {
+            Ok(analysis) if is_disc_image || scryer_mediainfo::is_valid_video(&analysis) => {
                 Some(ManualImportVideoFacts {
                     container_format: analysis.container_format,
                     video_codec: analysis.video_codec,
@@ -919,6 +939,8 @@ pub(crate) async fn qualify_manual_import_video_candidate(
                     video_width: analysis.video_width,
                     video_height: analysis.video_height,
                     duration_seconds: analysis.duration_seconds,
+                    disc: analysis.details.disc,
+                    report: analysis.details.report,
                 })
             }
             Ok(_) | Err(scryer_mediainfo::MediaInfoError::Parse(_)) => return Ok(None),
@@ -1179,7 +1201,10 @@ async fn preview_manual_import(
         // Several readings fit equally well: suggest nothing rather than the
         // wrong episode, and let the user pick.
         let numbering_ambiguous = numbering.is_ambiguous()
-            || matches!(numbering, crate::anime_numbering::NumberingResolution::UnresolvedPack);
+            || matches!(
+                numbering,
+                crate::anime_numbering::NumberingResolution::UnresolvedPack
+            );
         if let Some(summary) = numbering.ambiguity_summary() {
             tracing::debug!(
                 title_id = %title_id,
@@ -1206,7 +1231,10 @@ async fn preview_manual_import(
                 .season
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "1".to_string());
-            if let Some(ep_num) = ep_meta.episode_numbers.first().filter(|_| !numbering_ambiguous)
+            if let Some(ep_num) = ep_meta
+                .episode_numbers
+                .first()
+                .filter(|_| !numbering_ambiguous)
             {
                 let ep_str = ep_num.to_string();
                 if let Ok(Some(episode)) = app
@@ -1294,18 +1322,19 @@ async fn preview_manual_import(
         let is_grabbed_fallback_path = grabbed_fallback_path
             .as_ref()
             .is_some_and(|fallback| fallback == path);
-        let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous).then(|| {
-            manual_episode_suggestion_for_grabbed_scope(
-                suggested_episode_id.clone(),
-                &grabbed_episode_ids,
-                !exact_pack_scope
-                    && manual_grabbed_episode_fallback_applies(
-                        is_grabbed_fallback_path,
-                        parsed.episode.as_ref(),
-                    ),
-            )
-        })
-        .flatten();
+        let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous)
+            .then(|| {
+                manual_episode_suggestion_for_grabbed_scope(
+                    suggested_episode_id.clone(),
+                    &grabbed_episode_ids,
+                    !exact_pack_scope
+                        && manual_grabbed_episode_fallback_applies(
+                            is_grabbed_fallback_path,
+                            parsed.episode.as_ref(),
+                        ),
+                )
+            })
+            .flatten();
         if scoped_suggestion != suggested_episode_id {
             suggested_episode_label = scoped_suggestion.as_deref().and_then(|episode_id| {
                 available_episodes
@@ -1368,18 +1397,14 @@ pub(crate) async fn preview_manual_import_suggested_episode_ids_for_tests(
     release_evidence: &ReleaseEvidence,
     available_episodes: &[scryer_domain::Episode],
 ) -> AppResult<Vec<Option<String>>> {
-    Ok(preview_manual_import(
-        app,
-        source_dir,
-        title,
-        release_evidence,
-        available_episodes,
+    Ok(
+        preview_manual_import(app, source_dir, title, release_evidence, available_episodes)
+            .await?
+            .files
+            .into_iter()
+            .map(|file| file.suggested_episode_id)
+            .collect(),
     )
-    .await?
-    .files
-    .into_iter()
-    .map(|file| file.suggested_episode_id)
-    .collect())
 }
 
 #[cfg(test)]
@@ -1742,6 +1767,8 @@ pub struct ManualImportFileMapping {
     pub episode_id: Option<String>,
     #[serde(default)]
     pub series_movie_link_id: Option<String>,
+    #[serde(default)]
+    pub disc_selection: Option<scryer_media_types::DiscSelection>,
 }
 
 #[derive(Clone, Copy)]
@@ -1773,6 +1800,51 @@ fn manual_import_mapping_target<'a>(
     let episode_id = normalize_manual_import_target(mapping.episode_id.as_deref());
     let series_movie_link_id =
         normalize_manual_import_target(mapping.series_movie_link_id.as_deref());
+
+    if let Some(selection) = &mapping.disc_selection {
+        if episode_id.is_some() || series_movie_link_id.is_some() {
+            return Err(AppError::Validation(
+                "disc selection cannot include a separate episode or series-movie target".into(),
+            ));
+        }
+        let valid_id = |id: &str| {
+            !id.is_empty() && id.len() <= 16 && id.bytes().all(|byte| byte.is_ascii_digit())
+        };
+        if selection
+            .title_id
+            .as_deref()
+            .is_some_and(|id| !valid_id(id))
+            || selection.episode_mappings.len() > 512
+        {
+            return Err(AppError::Validation(
+                "invalid disc selection or mapping limit exceeded".into(),
+            ));
+        }
+        let mut episodes = std::collections::HashSet::new();
+        for mapping in &selection.episode_mappings {
+            if !valid_id(&mapping.disc_title_id)
+                || mapping.episode_ids.len() != 1
+                || mapping.episode_ids[0].trim().is_empty()
+                || !episodes.insert(&mapping.episode_ids[0])
+            {
+                return Err(AppError::Validation(
+                    "disc titles require distinct, explicit single-episode mappings".into(),
+                ));
+            }
+        }
+        if matches!(facet, MediaFacet::Movie) && selection.episode_mappings.is_empty() {
+            return Ok(ManualImportMappingTarget::Movie);
+        }
+        if !matches!(facet, MediaFacet::Movie)
+            && let Some(first) = selection.episode_mappings.first()
+        {
+            return Ok(ManualImportMappingTarget::Episode(&first.episode_ids[0]));
+        }
+        return Err(AppError::Validation(
+            "episodic discs require playback-title mappings; movie discs cannot map episodes"
+                .into(),
+        ));
+    }
 
     match (episode_id, series_movie_link_id) {
         (Some(episode_id), None) => Ok(ManualImportMappingTarget::Episode(episode_id)),
@@ -1860,6 +1932,7 @@ pub(crate) fn validate_manual_import_candidate_mapping_targets(
             file_path: String::new(),
             episode_id: mapping.episode_id.clone(),
             series_movie_link_id: mapping.series_movie_link_id.clone(),
+            disc_selection: mapping.disc_selection.clone(),
         };
         manual_import_mapping_target(&target, facet)?;
     }
@@ -1879,6 +1952,15 @@ pub(crate) async fn validate_manual_import_candidate_mapping_scope(
             mapping.series_movie_link_id.as_deref(),
         )
         .await?;
+        if let Some(selection) = &mapping.disc_selection {
+            for episode_id in selection
+                .episode_mappings
+                .iter()
+                .flat_map(|mapping| &mapping.episode_ids)
+            {
+                validate_manual_import_target_scope(app, title_id, Some(episode_id), None).await?;
+            }
+        }
     }
 
     Ok(())
@@ -2800,7 +2882,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                     release_evidence,
                     // Manual import never asks srrdb: an operator already told
                     // Scryer what this file is.
-                    std::slice::from_ref(&ImportVideoFile::physical(source.clone())),
+                    std::slice::from_ref(&ImportVideoFile::physical(source.clone()).with_disc_selection(mapping.disc_selection.clone())),
                     Utc::now(),
                     // An operator picked this file. The same bypass the manual
                     // episode path passes: no automatic sample rail, and no
@@ -2917,21 +2999,38 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
         let ep_num_str = episode.episode_number.clone().unwrap_or_default();
+        let target_episodes = if let Some(selection) = &mapping.disc_selection {
+            let ids = selection
+                .episode_mappings
+                .iter()
+                .flat_map(|mapping| mapping.episode_ids.iter().cloned())
+                .collect::<Vec<_>>();
+            let episodes = app.services.catalog.shows.get_episodes_by_ids(&ids).await?;
+            if episodes.len() != ids.len() || episodes.iter().any(|item| item.title_id != title.id)
+            {
+                return Err(AppError::Validation(
+                    "a mapped disc episode no longer belongs to the import title".into(),
+                ));
+            }
+            episodes
+        } else {
+            vec![episode.clone()]
+        };
         match execute_resolved_episode_import(
             app,
             actor,
             &title,
             import_id,
             completed,
-            rename_enabled,
+            rename_enabled && mapping.disc_selection.is_none(),
             &rename_template,
             &season_folder_template,
             &specials_folder_template,
             &full_folder_path,
             &source,
             &parsed,
-            std::slice::from_ref(&episode),
-            std::slice::from_ref(&episode),
+            &target_episodes,
+            &target_episodes,
             season_num,
             &ep_num_str,
             episode.absolute_number.as_deref(),
@@ -2942,6 +3041,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             crate::import_decide::ImportOrigin::OperatorQueued,
             release_evidence.announced_size_bytes(),
             false,
+            mapping.disc_selection.as_ref(),
         )
         .await
         {
@@ -2965,7 +3065,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                         "imported",
                         reason_code.as_deref(),
                         imported_media_file_id.as_deref(),
-                        std::slice::from_ref(&episode),
+                        &target_episodes,
                     )
                     .await?;
                 }
@@ -3012,7 +3112,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                             "already_present",
                             reason_code.as_deref(),
                             None,
-                            std::slice::from_ref(&episode),
+                            &target_episodes,
                         )
                         .await?;
                     }
@@ -4027,6 +4127,7 @@ mod manual_movie_primary_selection_tests {
         file.set_len(len).expect("size video");
         ManualImportFileMapping {
             file_path: path_to_stored_string(&path),
+            disc_selection: None,
             episode_id: None,
             series_movie_link_id: None,
         }
@@ -4060,6 +4161,7 @@ mod manual_movie_primary_selection_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = std::fs::canonicalize(dir.path()).expect("canonical root");
         let missing = ManualImportFileMapping {
+            disc_selection: None,
             file_path: path_to_stored_string(root.join("gone.mkv")),
             episode_id: None,
             series_movie_link_id: None,
