@@ -573,11 +573,7 @@ fn detect_eac3_profile_samples(data: &[u8]) -> Option<String> {
     let data = &data[..data.len().min(64 * 1024)];
     let mut cursor = 0;
     for _ in 0..32 {
-        let offset = data
-            .get(cursor..)?
-            .windows(2)
-            .position(|sync| sync == [0x0b, 0x77])?
-            + cursor;
+        let offset = crate::scan::find_pair_from(data, cursor, 0x0b, 0xff, 0x77)?;
         let header = data.get(offset..offset + 7)?;
         let frame_size = (usize::from(u16::from_be_bytes([header[2] & 7, header[3]])) + 1) * 2;
         if !(11..=16).contains(&(header[5] >> 3)) || header[2] >> 6 == 3 || frame_size < 7 {
@@ -598,13 +594,11 @@ fn detect_truehd_profile_samples(data: &[u8]) -> Option<String> {
     let mut cursor = 0;
     let mut profile = None;
     for _ in 0..32 {
-        let Some(offset) = data.get(cursor..).and_then(|rest| {
-            rest.windows(4)
-                .position(|sync| sync == TRUEHD_MAJOR_SYNCWORD)
-        }) else {
+        let Some(offset) =
+            crate::scan::find_syncword(data, u32::from_be_bytes(TRUEHD_MAJOR_SYNCWORD), cursor)
+        else {
             break;
         };
-        let offset = cursor + offset;
         merge_audio_profile(
             &mut profile,
             detect_truehd_profile_from_payload(&data[offset..data.len().min(offset + 64)]),
@@ -832,9 +826,11 @@ fn truehd_major_sync_size(payload: &[u8]) -> Option<usize> {
 fn detect_dts_profile_from_probe_bytes(prefix: &[u8], suffix: Option<&[u8]>) -> Option<String> {
     let core = parse_dts_core_header(prefix);
     let has_core = core.is_some();
-    let has_xch =
-        contains_syncword(prefix, DTS_SYNCWORD_XCH) || contains_syncword(prefix, DTS_SYNCWORD_XXCH);
-    let has_x96 = contains_syncword(prefix, DTS_SYNCWORD_X96);
+    let [has_xch, has_xxch, has_x96] = crate::scan::syncword_presence(
+        prefix,
+        [DTS_SYNCWORD_XCH, DTS_SYNCWORD_XXCH, DTS_SYNCWORD_X96],
+    );
+    let has_xch = has_xch || has_xxch;
     if let Some(exss) = parse_dts_exss_asset(prefix) {
         let exss_follows_core = core
             .map(|core| exss.exss_start >= core.frame_size)
@@ -875,11 +871,6 @@ fn detect_dts_profile_from_probe_bytes(prefix: &[u8], suffix: Option<&[u8]>) -> 
         return Some("DTS".into());
     }
     None
-}
-
-fn contains_syncword(data: &[u8], syncword: u32) -> bool {
-    data.windows(4)
-        .any(|window| u32::from_be_bytes(window.try_into().expect("window length")) == syncword)
 }
 
 fn contains_aligned_syncword(data: &[u8], syncword: u32) -> bool {

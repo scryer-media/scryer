@@ -29,6 +29,41 @@ a9faea43ed2067d7debf9ee423fa5577e81ad5f2050b6f3e3e4ba3387bb2ff13  ps_mpeg1_mp2.m
 cc05b9fc1ccea97944a2a15e46515e65b82140dd6444ebfbc807bbf3b42df312  ps_mpeg2_mp2.vob
 ```
 
+## Scanner optimization checks
+
+`scan::optimization_tests` compares accelerated prefix and audio-signature searches against scalar offsets across truncations, unaligned slices, overlapping prefixes, false candidates, and out-of-range starts. AVI checks cover partial entries, invalid IDs, small output arrays, repeated streams, and saturation. The metadata regression compares complete caption/HDR metadata and probe reports against the original scalar walk around the 256-NAL budget. UDF CRC checks compare the four-byte table implementation against a bitwise reference, including the known `123456789` value `0x31c3`.
+
+Run focused checks again in a separate process with `SCRYER_MEDIAINFO_ACCEL=off` to exercise dispatch fallbacks. The setting is cached per process. Direct backend tests still exercise a supported CPU backend independently of this setting.
+
+Opt-in performance checks use the existing optimized profile:
+
+```sh
+cargo nextest run --locked --cargo-profile release-lean -p scryer-mediainfo --lib \
+  --run-ignored only --no-capture \
+  -E 'test(benchmark_optimized_probe_scans) | test(benchmark_udf_crc)'
+```
+
+The September 9, 2026 ARM64 run with Rust 1.97.1 measured these median microseconds per operation (seven batches of 200). These are synthetic in-memory loop measurements, not end-to-end probe speedups:
+
+| Operation | Scalar | Optimized |
+| --- | ---: | ---: |
+| 256 KiB prefix scan, no matches | 109.379 | 14.832 |
+| 256 KiB prefix scan, sparse matches | 103.092 | 14.270 |
+| Dense prefixes, stopping at 256 matches | 8.391 | 1.628 |
+| Three audio signatures, 64 KiB | 57.532 | 8.706 |
+| AVI index, 256 KiB, one stream | 16.734 | 7.755 |
+| AVI index, 256 KiB, four streams | 16.921 | 8.872 |
+| AVI index, 256 KiB, 100 streams | 17.644 | 16.455 |
+| UDF CRC, 496 bytes | 1.371 | 0.407 |
+| UDF CRC, 2,048 bytes | 6.054 | 1.347 |
+| UDF CRC, 65,535 bytes | 164.262 | 51.954 |
+
+The x86 build and scalar fallback were checked locally under Rosetta. That environment does not expose AVX2; native x86 AVX2 execution and performance remain unmeasured.
+
+At this checkpoint, 103 focused checks passed both with acceleration enabled and with `SCRYER_MEDIAINFO_ACCEL=off`, including the 269-file FFprobe comparison. All 269 native results matched the pre-optimization report and the scalar report after excluding only `elapsed_ms`; metadata, warnings, read counts, and seek counts were identical. The 42-fixture application import/scan/rule contract check also passed with `--features runtime-media-analysis`. Workspace sweeps and Clippy remain deferred to integration under repository policy.
+
+The DVD navigation fixture now contains a valid MPEG-2 sequence marker and extension. Its two complete-title assertions also failed at the pre-optimization commit with the previous placeholder sequence. The authored timelines and assertions remain intact.
+
 ## Differential checks
 
 Run the opt-in reference check explicitly:

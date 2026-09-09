@@ -403,11 +403,8 @@ fn inspect_program_packets(
 ) {
     let mut pos = 0;
     let mut timestamps = BTreeMap::new();
-    while pos + 4 <= bytes.len() {
-        if bytes[pos..pos + 3] != [0, 0, 1] || bytes[pos + 3] < 0xb9 {
-            pos += 1;
-            continue;
-        }
+    while let Some(found) = crate::scan::find_program_start_code(bytes, pos) {
+        pos = found;
         let stream = bytes[pos + 3];
         let at = offset + pos as u64;
         result.packets_sampled += 1;
@@ -558,12 +555,16 @@ fn inspect_program_packets(
             }
         }
         if (0xe0..=0xef).contains(&stream) {
-            result.frame_headers_sampled += payload
-                .windows(6)
-                .filter(|header| {
-                    header[..4] == [0, 0, 1, 0] && (1..=4).contains(&((header[5] >> 3) & 7))
-                })
-                .count() as u64;
+            let mut cursor = 0;
+            while let Some(found) = crate::scan::find_mpeg_start_code(&payload[cursor..], 0) {
+                let at = cursor + found;
+                let Some(header) = payload.get(at..at + 6) else {
+                    break;
+                };
+                result.frame_headers_sampled +=
+                    u64::from((1..=4).contains(&((header[5] >> 3) & 7)));
+                cursor = at + 3;
+            }
         }
     }
 }
@@ -703,10 +704,12 @@ fn inspect_packets(
             }
         }
         if let Some(codec) = codecs.get(&pid) {
-            for start in elementary.windows(5) {
-                if start[..3] != [0, 0, 1] {
-                    continue;
-                }
+            let mut cursor = 0;
+            while let Some(at) = crate::scan::find_start_code_prefix(elementary, cursor) {
+                let Some(start) = elementary.get(at..at + 5) else {
+                    break;
+                };
+                cursor = at + 3;
                 let valid = match codec.as_str() {
                     "h264" => start[3] & 0x80 == 0 && (1..=5).contains(&(start[3] & 31)),
                     "hevc" => {

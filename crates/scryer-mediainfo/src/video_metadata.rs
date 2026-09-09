@@ -309,17 +309,17 @@ pub(crate) fn annex_b(
 ) {
     let mut start = None;
     let mut count = 0;
-    for (at, bytes) in data.windows(3).enumerate() {
-        if bytes == [0, 0, 1] {
-            if let Some(start) = start {
-                nal(&data[start..at], track, report, services);
-            }
-            start = Some(at + 3);
-            count += 1;
-            if count >= 256 {
-                incomplete(track, report, true);
-                return;
-            }
+    let mut cursor = 0;
+    while let Some(at) = crate::scan::find_start_code_prefix(data, cursor) {
+        if let Some(start) = start {
+            nal(&data[start..at], track, report, services);
+        }
+        cursor = at + 3;
+        start = Some(cursor);
+        count += 1;
+        if count >= 256 {
+            incomplete(track, report, true);
+            return;
         }
     }
     if let Some(start) = start {
@@ -354,6 +354,70 @@ mod tests {
             zeros = if byte == 0 { zeros + 1 } else { 0 };
         }
         nal
+    }
+
+    #[test]
+    fn accelerated_annex_b_preserves_metadata_boundaries_and_budget() {
+        fn reference(
+            data: &[u8],
+            track: &mut RawTrack,
+            report: &mut ProbeReport,
+            services: &mut Vec<CaptionService>,
+        ) {
+            let mut start = None;
+            let mut count = 0;
+            for (at, bytes) in data.windows(3).enumerate() {
+                if bytes == [0, 0, 1] {
+                    if let Some(start) = start {
+                        nal(&data[start..at], track, report, services);
+                    }
+                    start = Some(at + 3);
+                    count += 1;
+                    if count >= 256 {
+                        incomplete(track, report, true);
+                        return;
+                    }
+                }
+            }
+            if let Some(start) = start {
+                nal(&data[start..], track, report, services);
+            }
+        }
+        for codec in ["h264", "hevc", "mpeg2video"] {
+            let payload = caption_payload();
+            let body = if codec == "mpeg2video" {
+                [vec![0xb2], payload[3..].to_vec()].concat()
+            } else {
+                sei_nal(codec == "hevc", &[(4, payload)])
+            };
+            for count in [0, 1, 2, 255, 256, 257] {
+                let mut data = vec![0x55; 31];
+                for index in 0..count {
+                    data.extend(std::iter::repeat_n(0, 2 + index % 3));
+                    data.push(1);
+                    data.extend_from_slice(&body);
+                }
+                data.extend_from_slice(&[0, 0, 1, 0]);
+                for truncate in 0..=4 {
+                    let data = &data[..data.len() - truncate];
+                    let mut values = Vec::new();
+                    for parser in [reference, annex_b] {
+                        let mut track = RawTrack {
+                            codec_name: Some(codec.into()),
+                            ..Default::default()
+                        };
+                        let mut report = ProbeReport::default();
+                        let mut services = Vec::new();
+                        parser(data, &mut track, &mut report, &mut services);
+                        values.push(serde_json::json!({"track": track.metadata, "report": report, "services": services}));
+                    }
+                    assert_eq!(
+                        values[0], values[1],
+                        "codec={codec} count={count} truncate={truncate}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -558,7 +558,11 @@ fn dvd_cell_payload() -> Vec<u8> {
         ];
         let mut payload = vec![0x80, 0x80, 5];
         payload.extend(pts);
-        payload.extend([0, 0, 1, 0xb3, 0x2d, 0x01, 0xe0, 0x34, 0, 0, 0, 0]);
+        // 720x480 MPEG-2 sequence with the required marker and sequence extension.
+        payload.extend([
+            0, 0, 1, 0xb3, 0x2d, 0x01, 0xe0, 0x34, 0xff, 0xff, 0xe0, 0x18, 0, 0, 1, 0xb5, 0x14,
+            0x8a, 0, 1, 0, 0,
+        ]);
         bytes.extend([0, 0, 1, 0xe0]);
         bytes.extend((payload.len() as u16).to_be_bytes());
         bytes.extend(payload);

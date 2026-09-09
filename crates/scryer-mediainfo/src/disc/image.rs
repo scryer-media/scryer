@@ -327,6 +327,52 @@ fn iso_directory(
     Ok(())
 }
 
+// UDF uses the non-reflected 0x1021 polynomial with an initial value of zero.
+const UDF_CRC_TABLE: [[u16; 256]; 4] = {
+    let mut table = [[0; 256]; 4];
+    let mut byte = 0;
+    while byte < 256 {
+        let mut crc = (byte as u16) << 8;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
+            bit += 1;
+        }
+        table[0][byte] = crc;
+        byte += 1;
+    }
+    let mut row = 1;
+    while row < 4 {
+        let mut byte = 0;
+        while byte < 256 {
+            let crc = table[row - 1][byte];
+            table[row][byte] = (crc << 8) ^ table[0][(crc >> 8) as usize];
+            byte += 1;
+        }
+        row += 1;
+    }
+    table
+};
+
+fn udf_crc(body: &[u8]) -> u16 {
+    let mut crc = 0_u16;
+    let mut chunks = body.chunks_exact(4);
+    for bytes in &mut chunks {
+        crc = UDF_CRC_TABLE[3][usize::from((crc >> 8) as u8 ^ bytes[0])]
+            ^ UDF_CRC_TABLE[2][usize::from(crc as u8 ^ bytes[1])]
+            ^ UDF_CRC_TABLE[1][usize::from(bytes[2])]
+            ^ UDF_CRC_TABLE[0][usize::from(bytes[3])];
+    }
+    for &byte in chunks.remainder() {
+        crc = (crc << 8) ^ UDF_CRC_TABLE[0][usize::from((crc >> 8) as u8 ^ byte)];
+    }
+    crc
+}
+
 fn validate_tag(bytes: &[u8], location: Option<u32>) -> Result<u16> {
     if bytes.len() < 16 {
         return Err(ImageError::Malformed("short UDF descriptor tag"));
@@ -364,18 +410,7 @@ fn validate_tag(bytes: &[u8], location: Option<u32>) -> Result<u16> {
     let body = bytes
         .get(16..16 + length)
         .ok_or(ImageError::Malformed("short UDF descriptor body"))?;
-    let mut crc = 0_u16;
-    for byte in body {
-        crc ^= u16::from(*byte) << 8;
-        for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 {
-                (crc << 1) ^ 0x1021
-            } else {
-                crc << 1
-            };
-        }
-    }
-    if crc != le16(bytes, 8)? {
+    if udf_crc(body) != le16(bytes, 8)? {
         return Err(ImageError::Malformed("UDF descriptor CRC mismatch"));
     }
     Ok(le16(bytes, 0)?)
@@ -974,6 +1009,58 @@ mod tests {
         assert!(range(&extents, u64::MAX, 2).is_err());
         assert!(range(&extents, 29, 2).is_err());
     }
+    fn reference_crc(bytes: &[u8]) -> u16 {
+        let mut crc = 0_u16;
+        for &byte in bytes {
+            crc ^= u16::from(byte) << 8;
+            for _ in 0..8 {
+                crc = if crc & 0x8000 != 0 {
+                    (crc << 1) ^ 0x1021
+                } else {
+                    crc << 1
+                };
+            }
+        }
+        crc
+    }
+
+    #[test]
+    fn table_crc_matches_bitwise_reference_and_known_vector() {
+        assert_eq!(udf_crc(b"123456789"), 0x31c3);
+        assert_eq!(udf_crc(b""), 0);
+        let data: Vec<u8> = (0..65535).map(|i| ((i * 37) ^ (i >> 8)) as u8).collect();
+        for offset in 0..16 {
+            for size in [0, 1, 2, 15, 16, 255, 496, 2048, data.len() - offset] {
+                let data = &data[offset..offset + size];
+                assert_eq!(udf_crc(data), reference_crc(data));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "optimized-build microbenchmark; run explicitly with --release --no-capture"]
+    fn benchmark_udf_crc() {
+        use std::hint::black_box;
+        for size in [496, 2048, 65535] {
+            let data: Vec<u8> = (0..size).map(|i| (i * 37) as u8).collect();
+            for (name, crc) in [
+                ("bitwise", reference_crc as fn(&[u8]) -> u16),
+                ("table", udf_crc),
+            ] {
+                let mut samples = [0.0_f64; 7];
+                for sample in &mut samples {
+                    let start = std::time::Instant::now();
+                    for _ in 0..200 {
+                        black_box(crc(black_box(&data)));
+                    }
+                    *sample = start.elapsed().as_secs_f64() * 1e6 / 200.0;
+                }
+                samples.sort_by(f64::total_cmp);
+                eprintln!("UDF CRC {name} bytes={size}: {:.3}us", samples[3]);
+            }
+        }
+    }
+
     #[test]
     fn invalid_udf_checksums_are_structural_errors() {
         let mut tag = [0_u8; 512];

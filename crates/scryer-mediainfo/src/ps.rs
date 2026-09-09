@@ -147,11 +147,11 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
 }
 
 fn identify_mpeg_video(data: &[u8]) -> Option<&'static str> {
-    let start = data.windows(4).position(|bytes| bytes == [0, 0, 1, 0xb3])? + 4;
+    let start = crate::scan::find_mpeg_start_code(data, 0xb3)? + 4;
     let header_end = crate::legacy_video::mpeg_sequence_header_end(data, start)?;
     let suffix = data.get(header_end..)?;
-    let next = suffix.windows(4).find(|bytes| bytes[..3] == [0, 0, 1])?;
-    let codec = match next[3] {
+    let next = crate::scan::find_start_code_prefix(suffix, 0)?;
+    let codec = match *suffix.get(next + 3)? {
         0xb5 => "mpeg2video",
         0 | 0xb2 | 0xb8 => "mpeg1video",
         _ => return None,
@@ -245,10 +245,10 @@ pub(crate) fn pes_payload(packet: &[u8]) -> Option<PesPayload<'_>> {
 
 fn scan_pes(bytes: &[u8], streams: &mut BTreeMap<u16, PesStream>, collect: bool) {
     let mut pos = 0;
-    while pos + 6 <= bytes.len() {
-        if bytes[pos..pos + 3] != [0, 0, 1] {
-            pos += 1;
-            continue;
+    while let Some(found) = crate::scan::find_start_code_prefix(bytes, pos) {
+        pos = found;
+        if bytes.len() - pos < 6 {
+            break;
         }
         let stream_id = bytes[pos + 3];
         if !matches!(stream_id, 0xbd | 0xc0..=0xef) {
@@ -258,10 +258,7 @@ fn scan_pes(bytes: &[u8], streams: &mut BTreeMap<u16, PesStream>, collect: bool)
         let size = usize::from(u16::from_be_bytes([bytes[pos + 4], bytes[pos + 5]]));
         let payload_start = pos + 6;
         let end = if size == 0 {
-            bytes[payload_start..]
-                .windows(4)
-                .position(|b| b[..3] == [0, 0, 1] && b[3] >= 0xb9)
-                .map_or(bytes.len(), |offset| payload_start + offset)
+            crate::scan::find_program_start_code(bytes, payload_start).unwrap_or(bytes.len())
         } else {
             (payload_start + size).min(bytes.len())
         };
