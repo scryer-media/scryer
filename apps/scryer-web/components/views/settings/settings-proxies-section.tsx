@@ -604,6 +604,7 @@ export function SettingsProxiesSection({
                               id="settings-indexer-proxy-password"
                               type="password"
                               autoComplete="new-password"
+                              ignorePasswordManagers
                               value={proxyDraft.password}
                               disabled={proxyDraft.clearCredentials}
                               placeholder={
@@ -721,6 +722,11 @@ export function SettingsProxiesSection({
                           className="min-h-32 font-mono text-xs"
                           spellCheck={false}
                           autoComplete="off"
+                          data-1p-ignore="true"
+                          data-lpignore="true"
+                          data-bwignore="true"
+                          data-form-type="other"
+                          data-protonpass-ignore="true"
                           rows={8}
                           required={!proxyDraft.hasStoredPrivateKey}
                           value={proxyDraft.privateKey}
@@ -763,6 +769,7 @@ export function SettingsProxiesSection({
                             id="settings-indexer-proxy-private-key-passphrase"
                             type="password"
                             autoComplete="new-password"
+                            ignorePasswordManagers
                             value={proxyDraft.privateKeyPassphrase}
                             placeholder={
                               proxyDraft.hasStoredPrivateKey

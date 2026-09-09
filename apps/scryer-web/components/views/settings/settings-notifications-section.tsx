@@ -338,6 +338,7 @@ function DynamicConfigField({
               ? "number"
               : "text"
         }
+        ignorePasswordManagers={field.fieldType === "PASSWORD"}
         required={field.required}
         placeholder={field.defaultValue ?? ""}
       />

@@ -259,6 +259,7 @@ export default function SetupImportSourcesView({
                             dc.dedupKey,
                           )}
                           type="password"
+                          ignorePasswordManagers
                           value={dcPasswordOverrides[dc.dedupKey] ?? ""}
                           onChange={(e) =>
                             setDownloadClientPasswordOverride(
@@ -281,6 +282,7 @@ export default function SetupImportSourcesView({
                             dc.dedupKey,
                           )}
                           type="password"
+                          ignorePasswordManagers
                           value={dcApiKeyOverrides[dc.dedupKey] ?? ""}
                           onChange={(e) =>
                             setDownloadClientApiKeyOverride(
@@ -364,6 +366,7 @@ export default function SetupImportSourcesView({
                             idx.dedupKey,
                           )}
                           type="password"
+                          ignorePasswordManagers
                           value={idxApiKeyOverrides[idx.dedupKey] ?? ""}
                           onChange={(e) =>
                             setIndexerApiKeyOverride(idx.dedupKey, e.target.value)

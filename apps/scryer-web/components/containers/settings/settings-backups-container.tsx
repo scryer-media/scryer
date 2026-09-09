@@ -1208,6 +1208,7 @@ export function SettingsBackupsContainer() {
               <Input
                 id={selectorId("settings-backups-create-password")}
                 type="password"
+                ignorePasswordManagers
                 value={password}
                 onChange={(event) => {
                   const nextPassword = event.target.value;
@@ -1226,6 +1227,7 @@ export function SettingsBackupsContainer() {
               <Input
                 id={selectorId("settings-backups-create-confirm-password")}
                 type="password"
+                ignorePasswordManagers
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 placeholder={t("settings.backupsConfirmPassword")}

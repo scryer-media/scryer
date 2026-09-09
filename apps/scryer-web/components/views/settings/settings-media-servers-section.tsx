@@ -724,6 +724,7 @@ export function SettingsMediaServersSection({
                                   }
                                   type="password"
                                   autoComplete="off"
+                                  ignorePasswordManagers
                                 />
                               </label>
                             </div>
@@ -867,6 +868,7 @@ export function SettingsMediaServersSection({
                               }
                               type="password"
                               placeholder={t("form.apiKeyInputPlaceholder")}
+                              ignorePasswordManagers
                             />
                           </label>
                           {editingConnectionId && draft.provider === "JELLYFIN" ? (
@@ -944,6 +946,7 @@ export function SettingsMediaServersSection({
                               type="password"
                               autoComplete="off"
                               placeholder={t("form.passwordPlaceholder")}
+                              ignorePasswordManagers
                             />
                           </label>
                         </>

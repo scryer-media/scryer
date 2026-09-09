@@ -1334,6 +1334,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
               value={securityReauthenticationPassword}
               onChange={(event) => setSecurityReauthenticationPassword(event.target.value)}
               autoComplete="current-password"
+              ignorePasswordManagers
               placeholder="Current password"
               disabled={securityReauthenticationBusy}
             />

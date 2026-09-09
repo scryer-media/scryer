@@ -680,6 +680,7 @@ export function SettingsDownloadClientsSection({
                     }
                     placeholder={t("form.apiKeyInputPlaceholder")}
                     type="password"
+                    ignorePasswordManagers
                   />
                   {normalizedClientType === "weaver" ? (
                     <p className="mt-2 text-xs text-muted-foreground">
@@ -743,6 +744,7 @@ export function SettingsDownloadClientsSection({
                       }
                       placeholder={t("form.passwordPlaceholder")}
                       type="password"
+                      ignorePasswordManagers
                     />
                   </div>
                   {normalizedClientType === "qbittorrent" ? (
