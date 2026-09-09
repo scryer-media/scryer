@@ -15,6 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 
 export type TrackedRulePackMember = {
@@ -116,6 +118,7 @@ export function TrackedRulePacksSection({
   onUpdateMemberPriority,
   onCopyMember,
 }: TrackedRulePacksSectionProps) {
+  const dateTimeFormat = useUiDateTimeFormat();
   const [preview, setPreview] = React.useState<{
     pack: TrackedRulePackRecord;
     changes: TrackedRulePackPreview;
@@ -139,10 +142,14 @@ export function TrackedRulePacksSection({
         </p>
       </div>
       <div className="overflow-x-auto rounded border border-border bg-card">
-        <Table>
+        <Table layout="fixed" className="min-w-[1080px]" aria-label="Installed rule packs">
           <TableHeader><TableRow>
-            <TableHead>Pack / rule</TableHead><TableHead>Details</TableHead><TableHead>Facets</TableHead>
-            <TableHead className="w-28 text-center">Priority</TableHead><TableHead className="w-36 text-center">Enabled</TableHead><TableHead className="w-36 text-right">Actions</TableHead>
+            <TableHead>Pack</TableHead>
+            <TableHead className="w-40">Version</TableHead>
+            <TableHead className="w-20 text-center">Rules</TableHead>
+            <TableHead className="w-52">Last updated</TableHead>
+            <TableHead className="w-36 text-center">Auto-update</TableHead>
+            <TableHead className="w-40 text-right">Actions</TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {packs.map((pack) => {
@@ -151,8 +158,8 @@ export function TrackedRulePacksSection({
               const detailId = selectorId("settings-tracked-rule-pack-details", pack.packId);
               const autoUpdateId = selectorId("settings-tracked-rule-pack-auto-update", pack.packId);
               return <React.Fragment key={pack.packId}>
-                <TableRow data-ui="settings-tracked-rule-pack-row" className="bg-card hover:bg-muted/50">
-                  <TableCell className="min-w-[20rem] py-0">
+                <TableRow data-ui="settings-table-row" className="hover:bg-[var(--scry-rowHover)]">
+                  <TableCell className="py-0">
                     <button
                       id={selectorId("settings-tracked-rule-pack-disclosure", pack.packId)}
                       type="button"
@@ -167,40 +174,45 @@ export function TrackedRulePacksSection({
                       })}
                     >
                       <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
-                      <span className="min-w-0"><span className="block truncate font-medium">{pack.name}</span><span className="block truncate text-xs text-muted-foreground">{pack.packId} · installed {pack.version}</span></span>
+                      <span className="min-w-0"><span className="block truncate font-medium">{pack.name}</span><span className="block truncate text-xs text-muted-foreground">{pack.packId}</span></span>
                     </button>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {pack.availableVersion ? <Badge tone="info">Update {pack.availableVersion} available</Badge> : pack.lastUpdated ? `Last updated ${pack.lastUpdated}` : "Up to date"}
-                    {pack.lastError ? <span className="ml-2 text-xs text-[var(--scry-danger-text)]">Update failed</span> : null}
+                    <span className="block text-foreground">{pack.version}</span>
+                    {pack.availableVersion ? <Badge tone="info" className="mt-1">Update {pack.availableVersion} available</Badge> : null}
+                    {pack.lastError ? <span className="block text-xs text-[var(--scry-danger-text)]">Update failed</span> : null}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{pack.members.length} {pack.members.length === 1 ? "rule" : "rules"}</TableCell>
-                  <TableCell className="text-center text-muted-foreground">—</TableCell>
-                  <TableCell className="text-center">{canManage ? <label className="inline-flex items-center gap-2 text-xs">
+                  <TableCell className="text-center tabular-nums text-muted-foreground">{pack.members.length}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {pack.lastUpdated ? <time dateTime={pack.lastUpdated}>{formatUiDateTime(pack.lastUpdated, dateTimeFormat, { fallback: "—" })}</time> : "—"}
+                  </TableCell>
+                  <TableCell className="text-center">{canManage ? <div className="inline-flex items-center">
                     <Checkbox id={autoUpdateId} checked={pack.autoUpdate} disabled={busy} onCheckedChange={(value) => void onSetAutoUpdate(pack, value === true)} />
-                    <Label htmlFor={autoUpdateId}>Auto-update</Label>
-                  </label> : <span className="text-xs text-muted-foreground">{pack.autoUpdate ? "Auto-update" : "Manual"}</span>}</TableCell>
+                    <Label htmlFor={autoUpdateId} className="sr-only">Auto-update {pack.name}</Label>
+                  </div> : <span className="text-xs text-muted-foreground">{pack.autoUpdate ? "On" : "Off"}</span>}</TableCell>
                   <TableCell className="text-right">{canManage ? <div className="flex justify-end gap-2"><Button id={selectorId("settings-tracked-rule-pack-update", pack.packId)} type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void onPreviewUpdate(pack).then((changes) => { if (changes) setPreview({ pack, changes }); })}><RefreshCw className="mr-2 h-4 w-4" />Check</Button><IconButton id={selectorId("settings-tracked-rule-pack-uninstall", pack.packId)} label={`Uninstall ${pack.name}`} tone="delete" disabled={busy} onClick={() => setPendingUninstall(pack)}><Trash2 className="h-4 w-4" /></IconButton></div> : null}</TableCell>
                 </TableRow>
-                {expanded ? <>
-                  <TableRow id={detailId} data-ui="settings-tracked-rule-pack-details">
-                    <TableCell colSpan={6} className="bg-muted/20 px-5 py-3 text-xs text-muted-foreground">
-                      <p>Installs compatible stable patches for this pack’s current major and minor version, independently of plugin auto-update settings.</p>
-                      {pack.lastError ? <p className="mt-2 text-[var(--scry-danger-text)]">{pack.lastError}</p> : null}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableCell className="pl-12 text-xs font-medium text-muted-foreground">Rule</TableCell><TableCell className="text-xs font-medium text-muted-foreground">Description</TableCell><TableCell className="text-xs font-medium text-muted-foreground">Facets</TableCell>
-                    <TableCell className="text-center text-xs font-medium text-muted-foreground">Priority</TableCell><TableCell className="text-center text-xs font-medium text-muted-foreground">Enabled</TableCell><TableCell className="text-right text-xs font-medium text-muted-foreground">Actions</TableCell>
-                  </TableRow>
+                {expanded ? <TableRow id={detailId} data-ui="settings-table-row">
+                  <TableCell colSpan={6} className="p-4">
+                    {pack.lastError ? <p className="mb-3 text-xs text-[var(--scry-danger-text)]">{pack.lastError}</p> : null}
+                    <Table layout="fixed" density="dense" aria-label={`${pack.name} rules`} wrapperClassName="rounded border border-border bg-card">
+                      <TableHeader><TableRow>
+                        <TableHead className="w-[28%]">Rule</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead className="w-32">Facets</TableHead>
+                        <TableHead className="w-24 text-center">Priority</TableHead>
+                        <TableHead className="w-20 text-center">Enabled</TableHead>
+                        <TableHead className="w-20 text-right">Actions</TableHead>
+                      </TableRow></TableHeader>
+                      <TableBody>
                   {pack.members.map((member) => {
                     const memberBusy = busy || mutatingRuleSetId === member.ruleSetId;
                     const missingRule = member.enabled === null || member.priority === null || member.name === null;
                     const priorityKey = `${pack.packId}:${member.templateId}`;
                     const priorityValue = priorityDrafts[priorityKey] ?? String(member.priority ?? 0);
                     return <TableRow key={member.templateId} data-ui="settings-table-row">
-                      <TableCell className="pl-12 font-medium">{member.name ?? member.templateId}{member.removed ? <Badge tone="neutral" className="ml-2">Removed upstream</Badge> : null}</TableCell>
-                      <TableCell className="max-w-[240px] truncate text-muted-foreground">{member.description || "—"}</TableCell>
+                      <TableCell className="font-medium">{member.name ?? member.templateId}{member.removed ? <Badge tone="neutral" className="ml-2">Removed upstream</Badge> : null}</TableCell>
+                      <TableCell className="text-muted-foreground">{member.description || "—"}</TableCell>
                       <TableCell><FacetBadges facets={member.appliedFacets} /></TableCell>
                       <TableCell><Input {...signedIntegerInputProps} aria-label={`Priority: ${member.name ?? member.templateId}`} value={priorityValue} disabled={!canManage || member.removed || missingRule || memberBusy} onChange={(event) => setPriorityDrafts((current) => ({ ...current, [priorityKey]: event.target.value }))} onBlur={(event) => {
                         const priority = Number(event.currentTarget.value);
@@ -218,7 +230,10 @@ export function TrackedRulePacksSection({
                       <TableCell className="text-right">{canManage ? <IconButton id={selectorId("settings-tracked-rule-pack-copy", member.templateId)} label={`Copy ${member.name ?? member.templateId} as custom`} tone="neutral" disabled={missingRule || memberBusy} onClick={() => onCopyMember(member)}><Copy className="h-4 w-4" /></IconButton> : null}</TableCell>
                     </TableRow>;
                   })}
-                </> : null}
+                      </TableBody>
+                    </Table>
+                  </TableCell>
+                </TableRow> : null}
               </React.Fragment>;
             })}
           </TableBody>

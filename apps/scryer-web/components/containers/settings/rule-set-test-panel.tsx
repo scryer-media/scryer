@@ -111,6 +111,22 @@ function episodeLabel(episode: Episode): string {
       : prefix;
 }
 
+function previewEntryLabel(
+  entry: PreviewEntry,
+  parsed: PreviewResult["parsed"],
+): string {
+  if (entry.code === "group_unknown") return "Unknown release group";
+  if (
+    entry.code === "video_codec_quality_high" ||
+    entry.code === "video_codec_quality_mid"
+  ) {
+    const codec = parsed?.videoCodec;
+    return `${typeof codec === "string" && codec ? codec : "Video"} codec ${entry.delta > 0 ? "bonus" : "score"}`;
+  }
+  const label = entry.code.replaceAll("_", " ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function parsedLines(parsed: Record<string, unknown> | null | undefined) {
   return PARSED_FIELDS.flatMap(([key, label]) => {
     const value = parsed?.[key];
@@ -369,6 +385,7 @@ export function RuleSetTestPanel({
                     loadingEpisodes ? "Loading episodes…" : "Select an episode"
                   }
                   filterPlaceholder="Filter episodes"
+                  filterByValue={false}
                   ariaLabel="Episode"
                   optionIdPrefix="settings-rule-test-episode-option"
                   disabled={loadingEpisodes}
@@ -409,78 +426,128 @@ export function RuleSetTestPanel({
             className="mt-3 space-y-3 rounded border border-border p-3"
             aria-live="polite"
           >
-            <div className="flex flex-wrap items-center gap-3">
-              <div
-                className={
-                  result.score && result.score > 0
-                    ? "rounded border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-4 py-3 text-[var(--scry-success-text)]"
-                    : result.score && result.score < 0
-                      ? "rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-4 py-3 text-[var(--scry-danger-text)]"
-                      : "rounded border border-border bg-muted/50 px-4 py-3"
-                }
-              >
-                <p className="text-xs font-medium uppercase tracking-wide">
-                  Score
-                </p>
-                <p className="text-3xl font-semibold tabular-nums">
-                  {formatSignedScore(result.score ?? 0)}
-                </p>
-              </div>
-              <div>
-                <p
-                  className={
-                    incomplete
-                      ? "font-medium text-[var(--scry-warning-text)]"
-                      : result.allowed
-                        ? "font-medium text-[var(--scry-success-text)]"
-                        : "font-medium text-[var(--scry-danger-text)]"
-                  }
-                >
-                  {incomplete
-                    ? "Incomplete"
-                    : result.allowed
-                      ? "Allowed"
-                      : "Not allowed"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {incomplete
-                    ? "Evaluation completed with errors."
-                    : "Scoring policy"}
-                  {result.minimumScoreMet === false
-                    ? " · Minimum score not met"
-                    : ""}
-                </p>
-              </div>
-              {result.draftContribution ? (
-                <div className="border-l border-border pl-3 text-xs">
-                  <p className="font-medium">
-                    Current draft{" "}
-                    <span
+            <div className="grid items-start gap-4 lg:grid-cols-[auto_minmax(0,1fr)] lg:gap-6">
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    {
+                      label: "This rule’s contribution",
+                      score: result.draftContribution?.score ?? 0,
+                    },
+                    {
+                      label: "Overall custom score",
+                      score: result.score ?? 0,
+                    },
+                  ].map(({ label, score }) => (
+                    <div
+                      key={label}
                       className={
-                        result.draftContribution.score &&
-                        result.draftContribution.score > 0
-                          ? "text-[var(--scry-success-text)]"
-                          : result.draftContribution.score &&
-                              result.draftContribution.score < 0
-                            ? "text-[var(--scry-danger-text)]"
-                            : undefined
+                        score > 0
+                          ? "rounded border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-4 py-3 text-[var(--scry-success-text)]"
+                          : score < 0
+                            ? "rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-4 py-3 text-[var(--scry-danger-text)]"
+                            : "rounded border border-border bg-muted/50 px-4 py-3"
                       }
                     >
-                      {formatSignedScore(result.draftContribution.score ?? 0)}
-                    </span>
+                      <p className="text-xs font-medium uppercase tracking-wide">
+                        {label}
+                      </p>
+                      <p className="text-3xl font-semibold tabular-nums">
+                        {formatSignedScore(score)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <p
+                    className={
+                      incomplete
+                        ? "font-medium text-[var(--scry-warning-text)]"
+                        : result.allowed
+                          ? "font-medium text-[var(--scry-success-text)]"
+                          : "font-medium text-[var(--scry-danger-text)]"
+                    }
+                  >
+                    {incomplete
+                      ? "Incomplete"
+                      : result.allowed
+                        ? "Allowed"
+                        : "Not allowed"}
                   </p>
-                  <p className="text-muted-foreground">
-                    {result.draftContribution.message ||
-                      (result.draftContribution.enabled === false
-                        ? "Draft is disabled."
-                        : result.draftContribution.applies === false
-                          ? "Draft does not apply to this title facet."
-                          : result.draftContribution.matched
-                            ? "Draft matched."
-                            : "Draft did not match.")}
+                  <p className="text-xs text-muted-foreground">
+                    {incomplete
+                      ? "Evaluation completed with errors."
+                      : "Scoring policy"}
+                    {result.minimumScoreMet === false
+                      ? " · Minimum score not met"
+                      : ""}
                   </p>
                 </div>
-              ) : null}
+                {result.draftContribution ? (
+                  <div className="text-xs">
+                    <p className="text-muted-foreground">
+                      {result.draftContribution.enabled === false
+                        ? "This rule is disabled."
+                        : result.draftContribution.applies === false
+                          ? "Does not apply to this media type."
+                          : result.draftContribution.message ||
+                            (result.draftContribution.matched
+                              ? "This rule matched the release."
+                              : "This rule did not match the release.")}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+              <div className="min-w-0 space-y-3 lg:border-l lg:border-border lg:pl-6">
+                {groupedRuleSets.map(([origin, entries]) => (
+                  <div key={origin} className="text-xs">
+                    {origin !== "user" ? (
+                      <p className="mb-1 font-medium">{origin}</p>
+                    ) : null}
+                    <ul className="space-y-2">
+                      {entries.map((entry, index) => (
+                        <li
+                          key={`${entry.ruleSetId || entry.ruleSetName || index}`}
+                        >
+                          <div className="flex justify-between gap-3">
+                            <span>
+                              {entry.ruleSetName === "TRaSH Guides source video"
+                                ? "Source & video codec"
+                                : entry.ruleSetName || "Unnamed rule"}
+                              {entry.isDraft ? " (this rule)" : ""}
+                              {entry.messages?.length
+                                ? ` — ${entry.messages.join("; ")}`
+                                : ""}
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                              {entry.matched
+                                ? formatSignedScore(entry.score ?? 0)
+                                : "No match"}
+                            </span>
+                          </div>
+                          {entry.entries?.length ? (
+                            <ul className="mt-1 space-y-1 border-l border-border pl-2 text-muted-foreground">
+                              {entry.entries.map((scoreEntry, entryIndex) => (
+                                <li
+                                  key={`${scoreEntry.code}-${entryIndex}`}
+                                  className="flex justify-between gap-3"
+                                >
+                                  <span className="min-w-0 break-words">
+                                    {previewEntryLabel(scoreEntry, result.parsed)}
+                                  </span>
+                                  <span className="shrink-0 tabular-nums">
+                                    {scoringEntryText(scoreEntry, t)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
             </div>
             {incomplete ? (
               <div className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
@@ -491,7 +558,7 @@ export function RuleSetTestPanel({
                 </p>
               </div>
             ) : null}
-            <div className="grid gap-2 text-xs md:grid-cols-2">
+            <div className="space-y-1 text-xs">
               <p>
                 <span className="font-medium">Profile:</span>{" "}
                 {result.profileName || "Unavailable"}
@@ -510,19 +577,19 @@ export function RuleSetTestPanel({
                     .join(" · ") || "Unavailable"}
                 </p>
               ) : null}
-              <p>
-                <span className="font-medium">Tags:</span>{" "}
-                {result.context?.tags?.length
-                  ? result.context.tags.join(", ")
-                  : "None"}
-              </p>
+              {result.context?.tags?.length ? (
+                <p>
+                  <span className="font-medium">Tags:</span>{" "}
+                  {result.context.tags.join(", ")}
+                </p>
+              ) : null}
             </div>
             <div className="text-xs">
-              <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
+              <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
                 {parsedLines(result.parsed).map(([label, value]) => (
                   <React.Fragment key={label}>
                     <dt className="text-muted-foreground">{label}</dt>
-                    <dd>{value}</dd>
+                    <dd className="break-words">{value}</dd>
                   </React.Fragment>
                 ))}
                 <dt className="text-muted-foreground">Size</dt>
@@ -533,46 +600,6 @@ export function RuleSetTestPanel({
                 </dd>
               </dl>
             </div>
-            {groupedRuleSets.map(([origin, entries]) => (
-              <div key={origin} className="text-xs">
-                <p className="font-medium">{origin}</p>
-                <ul className="mt-1 space-y-2">
-                  {entries.map((entry, index) => (
-                    <li
-                      key={`${entry.ruleSetId || entry.ruleSetName || index}`}
-                    >
-                      <div className="flex justify-between gap-2">
-                        <span>
-                          {entry.ruleSetName || "Unnamed rule"}
-                          {entry.isDraft ? " (draft)" : ""}
-                          {entry.messages?.length
-                            ? ` — ${entry.messages.join("; ")}`
-                            : ""}
-                        </span>
-                        <span>
-                          {entry.matched
-                            ? formatSignedScore(entry.score ?? 0)
-                            : "No match"}
-                        </span>
-                      </div>
-                      {entry.entries?.length ? (
-                        <ul className="mt-1 space-y-1 border-l border-border pl-2 text-muted-foreground">
-                          {entry.entries.map((scoreEntry, entryIndex) => (
-                            <li
-                              key={`${scoreEntry.code}-${entryIndex}`}
-                              className="flex justify-between gap-2"
-                            >
-                              <span>{scoreEntry.code}</span>
-                              <span>{scoringEntryText(scoreEntry, t)}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
             {result.errors?.length ? (
               <div className="rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-2 py-2 text-xs text-[var(--scry-danger-text)]">
                 <p className="font-medium">Evaluation errors</p>
