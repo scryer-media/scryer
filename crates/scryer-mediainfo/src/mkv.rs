@@ -176,8 +176,8 @@ pub(crate) fn parse_mkv_source(
         }
 
         if !profile.skips_deep_probes() {
-            if !is_plausible_frame_rate(tracks[video_idx].frame_rate_fps)
-                && let Some(track_num) = primary_video_track_num
+            if let Some(track_num) = primary_video_track_num
+                && !primary_video_signals.nondefault_timestamp_scale
             {
                 frame_rate_probe = Some(MkvFrameRateProbeRequest {
                     target_track_num: track_num,
@@ -244,6 +244,10 @@ pub(crate) fn parse_mkv_source(
     );
 
     if let Some(video_idx) = primary_video_index {
+        if let Some(timing) = deep_probe.frame_timing {
+            tracks[video_idx].metadata.observed_frame_rate = Some(timing.rate);
+            tracks[video_idx].metadata.variable_frame_rate = Some(timing.variable);
+        }
         if let Some(fps) = deep_probe.frame_rate_fps
             && should_replace_frame_rate(tracks[video_idx].frame_rate_fps, fps)
         {
@@ -335,6 +339,18 @@ pub(crate) fn parse_mkv_source(
     }
     details.report.budget_exhausted |= sample_report.budget_exhausted;
     details.report.warnings.extend(sample_report.warnings);
+    if frame_rate_probe.is_some()
+        || (!profile.skips_deep_probes() && primary_video_signals.nondefault_timestamp_scale)
+    {
+        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.budget_exhausted |= deep_probe.frame_timing_budget_exhausted;
+        details.report.warnings.push(scryer_media_types::ProbeWarning {
+            code: "mkv_frame_timing_sampled".into(),
+            message: "Frame timing observes at most 12 timestamps or 24 blocks within a 32 MiB prefix; laced, nondefault track-scale, or inconclusive samples remain unknown".into(),
+            stream_id: primary_video_track_num.map(|number| number.to_string()),
+            ..Default::default()
+        });
+    }
     details.caption_services = caption_services;
     duration_seconds = duration_seconds.or(details.duration_seconds);
     details.overall_bitrate_bps = duration_seconds
@@ -1212,6 +1228,7 @@ struct MkvTrackSignals {
     has_itu_t_t35_mapping: bool,
     dovi_config: Option<Vec<u8>>,
     header_strip_prefix: Option<Vec<u8>>,
+    nondefault_timestamp_scale: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1237,25 +1254,27 @@ struct BlockHeaderInfo {
     payload_offset: u64,
     payload_size: u64,
     lacing_type: u8,
+    invisible: bool,
 }
 
 #[derive(Debug, Default)]
 struct FrameRateProbeState {
     timestamps: Vec<u64>,
     matching_blocks: usize,
+    has_lacing: bool,
+    prefix_limit_reached: bool,
 }
 
 impl FrameRateProbeState {
     fn done(&self) -> bool {
         self.timestamps.len() >= MKV_FPS_PROBE_MAX_TIMESTAMPS
             || self.matching_blocks >= MKV_FPS_PROBE_MAX_BLOCKS
+            || self.prefix_limit_reached
     }
 
     fn record_timestamp(&mut self, timestamp: u64) {
         self.matching_blocks += 1;
-        if self.timestamps.last().copied() != Some(timestamp) {
-            self.timestamps.push(timestamp);
-        }
+        self.timestamps.push(timestamp);
     }
 }
 
@@ -1463,6 +1482,8 @@ struct MkvAudioProbeRequest {
 #[derive(Debug, Default)]
 struct MkvDeepProbeResult {
     frame_rate_fps: Option<f64>,
+    frame_timing: Option<MkvFrameTiming>,
+    frame_timing_budget_exhausted: bool,
     has_hdr10plus: Option<bool>,
     audio: Vec<(usize, ScannedAudioMetadata)>,
 }
@@ -1556,12 +1577,18 @@ impl MkvDeepProbePlan {
     }
 
     fn into_result(self) -> MkvDeepProbeResult {
-        let frame_rate_fps = self.frame_rate.as_ref().and_then(|target| {
-            estimate_frame_rate_from_timestamps(
-                &target.state.timestamps,
-                target.request.timestamp_scale_ns,
-            )
+        let frame_timing = self.frame_rate.as_ref().and_then(|target| {
+            if target.state.has_lacing {
+                return None;
+            }
+            observe_frame_timing(&target.state.timestamps, target.request.timestamp_scale_ns)
         });
+        let frame_rate_fps = frame_timing
+            .map(|timing| timing.rate.numerator as f64 / timing.rate.denominator as f64);
+        let frame_timing_budget_exhausted = self
+            .frame_rate
+            .as_ref()
+            .is_some_and(|target| target.state.done());
         let has_hdr10plus = self.hdr10plus.as_ref().map(|target| target.state.found);
         let audio = self
             .audio
@@ -1577,6 +1604,8 @@ impl MkvDeepProbePlan {
 
         MkvDeepProbeResult {
             frame_rate_fps,
+            frame_timing,
+            frame_timing_budget_exhausted,
             has_hdr10plus,
             audio,
         }
@@ -1733,7 +1762,14 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         }
         let end = plan.max_scan_end(self.file_len);
         self.seek_to(0)?;
-        self.scan_root_for_deep_probe(end, plan, 0)
+        self.scan_root_for_deep_probe(end, plan, 0)?;
+        if self.file_len > MKV_FPS_PROBE_MAX_SCAN_BYTES
+            && self.position()? >= MKV_FPS_PROBE_MAX_SCAN_BYTES
+            && let Some(target) = plan.frame_rate.as_mut()
+        {
+            target.state.prefix_limit_reached = true;
+        }
+        Ok(())
     }
 
     fn scan_prefix_for_chapter_count(
@@ -1930,7 +1966,16 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             && !target.state.done()
             && block.track_number == target.request.target_track_num
         {
-            target.state.record_timestamp(block.timestamp);
+            if block.payload_offset >= MKV_FPS_PROBE_MAX_SCAN_BYTES {
+                target.state.prefix_limit_reached = true;
+            } else {
+                target.state.has_lacing |= block.lacing_type != 0;
+                if block.invisible {
+                    target.state.matching_blocks += 1;
+                } else {
+                    target.state.record_timestamp(block.timestamp);
+                }
+            }
         }
 
         if let Some(target) = plan.hdr10plus.as_mut()
@@ -2131,6 +2176,18 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         end: u64,
         candidate_ids: &[u32],
     ) -> Result<Option<EbmlElementHeader>, MediaInfoError> {
+        let start = self.position()?;
+        if start < end {
+            // Most callers just sought to an element boundary. Avoid reading
+            // a search window into its media payload when the header matches.
+            if let Ok(Some(header)) = self.read_element_header()
+                && candidate_ids.contains(&header.id)
+                && header.data_offset <= header.end(end, self.file_len)
+            {
+                return Ok(Some(header));
+            }
+            self.seek_to(start)?;
+        }
         while self.position()? < end {
             let Some(candidate_pos) = self.find_next_deep_probe_candidate(end, candidate_ids)?
             else {
@@ -2288,10 +2345,9 @@ impl<R: Read + Seek> MkvRawScanner<R> {
         }
 
         let relative_timestamp = i16::from_be_bytes([buf[track_len], buf[track_len + 1]]) as i64;
-        let timestamp = cluster_timestamp as i64 + relative_timestamp;
-        if timestamp < 0 {
+        let Some(timestamp) = cluster_timestamp.checked_add_signed(relative_timestamp) else {
             return Ok(None);
-        }
+        };
 
         let flags = buf[track_len + 2];
         let payload_offset = start + track_len as u64 + 3;
@@ -2300,10 +2356,11 @@ impl<R: Read + Seek> MkvRawScanner<R> {
 
         Ok(Some(BlockHeaderInfo {
             track_number,
-            timestamp: timestamp as u64,
+            timestamp,
             payload_offset,
             payload_size,
             lacing_type: (flags & 0x06) >> 1,
+            invisible: flags & 0x08 != 0,
         }))
     }
 
@@ -2357,7 +2414,10 @@ fn track_entry_signals(track_entry_payload: &[u8]) -> MkvTrackSignals {
         let Some((id, payload, consumed)) = next_ebml_element(current) else {
             break;
         };
-        if id == EBML_ID_BLOCK_ADDITION_MAPPING {
+        if id == 0x23314f {
+            // Deprecated TrackTimestampScale changes block timing semantics.
+            signals.nondefault_timestamp_scale |= parse_ebml_float(payload) != Some(1.0);
+        } else if id == EBML_ID_BLOCK_ADDITION_MAPPING {
             if block_addition_mapping_has_type(payload, MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35) {
                 signals.has_itu_t_t35_mapping = true;
             }
@@ -2523,33 +2583,50 @@ fn audio_header_probe_bytes(codec_name: &str) -> usize {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MkvFrameTiming {
+    rate: scryer_media_types::Rational,
+    variable: bool,
+}
+
+fn observe_frame_timing(timestamps: &[u64], timestamp_scale_ns: f64) -> Option<MkvFrameTiming> {
+    if timestamps.len() < 4
+        || !timestamp_scale_ns.is_finite()
+        || timestamp_scale_ns < 1.0
+        || timestamp_scale_ns.fract() != 0.0
+        || timestamp_scale_ns >= u64::MAX as f64
+    {
+        return None;
+    }
+    // Blocks arrive in coding order; timing describes presentation order.
+    let mut ordered = timestamps.to_vec();
+    ordered.sort_unstable();
+    let deltas: Vec<u64> = ordered.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    if deltas.contains(&0) {
+        return None;
+    }
+    let span = (ordered.last()? - ordered.first()?).checked_mul(timestamp_scale_ns as u64)?;
+    let numerator = i64::try_from(deltas.len())
+        .ok()?
+        .checked_mul(1_000_000_000)?;
+    let rate = scryer_media_types::Rational::new(numerator, span)?;
+    if !is_plausible_frame_rate(Some(rate.numerator as f64 / rate.denominator as f64)) {
+        return None;
+    }
+    // One tick of alternating quantization is not evidence of VFR.
+    let variable = deltas.iter().max()? - deltas.iter().min()? > 1;
+    if variable && timestamps.windows(2).any(|pair| pair[1] < pair[0]) {
+        // A bounded coding-order sample can end before reordered frames arrive.
+        // Its gaps cannot establish a variable presentation cadence.
+        return None;
+    }
+    Some(MkvFrameTiming { rate, variable })
+}
+
+#[cfg(test)]
 fn estimate_frame_rate_from_timestamps(timestamps: &[u64], timestamp_scale_ns: f64) -> Option<f64> {
-    if timestamps.len() < 4 {
-        return None;
-    }
-
-    let mut deltas: Vec<u64> = timestamps
-        .windows(2)
-        .filter_map(|window| window[1].checked_sub(window[0]))
-        .filter(|delta| *delta > 0)
-        .collect();
-    if deltas.is_empty() {
-        return None;
-    }
-
-    deltas.sort_unstable();
-    let median_delta = deltas[deltas.len() / 2] as f64;
-    let delta_seconds = median_delta * timestamp_scale_ns / 1e9;
-    if delta_seconds <= 0.0 {
-        return None;
-    }
-
-    let fps = 1.0 / delta_seconds;
-    if (1.0..=240.0).contains(&fps) {
-        Some(fps)
-    } else {
-        None
-    }
+    let timing = observe_frame_timing(timestamps, timestamp_scale_ns)?;
+    Some(timing.rate.numerator as f64 / timing.rate.denominator as f64)
 }
 
 fn parse_ebml_vint_value(data: &[u8]) -> Option<(u64, usize)> {
@@ -3275,6 +3352,33 @@ mod tests {
     }
 
     #[test]
+    fn observed_frame_timing_preserves_rationals_and_sampling_uncertainty() {
+        let timing = observe_frame_timing(&[0, 120, 40, 80, 160], 1_000_000.0).unwrap();
+        assert_eq!(
+            timing.rate,
+            scryer_media_types::Rational::new(25, 1).unwrap()
+        );
+        assert!(!timing.variable);
+        let rounded = observe_frame_timing(&[0, 33, 67, 100], 1_000_000.0).unwrap();
+        assert_eq!(
+            rounded.rate,
+            scryer_media_types::Rational::new(30, 1).unwrap()
+        );
+        assert!(!rounded.variable);
+        let variable = observe_frame_timing(&[0, 40, 80, 160], 1_000_000.0).unwrap();
+        assert_eq!(
+            variable.rate,
+            scryer_media_types::Rational::new(75, 4).unwrap()
+        );
+        assert!(variable.variable);
+        assert!(observe_frame_timing(&[0, 120, 40, 80, 240], 1_000_000.0).is_none());
+        assert!(observe_frame_timing(&[0, 40, 40, 80], 1_000_000.0).is_none());
+        for scale in [f64::NAN, f64::INFINITY, 0.0, 1.5, u64::MAX as f64] {
+            assert!(observe_frame_timing(&[0, 40, 80, 120], scale).is_none());
+        }
+    }
+
+    #[test]
     fn estimate_frame_rate_from_timestamp_deltas_uses_millisecond_units() {
         let fps = estimate_frame_rate_from_timestamps(&[0, 40, 80, 120, 160], 1_000_000.0);
         assert_eq!(fps, Some(25.0));
@@ -3363,6 +3467,7 @@ mod tests {
                 has_itu_t_t35_mapping: true,
                 dovi_config: None,
                 header_strip_prefix: None,
+                ..Default::default()
             }
         ));
 
@@ -3374,6 +3479,7 @@ mod tests {
                 has_itu_t_t35_mapping: true,
                 dovi_config: None,
                 header_strip_prefix: None,
+                ..Default::default()
             }
         ));
 
@@ -3390,6 +3496,142 @@ mod tests {
             &h264_track,
             &MkvTrackSignals::default()
         ));
+    }
+
+    #[test]
+    fn observed_frame_timing_reaches_mkv_metadata_without_replacing_declarations() {
+        for track_scale in [None, Some(1.0_f64), Some(2.0_f64)] {
+            let mut track = [
+                make_uint_element(&[0xd7], 1),
+                make_uint_element(&[0x83], 1),
+                make_ebml_element(&[0x86], b"V_MPEG2"),
+                make_uint_element(&[0x23, 0xe3, 0x83], 40_000_000),
+            ]
+            .concat();
+            if let Some(scale) = track_scale {
+                track.extend(make_ebml_element(&[0x23, 0x31, 0x4f], &scale.to_be_bytes()));
+            }
+            let tracks = make_ebml_element(
+                &[0x16, 0x54, 0xae, 0x6b],
+                &make_ebml_element(&[0xae], &track),
+            );
+            let cluster = make_ebml_element(
+                &[0x1f, 0x43, 0xb6, 0x75],
+                &[
+                    make_uint_element(&[0xe7], 0),
+                    make_simple_block(1, 0, 0, &[0]),
+                    make_simple_block(1, 40, 0, &[0]),
+                    make_simple_block(1, 80, 0, &[0]),
+                    make_simple_block(1, 160, 0, &[0]),
+                ]
+                .concat(),
+            );
+            let bytes = [
+                make_ebml_element(&[0x1a, 0x45, 0xdf, 0xa3], &[]),
+                make_ebml_element(&[0x18, 0x53, 0x80, 0x67], &[tracks, cluster].concat()),
+            ]
+            .concat();
+            for profile in [AnalysisProfile::DefaultRich, AnalysisProfile::FfprobeParity] {
+                let parsed = parse_mkv_source(&mut Cursor::new(bytes.clone()), profile).unwrap();
+                let video = &parsed.tracks[0];
+                assert_eq!(video.frame_rate_fps, Some(25.0));
+                assert_eq!(
+                    video.metadata.declared_frame_rate,
+                    scryer_media_types::Rational::new(25, 1)
+                );
+                if track_scale == Some(2.0) {
+                    assert!(video.metadata.observed_frame_rate.is_none());
+                    assert!(video.metadata.variable_frame_rate.is_none());
+                } else {
+                    assert_eq!(
+                        video.metadata.observed_frame_rate,
+                        scryer_media_types::Rational::new(75, 4)
+                    );
+                    assert_eq!(video.metadata.variable_frame_rate, Some(true));
+                }
+                assert!(
+                    parsed
+                        .details
+                        .report
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == "mkv_frame_timing_sampled")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observed_frame_timing_ignores_invisible_blocks_and_rejects_lacing() {
+        for flags in [0x08, 0x02, 0x04, 0x06] {
+            let cluster = make_ebml_element(
+                &[0x1f, 0x43, 0xb6, 0x75],
+                &[
+                    make_uint_element(&[0xe7], 0),
+                    make_simple_block(1, 0, 0, &[0]),
+                    make_simple_block(1, 20, flags, &[1, 0, 0]),
+                    make_simple_block(1, 40, 0, &[0]),
+                    make_simple_block(1, 80, 0, &[0]),
+                    make_simple_block(1, 120, 0, &[0]),
+                ]
+                .concat(),
+            );
+            let mut scanner = MkvRawScanner::new(Cursor::new(cluster)).unwrap();
+            let fps = scanner.probe_frame_rate(1, 1_000_000.0).unwrap();
+            assert_eq!(fps, (flags == 0x08).then_some(25.0));
+        }
+    }
+
+    #[test]
+    fn observed_frame_timing_reads_headers_with_a_fixed_sample_budget() {
+        struct Metered {
+            inner: Cursor<Vec<u8>>,
+            bytes: usize,
+        }
+        impl Read for Metered {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.inner.read(output)?;
+                self.bytes += count;
+                Ok(count)
+            }
+        }
+        impl Seek for Metered {
+            fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+                self.inner.seek(position)
+            }
+        }
+        let payload = vec![0; 64 * 1024];
+        let mut blocks = make_uint_element(&[0xe7], 0);
+        for index in 0..48 {
+            blocks.extend(make_simple_block(1, index * 40, 0, &payload));
+        }
+        let cluster = make_ebml_element(&[0x1f, 0x43, 0xb6, 0x75], &blocks);
+        let source = Metered {
+            inner: Cursor::new(cluster),
+            bytes: 0,
+        };
+        let mut scanner = MkvRawScanner::new(source).unwrap();
+        let mut plan = MkvDeepProbePlan::new(
+            Some(MkvFrameRateProbeRequest {
+                target_track_num: 1,
+                timestamp_scale_ns: 1_000_000.0,
+            }),
+            None,
+            Vec::new(),
+        );
+        scanner.run_deep_probe_plan(&mut plan).unwrap();
+        assert_eq!(
+            plan.frame_rate.as_ref().unwrap().state.timestamps.len(),
+            MKV_FPS_PROBE_MAX_TIMESTAMPS
+        );
+        assert!(
+            scanner.reader.bytes < 4096,
+            "read {} bytes for timing",
+            scanner.reader.bytes
+        );
+        let result = plan.into_result();
+        assert!(result.frame_timing_budget_exhausted);
+        assert_eq!(result.frame_rate_fps, Some(25.0));
     }
 
     #[test]

@@ -10,6 +10,8 @@ The AV1 and HEVC sequence fixtures contain one second of black 64×64 video at 2
 
 The application regression `canonical_catalog_and_import_paths_preserve_the_same_analysis_contract` runs 37 fixtures through `NativeMediaAnalyzer`, the actual post-download import gate, and the rule projection. It compares the complete analysis contract, excluding elapsed probe time. Coverage includes MPEG-PS, ASF, FLV, AC-3/E-AC-3, Opus, Vorbis, FLAC, and AVI stream sampling, alongside video sequence metadata and MP4 chapters.
 
+Matroska timing regressions retain declarations separately from rational observations and sampled VFR status. They cover presentation reordering, millisecond rounding, duplicate timestamps, invisible frames, lacing, and nondefault track scales. Laced or inconclusive timing remains unknown. An instrumented source requires the timing probe to stop after 12 timestamps and read fewer than 4 KiB from a fixture with 48 large blocks; this does not measure every other enrichment pass.
+
 The supplemental fixture SHA-256 values are:
 
 ```text
