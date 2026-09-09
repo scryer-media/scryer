@@ -1824,7 +1824,8 @@ mod seed_goal_tests {
         sqlx::query(
             "CREATE TABLE download_clients (
                  id TEXT PRIMARY KEY,
-                 name TEXT NOT NULL
+                 name TEXT NOT NULL,
+                 client_type TEXT NOT NULL DEFAULT 'qbittorrent'
              );
              CREATE TABLE downloads (
                  id TEXT PRIMARY KEY,
@@ -2909,6 +2910,75 @@ mod seed_goal_tests {
         assert_eq!(row.client_type.as_deref(), Some("qbittorrent"));
         assert_eq!(row.source_title.as_deref(), Some("Release job-1"));
         assert_eq!(row.size_bytes, Some(123));
+    }
+
+    #[tokio::test]
+    async fn cleanup_resolves_only_unambiguous_legacy_clients_and_persists_the_binding() {
+        for client_count in [0, 1, 2] {
+            let store = store().await;
+            let id = DownloadId::new();
+            let mut legacy = submission(id, "legacy-job", "title-1");
+            legacy.download_client_id = Some(String::new());
+            store
+                .record_submission_with_identity(legacy, submission_identity(id), None)
+                .await
+                .unwrap();
+            // Model the legacy migration's canonical binding with no config ID.
+            SqlRuntime::execute_write(&store.datastore, "test_legacy_binding",
+                "INSERT INTO download_client_bindings (download_id, client_config_id, client_type_snapshot, native_item_id, created_at)
+                 VALUES ({}, '', 'qbittorrent', 'legacy-job', {})",
+                vec![SqlArg::Text(id.to_string()), SqlArg::Timestamp(Utc::now())]).await.unwrap();
+            for n in 0..client_count {
+                SqlRuntime::execute_write(&store.datastore, "test_client",
+                    "INSERT INTO download_clients (id, name, client_type) VALUES ({}, {}, 'qbittorrent')",
+                    vec![SqlArg::Text(format!("client-{n}")), SqlArg::Text(format!("Client {n}"))]).await.unwrap();
+            }
+            store
+                .record_identity_tracked_state_for_download(
+                    Some(&id),
+                    &submission_identity(id),
+                    Some(&ClientJobLocator::new(None, "qbittorrent", "legacy-job")),
+                    "imported",
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let DownloadCleanupClaim::Claimed(record) =
+                store.claim_download_cleanup(&id).await.unwrap()
+            else {
+                panic!("legacy intent should remain durable even when ownership is ambiguous");
+            };
+            assert_eq!(
+                record.client_id,
+                if client_count == 1 { "client-0" } else { "" }
+            );
+            let binding = SqlRuntime::fetch_optional(
+                store.datastore.read_exec(),
+                "SELECT client_config_id FROM download_client_bindings WHERE download_id = {}",
+                &[SqlArg::Text(id.to_string())],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                blank_to_none(binding.opt_text("client_config_id").unwrap()),
+                (client_count == 1).then(|| "client-0".to_string())
+            );
+            // A row already enqueued by an older build must also heal on claim.
+            if client_count == 1 {
+                SqlRuntime::execute_write(&store.datastore, "test_old_intent",
+                    "UPDATE download_cleanup SET client_id = '', lease_until = NULL WHERE download_id = {}",
+                    vec![SqlArg::Text(id.to_string())]).await.unwrap();
+                let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+                let DownloadCleanupClaim::Claimed(recovered) =
+                    reopened.claim_download_cleanup(&id).await.unwrap()
+                else {
+                    panic!("claim");
+                };
+                assert_eq!(recovered.client_id, "client-0");
+            }
+        }
     }
 
     #[tokio::test]

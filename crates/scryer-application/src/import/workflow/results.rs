@@ -182,8 +182,9 @@ pub(crate) async fn should_remove_terminal_download(
 /// Removing a torrent's entry stops it seeding even with `remove_data: false`,
 /// so for torrent-protocol items an `Imported` state is no longer sufficient
 /// on its own — the gate has to agree that the seeding obligation is
-/// discharged. Failed and Ignored downloads are deliberately *not* gated:
-/// blocklist and retry must never wait on seeding (Sonarr's rule).
+/// discharged. Automatic failed-torrent cleanup also honors frozen profile
+/// obligations and requires the client's removal verdict. Operator Ignore is
+/// an explicit entry-only override; blocklisting remains independent.
 ///
 /// Once a removal is agreed, a torrent's payload goes with the entry
 /// (`remove_data`, Sonarr's `deleteData: true`); see the call site for which
@@ -243,8 +244,8 @@ async fn reconcile_terminal_download_cleanup(
         .as_ref()
         .and_then(|observation| observation.seed_time_seconds);
     // The client's own removal verdict, post-trust-floor — the same value the
-    // gate would read. A client-reported failure does not enter the gate and
-    // retains this behavior unchanged.
+    // gate reads. Client-reported failures require this verdict in addition
+    // to satisfying the persisted profile.
     let observed_can_remove = observation
         .as_ref()
         .and_then(|observation| observation.can_remove);
@@ -256,12 +257,15 @@ async fn reconcile_terminal_download_cleanup(
     };
 
     let is_torrent = crate::seeding_gate::client_type_is_torrent(app, client_type);
-    let mut seeding_report = None;
-    if state.counts_as_imported()
-        || (state == TrackedDownloadState::Failed
-            && failure_origin == TerminalFailureOrigin::ImportGate
-            && is_torrent)
+    if state == TrackedDownloadState::Failed
+        && is_torrent
+        && failure_origin == TerminalFailureOrigin::ClientFailure
+        && observed_can_remove != Some(true)
     {
+        return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
+    }
+    let mut seeding_report = None;
+    if state.counts_as_imported() || (state == TrackedDownloadState::Failed && is_torrent) {
         let key = crate::seeding_gate::SeedGoalLookupKey {
             canonical_download_id: canonical_download_id.cloned(),
             client_id: client_id.to_string(),
@@ -373,10 +377,9 @@ async fn reconcile_terminal_download_cleanup(
     //   the entry with `RemoveEntry`: the obligation is discharged, the import
     //   already produced the library file, and a copy import's client-side copy
     //   would otherwise be orphaned.
-    // - A client-reported `Failed` never enters the gate — no private rail, no
-    //   `never_remove`, no HandOff — so the client's own `can_remove` is the
-    //   only rail there is. A torrent it will not release (or cannot answer
-    //   for) retains both its entry and data for a later attempt.
+    // - A client-reported `Failed` requires both the client's `can_remove`
+    //   verdict and the seeding gate. Failure cannot erase a frozen profile
+    //   obligation, private rail, or `never_remove` policy.
     // - A burned import-gate `Failed` is a release failure, so torrents use
     //   the same gate and data behavior as imported torrents while Usenet
     //   history deletion includes its client-side data.
@@ -385,8 +388,7 @@ async fn reconcile_terminal_download_cleanup(
     //
     // `torrent-blackhole` is excluded outright. Its "remove" is a
     // `remove_dir_all` on a watch folder some *other* client is seeding from;
-    // the gate refuses it for imported states, and `Failed` skips the gate, so
-    // the rule has to be restated here.
+    // the gate keeps it for imported and failed states.
     let torrent_data_removal_allowed = is_torrent
         && !client_type
             .trim()
@@ -407,19 +409,13 @@ async fn reconcile_terminal_download_cleanup(
         _ => false,
     };
 
-    if state == TrackedDownloadState::Failed
-        && is_torrent
-        && failure_origin == TerminalFailureOrigin::ClientFailure
-        && observed_can_remove != Some(true)
-    {
-        return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
-    }
     let host_managed_payload = remove_data
         && client_type.trim() != "weaver"
         && !plugin_has_native_data_removal(app, client_id).await;
     let payload_cleanup_checkpoint = if host_managed_payload {
         match remove_host_payload_before_entry_cleanup(
             app,
+            canonical_download_id,
             client_id,
             client_type,
             download_client_item_id,
@@ -463,15 +459,16 @@ async fn reconcile_terminal_download_cleanup(
     let client_remove_data = remove_data
         && !payload_already_removed
         && (!host_managed_payload || client_type == "sabnzbd");
-    if client_remove_data
+    if (client_remove_data || !remove_data)
         && !host_managed_payload
         && let Some(record) = record
     {
-        // The client owns entry-and-data deletion as one operation. Persist
-        // its identity before sending it so a lost response can be reconciled
-        // through authoritative absence on the original client.
+        // Persist the operation and identity only after policy and seeding
+        // eligibility pass. Authoritative absence can then recover a lost
+        // response for either native data deletion or entry-only removal.
         let checkpoint = serde_json::json!({
-            "native_remove_requested": true,
+            "native_remove_requested": client_remove_data,
+            "entry_only_remove_requested": !remove_data,
             "download_id": record.download_id.to_string(),
             "client_id": record.client_id,
             "client_type": record.client_type,
@@ -613,6 +610,7 @@ async fn plugin_has_native_data_removal(app: &AppUseCase, client_id: &str) -> bo
 
 async fn remove_host_payload_before_entry_cleanup(
     app: &AppUseCase,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
     client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
@@ -811,15 +809,74 @@ async fn remove_host_payload_before_entry_cleanup(
     }
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
+            // A mapped root grants containment, not ownership of each file.
+            // Require Scryer's persisted import result for this canonical job;
+            // a fresh client path/name (or a checkpoint of it) is not proof.
+            let download_id = canonical_download_id.ok_or_else(|| {
+                AppError::Validation("file payload cleanup requires durable job ownership".into())
+            })?;
+            let locator =
+                crate::ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
+            let imports = app
+                .services
+                .workflow
+                .imports
+                .list_imports_for_identities(&[locator])
+                .await?;
+            let mut owned = false;
+            for import in imports {
+                if import.status != ImportStatus::Completed
+                    || app
+                        .services
+                        .workflow
+                        .imports
+                        .canonical_download_id_for_import(&import.id)
+                        .await?
+                        != Some(*download_id)
+                {
+                    continue;
+                }
+                let result = import
+                    .result_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+                if result.as_ref().is_some_and(|result| {
+                    result.get("decision").and_then(|v| v.as_str()) == Some("imported")
+                        && result
+                            .get("source_path")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|path| std::path::Path::new(path) == target)
+                }) {
+                    owned = true;
+                    break;
+                }
+            }
+            if !owned {
+                return Err(AppError::Validation(
+                    "file payload ownership is unverified; retaining source and client entry"
+                        .into(),
+                ));
+            }
             crate::fs_safety::remove_file_safely_if_exists(&target).await
         }
         Ok(metadata) if metadata.is_dir() => {
+            let source_title = match record {
+                Some(record) => record.source_title.clone(),
+                None => match canonical_download_id {
+                    Some(id) => app
+                        .services
+                        .workflow
+                        .download_submissions
+                        .find_by_canonical_download_id(id)
+                        .await?
+                        .and_then(|submission| submission.source_title),
+                    None => None,
+                },
+            };
             let owned_name = target
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name == completed.name || completed.release_name.as_deref() == Some(name)
-                });
+                .is_some_and(|name| source_title.as_deref() == Some(name));
             if !owned_name {
                 return Err(AppError::Validation(
                     "payload directory ownership is unverified; refusing shared-directory deletion"

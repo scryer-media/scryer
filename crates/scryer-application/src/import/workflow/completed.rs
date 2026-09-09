@@ -631,7 +631,10 @@ async fn reconcile_unclaimed_terminal_cleanup(
         // (which is only republished *after* reconcile runs). Passing it in is
         // what makes each cycle re-evaluate against current ratio/seed time
         // rather than the answer that first parked the row.
-        crate::seeding_gate::observation_from_queue_item(&tracked.client_item),
+        Some(
+            crate::seeding_gate::observation_from_queue_item(&tracked.client_item)
+                .unwrap_or_default(),
+        ),
         cache,
         record,
     )
@@ -697,14 +700,19 @@ pub(crate) async fn run_claimed_download_cleanup(
                     .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok());
                 let payload_removed = checkpoint.as_ref()
                     .is_some_and(|checkpoint| checkpoint.get("payload_removed").and_then(|v| v.as_bool()) == Some(true));
-                let native_requested = checkpoint.as_ref().is_some_and(|checkpoint| {
-                    checkpoint.get("native_remove_requested").and_then(|v| v.as_bool()) == Some(true)
-                        && checkpoint.get("download_id").and_then(|v| v.as_str()) == Some(record.download_id.to_string().as_str())
+                let checkpoint_matches = checkpoint.as_ref().is_some_and(|checkpoint| {
+                    checkpoint.get("download_id").and_then(|v| v.as_str()) == Some(record.download_id.to_string().as_str())
                         && checkpoint.get("client_id").and_then(|v| v.as_str()) == Some(record.client_id.as_str())
                         && checkpoint.get("client_type").and_then(|v| v.as_str()) == Some(record.client_type.as_str())
                         && checkpoint.get("item_id").and_then(|v| v.as_str()) == Some(record.item_id.as_str())
                 });
-                if payload_removed || native_requested || state == TrackedDownloadState::Ignored {
+                let native_requested = checkpoint_matches && checkpoint.as_ref().is_some_and(|checkpoint|
+                    checkpoint.get("native_remove_requested").and_then(|v| v.as_bool()) == Some(true));
+                let entry_only_requested = checkpoint_matches
+                    && matches!(state, TrackedDownloadState::Failed | TrackedDownloadState::Ignored)
+                    && checkpoint.as_ref().is_some_and(|checkpoint|
+                        checkpoint.get("entry_only_remove_requested").and_then(|v| v.as_bool()) == Some(true));
+                if payload_removed || native_requested || entry_only_requested || state == TrackedDownloadState::Ignored {
                     if state == TrackedDownloadState::ImportedSeeding {
                         app.services.workflow.download_submissions.record_identity_tracked_state_for_download(
                             Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(),
@@ -734,13 +742,27 @@ pub(crate) async fn run_claimed_download_cleanup(
             .find_active_binding_by_locator(&locator).await?;
         let token = item.download_id.as_deref()
             .and_then(scryer_domain::download_identity::DownloadId::from_wire);
+        // Hash-addressed torrent clients report the torrent's internal name,
+        // which need not equal the indexer's release title. Compare content
+        // identity with the original submission, while still requiring its
+        // active binding when no canonical token is available.
+        let torrent_hash_matches = if crate::seeding_gate::client_type_is_torrent(app, &record.client_type)
+            && let Some(observed) = crate::normalize_torrent_info_hash(Some(&item.download_client_item_id))
+        {
+            app.services.workflow.download_submissions
+                .find_by_canonical_download_id(&record.download_id).await?
+                .and_then(|submission| crate::normalize_torrent_info_hash(submission.info_hash.as_deref()))
+                .map(|expected| expected == observed)
+        } else { None };
         if crate::ClientJobLocator::new(Some(&item.client_id), &item.client_type,
             &item.download_client_item_id) != locator
             || token.is_some_and(|id| id != record.download_id)
             || active.as_ref().is_some_and(|binding| binding.download_id != record.download_id)
+            || torrent_hash_matches == Some(false)
             || (token != Some(record.download_id)
                 && !(active.as_ref().is_some_and(|binding| binding.download_id == record.download_id)
-                    && record.source_title.as_deref().is_some_and(|name| name == item.title_name)))
+                    && (torrent_hash_matches == Some(true)
+                        || record.source_title.as_deref().is_some_and(|name| name == item.title_name))))
         {
             return Err(AppError::Validation("cleanup locator is reused or identity is ambiguous".into()));
         }

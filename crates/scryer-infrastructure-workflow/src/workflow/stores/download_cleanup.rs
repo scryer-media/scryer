@@ -23,6 +23,57 @@ fn cleanup_record(row: &SqlRow) -> AppResult<DownloadCleanupRecord> {
     })
 }
 
+async fn resolve_legacy_cleanup_client_tx(tx: &mut SqlTx<'_>, id: &str) -> AppResult<()> {
+    let Some(row) = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+        "SELECT COALESCE(NULLIF(TRIM(c.client_id), ''), NULLIF(TRIM(b.client_config_id), ''),
+                         NULLIF(TRIM(s.download_client_id), '')) AS client_id,
+                COALESCE(NULLIF(TRIM(b.client_type_snapshot), ''), s.download_client_type) AS client_type,
+                COALESCE(b.native_item_id, s.download_client_item_id) AS item_id
+         FROM download_submissions s
+         LEFT JOIN download_client_bindings b ON b.download_id = s.id
+         LEFT JOIN download_cleanup c ON c.download_id = s.id WHERE s.id = {}",
+        &[SqlArg::Text(id.to_string())],
+    ).await? else { return Ok(()); };
+    let client_id = match row.opt_text("client_id")? {
+        Some(id) => id,
+        None => {
+            // Disabled clients still count: a second configured instance makes
+            // the original owner ambiguous even when only one is reachable.
+            let clients = SqlRuntime::fetch_all(
+                SqlExec::Tx(tx),
+                "SELECT id FROM download_clients WHERE client_type = {} ORDER BY id LIMIT 2",
+                &[SqlArg::Text(row.text("client_type")?)],
+            )
+            .await?;
+            if clients.len() != 1 {
+                return Ok(());
+            }
+            clients[0].text("id")?
+        }
+    };
+    if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+        "SELECT download_id FROM download_client_bindings
+         WHERE client_config_id = {} AND native_item_id = {} AND download_id <> {} AND ended_at IS NULL LIMIT 1",
+        &[SqlArg::Text(client_id.clone()), SqlArg::OptText(row.opt_text("item_id")?), SqlArg::Text(id.to_string())],
+    ).await?.is_some() { return Ok(()); }
+    for sql in [
+        "UPDATE download_submissions SET download_client_id = {} WHERE id = {} AND TRIM(COALESCE(download_client_id, '')) = ''",
+        "UPDATE download_client_bindings SET client_config_id = {} WHERE download_id = {} AND TRIM(COALESCE(client_config_id, '')) = ''",
+        "UPDATE download_cleanup SET client_id = {} WHERE download_id = {} AND TRIM(client_id) = ''",
+    ] {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            sql,
+            &[
+                SqlArg::Text(client_id.clone()),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn enqueue_cleanup_tx(tx: &mut SqlTx<'_>, id: &str, state: &str) -> AppResult<()> {
     if !matches!(
         state,
@@ -30,13 +81,14 @@ async fn enqueue_cleanup_tx(tx: &mut SqlTx<'_>, id: &str, state: &str) -> AppRes
     ) {
         return Ok(());
     }
+    resolve_legacy_cleanup_client_tx(tx, id).await?;
     let now = Utc::now();
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO download_cleanup
          (download_id, client_id, client_type, item_id, title_id, facet, source_title, tracked_state,
           next_attempt_at, created_at, updated_at)
-         SELECT d.id, COALESCE(b.client_config_id, s.download_client_id, ''),
+         SELECT d.id, COALESCE(NULLIF(TRIM(b.client_config_id), ''), s.download_client_id, ''),
                 COALESCE(b.client_type_snapshot, s.download_client_type, ''),
                 COALESCE(b.native_item_id, s.download_client_item_id, ''),
                 s.title_id, s.facet, s.source_title, {}, {}, {}, {}
@@ -146,6 +198,7 @@ impl DownloadSubmissionStore {
                         None => Ok(DownloadCleanupClaim::Deferred),
                     };
                 }
+                resolve_legacy_cleanup_client_tx(tx, &id).await?;
                 let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     &format!("SELECT {CLEANUP_COLUMNS} FROM download_cleanup c WHERE c.download_id = {{}}"),
                     &[SqlArg::Text(id)],

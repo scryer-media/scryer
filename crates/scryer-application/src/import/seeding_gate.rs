@@ -51,8 +51,7 @@
 //!   copy in, so the decision uses the observation from *this* poll rather
 //!   than the published snapshot, which is only refreshed after reconcile;
 //! - callers that only have a client identity (the manual-import mode check)
-//!   fall back to `observe_torrent_seeding`, which reads the published
-//!   tracked-download snapshot.
+//!   obtain fresh evidence from that client before allowing a move.
 //!
 //! When neither answers, the observation is absent and the gate holds — the
 //! conservative direction, and the same fail-closed behaviour the universal
@@ -203,7 +202,7 @@ impl SeedGoalBatch {
 ///
 /// A trait rather than a direct repository call so the gate has one named
 /// dependency, and so a failed read is a policy decision made in one place
-/// (treated as "no goals", never as "goals met").
+/// (unavailable policy holds the torrent and forbids moving its payload).
 #[async_trait::async_trait]
 pub(crate) trait SeedGoalsRead: Send + Sync {
     /// The goals this download was grabbed under, or `None` when it was not a
@@ -215,7 +214,7 @@ pub(crate) trait SeedGoalsRead: Send + Sync {
         &self,
         key: &SeedGoalLookupKey,
         batch: Option<&SeedGoalBatch>,
-    ) -> Option<PersistedSeedGoals>;
+    ) -> AppResult<Option<PersistedSeedGoals>>;
 }
 
 #[async_trait::async_trait]
@@ -224,7 +223,7 @@ impl SeedGoalsRead for AppUseCase {
         &self,
         key: &SeedGoalLookupKey,
         batch: Option<&SeedGoalBatch>,
-    ) -> Option<PersistedSeedGoals> {
+    ) -> AppResult<Option<PersistedSeedGoals>> {
         let submissions = &self.services.workflow.download_submissions;
         let identity = ClientJobLocator::new(
             Some(key.client_id.as_str()),
@@ -235,17 +234,20 @@ impl SeedGoalsRead for AppUseCase {
         // torrent that was removed and re-added keeps its hash but gets a new
         // client item id on several clients.
         let identity_answer = batch
+            // A tuple-keyed batch cannot override the original canonical job
+            // when a client locator has been reused by another submission.
+            .filter(|_| key.canonical_download_id.is_none())
             .map(|batch| batch.answer(&identity))
             .unwrap_or(SeedGoalBatchAnswer::Uncovered);
         match identity_answer {
-            SeedGoalBatchAnswer::Resolved(goals) => return Some(goals),
+            SeedGoalBatchAnswer::Resolved(goals) => return Ok(Some(goals)),
             // The tick already asked this question for every row it holds.
             SeedGoalBatchAnswer::NoIdentityResolution => {}
             SeedGoalBatchAnswer::Uncovered => match submissions
                 .get_seed_goals_for_download(key.canonical_download_id.as_ref(), &identity)
                 .await
             {
-                Ok(Some(goals)) => return Some(goals),
+                Ok(Some(goals)) => return Ok(Some(goals)),
                 Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(
@@ -253,22 +255,25 @@ impl SeedGoalsRead for AppUseCase {
                         client_id = key.client_id.as_str(),
                         client_type = key.client_type.as_str(),
                         download_client_item_id = key.client_item_id.as_str(),
-                        "failed to read persisted seed goals; treating this torrent as having none"
+                        "failed to read persisted seed goals; retaining torrent"
                     );
+                    return Err(error);
                 }
             },
         }
 
-        let info_hash = key.info_hash.as_deref()?;
+        let Some(info_hash) = key.info_hash.as_deref() else {
+            return Ok(None);
+        };
         match submissions.find_seed_goals_by_info_hash(info_hash).await {
-            Ok(goals) => goals,
+            Ok(goals) => Ok(goals),
             Err(error) => {
                 tracing::warn!(
                     error = %error,
                     info_hash,
                     "failed to read persisted seed goals by info hash"
                 );
-                None
+                Err(error)
             }
         }
     }
@@ -602,9 +607,11 @@ pub(crate) fn client_type_is_torrent(app: &AppUseCase, client_type: &str) -> boo
         .integrations
         .download_client_plugin_provider
         .available();
-    crate::accepted_inputs_for_client(client_type, plugin_provider)
-        .iter()
-        .any(|input| {
+    let inputs = crate::accepted_inputs_for_client(client_type, plugin_provider);
+    // Missing plugin metadata is not evidence of a Usenet client. Apply the
+    // seeding protections until its protocol can be established.
+    inputs.is_empty()
+        || inputs.iter().any(|input| {
             matches!(
                 input,
                 DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri
@@ -671,7 +678,52 @@ pub(crate) async fn evaluate_seeding_gate_for(
     key: &SeedGoalLookupKey,
     present_in_client: bool,
 ) -> SeedingGateDecision {
-    evaluate_seeding_gate_with(app, key, present_in_client, None, None).await
+    if !client_type_is_torrent(app, &key.client_type) {
+        return SeedingGateDecision::not_applicable();
+    }
+    // Moving imported data also stops seeding. A published observation may
+    // predate a pause, recheck, or locator reuse, so read the original client.
+    let locator =
+        ClientJobLocator::new(Some(&key.client_id), &key.client_type, &key.client_item_id);
+    let item = match app
+        .services
+        .integrations
+        .download_client
+        .observe_download(&locator, 0)
+        .await
+    {
+        Ok(crate::DownloadClientObservation::Present(item))
+            if ClientJobLocator::new(
+                Some(&item.client_id),
+                &item.client_type,
+                &item.download_client_item_id,
+            ) == locator
+                && item.state == scryer_domain::DownloadQueueState::Completed
+                && !item
+                    .download_id
+                    .as_deref()
+                    .and_then(DownloadId::from_wire)
+                    .zip(key.canonical_download_id)
+                    .is_some_and(|(observed, expected)| observed != expected) =>
+        {
+            item
+        }
+        _ => {
+            return SeedingGateDecision::new(
+                SeedingGateOutcome::Hold,
+                "fresh_seeding_observation_unavailable",
+                false,
+            );
+        }
+    };
+    evaluate_seeding_gate_with(
+        app,
+        key,
+        present_in_client,
+        Some(observation_from_queue_item(&item).unwrap_or_default()),
+        None,
+    )
+    .await
 }
 
 /// As `evaluate_seeding_gate_for`, with an observation the caller already has.
@@ -693,6 +745,21 @@ pub(crate) async fn evaluate_seeding_gate_with(
         return SeedingGateDecision::not_applicable();
     }
 
+    if crate::accepted_inputs_for_client(
+        &key.client_type,
+        app.services
+            .integrations
+            .download_client_plugin_provider
+            .available(),
+    )
+    .is_empty()
+    {
+        return SeedingGateDecision::new(
+            SeedingGateOutcome::Hold,
+            "download_client_protocol_unavailable",
+            false,
+        );
+    }
     let observation = match observation {
         Some(observation) => Some(observation),
         None => observe_torrent_seeding(app, key).await,
@@ -702,7 +769,16 @@ pub(crate) async fn evaluate_seeding_gate_with(
         client_type: key.client_type.clone(),
         present_in_client,
         observation,
-        goals: app.resolved_seed_goals(key, goal_batch).await,
+        goals: match app.resolved_seed_goals(key, goal_batch).await {
+            Ok(goals) => goals,
+            Err(_) => {
+                return SeedingGateDecision::new(
+                    SeedingGateOutcome::Hold,
+                    "persisted_seed_goals_unavailable",
+                    false,
+                );
+            }
+        },
         now: Utc::now(),
     };
     evaluate_seeding_gate(&input)
@@ -713,7 +789,10 @@ pub(crate) fn seed_goal_lookup_key_for_completed(
     completed: &CompletedDownload,
 ) -> SeedGoalLookupKey {
     SeedGoalLookupKey {
-        canonical_download_id: None,
+        canonical_download_id: completed
+            .download_id
+            .as_deref()
+            .and_then(DownloadId::from_wire),
         client_id: completed.client_id.trim().to_string(),
         client_type: completed.client_type.trim().to_string(),
         client_item_id: completed.download_client_item_id.trim().to_string(),
