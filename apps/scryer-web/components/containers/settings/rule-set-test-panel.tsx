@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
+import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import { useTranslate } from "@/lib/context/translate-context";
 import { scoringEntryText, type ScoringEntryKind } from "@/lib/utils/release-decision-explanation";
 import {
@@ -12,7 +13,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { testRuleSetMutation } from "@/lib/graphql/mutations";
 import {
-  catalogSearchTitlesQuery,
   ruleSetTestTitleCollectionsQuery,
   seriesCollectionEpisodesQuery,
 } from "@/lib/graphql/queries";
@@ -81,7 +81,6 @@ type PreviewResult = {
   errors?: Array<{ code?: string; message: string; ruleSetId?: string | null }>;
 };
 
-const SEARCH_DEBOUNCE_MS = 250;
 const PARSED_FIELDS = [
   ["releaseGroup", "Release group"],
   ["quality", "Quality"],
@@ -130,8 +129,6 @@ export function RuleSetTestPanel({
   const client = useClient();
   const t = useTranslate();
   const [open, setOpen] = React.useState(false);
-  const [query, setQuery] = React.useState("");
-  const [candidates, setCandidates] = React.useState<TitleRecord[]>([]);
   const [selectedTitle, setSelectedTitle] = React.useState<TitleRecord | null>(null);
   const [collections, setCollections] = React.useState<Collection[]>([]);
   const [collectionId, setCollectionId] = React.useState("");
@@ -139,7 +136,6 @@ export function RuleSetTestPanel({
   const [episodeId, setEpisodeId] = React.useState("");
   const [releaseName, setReleaseName] = React.useState("");
   const [sizeGib, setSizeGib] = React.useState("");
-  const [loadingTitles, setLoadingTitles] = React.useState(false);
   const [loadingEpisodes, setLoadingEpisodes] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -173,24 +169,6 @@ export function RuleSetTestPanel({
     controller.activate();
     return () => controller.dispose();
   }, []);
-
-  React.useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => void (async () => {
-      setLoadingTitles(true);
-      try {
-        const { data, error: queryError } = await client.query(catalogSearchTitlesQuery, { query: query.trim() || null, limit: 25 }).toPromise();
-        if (queryError) throw queryError;
-        if (!cancelled) setCandidates((data?.titles?.items ?? []) as TitleRecord[]);
-      } catch (searchError) {
-        if (!cancelled) setError(searchError instanceof Error ? searchError.message : "Unable to search library titles.");
-      } finally {
-        if (!cancelled) setLoadingTitles(false);
-      }
-    })(), SEARCH_DEBOUNCE_MS);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [client, open, query]);
 
   React.useEffect(() => {
     if (!selectedTitle || !episodic) {
@@ -232,8 +210,12 @@ export function RuleSetTestPanel({
   }, [client, collectionId]);
 
   const clearEpisodeChoices = () => { setCollections([]); setCollectionId(""); setEpisodes([]); setEpisodeId(""); };
-  const chooseTitle = (title: TitleRecord) => { setSelectedTitle(title); setQuery(title.name); clearEpisodeChoices(); setLoadingEpisodes(titleIsEpisodic(title)); setError(null); };
-  const resetTitle = (value: string) => { setQuery(value); setSelectedTitle(null); clearEpisodeChoices(); setLoadingEpisodes(false); };
+  const handleSelectedTitleChange = (title: TitleRecord | null) => {
+    setSelectedTitle(title);
+    clearEpisodeChoices();
+    setLoadingEpisodes(Boolean(title && titleIsEpisodic(title)));
+    setError(null);
+  };
 
   const test = async () => {
     if (!canTest || !selectedTitle) return;
@@ -277,8 +259,14 @@ export function RuleSetTestPanel({
       </p>
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <Label htmlFor="settings-rule-test-title" className="mb-1 block">Library title</Label>
-          <Input id="settings-rule-test-title" value={query} onChange={(event) => resetTitle(event.target.value)} placeholder="Search movies, shows, and anime" />
+          <Label className="mb-1 block">Library title</Label>
+          <TitleAutocompletePicker
+            selectedTitle={selectedTitle}
+            selectedTitleId={selectedTitle?.id ?? null}
+            onSelectedTitleChange={handleSelectedTitleChange}
+            placeholder="Search movies, shows, and anime"
+            ariaLabel="Library title"
+          />
         </div>
         <div>
           <Label htmlFor="settings-rule-test-release" className="mb-1 block">Release name</Label>
@@ -290,8 +278,6 @@ export function RuleSetTestPanel({
         </div>
         {episodic ? <><div><Label htmlFor="settings-rule-test-season" className="mb-1 block">Season</Label><select id="settings-rule-test-season" className="h-9 w-full rounded border border-input bg-background px-2 text-sm" value={collectionId} onChange={(event) => { setCollectionId(event.target.value); setEpisodes([]); setEpisodeId(""); setLoadingEpisodes(true); }} disabled={loadingEpisodes}><option value="">Select a season</option>{collections.map((collection) => <option key={collection.id} value={collection.id}>{collectionLabel(collection)}</option>)}</select></div><div><Label htmlFor="settings-rule-test-episode" className="mb-1 block">Episode</Label><select id="settings-rule-test-episode" className="h-9 w-full rounded border border-input bg-background px-2 text-sm" value={episodeId} onChange={(event) => setEpisodeId(event.target.value)} disabled={loadingEpisodes || !collectionId}><option value="">Select an episode</option>{episodes.map((episode) => <option key={episode.id} value={episode.id}>{episodeLabel(episode)}</option>)}</select></div></> : null}
       </div>
-      {loadingTitles ? <p className="mt-2 text-xs text-muted-foreground">Searching titles…</p> : null}
-      {!selectedTitle && candidates.length ? <div className="mt-2 max-h-40 overflow-y-auto rounded border border-border">{candidates.map((title) => <button key={title.id} type="button" className="block w-full px-2 py-1 text-left text-sm hover:bg-muted" onClick={() => chooseTitle(title)}>{title.name}{title.year ? ` (${title.year})` : ""} <span className="text-muted-foreground">{title.facet} · {title.libraryName || title.libraryId}</span></button>)}</div> : null}
       {selectedTitle ? <p className="mt-2 text-xs text-muted-foreground">Selected: {selectedTitle.name} · {selectedTitle.libraryName || selectedTitle.libraryId}{loadingEpisodes ? " · Loading episodes…" : ""}</p> : null}
       <div className="mt-3 flex items-center gap-3"><Button type="button" onClick={() => void test()} disabled={!canTest}>{testing ? "Testing…" : "Test"}</Button>{stale ? <span className="text-xs text-[var(--scry-warning-text)]">Inputs changed; result is stale.</span> : null}</div>
       {error ? <div className="mt-3 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]">{error}</div> : null}
