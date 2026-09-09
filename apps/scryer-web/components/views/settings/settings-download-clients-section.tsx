@@ -671,7 +671,19 @@ export function SettingsDownloadClientsSection({
               {hasApiKeyField ? (
                 <div>
                   <Label className="mb-2 block" htmlFor="settings-download-client-api-key">
-                    {t("settings.apiKey")}
+                    <span className="inline-flex items-center gap-1">
+                      {t("settings.apiKey")}
+                      {normalizedClientType === "sabnzbd" ? (
+                        <InfoHelp
+                          ariaLabel={t("settings.apiKey")}
+                          text={[
+                            t("settings.downloadClientSabnzbdAuthHelp"),
+                            t("settings.downloadClientSabnzbdNzbdavHelp"),
+                            t("settings.downloadClientDecypharrFilesystemHelp"),
+                          ].join(" ")}
+                        />
+                      ) : null}
+                    </span>
                   </Label>
                   <Input
                     ref={apiKeyInputRef}
@@ -706,11 +718,6 @@ export function SettingsDownloadClientsSection({
                         <span>finish the Weaver URL above to generate the link.</span>
                       )}
                     </p>
-                  ) : normalizedClientType === "sabnzbd" ? (
-                    <div className="mt-2 space-y-2 text-xs text-muted-foreground">
-                      <p>{t("settings.downloadClientSabnzbdAuthHelp")}</p>
-                      <p>{t("settings.downloadClientSabnzbdNzbdavHelp")}</p>
-                    </div>
                   ) : null}
                 </div>
               ) : null}
@@ -799,7 +806,7 @@ export function SettingsDownloadClientsSection({
                   </div>
                 );
               })}
-              {normalizedClientType === "sabnzbd" || normalizedClientType === "qbittorrent" ? (
+              {normalizedClientType === "qbittorrent" ? (
                 <p className="md:col-span-3 text-xs text-muted-foreground">
                   {t("settings.downloadClientDecypharrFilesystemHelp")}
                 </p>
