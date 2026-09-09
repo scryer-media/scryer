@@ -55,6 +55,10 @@ struct FileCheckpoint {
     file_id: String,
     file_path: String,
     catalog_proof: String,
+    /// Exact catalog size captured with this target. Older journals lack the
+    /// field and therefore never project a size baseline forward.
+    #[serde(default)]
+    file_size_bytes: Option<i64>,
     plan: Option<PolicyMediaFileDeletePlan>,
     /// Episode coverage that this exact manifest contributed to rolling
     /// retention before it was unlinked. Legacy journals omit it safely.
@@ -73,6 +77,10 @@ pub(super) struct ScopedDeletionCheckpoint {
     match_generation: i64,
     #[serde(default)]
     action_kind: String,
+    /// A v2 sequence carries its stable step identity through the existing
+    /// file journal. Legacy journals intentionally omit this field.
+    #[serde(default)]
+    sequence_step_id: Option<String>,
     /// `None` is a legacy, unfiltered manifest. It can only resume a rule
     /// which still has no selected storage root.
     #[serde(default)]
@@ -111,12 +119,85 @@ impl ScopedDeletionCheckpoint {
         }
     }
 
+    /// Restore only file-count and size deltas which can be attributed to the
+    /// exact completed journal targets. The live values must equal the
+    /// baseline minus those targets first; imports, independent removals, or
+    /// any unproven journal remain live instead of being masked.
+    pub(super) fn restore_sequence_owned_file_deltas(&self, input: &mut MaintenanceInput) {
+        if !self.mutation_started {
+            return;
+        }
+        let completed_count = self.files.iter().filter(|file| file.completed).count() as i64;
+        let Some(completed_size) = self
+            .files
+            .iter()
+            .filter(|file| file.completed)
+            .map(|file| file.file_size_bytes)
+            .collect::<Option<Vec<_>>>()
+            .map(|sizes| sizes.into_iter().sum::<i64>())
+        else {
+            return;
+        };
+        let restore_has_file = if let (
+            Observation::Known {
+                value: baseline_count,
+                ..
+            },
+            Observation::Known {
+                value: current_count,
+                ..
+            },
+            Observation::Known {
+                value: baseline_has_file,
+                ..
+            },
+        ) = (
+            &self.baseline.file_count,
+            &input.facts.file_count,
+            &self.baseline.has_file,
+        ) && *current_count == *baseline_count - completed_count
+        {
+            Some(*baseline_has_file)
+        } else {
+            None
+        };
+        restore_known_delta(
+            &self.baseline.file_count,
+            &mut input.facts.file_count,
+            completed_count,
+        );
+        restore_known_delta(
+            &self.baseline.total_file_size_bytes,
+            &mut input.facts.total_file_size_bytes,
+            completed_size,
+        );
+        if let Some(baseline_has_file) = restore_has_file {
+            input.facts.has_file = Observation::known(baseline_has_file);
+        }
+    }
+
     fn file_matches_catalog(&self, file: &crate::types::TitleMediaFile) -> bool {
         self.files.iter().any(|saved| {
             !saved.completed
                 && saved.file_id == file.id
                 && saved.catalog_proof == catalog_proof(file)
         })
+    }
+}
+
+fn restore_known_delta(baseline: &Observation<i64>, current: &mut Observation<i64>, delta: i64) {
+    if let (
+        Observation::Known {
+            value: baseline, ..
+        },
+        Observation::Known {
+            value: current_value,
+            ..
+        },
+    ) = (baseline, current)
+        && *current_value == *baseline - delta
+    {
+        *current_value = *baseline;
     }
 }
 fn catalog_proof(file: &crate::types::TitleMediaFile) -> String {
@@ -136,6 +217,16 @@ impl AppUseCase {
         &self,
         candidate: &LifecycleCandidate,
         storage_root_id: Option<&str>,
+    ) -> AppResult<Option<ScopedDeletionCheckpoint>> {
+        self.maintenance_deletion_checkpoint_for_step(candidate, storage_root_id, None)
+            .await
+    }
+
+    pub(super) async fn maintenance_deletion_checkpoint_for_step(
+        &self,
+        candidate: &LifecycleCandidate,
+        storage_root_id: Option<&str>,
+        sequence_step_id: Option<&str>,
     ) -> AppResult<Option<ScopedDeletionCheckpoint>> {
         let Some(run) = self
             .services
@@ -168,6 +259,7 @@ impl AppUseCase {
             || checkpoint.scoped_deletion != 1
             || checkpoint.match_generation != candidate.match_generation
             || checkpoint.action_kind != candidate.action_kind
+            || checkpoint.sequence_step_id.as_deref() != sequence_step_id
             || checkpoint.storage_root_id.as_deref()
                 != storage_root_id.map(str::trim).filter(|id| !id.is_empty())
             || checkpoint.subject_kind != candidate.subject_kind
@@ -317,28 +409,45 @@ impl AppUseCase {
     /// title's disabled state and make the postcondition independently
     /// observable before the first filesystem mutation.
     async fn unmonitor_maintenance_title(&self, title: &Title) -> AppResult<()> {
+        self.unmonitor_maintenance_title_with_descendants(title, true)
+            .await
+    }
+
+    /// Unmonitor a title, optionally including the monitoring records of its
+    /// persisted descendants. Sequence actions expose the option explicitly;
+    /// the legacy deletion workflow always retains its full-title behavior.
+    pub(super) async fn unmonitor_maintenance_title_with_descendants(
+        &self,
+        title: &Title,
+        include_descendants: bool,
+    ) -> AppResult<()> {
         let actor = User::system_execution_actor();
-        let collections = self
-            .services
-            .catalog
-            .shows
-            .list_collections_for_title(&title.id)
-            .await?;
-        let episodes = self
-            .services
-            .catalog
-            .shows
-            .list_episodes_for_title(&title.id)
-            .await?;
-        if collections
-            .iter()
-            .any(|collection| collection.title_id != title.id)
-            || episodes.iter().any(|episode| episode.title_id != title.id)
-        {
-            return Err(AppError::Repository(
-                "maintenance title child ownership mismatch".into(),
-            ));
-        }
+        let (collections, episodes) = if include_descendants {
+            let collections = self
+                .services
+                .catalog
+                .shows
+                .list_collections_for_title(&title.id)
+                .await?;
+            let episodes = self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await?;
+            if collections
+                .iter()
+                .any(|collection| collection.title_id != title.id)
+                || episodes.iter().any(|episode| episode.title_id != title.id)
+            {
+                return Err(AppError::Repository(
+                    "maintenance title child ownership mismatch".into(),
+                ));
+            }
+            (collections, episodes)
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
         if title.monitored {
             self.set_title_monitored(&actor, &title.id, false).await?;
@@ -359,27 +468,35 @@ impl AppUseCase {
             .get_by_id(&title.id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", title.id)))?;
-        let fresh_collections = self
-            .services
-            .catalog
-            .shows
-            .list_collections_for_title(&title.id)
-            .await?;
-        let fresh_episodes = self
-            .services
-            .catalog
-            .shows
-            .list_episodes_for_title(&title.id)
-            .await?;
-        if fresh_title.monitored
-            || fresh_collections
-                .iter()
-                .any(|collection| collection.monitored)
-            || fresh_episodes.iter().any(|episode| episode.monitored)
-        {
+        if fresh_title.monitored {
             return Err(AppError::Repository(
                 "maintenance title unmonitoring was not confirmed; files preserved".into(),
             ));
+        }
+        if include_descendants {
+            let fresh_collections = self
+                .services
+                .catalog
+                .shows
+                .list_collections_for_title(&title.id)
+                .await?;
+            let fresh_episodes = self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await?;
+            if fresh_collections
+                .iter()
+                .any(|collection| collection.title_id != title.id || collection.monitored)
+                || fresh_episodes
+                    .iter()
+                    .any(|episode| episode.title_id != title.id || episode.monitored)
+            {
+                return Err(AppError::Repository(
+                    "maintenance title unmonitoring was not confirmed; files preserved".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -524,6 +641,62 @@ impl AppUseCase {
         Ok(())
     }
 
+    /// Read the persisted monitoring state required by a sequence's earlier
+    /// `unmonitor` step. This deliberately accepts no baseline: an external
+    /// re-monitor between steps is live evidence that invalidates a later file
+    /// deletion, not a value a sequence may write over in memory.
+    pub(super) async fn maintenance_unmonitoring_is_confirmed(
+        &self,
+        candidate: &LifecycleCandidate,
+        title: &Title,
+        title_includes_descendants: bool,
+    ) -> AppResult<bool> {
+        if candidate.title_id != title.id
+            || (candidate.subject_kind == Scope::Title.as_storage_str()
+                && candidate.subject_id != title.id)
+        {
+            return Err(AppError::Validation(
+                "maintenance unmonitoring candidate identity does not match its title".into(),
+            ));
+        }
+        if candidate.subject_kind != Scope::Title.as_storage_str() {
+            let fresh = self
+                .maintenance_resolve_subject(
+                    &candidate.subject_kind,
+                    &candidate.subject_id,
+                    title,
+                    &[],
+                )
+                .await?;
+            return Ok(!fresh.monitored && fresh.episodes.iter().all(|episode| !episode.monitored));
+        }
+
+        let Some(fresh_title) = self.services.catalog.titles.get_by_id(&title.id).await? else {
+            return Err(AppError::NotFound(format!("title {}", title.id)));
+        };
+        if fresh_title.monitored || !title_includes_descendants {
+            return Ok(!fresh_title.monitored);
+        }
+        let collections = self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
+        let episodes = self
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_title(&title.id)
+            .await?;
+        Ok(collections
+            .iter()
+            .all(|collection| collection.title_id == title.id && !collection.monitored)
+            && episodes
+                .iter()
+                .all(|episode| episode.title_id == title.id && !episode.monitored))
+    }
+
     async fn save_scoped_deletion_checkpoint(
         &self,
         run: &mut LifecycleActionRun,
@@ -542,6 +715,9 @@ impl AppUseCase {
     pub(super) async fn execute_scoped_maintenance_deletion(
         &self,
         context: &mut MaintenanceExecutionContext<'_>,
+        sequence_step_id: Option<&str>,
+        unmonitor_before_delete: bool,
+        sequence_unmonitor_includes_descendants: Option<bool>,
     ) -> AppResult<ActionResult> {
         let candidate = context.candidate;
         let title = context.title;
@@ -587,7 +763,7 @@ impl AppUseCase {
             });
         }
         let existing_checkpoint = self
-            .maintenance_deletion_checkpoint(candidate, storage_root_id)
+            .maintenance_deletion_checkpoint_for_step(candidate, storage_root_id, sequence_step_id)
             .await?;
         let mut checkpoint = match existing_checkpoint {
             Some(checkpoint) => {
@@ -701,6 +877,7 @@ impl AppUseCase {
                         file_id: file.id.clone(),
                         file_path: file.file_path.clone(),
                         catalog_proof: catalog_proof(file),
+                        file_size_bytes: Some(file.size_bytes),
                         plan,
                         retention_episode_ids,
                         completed: false,
@@ -711,6 +888,7 @@ impl AppUseCase {
                     scoped_deletion: 1,
                     match_generation: candidate.match_generation,
                     action_kind: candidate.action_kind.clone(),
+                    sequence_step_id: sequence_step_id.map(str::to_string),
                     storage_root_id: storage_root_id
                         .map(str::trim)
                         .filter(|id| !id.is_empty())
@@ -790,10 +968,12 @@ impl AppUseCase {
         checkpoint.mutation_started = true;
         self.save_scoped_deletion_checkpoint(run, &checkpoint)
             .await?;
-        if candidate.subject_kind == Scope::Title.as_storage_str() {
-            self.unmonitor_maintenance_title(title).await?;
-        } else {
-            self.unmonitor_maintenance_child(candidate, title).await?;
+        if unmonitor_before_delete {
+            if candidate.subject_kind == Scope::Title.as_storage_str() {
+                self.unmonitor_maintenance_title(title).await?;
+            } else {
+                self.unmonitor_maintenance_child(candidate, title).await?;
+            }
         }
         let authorization = PolicyDeleteAuthorization {
             rule_set_id: candidate.rule_set_id.clone(),
@@ -807,10 +987,25 @@ impl AppUseCase {
                 continue;
             }
             let saved = checkpoint.files[index].clone();
+            if let Some(include_descendants) = sequence_unmonitor_includes_descendants
+                && !self
+                    .maintenance_unmonitoring_is_confirmed(candidate, title, include_descendants)
+                    .await?
+            {
+                checkpoint.files[index].error =
+                    Some(execution_reason::NO_MATCH_AT_EXECUTION.to_string());
+                self.save_scoped_deletion_checkpoint(run, &checkpoint)
+                    .await?;
+                return Ok(ActionResult::Canceled {
+                    reason: execution_reason::NO_MATCH_AT_EXECUTION,
+                    detail: serde_json::to_value(checkpoint)
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                });
+            }
             // Storage pressure is a moving condition. The first safety check
             // authorized unmonitoring and the manifest; every subsequent file
             // gets a new capacity probe and Rego evaluation before unlinking.
-            if storage_root_id.is_some() {
+            if storage_root_id.is_some() || sequence_step_id.is_some() {
                 match self
                     .maintenance_execution_safety_checks(
                         detail,

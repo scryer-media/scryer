@@ -11,7 +11,8 @@ use crate::maintenance_rules::storage::{
     TestCapacityProbe, install_maintenance_storage_capacity_probe_for_test,
 };
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceGatesUpdate, MaintenanceRuleDraft,
+    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceCandidateFilter,
+    MaintenanceGatesUpdate, MaintenanceRuleDraft,
 };
 use crate::ports::SubtitleDownloadRepository;
 use scryer_domain::{
@@ -220,8 +221,8 @@ async fn arm_storage_title_deletion_with_matcher(
                 name: "Storage pressure".into(),
                 description: String::new(),
                 rego_source: matcher,
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorTitleDeleteAllFiles),
                 ),
                 grace_days: 0,
                 storage_root_id: Some(storage_root_id),
@@ -284,6 +285,45 @@ async fn arm_storage_title_deletion_with_matcher(
         .await
         .expect("arm storage rule");
     created.rule_set.id
+}
+
+#[tokio::test]
+async fn candidate_view_reports_exact_selected_root_file_totals() {
+    let _probe =
+        install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([Some(
+            capacity(100),
+        )]))
+        .await;
+    let fixture = title_fixture("Candidate Root Summary", MediaFacet::Movie).await;
+    add_movie_file(&fixture, "Selected/movie.mkv").await;
+    let outside_root = fixture
+        .root
+        .parent()
+        .expect("fixture root parent")
+        .join("unselected/movie.mkv");
+    add_movie_file_at(&fixture, &outside_root).await;
+
+    let rule_set_id = arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    let candidate = fixture
+        .execution
+        .app
+        .list_maintenance_candidates(
+            &fixture.execution.user,
+            MaintenanceCandidateFilter {
+                rule_set_id: Some(rule_set_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("list storage candidate")
+        .into_iter()
+        .next()
+        .expect("storage candidate");
+
+    assert_eq!(candidate.file_count, Some(2));
+    assert_eq!(candidate.total_size_bytes, Some(10));
+    assert_eq!(candidate.storage_root_file_count, Some(1));
+    assert_eq!(candidate.storage_root_total_size_bytes, Some(5));
 }
 
 #[tokio::test]

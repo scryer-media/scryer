@@ -534,7 +534,7 @@ fn series_movies_observation(
 /// stored in the same bag; surfacing them here would let a rule read a quality
 /// profile or a monitor type through a fact named "tags", and every one of
 /// those settings already has its own fact or none at all on purpose.
-fn user_title_tags(tags: &[String]) -> Vec<String> {
+pub(super) fn user_title_tags(tags: &[String]) -> Vec<String> {
     tags.iter()
         .filter(|tag| !crate::is_reserved_title_tag(tag))
         .cloned()
@@ -544,7 +544,7 @@ fn user_title_tags(tags: &[String]) -> Vec<String> {
 /// Known when the structured tag is present and non-empty; absent when the
 /// title carries no such tag, which is a confirmed "no profile assigned"
 /// rather than a lookup Scryer failed to perform.
-fn quality_profile_observation(tags: &[String]) -> Observation<String> {
+pub(super) fn quality_profile_observation(tags: &[String]) -> Observation<String> {
     tags.iter()
         .find_map(|tag| tag.strip_prefix(QUALITY_PROFILE_TAG_PREFIX))
         .map(str::trim)

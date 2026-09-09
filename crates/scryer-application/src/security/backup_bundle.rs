@@ -818,6 +818,26 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "lifecycle_action_runs",
         classification: BackupTableClassification::Export,
     },
+    // Sequence steps, immutable attempts, and Search receipts preserve both
+    // mutation attribution and durable deduplication across a restore. The
+    // terminal membership is the once-per-match latch, so every part of this
+    // sequence safety state must remain with its candidate history.
+    BackupTableCatalogEntry {
+        table: "maintenance_action_steps",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_action_step_attempts",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_action_job_receipts",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_sequence_terminal_memberships",
+        classification: BackupTableClassification::Export,
+    },
     // Request rules are user intent in exactly the way maintenance rules are,
     // and their revisions are what a stored decision points at: dropping them
     // would leave every trace naming a rule revision that no longer exists.

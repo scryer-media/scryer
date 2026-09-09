@@ -9,11 +9,20 @@
 use super::*;
 
 use scryer_application::maintenance_rules::{
+    MaintenanceActionCompletionPolicy as AppActionCompletionPolicy,
+    MaintenanceActionDefinition as AppActionDefinition,
     MaintenanceActionDescriptor as AppActionDescriptor, MaintenanceActionKind as AppActionKind,
-    MaintenanceActionParameters as AppActionParameters, MaintenanceActionSpec as AppActionSpec,
+    MaintenanceActionParameters as AppActionParameters,
+    MaintenanceActionSequence as AppActionSequence, MaintenanceActionSpec as AppActionSpec,
+    MaintenanceActionStep as AppActionStep,
+    MaintenanceActionStepDescriptor as AppActionStepDescriptor,
+    MaintenanceActionStepKind as AppActionStepKind,
+    MaintenanceActionStepParameters as AppActionStepParameters,
+    MaintenanceActionStepRequirement as AppActionStepRequirement,
     MaintenanceEffectClass as AppEffectClass, MaintenanceRepeatMode as AppRepeatMode,
-    MaintenanceRiskClass as AppRiskClass, MaintenanceSubjectKind as AppSubjectKind,
-    MaintenanceTimingMode as AppTimingMode, action_catalog,
+    MaintenanceRiskClass as AppRiskClass, MaintenanceSearchCondition as AppSearchCondition,
+    MaintenanceSubjectKind as AppSubjectKind, MaintenanceTimingMode as AppTimingMode,
+    action_catalog, action_sequence_catalog,
 };
 use scryer_application::maintenance_rules::{
     MaintenancePreviewResult as AppPreviewResult, MaintenanceRuleSetDetail as AppRuleSetDetail,
@@ -91,10 +100,25 @@ pub fn maintenance_effect_arming_into_application(
 pub fn from_maintenance_action_run(
     view: scryer_application::maintenance_rules::MaintenanceActionRunView,
 ) -> Option<MaintenanceActionRun> {
-    let run = view.run;
-    let kind = AppActionKind::parse_wire_str(&run.action_kind)?;
+    let scryer_application::maintenance_rules::MaintenanceActionRunView {
+        subject_label,
+        run,
+        title_name,
+        action_definition,
+        sequence_steps,
+    } = view;
+    let action_kind =
+        if run.action_kind == scryer_application::maintenance_rules::ACTION_SEQUENCE_KIND {
+            MaintenanceActionKind::ActionSequence
+        } else {
+            maintenance_action_kind_value(AppActionKind::parse_wire_str(&run.action_kind)?)
+        };
+    let action_sequence = action_definition.as_ref().and_then(|definition| {
+        let (_, sequence) = from_maintenance_action_definition(definition);
+        sequence
+    });
     Some(MaintenanceActionRun {
-        subject_label: view.subject_label,
+        subject_label,
         subject_kind: run.subject_kind,
         subject_id: ID::from(run.subject_id),
         detail: run.detail,
@@ -102,8 +126,13 @@ pub fn from_maintenance_action_run(
         rule_set_id: ID::from(run.rule_set_id),
         candidate_id: ID::from(run.candidate_id),
         title_id: ID::from(run.title_id),
-        title_name: view.title_name,
-        action_kind: maintenance_action_kind_value(kind),
+        title_name,
+        action_kind,
+        action_sequence,
+        sequence_steps: sequence_steps
+            .iter()
+            .map(from_maintenance_action_step_progress)
+            .collect(),
         match_generation: to_graphql_int(run.match_generation),
         attempt: to_graphql_int(run.attempt),
         status: run.status.as_storage_str().to_string(),
@@ -112,6 +141,41 @@ pub fn from_maintenance_action_run(
         started_at: run.started_at,
         finished_at: run.finished_at,
     })
+}
+
+fn from_maintenance_action_step_progress(
+    progress: &scryer_application::maintenance_rules::action_execution::MaintenanceActionStepProgressView,
+) -> MaintenanceActionStepProgress {
+    MaintenanceActionStepProgress {
+        step: MaintenanceActionStep {
+            id: ID::from(progress.step.id.clone()),
+            kind: maintenance_action_step_kind_value(progress.step.kind),
+            parameters: from_maintenance_action_step_parameters(&progress.step.parameters),
+        },
+        run: progress.run.as_ref().map(|run| MaintenanceActionStepRun {
+            step_id: ID::from(run.key.step_id.clone()),
+            step_kind: run.step_kind.clone(),
+            state: run.state.as_storage_str().to_string(),
+            attempt: to_graphql_int(run.attempt),
+            hold_reason: run.hold_reason.clone(),
+            error: run.error.clone(),
+            created_at: run.created_at.to_owned(),
+            updated_at: run.updated_at.to_owned(),
+            finished_at: run.finished_at.to_owned(),
+        }),
+        receipts: progress
+            .receipts
+            .iter()
+            .map(|receipt| MaintenanceActionJobReceipt {
+                dispatch_attempt: to_graphql_int(receipt.dispatch_attempt),
+                logical_request_key: receipt.logical_request_key.clone(),
+                job_run_id: receipt.job_run_id.clone().map(ID::from),
+                state: receipt.state.as_storage_str().to_string(),
+                created_at: receipt.created_at.to_owned(),
+                updated_at: receipt.updated_at.to_owned(),
+            })
+            .collect(),
+    }
 }
 
 pub fn maintenance_action_kind_value(kind: AppActionKind) -> MaintenanceActionKind {
@@ -144,6 +208,9 @@ pub fn maintenance_action_kind_value(kind: AppActionKind) -> MaintenanceActionKi
 
 pub fn maintenance_action_kind_into_application(kind: MaintenanceActionKind) -> AppActionKind {
     match kind {
+        MaintenanceActionKind::ActionSequence => {
+            unreachable!("ACTION_SEQUENCE is an output-only legacy projection")
+        }
         MaintenanceActionKind::DoNothing => AppActionKind::DoNothing,
         MaintenanceActionKind::UnmonitorScopeKeepFiles => AppActionKind::UnmonitorScopeKeepFiles,
         MaintenanceActionKind::DeleteTitleAndFiles => AppActionKind::DeleteTitleAndFiles,
@@ -233,6 +300,8 @@ fn maintenance_outcome_value(
 /// list into N+1 requests.
 pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSet {
     let rule_set = &detail.rule_set;
+    let (action_spec, action_sequence) =
+        from_maintenance_action_definition(&detail.action_definition);
     MaintenanceRuleSet {
         id: ID::from(rule_set.id.clone()),
         name: rule_set.name.clone(),
@@ -245,7 +314,8 @@ pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSe
         subject_kind: maintenance_rule_subject_kind_value(rule_set.subject_kind),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         grace_days: to_graphql_int(detail.revision.grace_days),
-        action_spec: from_maintenance_action_spec(&detail.action_spec),
+        action_spec,
+        action_sequence,
         created_at: rule_set.created_at,
         updated_at: rule_set.updated_at,
     }
@@ -284,12 +354,134 @@ pub fn from_maintenance_action_spec(spec: &AppActionSpec) -> MaintenanceActionSp
     }
 }
 
+fn maintenance_search_condition_value(condition: AppSearchCondition) -> MaintenanceSearchCondition {
+    match condition {
+        AppSearchCondition::Unconditional => MaintenanceSearchCondition::Unconditional,
+        AppSearchCondition::PreviousProfileChanged => {
+            MaintenanceSearchCondition::PreviousProfileChanged
+        }
+    }
+}
+
+fn maintenance_search_condition_into_application(
+    condition: MaintenanceSearchCondition,
+) -> AppSearchCondition {
+    match condition {
+        MaintenanceSearchCondition::Unconditional => AppSearchCondition::Unconditional,
+        MaintenanceSearchCondition::PreviousProfileChanged => {
+            AppSearchCondition::PreviousProfileChanged
+        }
+    }
+}
+
+pub fn from_maintenance_action_sequence(sequence: &AppActionSequence) -> MaintenanceActionSequence {
+    MaintenanceActionSequence {
+        schema_version: to_graphql_int(i64::from(sequence.schema_version)),
+        steps: sequence
+            .steps
+            .iter()
+            .map(|step| MaintenanceActionStep {
+                id: ID::from(step.id.clone()),
+                kind: maintenance_action_step_kind_value(step.kind),
+                parameters: from_maintenance_action_step_parameters(&step.parameters),
+            })
+            .collect(),
+    }
+}
+
+fn from_maintenance_action_step_parameters(
+    parameters: &AppActionStepParameters,
+) -> MaintenanceActionStepParameters {
+    match parameters {
+        AppActionStepParameters::None => MaintenanceActionStepParameters {
+            include_descendants: None,
+            target_quality_profile_id: None,
+            search_condition: None,
+            tags: Vec::new(),
+        },
+        AppActionStepParameters::Unmonitor {
+            include_descendants,
+        } => MaintenanceActionStepParameters {
+            include_descendants: Some(*include_descendants),
+            target_quality_profile_id: None,
+            search_condition: None,
+            tags: Vec::new(),
+        },
+        AppActionStepParameters::ChangeQualityProfile {
+            target_quality_profile_id,
+        } => MaintenanceActionStepParameters {
+            include_descendants: None,
+            target_quality_profile_id: Some(target_quality_profile_id.clone()),
+            search_condition: None,
+            tags: Vec::new(),
+        },
+        AppActionStepParameters::Search { condition } => MaintenanceActionStepParameters {
+            include_descendants: None,
+            target_quality_profile_id: None,
+            search_condition: Some(maintenance_search_condition_value(*condition)),
+            tags: Vec::new(),
+        },
+        AppActionStepParameters::Tags { tags } => MaintenanceActionStepParameters {
+            include_descendants: None,
+            target_quality_profile_id: None,
+            search_condition: None,
+            tags: tags.clone(),
+        },
+    }
+}
+
+fn maintenance_action_step_kind_value(kind: AppActionStepKind) -> MaintenanceActionStepKind {
+    match kind {
+        AppActionStepKind::Unmonitor => MaintenanceActionStepKind::Unmonitor,
+        AppActionStepKind::DeleteFiles => MaintenanceActionStepKind::DeleteFiles,
+        AppActionStepKind::ChangeQualityProfile => MaintenanceActionStepKind::ChangeQualityProfile,
+        AppActionStepKind::Search => MaintenanceActionStepKind::Search,
+        AppActionStepKind::AddTags => MaintenanceActionStepKind::AddTags,
+        AppActionStepKind::RemoveTags => MaintenanceActionStepKind::RemoveTags,
+        AppActionStepKind::DeleteTitleAndFiles => MaintenanceActionStepKind::DeleteTitleAndFiles,
+    }
+}
+
+fn maintenance_action_step_kind_into_application(
+    kind: MaintenanceActionStepKind,
+) -> AppActionStepKind {
+    match kind {
+        MaintenanceActionStepKind::Unmonitor => AppActionStepKind::Unmonitor,
+        MaintenanceActionStepKind::DeleteFiles => AppActionStepKind::DeleteFiles,
+        MaintenanceActionStepKind::ChangeQualityProfile => AppActionStepKind::ChangeQualityProfile,
+        MaintenanceActionStepKind::Search => AppActionStepKind::Search,
+        MaintenanceActionStepKind::AddTags => AppActionStepKind::AddTags,
+        MaintenanceActionStepKind::RemoveTags => AppActionStepKind::RemoveTags,
+        MaintenanceActionStepKind::DeleteTitleAndFiles => AppActionStepKind::DeleteTitleAndFiles,
+    }
+}
+
+fn from_maintenance_action_definition(
+    definition: &AppActionDefinition,
+) -> (MaintenanceActionSpec, Option<MaintenanceActionSequence>) {
+    match definition {
+        AppActionDefinition::Legacy(spec) => (from_maintenance_action_spec(spec), None),
+        AppActionDefinition::Sequence(sequence) => (
+            MaintenanceActionSpec {
+                kind: MaintenanceActionKind::ActionSequence,
+                schema_version: to_graphql_int(i64::from(sequence.schema_version)),
+                target_quality_profile_id: None,
+                tags: Vec::new(),
+            },
+            Some(from_maintenance_action_sequence(sequence)),
+        ),
+    }
+}
+
 pub fn from_maintenance_rule_set_detail(detail: AppRuleSetDetail) -> MaintenanceRuleSetDetail {
+    let (action_spec, action_sequence) =
+        from_maintenance_action_definition(&detail.action_definition);
     let rule_set = from_maintenance_rule_set(&detail);
     MaintenanceRuleSetDetail {
         rule_set,
         revision: from_maintenance_rule_revision(detail.revision),
-        action_spec: from_maintenance_action_spec(&detail.action_spec),
+        action_spec,
+        action_sequence,
     }
 }
 
@@ -345,6 +537,61 @@ pub fn maintenance_action_descriptors() -> Vec<MaintenanceActionDescriptor> {
     action_catalog()
         .iter()
         .map(from_maintenance_action_descriptor)
+        .collect()
+}
+
+fn maintenance_action_step_requirement_name(requirement: AppActionStepRequirement) -> &'static str {
+    match requirement {
+        AppActionStepRequirement::PriorCompleteCoveringUnmonitor => {
+            "prior_complete_covering_unmonitor"
+        }
+    }
+}
+
+fn maintenance_action_completion_policy_name(policy: AppActionCompletionPolicy) -> &'static str {
+    match policy {
+        AppActionCompletionPolicy::Accepted => "accepted",
+        AppActionCompletionPolicy::Completed => "completed",
+    }
+}
+
+fn from_maintenance_action_step_descriptor(
+    descriptor: &AppActionStepDescriptor,
+) -> MaintenanceActionStepDescriptor {
+    MaintenanceActionStepDescriptor {
+        id: descriptor.id.to_string(),
+        kind: maintenance_action_step_kind_value(descriptor.kind),
+        label: descriptor.label.to_string(),
+        supported_subjects: descriptor
+            .supported_subjects
+            .iter()
+            .map(|subject| maintenance_action_subject_value(*subject))
+            .collect(),
+        parameter_schema: descriptor.parameter_schema.to_string(),
+        effect_classes: descriptor
+            .effect_classes
+            .iter()
+            .map(|effect| maintenance_effect_class_name(*effect).to_string())
+            .collect(),
+        risk_class: maintenance_risk_class_value(descriptor.risk_class),
+        requires: descriptor
+            .requires
+            .iter()
+            .map(|requirement| maintenance_action_step_requirement_name(*requirement).to_string())
+            .collect(),
+        terminal: descriptor.terminal,
+        completion_policy: maintenance_action_completion_policy_name(descriptor.completion_policy)
+            .to_string(),
+        storage_root_allowed: descriptor.storage_root_allowed,
+    }
+}
+
+/// The sequence catalog is the source of authoring availability and parameter
+/// forms for schema-2 actions.
+pub fn maintenance_action_step_descriptors() -> Vec<MaintenanceActionStepDescriptor> {
+    action_sequence_catalog()
+        .iter()
+        .map(from_maintenance_action_step_descriptor)
         .collect()
 }
 
@@ -424,28 +671,56 @@ pub fn maintenance_candidate_state_into_application(
 pub fn from_maintenance_candidate(
     view: scryer_application::maintenance_rules::MaintenanceCandidateView,
 ) -> MaintenanceCandidate {
-    let candidate = view.candidate;
+    let scryer_application::maintenance_rules::MaintenanceCandidateView {
+        subject_label,
+        file_count,
+        total_size_bytes,
+        storage_root_file_count,
+        storage_root_total_size_bytes,
+        candidate,
+        rule_name,
+        title_name,
+        action_definition,
+        sequence_steps,
+    } = view;
+    let action_sequence = action_definition.as_ref().and_then(|definition| {
+        let (_, sequence) = from_maintenance_action_definition(definition);
+        sequence
+    });
     MaintenanceCandidate {
-        file_count: view.file_count.map(to_graphql_int),
-        total_size_bytes: view.total_size_bytes,
-        subject_label: view.subject_label,
+        file_count: file_count.map(to_graphql_int),
+        total_size_bytes,
+        storage_root_file_count: storage_root_file_count.map(to_graphql_int),
+        storage_root_total_size_bytes,
+        subject_label,
         subject_kind: candidate.subject_kind,
         subject_id: ID::from(candidate.subject_id),
         id: ID::from(candidate.id),
         rule_set_id: ID::from(candidate.rule_set_id),
-        rule_name: view.rule_name,
+        rule_name,
         revision_number: to_graphql_int(candidate.revision_number),
         title_id: ID::from(candidate.title_id),
-        title_name: view.title_name,
+        title_name,
         library_id: candidate.library_id,
         facet: candidate.facet,
         state: maintenance_candidate_state_value(candidate.state),
         state_reason: candidate.state_reason,
         reason_codes: candidate.reason_codes,
-        action_kind: maintenance_action_kind_value(
-            AppActionKind::parse_wire_str(&candidate.action_kind)
-                .unwrap_or(AppActionKind::DoNothing),
-        ),
+        action_kind: if candidate.action_kind
+            == scryer_application::maintenance_rules::ACTION_SEQUENCE_KIND
+        {
+            MaintenanceActionKind::ActionSequence
+        } else {
+            maintenance_action_kind_value(
+                AppActionKind::parse_wire_str(&candidate.action_kind)
+                    .unwrap_or(AppActionKind::DoNothing),
+            )
+        },
+        action_sequence,
+        sequence_steps: sequence_steps
+            .iter()
+            .map(from_maintenance_action_step_progress)
+            .collect(),
         grace_days: to_graphql_int(candidate.grace_days),
         match_generation: to_graphql_int(candidate.match_generation),
         first_matched_at: candidate.first_matched_at,
@@ -536,9 +811,130 @@ pub fn maintenance_action_spec_from_input(input: MaintenanceActionInput) -> AppA
     }
 }
 
+/// Resolve the two mutually exclusive authoring shapes without ever converting
+/// a legacy action into a sequence during a read. GraphQL calls this before it
+/// reaches the service, and the service receives one typed definition only.
+pub fn maintenance_action_definition_from_inputs(
+    action: Option<MaintenanceActionInput>,
+    action_sequence: Option<MaintenanceActionSequenceInput>,
+) -> Result<AppActionDefinition, String> {
+    match (action, action_sequence) {
+        (Some(_), Some(_)) => Err("supply either 'action' or 'actionSequence', not both".into()),
+        (None, None) => Err("a maintenance rule requires 'action' or 'actionSequence'".into()),
+        (Some(action), None) => {
+            if action.kind == MaintenanceActionKind::ActionSequence {
+                return Err("ACTION_SEQUENCE is output-only; use 'actionSequence'".into());
+            }
+            Ok(AppActionDefinition::Legacy(
+                maintenance_action_spec_from_input(action),
+            ))
+        }
+        (None, Some(sequence)) => {
+            let schema_version = u32::try_from(sequence.schema_version)
+                .map_err(|_| "actionSequence.schemaVersion must be zero or greater".to_string())?;
+            let steps = sequence
+                .steps
+                .into_iter()
+                .map(maintenance_action_step_from_input)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(AppActionDefinition::Sequence(AppActionSequence {
+                schema_version,
+                steps,
+            }))
+        }
+    }
+}
+
+fn maintenance_action_step_from_input(
+    input: MaintenanceActionStepInput,
+) -> Result<AppActionStep, String> {
+    let kind = maintenance_action_step_kind_into_application(input.kind);
+    let parameters = maintenance_action_step_parameters_from_input(kind, input.parameters)?;
+    Ok(AppActionStep {
+        id: input.id.to_string(),
+        kind,
+        parameters,
+    })
+}
+
+fn maintenance_action_step_parameters_from_input(
+    kind: AppActionStepKind,
+    input: MaintenanceActionStepParametersInput,
+) -> Result<AppActionStepParameters, String> {
+    let MaintenanceActionStepParametersInput {
+        include_descendants,
+        target_quality_profile_id,
+        search_condition,
+        tags,
+    } = input;
+    let allows_only =
+        |allows_descendants: bool, allows_target: bool, allows_search: bool, allows_tags: bool| {
+            (allows_descendants || include_descendants.is_none())
+                && (allows_target || target_quality_profile_id.is_none())
+                && (allows_search || search_condition.is_none())
+                && (allows_tags || tags.is_none())
+        };
+    match kind {
+        AppActionStepKind::Unmonitor => {
+            if !allows_only(true, false, false, false) {
+                return Err("unmonitor accepts only includeDescendants".into());
+            }
+            Ok(AppActionStepParameters::Unmonitor {
+                include_descendants: include_descendants
+                    .ok_or_else(|| "unmonitor requires includeDescendants".to_string())?,
+            })
+        }
+        AppActionStepKind::ChangeQualityProfile => {
+            if !allows_only(false, true, false, false) {
+                return Err("change-quality-profile accepts only targetQualityProfileId".into());
+            }
+            Ok(AppActionStepParameters::ChangeQualityProfile {
+                target_quality_profile_id: target_quality_profile_id.ok_or_else(|| {
+                    "change-quality-profile requires targetQualityProfileId".to_string()
+                })?,
+            })
+        }
+        AppActionStepKind::Search => {
+            if !allows_only(false, false, true, false) {
+                return Err("search accepts only searchCondition".into());
+            }
+            Ok(AppActionStepParameters::Search {
+                condition: maintenance_search_condition_into_application(
+                    search_condition
+                        .ok_or_else(|| "search requires searchCondition".to_string())?,
+                ),
+            })
+        }
+        AppActionStepKind::AddTags | AppActionStepKind::RemoveTags => {
+            if !allows_only(false, false, false, true) {
+                return Err("a tag step accepts only tags".into());
+            }
+            Ok(AppActionStepParameters::Tags {
+                tags: tags.ok_or_else(|| "a tag step requires tags".to_string())?,
+            })
+        }
+        AppActionStepKind::DeleteFiles | AppActionStepKind::DeleteTitleAndFiles => {
+            if !allows_only(false, false, false, false) {
+                return Err("this step does not accept parameters".into());
+            }
+            Ok(AppActionStepParameters::None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use scryer_application::maintenance_rules::action_execution::{
+        MaintenanceActionRunView, MaintenanceActionStepProgressView,
+    };
+    use scryer_application::maintenance_rules::evaluation::MaintenanceCandidateView;
+    use scryer_domain::{
+        LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate,
+        MaintenanceActionJobReceipt, MaintenanceActionJobReceiptState, MaintenanceActionStepKey,
+        MaintenanceActionStepRun, MaintenanceActionStepState, MaintenanceCandidateState,
+    };
 
     /// The descriptor strings are hand-written above so the schema does not
     /// depend on serde's rename rules; this proves the two never drift.
@@ -695,5 +1091,331 @@ mod tests {
                 .target_quality_profile_id,
             None
         );
+    }
+
+    fn step_parameters() -> MaintenanceActionStepParametersInput {
+        MaintenanceActionStepParametersInput {
+            include_descendants: None,
+            target_quality_profile_id: None,
+            search_condition: None,
+            tags: None,
+        }
+    }
+
+    #[test]
+    fn action_definition_input_requires_exactly_one_shape() {
+        let action = MaintenanceActionInput {
+            kind: MaintenanceActionKind::DoNothing,
+            target_quality_profile_id: None,
+            tags: None,
+        };
+        let sequence = MaintenanceActionSequenceInput {
+            schema_version: 2,
+            steps: Vec::new(),
+        };
+
+        assert!(
+            maintenance_action_definition_from_inputs(None, None)
+                .expect_err("missing action definition must fail")
+                .contains("requires")
+        );
+        assert!(
+            maintenance_action_definition_from_inputs(Some(action), Some(sequence))
+                .expect_err("both action shapes must fail")
+                .contains("either")
+        );
+    }
+
+    #[test]
+    fn sequence_input_keeps_typed_parameters_and_rejects_stale_ones() {
+        let mut unmonitor_parameters = step_parameters();
+        unmonitor_parameters.include_descendants = Some(true);
+        let mut search_parameters = step_parameters();
+        search_parameters.search_condition = Some(MaintenanceSearchCondition::Unconditional);
+        let definition = maintenance_action_definition_from_inputs(
+            None,
+            Some(MaintenanceActionSequenceInput {
+                schema_version: 2,
+                steps: vec![
+                    MaintenanceActionStepInput {
+                        id: ID::from("unmonitor"),
+                        kind: MaintenanceActionStepKind::Unmonitor,
+                        parameters: unmonitor_parameters,
+                    },
+                    MaintenanceActionStepInput {
+                        id: ID::from("search"),
+                        kind: MaintenanceActionStepKind::Search,
+                        parameters: search_parameters,
+                    },
+                ],
+            }),
+        )
+        .expect("typed sequence input maps");
+        let AppActionDefinition::Sequence(sequence) = definition else {
+            panic!("expected sequence definition");
+        };
+        assert_eq!(sequence.schema_version, 2);
+        assert!(matches!(
+            sequence.steps[0].parameters,
+            AppActionStepParameters::Unmonitor {
+                include_descendants: true
+            }
+        ));
+        assert!(matches!(
+            sequence.steps[1].parameters,
+            AppActionStepParameters::Search {
+                condition: AppSearchCondition::Unconditional
+            }
+        ));
+
+        let mut invalid_parameters = step_parameters();
+        invalid_parameters.include_descendants = Some(true);
+        invalid_parameters.tags = Some(vec!["keep".into()]);
+        assert!(
+            maintenance_action_definition_from_inputs(
+                None,
+                Some(MaintenanceActionSequenceInput {
+                    schema_version: 2,
+                    steps: vec![MaintenanceActionStepInput {
+                        id: ID::from("invalid"),
+                        kind: MaintenanceActionStepKind::Unmonitor,
+                        parameters: invalid_parameters,
+                    }],
+                }),
+            )
+            .expect_err("a step must reject fields from another parameter schema")
+            .contains("only")
+        );
+    }
+
+    #[test]
+    fn sequence_projection_uses_the_sentinel_and_preserves_every_step() {
+        let definition = AppActionDefinition::Sequence(AppActionSequence {
+            schema_version: 2,
+            steps: vec![AppActionStep {
+                id: "search".into(),
+                kind: AppActionStepKind::Search,
+                parameters: AppActionStepParameters::Search {
+                    condition: AppSearchCondition::PreviousProfileChanged,
+                },
+            }],
+        });
+
+        let (legacy_projection, sequence) = from_maintenance_action_definition(&definition);
+        assert_eq!(
+            legacy_projection.kind,
+            MaintenanceActionKind::ActionSequence
+        );
+        let sequence = sequence.expect("sequence payload is never replaced by a legacy action");
+        assert_eq!(sequence.steps[0].kind, MaintenanceActionStepKind::Search);
+        assert_eq!(
+            sequence.steps[0].parameters.search_condition,
+            Some(MaintenanceSearchCondition::PreviousProfileChanged)
+        );
+    }
+
+    #[test]
+    fn sequence_action_history_projects_ordered_steps_and_accepted_search_receipt() {
+        let now = Utc::now();
+        let profile_step = AppActionStep {
+            id: "profile".into(),
+            kind: AppActionStepKind::ChangeQualityProfile,
+            parameters: AppActionStepParameters::ChangeQualityProfile {
+                target_quality_profile_id: "quality-hd".into(),
+            },
+        };
+        let search_step = AppActionStep {
+            id: "search".into(),
+            kind: AppActionStepKind::Search,
+            parameters: AppActionStepParameters::Search {
+                condition: AppSearchCondition::PreviousProfileChanged,
+            },
+        };
+        let search_key = MaintenanceActionStepKey {
+            candidate_id: "candidate-1".into(),
+            match_generation: 3,
+            revision_number: 2,
+            step_id: search_step.id.clone(),
+        };
+        let search_run = MaintenanceActionStepRun {
+            key: search_key.clone(),
+            rule_set_id: "rule-1".into(),
+            title_id: "title-1".into(),
+            subject_kind: "title".into(),
+            subject_id: "title-1".into(),
+            sequence_content_hash: "hash".into(),
+            step_kind: "search".into(),
+            intent_json: "{}".into(),
+            before_state_json: "{}".into(),
+            target_identity_json: "{}".into(),
+            provenance_json: "{}".into(),
+            state: MaintenanceActionStepState::Succeeded,
+            attempt: 1,
+            lease_id: None,
+            lease_expires_at: None,
+            hold_reason: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+            finished_at: Some(now),
+        };
+        let receipt = MaintenanceActionJobReceipt {
+            schema_version: 1,
+            key: search_key,
+            dispatch_attempt: 1,
+            logical_request_key: "maintenance-sequence:candidate-1:3:2:search".into(),
+            request_hash: "request-hash".into(),
+            job_run_id: Some("job-1".into()),
+            state: MaintenanceActionJobReceiptState::Accepted,
+            reconciliation_evidence_json: "{}".into(),
+            created_at: now,
+            updated_at: now,
+        };
+        let view = MaintenanceActionRunView {
+            subject_label: "Example".into(),
+            run: LifecycleActionRun {
+                id: "action-run-1".into(),
+                candidate_id: "candidate-1".into(),
+                rule_set_id: "rule-1".into(),
+                revision_number: 2,
+                title_id: "title-1".into(),
+                subject_kind: "title".into(),
+                subject_id: "title-1".into(),
+                action_kind: "action_sequence".into(),
+                match_generation: 3,
+                idempotency_key: "key".into(),
+                attempt: 1,
+                status: LifecycleActionRunStatus::Succeeded,
+                hold_reason: None,
+                error: None,
+                detail: "{}".into(),
+                started_at: now,
+                finished_at: Some(now),
+                created_at: now,
+            },
+            title_name: "Example".into(),
+            action_definition: Some(AppActionDefinition::Sequence(AppActionSequence {
+                schema_version: 2,
+                steps: vec![profile_step, search_step],
+            })),
+            sequence_steps: vec![MaintenanceActionStepProgressView {
+                step: AppActionStep {
+                    id: "search".into(),
+                    kind: AppActionStepKind::Search,
+                    parameters: AppActionStepParameters::Search {
+                        condition: AppSearchCondition::PreviousProfileChanged,
+                    },
+                },
+                run: Some(search_run),
+                receipts: vec![receipt],
+            }],
+        };
+
+        let projected = from_maintenance_action_run(view).expect("known action kind projects");
+        assert_eq!(projected.action_kind, MaintenanceActionKind::ActionSequence);
+        let sequence = projected.action_sequence.expect("sequence");
+        assert_eq!(sequence.steps.len(), 2);
+        assert_eq!(
+            sequence
+                .steps
+                .iter()
+                .map(|step| step.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                MaintenanceActionStepKind::ChangeQualityProfile,
+                MaintenanceActionStepKind::Search,
+            ]
+        );
+        assert_eq!(projected.sequence_steps.len(), 1);
+        assert_eq!(
+            projected.sequence_steps[0]
+                .run
+                .as_ref()
+                .map(|run| run.state.as_str()),
+            Some("succeeded")
+        );
+        assert_eq!(projected.sequence_steps[0].receipts[0].state, "accepted");
+        assert_eq!(
+            projected.sequence_steps[0].receipts[0]
+                .job_run_id
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("job-1")
+        );
+    }
+
+    #[test]
+    fn candidate_projection_preserves_empty_and_legacy_action_definitions() {
+        let now = Utc::now();
+        let candidate = LifecycleCandidate {
+            id: "candidate-1".into(),
+            rule_set_id: "rule-1".into(),
+            revision_number: 2,
+            matcher_content_hash: "hash".into(),
+            title_id: "title-1".into(),
+            library_id: "library-1".into(),
+            facet: "movie".into(),
+            subject_kind: "title".into(),
+            subject_id: "title-1".into(),
+            match_generation: 1,
+            state: MaintenanceCandidateState::Blocked,
+            state_reason: "waiting".into(),
+            reason_codes: Vec::new(),
+            action_kind: "action_sequence".into(),
+            grace_days: 0,
+            first_matched_at: now,
+            last_matched_at: now,
+            due_at: now,
+            last_evaluated_at: now,
+            held_since: Some(now),
+            action_attempts: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        let sequence_view = MaintenanceCandidateView {
+            subject_label: "Example".into(),
+            file_count: Some(1),
+            total_size_bytes: Some(42),
+            storage_root_file_count: Some(1),
+            storage_root_total_size_bytes: Some(42),
+            candidate: candidate.clone(),
+            rule_name: "Rule".into(),
+            title_name: "Example".into(),
+            action_definition: Some(AppActionDefinition::Sequence(AppActionSequence {
+                schema_version: 2,
+                steps: Vec::new(),
+            })),
+            sequence_steps: Vec::new(),
+        };
+        let projected = from_maintenance_candidate(sequence_view);
+        assert_eq!(projected.action_kind, MaintenanceActionKind::ActionSequence);
+        assert_eq!(projected.storage_root_file_count, Some(1));
+        assert_eq!(projected.storage_root_total_size_bytes, Some(42));
+        assert!(projected.action_sequence.is_some());
+        assert!(projected.sequence_steps.is_empty());
+
+        let legacy_view = MaintenanceCandidateView {
+            candidate: LifecycleCandidate {
+                action_kind: AppActionKind::DoNothing.as_wire_str().into(),
+                ..candidate
+            },
+            subject_label: "Example".into(),
+            file_count: None,
+            total_size_bytes: None,
+            storage_root_file_count: None,
+            storage_root_total_size_bytes: None,
+            rule_name: "Rule".into(),
+            title_name: "Example".into(),
+            action_definition: Some(AppActionDefinition::Legacy(AppActionSpec::new(
+                AppActionKind::DoNothing,
+            ))),
+            sequence_steps: Vec::new(),
+        };
+        let legacy = from_maintenance_candidate(legacy_view);
+        assert_eq!(legacy.action_kind, MaintenanceActionKind::DoNothing);
+        assert_eq!(legacy.storage_root_file_count, None);
+        assert_eq!(legacy.storage_root_total_size_bytes, None);
+        assert!(legacy.action_sequence.is_none());
+        assert!(legacy.sequence_steps.is_empty());
     }
 }

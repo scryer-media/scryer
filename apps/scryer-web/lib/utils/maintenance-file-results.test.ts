@@ -56,6 +56,34 @@ test("storage checkpoints report their selected root and partial progress", () =
   assert.equal(detail?.remainingFileCount, 2);
 });
 
+test("sequence history unwraps its scoped deletion outcomes without another history row", () => {
+  const detail = parseMaintenanceFileResults(
+    JSON.stringify({
+      maintenance_sequence_history: true,
+      deletion_outcomes: [
+        {
+          action_run_id: "internal-delete-run",
+          status: "held",
+          detail: JSON.stringify({
+            storage_root_id: "root-a",
+            total_size_bytes: 42,
+            files: [
+              { file_id: "file-a", completed: true, error: null },
+              { file_id: "file-b", completed: false, error: "capacity changed" },
+            ],
+          }),
+        },
+      ],
+    }),
+  );
+
+  assert.equal(detail?.files.length, 2);
+  assert.equal(detail?.completedFileCount, 1);
+  assert.equal(detail?.remainingFileCount, 1);
+  assert.equal(detail?.totalSizeBytes, 42);
+  assert.equal(detail?.storageRootId, "root-a");
+});
+
 test("non-checkpoint action details do not render a file results table", () => {
   assert.equal(parseMaintenanceFileResults('{"deleted_title":true}'), null);
   assert.equal(parseMaintenanceFileResults("not json"), null);

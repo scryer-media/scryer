@@ -1863,6 +1863,10 @@ pub fn datastore_file_path(database_url: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scryer_application::maintenance_rules::{
+        MaintenanceActionSequence, MaintenanceActionStep, MaintenanceActionStepKind,
+        MaintenanceActionStepParameters, MaintenanceSearchCondition, MaintenanceSubjectKind,
+    };
     use scryer_application::{
         AcquisitionScopeStateRepository, BACKUP_TABLE_CATALOG, BackupBundleExportRequest,
         BackupExportSecrets, BackupTableClassification, DiscoverySyncStateRecord,
@@ -2369,6 +2373,18 @@ mod tests {
                 Some(1),
                 "inspected bundle should persist convergence coverage"
             );
+            for table in [
+                "maintenance_action_steps",
+                "maintenance_action_step_attempts",
+                "maintenance_action_job_receipts",
+                "maintenance_sequence_terminal_memberships",
+            ] {
+                assert_eq!(
+                    inspected.row_counts.get(table).copied(),
+                    Some(1),
+                    "inspected bundle should retain sequence safety evidence in {table}"
+                );
+            }
             assert!(
                 outcome.summary.row_counts.contains_key("settings_values"),
                 "backup should include settings JSON rows"
@@ -2453,7 +2469,8 @@ mod tests {
                 "2026-07-17T12:34:56Z",
                 "source-discovery-generation",
             )
-            .await
+            .await?;
+            seed_backup_matrix_sequence_safety_state(&datastore).await
         }
 
         async fn export_backup(
@@ -2559,6 +2576,7 @@ mod tests {
             let users = UserStore::new(datastore.clone());
             verify_backup_matrix_data(&settings, &titles, &users).await?;
             verify_backup_matrix_runtime_state(&datastore).await?;
+            verify_backup_matrix_sequence_safety_state(&datastore).await?;
             verify_backup_matrix_title_image_restore(&images).await?;
             verify_sqlite_title_image_restore_tables(services.pool()).await?;
             services.pool().close().await;
@@ -2717,6 +2735,279 @@ mod tests {
             .await
     }
 
+    async fn seed_backup_matrix_sequence_safety_state(datastore: &StoreDatastore) -> AppResult<()> {
+        let now = chrono::Utc::now();
+        let sequence = backup_matrix_search_sequence();
+        sequence
+            .validate(MaintenanceSubjectKind::Movie)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let action_spec = serde_json::to_string(&sequence)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let sequence_hash = sequence
+            .content_hash()
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let evidence = backup_matrix_sequence_evidence(&sequence, &sequence_hash);
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO maintenance_rule_sets (
+                 id, name, enabled, evaluation_mode, effect_arming, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-rule".to_string()),
+                SqlArg::Text("Backup sequence safety state".to_string()),
+                SqlArg::Bool(true),
+                SqlArg::Text("observe".to_string()),
+                SqlArg::Text("none".to_string()),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO maintenance_rule_revisions (
+                 id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
+                 matcher_content_hash, created_at
+             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-revision".to_string()),
+                SqlArg::Text("backup-sequence-rule".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Text("match := true".to_string()),
+                SqlArg::Text(action_spec),
+                SqlArg::I64(0),
+                SqlArg::Text("backup-sequence-matcher".to_string()),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO lifecycle_candidates (
+                 id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id,
+                 facet, subject_kind, subject_id, match_generation, state, state_reason,
+                 reason_codes, action_kind, grace_days, first_matched_at, last_matched_at,
+                 due_at, last_evaluated_at, created_at, updated_at, action_attempts
+             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-candidate".to_string()),
+                SqlArg::Text("backup-sequence-rule".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Text("backup-sequence-matcher".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::Text("backup-matrix-library".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("title".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Text("succeeded".to_string()),
+                SqlArg::Text("sequence_completed".to_string()),
+                SqlArg::Text("[]".to_string()),
+                SqlArg::Text("action_sequence".to_string()),
+                SqlArg::I64(0),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::I64(1),
+            ],
+        )
+        .await?;
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO maintenance_action_steps (
+                 candidate_id, match_generation, revision_number, step_id, rule_set_id,
+                 title_id, subject_kind, subject_id, sequence_content_hash, step_kind,
+                 intent_json, before_state_json, target_identity_json, provenance_json, state,
+                 attempt, created_at, updated_at, finished_at
+             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-candidate".to_string()),
+                SqlArg::I64(1),
+                SqlArg::I64(1),
+                SqlArg::Text("search".to_string()),
+                SqlArg::Text("backup-sequence-rule".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::Text("title".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::Text(sequence_hash.clone()),
+                SqlArg::Text("search".to_string()),
+                SqlArg::Text(evidence.intent_json.clone()),
+                SqlArg::Text(evidence.before_state_json.clone()),
+                SqlArg::Text(evidence.target_identity_json.clone()),
+                SqlArg::Text(evidence.provenance_json.clone()),
+                SqlArg::Text("succeeded".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO maintenance_action_step_attempts (
+                 id, candidate_id, match_generation, revision_number, step_id, attempt, state,
+                 intent_json, before_state_json, target_identity_json, provenance_json,
+                 started_at, finished_at, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-attempt".to_string()),
+                SqlArg::Text("backup-sequence-candidate".to_string()),
+                SqlArg::I64(1),
+                SqlArg::I64(1),
+                SqlArg::Text("search".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Text("succeeded".to_string()),
+                SqlArg::Text(evidence.intent_json.clone()),
+                SqlArg::Text(evidence.before_state_json.clone()),
+                SqlArg::Text(evidence.target_identity_json.clone()),
+                SqlArg::Text(evidence.provenance_json.clone()),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO maintenance_action_job_receipts (
+                 candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
+                 schema_version, logical_request_key, request_hash, job_run_id, state,
+                 reconciliation_evidence_json, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-candidate".to_string()),
+                SqlArg::I64(1),
+                SqlArg::I64(1),
+                SqlArg::Text("search".to_string()),
+                SqlArg::I64(1),
+                SqlArg::I64(1),
+                SqlArg::Text("backup-sequence-candidate:1:1:search".to_string()),
+                SqlArg::Text("backup-sequence-request-hash".to_string()),
+                SqlArg::Text("backup-sequence-job".to_string()),
+                SqlArg::Text("accepted".to_string()),
+                SqlArg::Text(evidence.receipt_reconciliation_evidence_json.clone()),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO maintenance_sequence_terminal_memberships (
+                 id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
+                 subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
+                 expected_step_ids_json, completed_step_ids_json, created_at
+             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-sequence-membership".to_string()),
+                SqlArg::Text("backup-sequence-candidate".to_string()),
+                SqlArg::Text("backup-sequence-rule".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Text("backup-sequence-matcher".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::Text("title".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::I64(1),
+                SqlArg::Text(sequence_hash),
+                SqlArg::Text("succeeded".to_string()),
+                SqlArg::Text(r#"["search"]"#.to_string()),
+                SqlArg::Text(r#"["search"]"#.to_string()),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn backup_matrix_search_sequence() -> MaintenanceActionSequence {
+        MaintenanceActionSequence::new(vec![MaintenanceActionStep {
+            id: "search".to_string(),
+            kind: MaintenanceActionStepKind::Search,
+            parameters: MaintenanceActionStepParameters::Search {
+                condition: MaintenanceSearchCondition::Unconditional,
+            },
+        }])
+    }
+
+    struct BackupMatrixSequenceEvidence {
+        intent_json: String,
+        before_state_json: String,
+        target_identity_json: String,
+        provenance_json: String,
+        receipt_reconciliation_evidence_json: String,
+    }
+
+    fn backup_matrix_sequence_evidence(
+        sequence: &MaintenanceActionSequence,
+        sequence_hash: &str,
+    ) -> BackupMatrixSequenceEvidence {
+        let step = sequence
+            .steps
+            .first()
+            .expect("backup matrix sequence has its Search step");
+        BackupMatrixSequenceEvidence {
+            intent_json: serde_json::json!({
+                "step": step,
+                "search_request": {
+                    "wanted_kind": "missing",
+                    "title_id": "backup-lattice-title",
+                },
+            })
+            .to_string(),
+            before_state_json: serde_json::json!({
+                "schema_version": 1,
+                "facts_monitored": true,
+                "monitoring_changed": false,
+                "title_tags": [],
+            })
+            .to_string(),
+            target_identity_json: serde_json::json!({
+                "schema_version": 1,
+                "rule_set_id": "backup-sequence-rule",
+                "candidate_id": "backup-sequence-candidate",
+                "match_generation": 1,
+                "revision_number": 1,
+                "title_id": "backup-lattice-title",
+                "subject_kind": "title",
+                "subject_id": "backup-lattice-title",
+                "step_id": step.id,
+                "step_kind": step.kind.as_wire_str(),
+                "sequence_content_hash": sequence_hash,
+            })
+            .to_string(),
+            provenance_json: serde_json::json!({
+                "schema_version": 1,
+                "candidate_id": "backup-sequence-candidate",
+                "match_generation": 1,
+                "revision_number": 1,
+                "rule_set_id": "backup-sequence-rule",
+                "title_id": "backup-lattice-title",
+                "subject_kind": "title",
+                "subject_id": "backup-lattice-title",
+                "step_id": step.id,
+                "step_kind": step.kind.as_wire_str(),
+                "request_hash": "backup-sequence-request-hash",
+                "dispatch_attempt": 1,
+                "job_run_id": "backup-sequence-job",
+                "accepted": true,
+            })
+            .to_string(),
+            receipt_reconciliation_evidence_json: serde_json::json!({
+                "schema_version": 1,
+                "request": {
+                    "wanted_kind": "missing",
+                    "title_id": "backup-lattice-title",
+                },
+            })
+            .to_string(),
+        }
+    }
+
     async fn seed_backup_matrix_emby_connection(
         datastore: &StoreDatastore,
         fingerprint: &str,
@@ -2832,6 +3123,129 @@ mod tests {
                 .await?
                 .is_none(),
             "Discovery state should be empty after restore"
+        );
+        Ok(())
+    }
+
+    async fn verify_backup_matrix_sequence_safety_state(
+        datastore: &StoreDatastore,
+    ) -> AppResult<()> {
+        let sequence = SqlRuntime::fetch_optional(
+            datastore.read_exec(),
+            "SELECT revision.action_spec,
+                    candidate.action_kind,
+                    step.sequence_content_hash,
+                    step.intent_json,
+                    step.before_state_json,
+                    step.target_identity_json,
+                    step.provenance_json,
+                    attempt.id AS attempt_id,
+                    attempt.state AS attempt_state,
+                    attempt.intent_json AS attempt_intent_json,
+                    attempt.before_state_json AS attempt_before_state_json,
+                    attempt.target_identity_json AS attempt_target_identity_json,
+                    attempt.provenance_json AS attempt_provenance_json,
+                    receipt.state AS receipt_state,
+                    receipt.logical_request_key,
+                    receipt.request_hash,
+                    receipt.job_run_id,
+                    receipt.reconciliation_evidence_json,
+                    membership.outcome AS membership_outcome,
+                    membership.expected_step_ids_json,
+                    membership.completed_step_ids_json,
+                    membership.released_at
+               FROM lifecycle_candidates candidate
+               JOIN maintenance_rule_revisions revision
+                 ON revision.rule_set_id = candidate.rule_set_id
+                AND revision.revision_number = candidate.revision_number
+               JOIN maintenance_action_steps step
+                 ON step.candidate_id = candidate.id
+                AND step.match_generation = candidate.match_generation
+                AND step.revision_number = candidate.revision_number
+               JOIN maintenance_action_step_attempts attempt
+                 ON attempt.candidate_id = step.candidate_id
+                AND attempt.match_generation = step.match_generation
+                AND attempt.revision_number = step.revision_number
+                AND attempt.step_id = step.step_id
+               JOIN maintenance_action_job_receipts receipt
+                 ON receipt.candidate_id = step.candidate_id
+                AND receipt.match_generation = step.match_generation
+                AND receipt.revision_number = step.revision_number
+                AND receipt.step_id = step.step_id
+               JOIN maintenance_sequence_terminal_memberships membership
+                 ON membership.candidate_id = candidate.id
+              WHERE candidate.id = {}",
+            &[SqlArg::Text("backup-sequence-candidate".to_string())],
+        )
+        .await?
+        .expect("restored sequence safety state should retain its candidate");
+
+        let expected_sequence = backup_matrix_search_sequence();
+        let expected_action_spec = serde_json::to_string(&expected_sequence)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let expected_sequence_hash = expected_sequence
+            .content_hash()
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let expected_evidence =
+            backup_matrix_sequence_evidence(&expected_sequence, &expected_sequence_hash);
+
+        assert_eq!(sequence.text("action_spec")?, expected_action_spec);
+        assert_eq!(sequence.text("action_kind")?, "action_sequence");
+        assert_eq!(
+            sequence.text("sequence_content_hash")?,
+            expected_sequence_hash
+        );
+        assert_eq!(sequence.text("intent_json")?, expected_evidence.intent_json);
+        assert_eq!(
+            sequence.text("before_state_json")?,
+            expected_evidence.before_state_json
+        );
+        assert_eq!(
+            sequence.text("target_identity_json")?,
+            expected_evidence.target_identity_json
+        );
+        assert_eq!(
+            sequence.text("provenance_json")?,
+            expected_evidence.provenance_json
+        );
+        assert_eq!(sequence.text("attempt_id")?, "backup-sequence-attempt");
+        assert_eq!(sequence.text("attempt_state")?, "succeeded");
+        assert_eq!(
+            sequence.text("attempt_intent_json")?,
+            expected_evidence.intent_json
+        );
+        assert_eq!(
+            sequence.text("attempt_before_state_json")?,
+            expected_evidence.before_state_json
+        );
+        assert_eq!(
+            sequence.text("attempt_target_identity_json")?,
+            expected_evidence.target_identity_json
+        );
+        assert_eq!(
+            sequence.text("attempt_provenance_json")?,
+            expected_evidence.provenance_json
+        );
+        assert_eq!(sequence.text("receipt_state")?, "accepted");
+        assert_eq!(
+            sequence.text("logical_request_key")?,
+            "backup-sequence-candidate:1:1:search"
+        );
+        assert_eq!(
+            sequence.text("request_hash")?,
+            "backup-sequence-request-hash"
+        );
+        assert_eq!(sequence.text("job_run_id")?, "backup-sequence-job");
+        assert_eq!(
+            sequence.text("reconciliation_evidence_json")?,
+            expected_evidence.receipt_reconciliation_evidence_json
+        );
+        assert_eq!(sequence.text("membership_outcome")?, "succeeded");
+        assert_eq!(sequence.text("expected_step_ids_json")?, r#"["search"]"#);
+        assert_eq!(sequence.text("completed_step_ids_json")?, r#"["search"]"#);
+        assert!(
+            sequence.opt_text("released_at")?.is_none(),
+            "restored terminal membership should remain active"
         );
         Ok(())
     }

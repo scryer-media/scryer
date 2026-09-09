@@ -59,11 +59,15 @@ pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionF
     let rules = Arc::new(InMemoryMaintenanceRuleRepo::default());
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let media_files = Arc::new(MockMediaFileRepo::default());
+    let job_runs = Arc::new(RecordingJobRunRepo::with_maintenance_action_job_receipts(
+        evaluation.action_job_receipts.clone(),
+    ));
     let app = app.with_test_overrides(|services| {
         let services = services
             .with_maintenance_rule_set_store(rules.clone())
             .with_maintenance_evaluation_store(evaluation.clone())
-            .with_media_files(media_files.clone());
+            .with_media_files(media_files.clone())
+            .with_job_runs(job_runs.clone());
         match playback {
             Some(status) => {
                 services.with_media_server_playback_probe(Arc::new(FixedPlaybackProbe { status }))
@@ -92,7 +96,9 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
         name: "Unmonitor stale".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),
-        action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        ),
         grace_days: 0,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -106,7 +112,9 @@ fn delete_draft() -> MaintenanceRuleDraft {
         name: "Retire".to_string(),
         description: String::new(),
         rego_source: ALWAYS_MATCHER.to_string(),
-        action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+            MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+        ),
         grace_days: 0,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -221,7 +229,9 @@ async fn replacing_the_matcher_disarms_the_rule() {
             &rule_id,
             MaintenanceMatcherDraft {
                 rego_source: ALWAYS_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                ),
                 grace_days: 0,
                 storage_root_id: None,
             },

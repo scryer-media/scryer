@@ -22,6 +22,8 @@ import type { Translate } from "@/components/root/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import type {
   MaintenanceActionRun,
+  MaintenanceActionSequence,
+  MaintenanceActionStepProgress,
   MaintenanceCandidate,
   MaintenanceCandidateState,
   MaintenanceEvaluationRun,
@@ -34,10 +36,12 @@ import {
   MAINTENANCE_FILTER_ALL,
   MAINTENANCE_GATE_ORDER,
   actionKindLabelKey,
+  actionStepKindLabelKey,
   candidateStateBadgeTone,
   candidateStateLabelKey,
   gateHelpKey,
   gateLabelKey,
+  maintenanceSearchHistoryState,
   maintenanceCountdown,
   runStatusBadgeTone,
   runStatusLabelKey,
@@ -75,6 +79,84 @@ function ActionKindLabel({ kind }: { kind: string }) {
   const t = useTranslate();
   const labelKey = actionKindLabelKey(kind);
   return <>{labelKey ? t(labelKey) : kind}</>;
+}
+
+function MaintenanceSequenceProgress({
+  sequence,
+  progress,
+}: {
+  sequence: MaintenanceActionSequence | null;
+  progress: MaintenanceActionStepProgress[];
+}) {
+  const t = useTranslate();
+  if (sequence === null) return null;
+  if (sequence.steps.length === 0) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {t("settings.maintenanceSequenceObserveOnly")}
+      </span>
+    );
+  }
+
+  const progressByStepId = new Map(progress.map((entry) => [entry.step.id, entry]));
+  return (
+    <ol className="mt-1 space-y-1 text-xs text-muted-foreground">
+      {sequence.steps.map((step, index) => {
+        const entry = progressByStepId.get(step.id);
+        const acceptedReceipt = entry?.receipts.find(
+          (item) => item.state === "accepted" || item.state === "completed",
+        );
+        const searchState = maintenanceSearchHistoryState(entry);
+        const stepLabelKey = actionStepKindLabelKey(step.kind);
+        return (
+          <li key={step.id} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="font-medium text-foreground">
+              {index + 1}. {stepLabelKey ? t(stepLabelKey) : step.kind}
+            </span>
+            {step.kind === "SEARCH" ? (
+              acceptedReceipt ? (
+                <>
+                  <span>{t("settings.maintenanceSequenceHistorySearchRequested")}</span>
+                  <span>·</span>
+                  <span>{t("settings.maintenanceSequenceHistorySearchAccepted")}</span>
+                  {acceptedReceipt.jobRunId ? (
+                    <a
+                      className="text-primary underline-offset-2 hover:underline"
+                      href={`/system/jobs?jobRun=${encodeURIComponent(acceptedReceipt.jobRunId)}`}
+                    >
+                      {t("settings.maintenanceSequenceHistoryJob", {
+                        id: acceptedReceipt.jobRunId,
+                      })}
+                    </a>
+                  ) : null}
+                </>
+              ) : searchState === "waiting" ? (
+                <span>· {t("settings.maintenanceSequenceHistoryWaiting")}</span>
+              ) : (
+                <>
+                  <span>·</span>
+                  <RunStatusBadge status={searchState} />
+                </>
+              )
+            ) : entry?.run ? (
+              <>
+                <span>·</span>
+                <RunStatusBadge status={entry.run.state} />
+              </>
+            ) : (
+              <span>· {t("settings.maintenanceSequenceHistoryWaiting")}</span>
+            )}
+            {entry?.run?.holdReason ? (
+              <span className="text-[var(--scry-warning-text)]">{entry.run.holdReason}</span>
+            ) : null}
+            {entry?.run?.error ? (
+              <span className="text-[var(--scry-danger-text)]">{entry.run.error}</span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 /// The labels a tag action would write on the candidate's subject. Rendered
@@ -423,6 +505,15 @@ export function MaintenanceCandidatesPanel({
                         <span>{candidate.titleName}</span>
                         {candidate.subjectKind !== "title" && <span className="text-sm text-muted-foreground">{candidate.subjectLabel}</span>}
                         {candidate.fileCount != null && <span className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: candidate.fileCount, size: formatBytes(candidate.totalSizeBytes) })}</span>}
+                        {candidate.storageRootFileCount !== null &&
+                        candidate.storageRootTotalSizeBytes !== null ? (
+                          <span className="text-xs text-muted-foreground">
+                            {t("settings.maintenanceStorageRootFileSummary", {
+                              count: candidate.storageRootFileCount,
+                              size: formatBytes(candidate.storageRootTotalSizeBytes),
+                            })}
+                          </span>
+                        ) : null}
                         {shadowRuleIds.has(candidate.ruleSetId) ? (
                           <Badge tone="outline" className="w-fit">
                             {t("settings.maintenanceCandidatesShadowBadge")}
@@ -436,6 +527,10 @@ export function MaintenanceCandidatesPanel({
                         <span className="text-xs">
                           <ActionKindLabel kind={candidate.actionKind} />
                         </span>
+                        <MaintenanceSequenceProgress
+                          sequence={candidate.actionSequence}
+                          progress={candidate.sequenceSteps}
+                        />
                         <TagPatchSummary
                           patch={tagPatchByRuleId.get(candidate.ruleSetId)}
                         />
@@ -742,6 +837,10 @@ export function MaintenanceRunsPanel({
                     <TableCell className="font-medium">{run.titleName}{run.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{run.subjectLabel}</div>}</TableCell>
                     <TableCell className="text-muted-foreground">
                       <ActionKindLabel kind={run.actionKind} />
+                      <MaintenanceSequenceProgress
+                        sequence={run.actionSequence}
+                        progress={run.sequenceSteps}
+                      />
                     </TableCell>
                     <TableCell>
                       <RunStatusBadge status={run.status} />

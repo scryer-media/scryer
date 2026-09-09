@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useClient } from "urql";
+import { useSearchParams } from "react-router";
 
 import { SystemJobsView } from "@/components/views/system-jobs-view";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
@@ -94,6 +95,8 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const { registerInteractiveJobRun } = useJobRunToasts();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedJobRunId = searchParams.get("jobRun")?.trim() || null;
   const [jobs, setJobs] = useState<JobDefinition[]>([]);
   const [activeRunsById, setActiveRunsById] = useState<Record<string, JobRun>>({});
   const [recentRuns, setRecentRuns] = useState<JobRun[]>([]);
@@ -135,6 +138,16 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
       cancelled = true;
     };
   }, [client, setGlobalStatus]);
+
+  useEffect(() => {
+    if (!selectedJobRunId) {
+      return;
+    }
+    const run = recentRuns.find((candidate) => candidate.id === selectedJobRunId);
+    if (run) {
+      setSelectedJobKey(run.jobKey);
+    }
+  }, [recentRuns, selectedJobRunId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,7 +220,10 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     let cancelled = false;
     setJobHistoryLoading(true);
     client
-      .query(jobRunsQuery, { jobKey: selectedJobKey, limit: 10 })
+      .query(jobRunsQuery, {
+        jobKey: selectedJobKey,
+        limit: selectedJobRunId ? 50 : 10,
+      })
       .toPromise()
       .then(({ data, error }) => {
         if (cancelled) {
@@ -233,7 +249,19 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     return () => {
       cancelled = true;
     };
-  }, [client, selectedJobKey, setGlobalStatus]);
+  }, [client, selectedJobKey, selectedJobRunId, setGlobalStatus]);
+
+  const onSelectJob = useCallback(
+    (jobKey: JobKey | null) => {
+      if (selectedJobRunId && jobKey !== selectedJobKey) {
+        const next = new URLSearchParams(searchParams.toString());
+        next.delete("jobRun");
+        setSearchParams(next, { replace: true });
+      }
+      setSelectedJobKey(jobKey);
+    },
+    [searchParams, selectedJobKey, selectedJobRunId, setSearchParams],
+  );
 
   const onTriggerJob = useCallback(
     async (jobKey: JobKey) => {
@@ -282,10 +310,11 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         activeRuns,
         recentRuns,
         selectedJobKey,
+        selectedJobRunId,
         selectedJobHistory: selectedJobKey ? jobHistoryByKey[selectedJobKey] ?? [] : [],
         jobHistoryLoading,
         triggeringKeys,
-        onSelectJob: setSelectedJobKey,
+        onSelectJob,
         onTriggerJob,
       }}
     />

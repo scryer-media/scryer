@@ -228,6 +228,7 @@ pub(super) struct MockMediaFileRepo {
     pub(super) store: Arc<Mutex<Vec<TitleMediaFile>>>,
     pub(super) pending_analysis_ids: Arc<Mutex<Vec<String>>>,
     pub(super) analysis_attempts: Arc<Mutex<Vec<(String, MediaFileAnalysis)>>>,
+    pub(super) delete_media_file_error: Arc<Mutex<Option<String>>>,
     /// Optional bridge for the background acquisition cursor: when set, the
     /// derived missing-target sweep reads the seeded acquisition-state rows so a
     /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
@@ -240,6 +241,10 @@ pub(super) struct MockMediaFileRepo {
 }
 
 impl MockMediaFileRepo {
+    pub(super) async fn fail_delete_media_file(&self, message: &str) {
+        *self.delete_media_file_error.lock().await = Some(message.to_string());
+    }
+
     /// Wire the seeded wanted-state store (and its catalog) as the missing-target
     /// source so the convergence cursor sees each monitored, fileless scope as a
     /// target with its correct facet.
@@ -940,6 +945,9 @@ impl MediaFileRepository for MockMediaFileRepo {
             .cloned())
     }
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {
+        if let Some(error) = self.delete_media_file_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         let mut list = self.store.lock().await;
         let position = list
             .iter()

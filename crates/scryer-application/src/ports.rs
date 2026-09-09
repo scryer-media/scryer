@@ -4828,9 +4828,37 @@ pub trait ImportArtifactRepository: Send + Sync {
     }
 }
 
+/// Outcome of the Search-specific durable job boundary. An existing accepted
+/// receipt is sufficient for the action policy and deliberately does not imply
+/// that historical job metadata remains retained.
+#[derive(Clone, Debug)]
+pub enum MaintenanceSearchJobRunCreation {
+    Created {
+        run: Box<JobRunRecord>,
+        receipt: scryer_domain::MaintenanceActionJobReceipt,
+    },
+    Existing {
+        receipt: scryer_domain::MaintenanceActionJobReceipt,
+    },
+}
+
 #[async_trait]
 pub trait JobRunRepository: Send + Sync {
     async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
+
+    /// Atomically creates a policy Search job and its durable accepted receipt.
+    /// A duplicate `(step key, dispatch attempt)` returns the original receipt
+    /// and must never create or spawn another Search job. Implementations may
+    /// retain job history independently; receipt evidence outlives pruning.
+    async fn create_maintenance_search_job_run(
+        &self,
+        _run: &JobRunRecord,
+        _receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        Err(AppError::Repository(
+            "maintenance Search dispatch is not configured".to_string(),
+        ))
+    }
 
     async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
 
@@ -6700,6 +6728,19 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 
+    /// Finish a candidate only while this worker still owns the exact
+    /// `Executing` lease it acquired. Sequence holds and retryable failures
+    /// must use this stronger form so a stale worker cannot overwrite a newer
+    /// execution lease.
+    async fn finish_leased_candidate(
+        &self,
+        id: &str,
+        expected_lease_updated_at: DateTime<Utc>,
+        state: scryer_domain::MaintenanceCandidateState,
+        state_reason: &str,
+        finished_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
     /// Cancel every active candidate of one rule set in a single write. Used
     /// when a whole rule is superseded or retired; returns how many rows moved.
     async fn cancel_active_candidates_for_rule(
@@ -6803,6 +6844,205 @@ pub trait LifecycleActionRunRepository: Send + Sync {
         candidate_id: Option<&str>,
         limit: Option<usize>,
     ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+
+    /// Newest-first operator summaries for v2 sequence executions only.
+    /// The durable history marker is filtered in storage before `limit`, so
+    /// internal scoped-deletion journals cannot hide a requested summary.
+    async fn list_sequence_history_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+
+    /// Newest-first legacy action runs only. This companion to the sequence
+    /// history query excludes v2 internal journals before `limit`.
+    async fn list_non_sequence_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+}
+
+/// Result of atomically acquiring the per-step lease. A stale running lease is
+/// reclaimed only through this operation; callers must never overwrite another
+/// worker's evidence by treating `Busy` as a retryable write failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaintenanceActionStepClaim {
+    Claimed(scryer_domain::MaintenanceActionStepRun),
+    Busy,
+    Completed(scryer_domain::MaintenanceActionStepRun),
+}
+
+/// Candidate coordinates for a bounded sequence-progress projection. A caller
+/// supplies only the candidates already on its page; each can contribute at
+/// most seven current step rows.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MaintenanceActionStepCandidateKey {
+    pub candidate_id: String,
+    pub match_generation: i64,
+    pub revision_number: i64,
+}
+
+/// Result of claiming an external-job dispatch attempt. The existing receipt
+/// carries its exact request hash and reconciliation evidence so callers can
+/// hold on an unknown state rather than submit blindly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaintenanceActionJobReceiptClaim {
+    Claimed(scryer_domain::MaintenanceActionJobReceipt),
+    Existing(scryer_domain::MaintenanceActionJobReceipt),
+}
+
+/// Compare-and-set request for durable job reconciliation. Keeping the state
+/// expectation, external identity, and evidence together avoids callers
+/// accidentally advancing a receipt with evidence from a different attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaintenanceActionJobReceiptTransition {
+    pub key: scryer_domain::MaintenanceActionStepKey,
+    pub dispatch_attempt: i64,
+    pub expected_states: Vec<scryer_domain::MaintenanceActionJobReceiptState>,
+    pub next_state: scryer_domain::MaintenanceActionJobReceiptState,
+    pub job_run_id: Option<String>,
+    pub reconciliation_evidence_json: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Durable v2 step intent, attempt evidence, and external-job receipts.
+#[async_trait]
+pub trait MaintenanceActionStepRepository: Send + Sync {
+    async fn get_action_step(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionStepRun>>;
+
+    /// Insert the intent before its mutation or atomically acquire/reclaim its
+    /// lease. The supplied evidence is used only for a new row or an eligible
+    /// next attempt; an existing running row is never overwritten here.
+    async fn claim_action_step(
+        &self,
+        step: &scryer_domain::MaintenanceActionStepRun,
+        stale_before: DateTime<Utc>,
+        lease_id: &str,
+        leased_at: DateTime<Utc>,
+    ) -> AppResult<MaintenanceActionStepClaim>;
+
+    /// Update only a currently running row owned by `expected_lease_id`. This
+    /// is the durable per-file checkpoint path; it cannot change the state or
+    /// erase a terminal result.
+    async fn checkpoint_action_step(
+        &self,
+        step: &scryer_domain::MaintenanceActionStepRun,
+        expected_lease_id: &str,
+    ) -> AppResult<bool>;
+
+    /// Compare-and-set a running owned step to its next result and write the
+    /// corresponding immutable attempt evidence.
+    async fn finish_action_step(
+        &self,
+        step: &scryer_domain::MaintenanceActionStepRun,
+        expected_lease_id: &str,
+    ) -> AppResult<bool>;
+
+    async fn list_action_steps(
+        &self,
+        candidate_id: &str,
+        match_generation: i64,
+        revision_number: i64,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+
+    /// Bounded page projection. This avoids one query per candidate when a
+    /// sequence-aware candidate list renders step progress.
+    async fn list_action_steps_for_candidates(
+        &self,
+        candidates: &[MaintenanceActionStepCandidateKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+
+    async fn list_action_step_attempts(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>>;
+
+    async fn get_action_job_receipt(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+        dispatch_attempt: i64,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionJobReceipt>>;
+
+    async fn list_action_job_receipts(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+
+    /// Bounded receipt projection for the already bounded step list. Search
+    /// receipt states are therefore available to a candidate page without one
+    /// query per sequence step.
+    async fn list_action_job_receipts_for_steps(
+        &self,
+        steps: &[scryer_domain::MaintenanceActionStepKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+
+    /// Generic two-phase dispatch support for adapters whose job creation is
+    /// external. Search uses `JobRunRepository`'s stronger atomic creation
+    /// boundary instead of this method.
+    async fn claim_action_job_dispatch(
+        &self,
+        receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceActionJobReceiptClaim>;
+
+    async fn transition_action_job_receipt(
+        &self,
+        transition: &MaintenanceActionJobReceiptTransition,
+    ) -> AppResult<bool>;
+}
+
+/// A durable terminal-membership marker for a v2 sequence. It survives a
+/// terminal candidate so continuous raw matches cannot create a fresh
+/// generation and reset retry limits. Only a confirmed raw no-match releases
+/// it; unknown evaluation never does.
+#[async_trait]
+pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
+    async fn get_active_sequence_completion(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+
+    /// Active markers in stable-ID keyset order for a reconciliation page. This
+    /// lets a storage-root pass release a marker only after it has observed an
+    /// exact raw no-match without a released early page starving later rows.
+    async fn list_active_sequence_completions(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+
+    /// Verify the durable per-step evidence and atomically write the terminal
+    /// membership marker before moving the candidate to its terminal state.
+    /// This closes the crash gap between a sequence completion and admission
+    /// of a new candidate for the same continuous match.
+    async fn finish_sequence_terminal_membership_and_candidate(
+        &self,
+        membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
+        expected_candidate_state: scryer_domain::MaintenanceCandidateState,
+        expected_candidate_updated_at: DateTime<Utc>,
+        terminal_candidate_state: scryer_domain::MaintenanceCandidateState,
+        state_reason: &str,
+        finished_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    async fn release_sequence_completion_on_confirmed_non_match(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subject_kind: &str,
+        subject_id: &str,
+        released_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
 }
 
 /// Subjects a maintenance rule must never act on (RFC 137 section 11).
@@ -6862,6 +7102,8 @@ pub trait MaintenanceEvaluationRepository:
     + MaintenanceExclusionRepository
     + MaintenanceEvaluationRunRepository
     + LifecycleActionRunRepository
+    + MaintenanceActionStepRepository
+    + MaintenanceSequenceCompletionRepository
 {
 }
 
@@ -6870,6 +7112,8 @@ impl<T> MaintenanceEvaluationRepository for T where
         + MaintenanceExclusionRepository
         + MaintenanceEvaluationRunRepository
         + LifecycleActionRunRepository
+        + MaintenanceActionStepRepository
+        + MaintenanceSequenceCompletionRepository
 {
 }
 

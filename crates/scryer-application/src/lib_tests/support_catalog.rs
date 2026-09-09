@@ -1,3 +1,4 @@
+use super::maintenance_evaluation::MaintenanceActionJobReceipts;
 use super::*;
 use std::sync::atomic::AtomicBool;
 
@@ -38,12 +39,22 @@ pub(super) struct MockTitleRepo {
 #[derive(Default)]
 pub(crate) struct RecordingJobRunRepo {
     pub(super) runs: Arc<Mutex<Vec<JobRunRecord>>>,
+    maintenance_action_job_receipts: Option<MaintenanceActionJobReceipts>,
     pub(super) list_job_runs_calls: AtomicUsize,
     pub(super) list_job_runs_for_actor_calls: AtomicUsize,
     pub(super) list_active_job_runs_calls: AtomicUsize,
 }
 
 impl RecordingJobRunRepo {
+    pub(super) fn with_maintenance_action_job_receipts(
+        maintenance_action_job_receipts: MaintenanceActionJobReceipts,
+    ) -> Self {
+        Self {
+            maintenance_action_job_receipts: Some(maintenance_action_job_receipts),
+            ..Self::default()
+        }
+    }
+
     pub(crate) async fn seed(&self, run: JobRunRecord) {
         self.runs.lock().await.push(run);
     }
@@ -55,6 +66,63 @@ impl JobRunRepository for RecordingJobRunRepo {
         let mut runs = self.runs.lock().await;
         runs.push(run.clone());
         Ok(run.clone())
+    }
+
+    async fn create_maintenance_search_job_run(
+        &self,
+        run: &JobRunRecord,
+        receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        receipt
+            .validate_schema()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if receipt.state != scryer_domain::MaintenanceActionJobReceiptState::Accepted
+            || receipt.job_run_id.as_deref() != Some(run.id.as_str())
+            || run.job_key != JobKey::AcquisitionSearch
+        {
+            return Err(AppError::Validation(
+                "maintenance Search requires an accepted receipt for its acquisition job run"
+                    .to_string(),
+            ));
+        }
+        let Some(stored_receipts) = &self.maintenance_action_job_receipts else {
+            return Err(AppError::Repository(
+                "maintenance Search dispatch is not configured".to_string(),
+            ));
+        };
+
+        // Keep this receipt store shared with the evaluator. Holding its lock
+        // through the job insertion gives the test adapter the same no-duplicate
+        // acceptance boundary that the workflow store provides in SQL.
+        let mut receipts = stored_receipts.lock().await;
+        if let Some(existing) = receipts.iter().find(|existing| {
+            existing.key == receipt.key
+                && existing.request_hash == receipt.request_hash
+                && matches!(
+                    existing.state,
+                    scryer_domain::MaintenanceActionJobReceiptState::Accepted
+                        | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                )
+        }) {
+            return Ok(MaintenanceSearchJobRunCreation::Existing {
+                receipt: existing.clone(),
+            });
+        }
+        if let Some(existing) = receipts.iter().find(|existing| {
+            existing.key == receipt.key && existing.dispatch_attempt == receipt.dispatch_attempt
+        }) {
+            return Ok(MaintenanceSearchJobRunCreation::Existing {
+                receipt: existing.clone(),
+            });
+        }
+
+        let mut runs = self.runs.lock().await;
+        receipts.push(receipt.clone());
+        runs.push(run.clone());
+        Ok(MaintenanceSearchJobRunCreation::Created {
+            run: Box::new(run.clone()),
+            receipt: receipt.clone(),
+        })
     }
 
     async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {

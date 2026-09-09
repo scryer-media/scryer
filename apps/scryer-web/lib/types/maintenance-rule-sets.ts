@@ -20,6 +20,7 @@ export type MaintenanceSubjectScope = "MOVIE" | "SHOW" | "SEASON" | "EPISODE";
 export type MaintenanceRiskClass = "NONE" | "LOW" | "MEDIUM" | "HIGH";
 
 export type MaintenanceActionKind =
+  | "ACTION_SEQUENCE"
   | "DO_NOTHING"
   | "UNMONITOR_SCOPE_KEEP_FILES"
   | "DELETE_TITLE_AND_FILES"
@@ -31,6 +32,37 @@ export type MaintenanceActionKind =
   | "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED"
   | "ADD_TAGS"
   | "REMOVE_TAGS";
+
+export type MaintenanceActionStepKind =
+  | "UNMONITOR"
+  | "DELETE_FILES"
+  | "CHANGE_QUALITY_PROFILE"
+  | "SEARCH"
+  | "ADD_TAGS"
+  | "REMOVE_TAGS"
+  | "DELETE_TITLE_AND_FILES";
+
+export type MaintenanceActionStepParameters = {
+  includeDescendants: boolean | null;
+  targetQualityProfileId: string | null;
+  searchCondition: MaintenanceSearchCondition | null;
+  tags: string[];
+};
+
+export type MaintenanceSearchCondition =
+  | "UNCONDITIONAL"
+  | "PREVIOUS_PROFILE_CHANGED";
+
+export type MaintenanceActionStep = {
+  id: string;
+  kind: MaintenanceActionStepKind;
+  parameters: MaintenanceActionStepParameters;
+};
+
+export type MaintenanceActionSequence = {
+  schemaVersion: number;
+  steps: MaintenanceActionStep[];
+};
 
 export type MaintenancePreviewOutcome = "MATCH" | "NO_MATCH" | "UNKNOWN";
 
@@ -54,6 +86,9 @@ export type MaintenanceRuleSetRecord = {
   /// payload so rendering badges never needs a per-rule detail fetch.
   graceDays: number;
   actionSpec: MaintenanceActionSpec;
+  /// Present for schema-2 revisions. The legacy action spec stays in place so
+  /// old revisions remain readable without being silently converted.
+  actionSequence?: MaintenanceActionSequence | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -86,6 +121,24 @@ export type MaintenanceRuleSetDetail = {
   ruleSet: MaintenanceRuleSetRecord;
   revision: MaintenanceRuleRevision;
   actionSpec: MaintenanceActionSpec;
+  actionSequence: MaintenanceActionSequence | null;
+};
+
+/// The sequence catalog is owned by the API. The editor only uses these
+/// advertised capabilities to offer steps and fields; it never recreates the
+/// effect or dependency matrix locally.
+export type MaintenanceActionStepDescriptor = {
+  id: string;
+  kind: MaintenanceActionStepKind;
+  label: string;
+  supportedSubjects: MaintenanceSubjectScope[];
+  riskClass: MaintenanceRiskClass;
+  effectClasses: string[];
+  parameterSchema: "none" | "unmonitor" | "change_quality_profile" | "search" | "tags";
+  requires: string[];
+  terminal: boolean;
+  completionPolicy: "accepted" | "completed";
+  storageRootAllowed: boolean;
 };
 
 export type MaintenanceActionDescriptor = {
@@ -116,6 +169,9 @@ export type MaintenanceRuleSetDraft = {
   /// selected, so switching back and forth does not lose what was picked; the
   /// input builder drops them for kinds that take none.
   tags: string[];
+  /// Schema-2 action definition. An empty list is intentionally observe-only;
+  /// the editor does not synthesize a do-nothing step.
+  actionSequence: MaintenanceActionSequence;
   graceDays: number;
   /// Empty when storage capacity and root-filtered deletion do not apply.
   storageRootId: string;
@@ -176,12 +232,47 @@ export type MaintenanceCandidateState =
   | "EXCLUDED"
   | "BLOCKED";
 
+/// Latest durable outcome for one ordered action sequence step.
+export type MaintenanceActionStepRun = {
+  stepId: string;
+  stepKind: string;
+  state: string;
+  attempt: number;
+  holdReason: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
+
+/// Durable evidence for a job requested by a sequence step. An accepted
+/// receipt means the request was accepted; it is not a download completion.
+export type MaintenanceActionJobReceipt = {
+  dispatchAttempt: number;
+  logicalRequestKey: string;
+  jobRunId: string | null;
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/// One configured action sequence step with its latest checkpoint and receipts.
+export type MaintenanceActionStepProgress = {
+  step: MaintenanceActionStep;
+  run: MaintenanceActionStepRun | null;
+  receipts: MaintenanceActionJobReceipt[];
+};
+
 /// One subject's membership in one rule set. Nothing here has acted on the
 /// subject: a candidate records that a rule matched it and how much of the
 /// grace period is left.
 export type MaintenanceCandidate = {
   fileCount: number | null;
   totalSizeBytes: number | null;
+  /// File summary restricted to the candidate revision's configured storage
+  /// root. Null means no root was selected or exact ownership is unknown.
+  storageRootFileCount: number | null;
+  storageRootTotalSizeBytes: number | null;
   subjectLabel: string;
   subjectKind: string;
   subjectId: string;
@@ -197,6 +288,8 @@ export type MaintenanceCandidate = {
   stateReason: string;
   reasonCodes: string[];
   actionKind: MaintenanceActionKind;
+  actionSequence: MaintenanceActionSequence | null;
+  sequenceSteps: MaintenanceActionStepProgress[];
   graceDays: number;
   matchGeneration: number;
   firstMatchedAt: string;
@@ -240,6 +333,8 @@ export type MaintenanceActionRun = {
   titleId: string;
   titleName: string;
   actionKind: MaintenanceActionKind;
+  actionSequence: MaintenanceActionSequence | null;
+  sequenceSteps: MaintenanceActionStepProgress[];
   matchGeneration: number;
   attempt: number;
   /// Free-form for the same reason as an evaluation run's status; includes

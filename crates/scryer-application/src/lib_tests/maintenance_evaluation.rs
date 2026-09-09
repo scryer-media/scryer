@@ -11,14 +11,18 @@ use std::sync::atomic::AtomicBool;
 
 use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceCandidateFilter,
-    MaintenanceGatesUpdate, MaintenanceMatcherDraft, MaintenanceRuleDraft, candidate_reason,
+    ACTION_SEQUENCE_KIND, MaintenanceActionDefinition, MaintenanceActionKind,
+    MaintenanceActionSpec, MaintenanceCandidateFilter, MaintenanceGatesUpdate,
+    MaintenanceMatcherDraft, MaintenanceRuleDraft, candidate_reason,
 };
-use crate::ports::MaintenanceCandidateQuery;
+use crate::ports::{MaintenanceActionStepCandidateKey, MaintenanceCandidateQuery};
 use scryer_domain::{
-    LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate, MaintenanceCandidateState,
-    MaintenanceEvaluationMode, MaintenanceEvaluationRun, MaintenanceEvaluationRunStatus,
-    MaintenanceRuleExclusion, MaintenanceRuleRevision,
+    Id, LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate,
+    MaintenanceActionJobReceipt, MaintenanceActionJobReceiptState, MaintenanceActionStepAttempt,
+    MaintenanceActionStepKey, MaintenanceActionStepRun, MaintenanceActionStepState,
+    MaintenanceCandidateState, MaintenanceEvaluationMode, MaintenanceEvaluationRun,
+    MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion, MaintenanceRuleRevision,
+    MaintenanceSequenceTerminalMembership, MaintenanceSequenceTerminalOutcome,
 };
 
 /// Matches every monitored title.
@@ -56,6 +60,8 @@ const UNKNOWN_MATCHER: &str = "package whatever\n\
 /// Mirrors the SQL store's contract, including the one-active-candidate-per
 /// (rule, title) invariant, so a service bug cannot hide behind a permissive
 /// double.
+pub(super) type MaintenanceActionJobReceipts = Arc<Mutex<Vec<MaintenanceActionJobReceipt>>>;
+
 #[derive(Default)]
 pub(super) struct InMemoryMaintenanceEvaluationRepo {
     pub(super) fail_action_completion: AtomicBool,
@@ -63,6 +69,10 @@ pub(super) struct InMemoryMaintenanceEvaluationRepo {
     exclusions: Mutex<Vec<MaintenanceRuleExclusion>>,
     runs: Mutex<Vec<MaintenanceEvaluationRun>>,
     action_runs: Mutex<Vec<LifecycleActionRun>>,
+    action_steps: Mutex<Vec<MaintenanceActionStepRun>>,
+    action_step_attempts: Mutex<Vec<MaintenanceActionStepAttempt>>,
+    pub(super) action_job_receipts: MaintenanceActionJobReceipts,
+    sequence_terminal_memberships: Mutex<Vec<MaintenanceSequenceTerminalMembership>>,
     /// When set to a candidate id, the next [`Self::finish_action_run`] also
     /// moves that candidate out of `executing`, exactly as a concurrent pass
     /// reclaiming a stale lease would.
@@ -85,6 +95,19 @@ impl InMemoryMaintenanceEvaluationRepo {
 
     pub(super) async fn all_action_runs(&self) -> Vec<LifecycleActionRun> {
         self.action_runs.lock().await.clone()
+    }
+
+    /// Seed a terminal marker for evaluator-only reconciliation tests. The
+    /// production finish path validates durable step evidence before it writes
+    /// a marker; these tests isolate pagination and raw no-match handling.
+    pub(super) async fn seed_sequence_terminal_membership(
+        &self,
+        membership: MaintenanceSequenceTerminalMembership,
+    ) {
+        self.sequence_terminal_memberships
+            .lock()
+            .await
+            .push(membership);
     }
 
     /// Leave a candidate looking like a crashed worker left it: `executing`,
@@ -185,6 +208,24 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
     }
 
     async fn create_candidate(&self, candidate: &LifecycleCandidate) -> AppResult<()> {
+        if candidate.action_kind == ACTION_SEQUENCE_KIND
+            && self
+                .sequence_terminal_memberships
+                .lock()
+                .await
+                .iter()
+                .any(|membership| {
+                    membership.rule_set_id == candidate.rule_set_id
+                        && membership.revision_number == candidate.revision_number
+                        && membership.subject_kind == candidate.subject_kind
+                        && membership.subject_id == candidate.subject_id
+                        && membership.released_at.is_none()
+                })
+        {
+            return Err(AppError::Validation(
+                "maintenance sequence membership is terminal until a confirmed no-match".into(),
+            ));
+        }
         let mut rows = self.candidates.lock().await;
         if rows.iter().any(|row| {
             row.rule_set_id == candidate.rule_set_id
@@ -266,6 +307,31 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         candidate.state_reason = state_reason.to_string();
         candidate.last_evaluated_at = updated_at;
         candidate.updated_at = updated_at;
+        Ok(true)
+    }
+
+    async fn finish_leased_candidate(
+        &self,
+        id: &str,
+        expected_lease_updated_at: DateTime<Utc>,
+        state: MaintenanceCandidateState,
+        state_reason: &str,
+        finished_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        if candidate.state != MaintenanceCandidateState::Executing
+            || candidate.updated_at != expected_lease_updated_at
+        {
+            return Ok(false);
+        }
+        candidate.state = state;
+        candidate.state_reason = state_reason.to_string();
+        candidate.last_evaluated_at = finished_at;
+        candidate.updated_at = finished_at;
         Ok(true)
     }
 
@@ -523,6 +589,690 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
         }
         Ok(rows)
     }
+
+    async fn list_sequence_history_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<LifecycleActionRun>> {
+        let mut rows: Vec<LifecycleActionRun> = self
+            .action_runs
+            .lock()
+            .await
+            .iter()
+            .filter(|run| {
+                rule_set_id.is_none_or(|rule_set_id| run.rule_set_id == rule_set_id)
+                    && candidate_id.is_none_or(|candidate_id| run.candidate_id == candidate_id)
+                    && run.action_kind == ACTION_SEQUENCE_KIND
+                    && run.detail.contains("\"maintenance_sequence_history\":true")
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|run| std::cmp::Reverse(run.started_at));
+        rows.truncate(limit.min(200));
+        Ok(rows)
+    }
+
+    async fn list_non_sequence_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<LifecycleActionRun>> {
+        let mut rows: Vec<LifecycleActionRun> = self
+            .action_runs
+            .lock()
+            .await
+            .iter()
+            .filter(|run| {
+                rule_set_id.is_none_or(|rule_set_id| run.rule_set_id == rule_set_id)
+                    && candidate_id.is_none_or(|candidate_id| run.candidate_id == candidate_id)
+                    && run.action_kind != ACTION_SEQUENCE_KIND
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|run| std::cmp::Reverse(run.started_at));
+        rows.truncate(limit.min(200));
+        Ok(rows)
+    }
+}
+
+#[async_trait]
+impl MaintenanceActionStepRepository for InMemoryMaintenanceEvaluationRepo {
+    async fn get_action_step(
+        &self,
+        key: &MaintenanceActionStepKey,
+    ) -> AppResult<Option<MaintenanceActionStepRun>> {
+        Ok(self
+            .action_steps
+            .lock()
+            .await
+            .iter()
+            .find(|step| &step.key == key)
+            .cloned())
+    }
+
+    async fn claim_action_step(
+        &self,
+        step: &MaintenanceActionStepRun,
+        stale_before: DateTime<Utc>,
+        lease_id: &str,
+        leased_at: DateTime<Utc>,
+    ) -> AppResult<MaintenanceActionStepClaim> {
+        if step.state != MaintenanceActionStepState::Running || step.attempt < 0 {
+            return Err(AppError::Validation(
+                "a maintenance action step claim must start a non-negative running attempt".into(),
+            ));
+        }
+        if !in_memory_action_step_identity_is_consistent(step) {
+            return Err(AppError::Validation(
+                "a maintenance action step claim has an invalid target identity".into(),
+            ));
+        }
+        let mut claimed = step.clone();
+        claimed.lease_id = Some(lease_id.to_string());
+        claimed.updated_at = leased_at;
+        claimed.finished_at = None;
+        claimed.hold_reason = None;
+        claimed.error = None;
+        let (result, started_attempt) = {
+            let mut rows = self.action_steps.lock().await;
+            if let Some(index) = rows.iter().position(|stored| stored.key == claimed.key) {
+                let existing = rows[index].clone();
+                if !in_memory_action_step_identity_is_consistent(&existing)
+                    || existing.sequence_content_hash != claimed.sequence_content_hash
+                    || existing.step_kind != claimed.step_kind
+                {
+                    return Err(AppError::Validation(
+                        "maintenance action step does not match its persisted sequence identity"
+                            .into(),
+                    ));
+                }
+                if existing.state.is_completion_success() {
+                    (MaintenanceActionStepClaim::Completed(existing), false)
+                } else if existing.state == MaintenanceActionStepState::Running
+                    && existing.updated_at >= stale_before
+                {
+                    (MaintenanceActionStepClaim::Busy, false)
+                } else if existing.state == MaintenanceActionStepState::Running {
+                    let mut reclaimed = existing;
+                    reclaimed.lease_id = claimed.lease_id;
+                    reclaimed.lease_expires_at = claimed.lease_expires_at;
+                    reclaimed.updated_at = claimed.updated_at;
+                    rows[index] = reclaimed.clone();
+                    (MaintenanceActionStepClaim::Claimed(reclaimed), false)
+                } else if existing.state == MaintenanceActionStepState::Held {
+                    let mut resumed = existing;
+                    resumed.state = MaintenanceActionStepState::Running;
+                    resumed.lease_id = claimed.lease_id;
+                    resumed.lease_expires_at = claimed.lease_expires_at;
+                    resumed.hold_reason = None;
+                    resumed.error = None;
+                    resumed.updated_at = claimed.updated_at;
+                    resumed.finished_at = None;
+                    rows[index] = resumed.clone();
+                    (MaintenanceActionStepClaim::Claimed(resumed), true)
+                } else {
+                    if claimed.attempt <= existing.attempt {
+                        return Err(AppError::Validation(
+                            "a retried maintenance action step must advance its attempt".into(),
+                        ));
+                    }
+                    let mut retried = existing;
+                    retried.state = MaintenanceActionStepState::Running;
+                    retried.attempt = claimed.attempt;
+                    retried.lease_id = claimed.lease_id;
+                    retried.lease_expires_at = claimed.lease_expires_at;
+                    retried.hold_reason = None;
+                    retried.error = None;
+                    retried.updated_at = claimed.updated_at;
+                    retried.finished_at = None;
+                    rows[index] = retried.clone();
+                    (MaintenanceActionStepClaim::Claimed(retried), true)
+                }
+            } else {
+                rows.push(claimed.clone());
+                (MaintenanceActionStepClaim::Claimed(claimed), true)
+            }
+        };
+        if started_attempt && let MaintenanceActionStepClaim::Claimed(step) = &result {
+            self.action_step_attempts
+                .lock()
+                .await
+                .push(in_memory_action_step_attempt(step));
+        }
+        Ok(result)
+    }
+
+    async fn checkpoint_action_step(
+        &self,
+        step: &MaintenanceActionStepRun,
+        expected_lease_id: &str,
+    ) -> AppResult<bool> {
+        update_in_memory_action_step(self, step, expected_lease_id, false).await
+    }
+
+    async fn finish_action_step(
+        &self,
+        step: &MaintenanceActionStepRun,
+        expected_lease_id: &str,
+    ) -> AppResult<bool> {
+        if !step.state.is_attempt_finished() || step.state == MaintenanceActionStepState::Running {
+            return Err(AppError::Validation(
+                "a maintenance action step finish must carry an attempt result".into(),
+            ));
+        }
+        update_in_memory_action_step(self, step, expected_lease_id, true).await
+    }
+
+    async fn list_action_steps(
+        &self,
+        candidate_id: &str,
+        match_generation: i64,
+        revision_number: i64,
+    ) -> AppResult<Vec<MaintenanceActionStepRun>> {
+        self.list_action_steps_for_candidates(&[MaintenanceActionStepCandidateKey {
+            candidate_id: candidate_id.to_string(),
+            match_generation,
+            revision_number,
+        }])
+        .await
+    }
+
+    async fn list_action_steps_for_candidates(
+        &self,
+        candidates: &[MaintenanceActionStepCandidateKey],
+    ) -> AppResult<Vec<MaintenanceActionStepRun>> {
+        if candidates.len() > 100 {
+            return Err(AppError::Validation(
+                "maintenance sequence progress accepts at most 100 candidates per page".into(),
+            ));
+        }
+        let mut steps: Vec<_> = self
+            .action_steps
+            .lock()
+            .await
+            .iter()
+            .filter(|step| {
+                candidates.iter().any(|candidate| {
+                    candidate.candidate_id == step.key.candidate_id
+                        && candidate.match_generation == step.key.match_generation
+                        && candidate.revision_number == step.key.revision_number
+                })
+            })
+            .cloned()
+            .collect();
+        steps.sort_by(|left, right| {
+            left.key
+                .candidate_id
+                .cmp(&right.key.candidate_id)
+                .then_with(|| left.key.step_id.cmp(&right.key.step_id))
+        });
+        Ok(steps)
+    }
+
+    async fn list_action_step_attempts(
+        &self,
+        key: &MaintenanceActionStepKey,
+    ) -> AppResult<Vec<MaintenanceActionStepAttempt>> {
+        let mut attempts: Vec<_> = self
+            .action_step_attempts
+            .lock()
+            .await
+            .iter()
+            .filter(|attempt| &attempt.key == key)
+            .cloned()
+            .collect();
+        attempts.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(attempts)
+    }
+
+    async fn get_action_job_receipt(
+        &self,
+        key: &MaintenanceActionStepKey,
+        dispatch_attempt: i64,
+    ) -> AppResult<Option<MaintenanceActionJobReceipt>> {
+        Ok(self
+            .action_job_receipts
+            .lock()
+            .await
+            .iter()
+            .find(|receipt| &receipt.key == key && receipt.dispatch_attempt == dispatch_attempt)
+            .cloned())
+    }
+
+    async fn list_action_job_receipts(
+        &self,
+        key: &MaintenanceActionStepKey,
+    ) -> AppResult<Vec<MaintenanceActionJobReceipt>> {
+        let mut receipts: Vec<_> = self
+            .action_job_receipts
+            .lock()
+            .await
+            .iter()
+            .filter(|receipt| &receipt.key == key)
+            .cloned()
+            .collect();
+        receipts.sort_by_key(|receipt| receipt.dispatch_attempt);
+        Ok(receipts)
+    }
+
+    async fn list_action_job_receipts_for_steps(
+        &self,
+        steps: &[MaintenanceActionStepKey],
+    ) -> AppResult<Vec<MaintenanceActionJobReceipt>> {
+        if steps.len() > 700 {
+            return Err(AppError::Validation(
+                "maintenance sequence receipt projection accepts at most 700 steps".into(),
+            ));
+        }
+        let mut receipts: Vec<_> = self
+            .action_job_receipts
+            .lock()
+            .await
+            .iter()
+            .filter(|receipt| steps.contains(&receipt.key))
+            .cloned()
+            .collect();
+        receipts.sort_by(|left, right| {
+            left.key
+                .candidate_id
+                .cmp(&right.key.candidate_id)
+                .then_with(|| left.key.step_id.cmp(&right.key.step_id))
+                .then_with(|| left.dispatch_attempt.cmp(&right.dispatch_attempt))
+        });
+        Ok(receipts)
+    }
+
+    async fn claim_action_job_dispatch(
+        &self,
+        receipt: &MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceActionJobReceiptClaim> {
+        receipt
+            .validate_schema()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if receipt.state != MaintenanceActionJobReceiptState::Dispatching {
+            return Err(AppError::Validation(
+                "a generic maintenance job dispatch must begin dispatching".into(),
+            ));
+        }
+        let mut receipts = self.action_job_receipts.lock().await;
+        if let Some(existing) = receipts.iter().find(|stored| {
+            stored.key == receipt.key && stored.dispatch_attempt == receipt.dispatch_attempt
+        }) {
+            return Ok(MaintenanceActionJobReceiptClaim::Existing(existing.clone()));
+        }
+        receipts.push(receipt.clone());
+        Ok(MaintenanceActionJobReceiptClaim::Claimed(receipt.clone()))
+    }
+
+    async fn transition_action_job_receipt(
+        &self,
+        transition: &MaintenanceActionJobReceiptTransition,
+    ) -> AppResult<bool> {
+        if transition.expected_states.is_empty() {
+            return Err(AppError::Validation(
+                "a maintenance job receipt transition must name expected states".into(),
+            ));
+        }
+        let mut receipts = self.action_job_receipts.lock().await;
+        let Some(receipt) = receipts.iter_mut().find(|receipt| {
+            receipt.key == transition.key && receipt.dispatch_attempt == transition.dispatch_attempt
+        }) else {
+            return Ok(false);
+        };
+        if !transition.expected_states.contains(&receipt.state) {
+            return Ok(false);
+        }
+        receipt.state = transition.next_state;
+        receipt.job_run_id = transition.job_run_id.clone();
+        receipt.reconciliation_evidence_json = transition.reconciliation_evidence_json.clone();
+        receipt.updated_at = transition.updated_at;
+        receipt
+            .validate_schema()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        Ok(true)
+    }
+}
+
+fn in_memory_action_step_identity_is_consistent(step: &MaintenanceActionStepRun) -> bool {
+    let Ok(target) = serde_json::from_str::<serde_json::Value>(&step.target_identity_json) else {
+        return false;
+    };
+    let text = |name: &str, expected: &str| {
+        target.get(name).and_then(serde_json::Value::as_str) == Some(expected)
+    };
+    target
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(1)
+        && text("rule_set_id", &step.rule_set_id)
+        && text("candidate_id", &step.key.candidate_id)
+        && target
+            .get("match_generation")
+            .and_then(serde_json::Value::as_i64)
+            == Some(step.key.match_generation)
+        && target
+            .get("revision_number")
+            .and_then(serde_json::Value::as_i64)
+            == Some(step.key.revision_number)
+        && text("title_id", &step.title_id)
+        && text("subject_kind", &step.subject_kind)
+        && text("subject_id", &step.subject_id)
+        && text("step_id", &step.key.step_id)
+        && text("step_kind", &step.step_kind)
+        && text("sequence_content_hash", &step.sequence_content_hash)
+}
+
+fn in_memory_action_step_attempt(step: &MaintenanceActionStepRun) -> MaintenanceActionStepAttempt {
+    MaintenanceActionStepAttempt {
+        id: Id::new().0,
+        key: step.key.clone(),
+        attempt: step.attempt,
+        state: MaintenanceActionStepState::Running,
+        intent_json: step.intent_json.clone(),
+        before_state_json: step.before_state_json.clone(),
+        target_identity_json: step.target_identity_json.clone(),
+        provenance_json: step.provenance_json.clone(),
+        hold_reason: None,
+        error: None,
+        started_at: step.updated_at,
+        finished_at: None,
+        created_at: step.updated_at,
+        updated_at: step.updated_at,
+    }
+}
+
+async fn update_in_memory_action_step(
+    repository: &InMemoryMaintenanceEvaluationRepo,
+    step: &MaintenanceActionStepRun,
+    expected_lease_id: &str,
+    finish: bool,
+) -> AppResult<bool> {
+    let mut steps = repository.action_steps.lock().await;
+    let Some(stored) = steps.iter_mut().find(|stored| {
+        stored.key == step.key
+            && stored.state == MaintenanceActionStepState::Running
+            && stored.lease_id.as_deref() == Some(expected_lease_id)
+    }) else {
+        return Ok(false);
+    };
+    if finish {
+        if !in_memory_action_step_identity_is_consistent(stored) {
+            return Err(AppError::Repository(
+                "maintenance action step has inconsistent target identity".into(),
+            ));
+        }
+        stored.before_state_json = step.before_state_json.clone();
+        stored.target_identity_json = step.target_identity_json.clone();
+        stored.provenance_json = step.provenance_json.clone();
+        stored.state = step.state;
+        stored.lease_id = None;
+        stored.lease_expires_at = None;
+        stored.hold_reason = step.hold_reason.clone();
+        stored.error = step.error.clone();
+        stored.updated_at = step.updated_at;
+        stored.finished_at = step.finished_at;
+    } else {
+        stored.before_state_json = step.before_state_json.clone();
+        stored.target_identity_json = step.target_identity_json.clone();
+        stored.provenance_json = step.provenance_json.clone();
+        stored.updated_at = step.updated_at;
+    }
+    let persisted = stored.clone();
+    drop(steps);
+    let mut attempts = repository.action_step_attempts.lock().await;
+    let Some(attempt) = attempts
+        .iter_mut()
+        .rev()
+        .find(|attempt| attempt.key == persisted.key && attempt.finished_at.is_none())
+    else {
+        return Err(AppError::Repository(
+            "maintenance action step lost its current immutable attempt".into(),
+        ));
+    };
+    attempt.before_state_json = persisted.before_state_json.clone();
+    attempt.target_identity_json = persisted.target_identity_json.clone();
+    attempt.provenance_json = persisted.provenance_json.clone();
+    attempt.updated_at = persisted.updated_at;
+    if finish {
+        attempt.state = persisted.state;
+        attempt.hold_reason = persisted.hold_reason.clone();
+        attempt.error = persisted.error.clone();
+        attempt.finished_at = persisted.finished_at;
+    }
+    Ok(true)
+}
+
+#[async_trait]
+impl MaintenanceSequenceCompletionRepository for InMemoryMaintenanceEvaluationRepo {
+    async fn get_active_sequence_completion(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<Option<MaintenanceSequenceTerminalMembership>> {
+        Ok(self
+            .sequence_terminal_memberships
+            .lock()
+            .await
+            .iter()
+            .find(|membership| {
+                membership.rule_set_id == rule_set_id
+                    && membership.revision_number == revision_number
+                    && membership.subject_kind == subject_kind
+                    && membership.subject_id == subject_id
+                    && membership.released_at.is_none()
+            })
+            .cloned())
+    }
+
+    async fn list_active_sequence_completions(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<MaintenanceSequenceTerminalMembership>> {
+        let mut memberships: Vec<_> = self
+            .sequence_terminal_memberships
+            .lock()
+            .await
+            .iter()
+            .filter(|membership| {
+                membership.rule_set_id == rule_set_id
+                    && membership.revision_number == revision_number
+                    && membership.released_at.is_none()
+                    && after_id.is_none_or(|after_id| membership.id.as_str() > after_id)
+            })
+            .cloned()
+            .collect();
+        memberships.sort_by(|left, right| left.id.cmp(&right.id));
+        memberships.truncate(limit.min(100));
+        Ok(memberships)
+    }
+
+    async fn finish_sequence_terminal_membership_and_candidate(
+        &self,
+        membership: &MaintenanceSequenceTerminalMembership,
+        expected_candidate_state: MaintenanceCandidateState,
+        expected_candidate_updated_at: DateTime<Utc>,
+        terminal_candidate_state: MaintenanceCandidateState,
+        state_reason: &str,
+        finished_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        if !matches!(
+            (membership.outcome, terminal_candidate_state),
+            (
+                MaintenanceSequenceTerminalOutcome::Succeeded,
+                MaintenanceCandidateState::Succeeded
+            ) | (
+                MaintenanceSequenceTerminalOutcome::Failed,
+                MaintenanceCandidateState::Failed
+            )
+        ) {
+            return Err(AppError::Validation(
+                "maintenance sequence terminal outcome does not match candidate state".into(),
+            ));
+        }
+        if membership.expected_step_ids.len() > 7
+            || membership.expected_step_ids.iter().any(|id| id.is_empty())
+            || membership
+                .expected_step_ids
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != membership.expected_step_ids.len()
+        {
+            return Err(AppError::Validation(
+                "maintenance sequence terminal marker has invalid expected step ids".into(),
+            ));
+        }
+        let steps = self.action_steps.lock().await.clone();
+        let step_state = |step_id: &str| {
+            steps
+                .iter()
+                .find(|step| {
+                    step.key.candidate_id == membership.candidate_id
+                        && step.key.match_generation == membership.match_generation
+                        && step.key.revision_number == membership.revision_number
+                        && step.key.step_id == step_id
+                })
+                .map(|step| step.state)
+        };
+        let terminal_index = membership.terminal_step_id.as_deref().and_then(|id| {
+            membership
+                .expected_step_ids
+                .iter()
+                .position(|expected| expected == id)
+        });
+        let expected_completed = match membership.outcome {
+            MaintenanceSequenceTerminalOutcome::Succeeded => {
+                if membership.terminal_step_id.is_some()
+                    || membership.completed_step_ids != membership.expected_step_ids
+                {
+                    return Err(AppError::Validation(
+                        "successful maintenance sequence marker lacks complete step evidence"
+                            .into(),
+                    ));
+                }
+                membership.expected_step_ids.as_slice()
+            }
+            MaintenanceSequenceTerminalOutcome::Failed => {
+                let Some(index) = terminal_index else {
+                    return Err(AppError::Validation(
+                        "failed maintenance sequence marker lacks its failed step id".into(),
+                    ));
+                };
+                let expected = &membership.expected_step_ids[..=index];
+                if membership.completed_step_ids != expected {
+                    return Err(AppError::Validation(
+                        "failed maintenance sequence marker does not preserve its step prefix"
+                            .into(),
+                    ));
+                }
+                expected
+            }
+        };
+        for (index, step_id) in expected_completed.iter().enumerate() {
+            let Some(state) = step_state(step_id) else {
+                return Err(AppError::Validation(
+                    "maintenance terminal marker references a missing step".into(),
+                ));
+            };
+            let expected_failure = membership.outcome == MaintenanceSequenceTerminalOutcome::Failed
+                && index + 1 == expected_completed.len();
+            if (expected_failure && state != MaintenanceActionStepState::Failed)
+                || (!expected_failure && !state.is_completion_success())
+            {
+                return Err(AppError::Validation(
+                    "maintenance terminal marker does not match durable step evidence".into(),
+                ));
+            }
+        }
+        let mut memberships = self.sequence_terminal_memberships.lock().await;
+        if let Some(existing) = memberships
+            .iter()
+            .find(|existing| existing.candidate_id == membership.candidate_id)
+        {
+            return Ok(same_terminal_membership(existing, membership));
+        }
+        if memberships.iter().any(|existing| {
+            existing.rule_set_id == membership.rule_set_id
+                && existing.revision_number == membership.revision_number
+                && existing.subject_kind == membership.subject_kind
+                && existing.subject_id == membership.subject_id
+                && existing.released_at.is_none()
+        }) {
+            return Ok(false);
+        }
+        let mut candidates = self.candidates.lock().await;
+        let Some(candidate) = candidates.iter_mut().find(|candidate| {
+            candidate.id == membership.candidate_id
+                && candidate.revision_number == membership.revision_number
+                && candidate.match_generation == membership.match_generation
+        }) else {
+            return Ok(false);
+        };
+        if candidate.state != expected_candidate_state
+            || candidate.updated_at != expected_candidate_updated_at
+        {
+            return Ok(false);
+        }
+        memberships.push(membership.clone());
+        candidate.state = terminal_candidate_state;
+        candidate.state_reason = state_reason.to_string();
+        candidate.updated_at = finished_at;
+        Ok(true)
+    }
+
+    async fn release_sequence_completion_on_confirmed_non_match(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subject_kind: &str,
+        subject_id: &str,
+        released_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let mut memberships = self.sequence_terminal_memberships.lock().await;
+        let Some(membership) = memberships.iter_mut().find(|membership| {
+            membership.rule_set_id == rule_set_id
+                && membership.revision_number == revision_number
+                && membership.subject_kind == subject_kind
+                && membership.subject_id == subject_id
+                && membership.released_at.is_none()
+                && membership.created_at <= released_at
+        }) else {
+            return Ok(false);
+        };
+        membership.released_at = Some(released_at);
+        Ok(true)
+    }
+}
+
+fn same_terminal_membership(
+    left: &MaintenanceSequenceTerminalMembership,
+    right: &MaintenanceSequenceTerminalMembership,
+) -> bool {
+    left.candidate_id == right.candidate_id
+        && left.rule_set_id == right.rule_set_id
+        && left.revision_number == right.revision_number
+        && left.matcher_content_hash == right.matcher_content_hash
+        && left.title_id == right.title_id
+        && left.subject_kind == right.subject_kind
+        && left.subject_id == right.subject_id
+        && left.match_generation == right.match_generation
+        && left.sequence_content_hash == right.sequence_content_hash
+        && left.outcome == right.outcome
+        && left.expected_step_ids == right.expected_step_ids
+        && left.completed_step_ids == right.completed_step_ids
+        && left.terminal_step_id == right.terminal_step_id
 }
 
 #[async_trait]
@@ -643,7 +1393,9 @@ fn draft(rego_source: &str, grace_days: i64) -> MaintenanceRuleDraft {
         name: "Stale movies".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),
-        action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        action_definition: MaintenanceActionDefinition::Legacy(MaintenanceActionSpec::new(
+            MaintenanceActionKind::UnmonitorScopeKeepFiles,
+        )),
         grace_days,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -1035,7 +1787,9 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
             &rule_set_id,
             MaintenanceMatcherDraft {
                 rego_source: MONITORED_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                action_definition: MaintenanceActionDefinition::Legacy(MaintenanceActionSpec::new(
+                    MaintenanceActionKind::DeleteTitleAndFiles,
+                )),
                 grace_days: 30,
                 storage_root_id: None,
             },
