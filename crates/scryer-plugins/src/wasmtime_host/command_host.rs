@@ -135,6 +135,10 @@ impl CommandHost {
     /// The policy goes straight into [`PluginHttpHost`], which already knows
     /// how to branch a solver from a transport hop, so a download client gets
     /// the identical egress treatment an indexer does.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "download-client host construction includes its explicit proxy policy"
+    )]
     pub(crate) fn for_download_client(
         plugin_id: String,
         config: BTreeMap<String, String>,

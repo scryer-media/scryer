@@ -1054,6 +1054,10 @@ fn merge_cookie_headers(original: Option<&str>, solved: &str) -> Option<String> 
 /// and because the count must happen *after* the cooldown gate below: that gate
 /// can reject a request before it is dispatched, and a request that never left
 /// is not one the indexer served.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared dispatch boundary carries request, proxy, and accounting context explicitly"
+)]
 fn execute_request_with_extra_headers(
     client: &Client,
     request: &PluginHttpRequest,
