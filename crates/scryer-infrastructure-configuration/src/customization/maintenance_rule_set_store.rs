@@ -209,6 +209,32 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         .await
     }
 
+    async fn delete_rule_set_if_unused(&self, id: &str) -> AppResult<()> {
+        let id = id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_unused_maintenance_rule", move |tx| {
+            let id = id.clone();
+            Box::pin(async move {
+                let args = [SqlArg::Text(id)];
+                // Take a parent-row write lock before the reads. PostgreSQL
+                // child FK inserts take a conflicting key-share lock; SQLite
+                // serializes the transaction's writers. Either insertion wins
+                // and is observed here, or deletion wins and insertion fails.
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "UPDATE maintenance_rule_sets SET id = id WHERE id = {}", &args).await?;
+                let used = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT id FROM lifecycle_action_runs WHERE rule_set_id = {} LIMIT 1", &args).await?.is_some()
+                    || SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                        "SELECT id FROM lifecycle_candidates WHERE rule_set_id = {} AND state NOT IN ('canceled', 'excluded', 'succeeded', 'failed') LIMIT 1", &args).await?.is_some();
+                if used {
+                    return Err(scryer_application::AppError::Validation(
+                        "This maintenance rule has live candidates or action history; disable it instead.".into()));
+                }
+                SqlRuntime::execute(SqlExec::Tx(tx), "DELETE FROM maintenance_rule_sets WHERE id = {}", &args).await?;
+                Ok(())
+            })
+        }).await
+    }
+
     async fn update_rule_set_evaluation_mode(
         &self,
         id: &str,

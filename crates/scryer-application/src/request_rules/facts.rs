@@ -35,6 +35,7 @@ use scryer_rules::request::{
 };
 
 use crate::media_requests::snapshot::{MediaRequestMetadataSnapshot, SNAPSHOT_GROUP_ALL};
+use crate::ports::TitleExternalIdLookup;
 use crate::{AppResult, AppUseCase};
 
 /// Snapshot group names the fact builder asks [`MediaRequestMetadataSnapshot::is_missing`]
@@ -520,10 +521,11 @@ fn parse_release_date(value: &str) -> Option<NaiveDate> {
 impl AppUseCase {
     /// Perform every read one evaluation needs, exactly once each.
     ///
-    /// A failure of any *fact* source is not a failure of the assembly: it
-    /// degrades that group to unknown, which holds the rules that read it and
-    /// lands the request in manual review. Only a read that would make the
-    /// document meaningless — none, today — would be allowed to error.
+    /// Most fact-source failures degrade that group to unknown, which holds
+    /// the rules that read it and lands the request in manual review. External
+    /// account links are the exception: their document shape has no unknown
+    /// state, so a failed read must reach the evaluation fallback rather than
+    /// fabricate an empty provider list.
     pub(crate) async fn assemble_request_input_context(
         &self,
         actor: &User,
@@ -601,31 +603,20 @@ impl AppUseCase {
         // Verified links only: a pending claim is an assertion nobody has
         // confirmed, and a rule that trusted it would let anyone grant
         // themselves a provider identity by typing a username.
-        let linked_providers = match self
+        let linked_providers = self
             .services
             .identity
             .external_accounts
             .list_by_user_id(&actor.id)
-            .await
-        {
-            Ok(accounts) => accounts
-                .into_iter()
-                .filter(|account| {
-                    account.status == ExternalAccountStatus::Active && account.verified_at.is_some()
-                })
-                .map(|account| account.provider.as_str().to_string())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-            Err(error) => {
-                tracing::warn!(
-                    user_id = actor.id.as_str(),
-                    error = %error,
-                    "could not read the requester's external accounts; rules see no linked providers"
-                );
-                Vec::new()
-            }
-        };
+            .await?
+            .into_iter()
+            .filter(|account| {
+                account.status == ExternalAccountStatus::Active && account.verified_at.is_some()
+            })
+            .map(|account| account.provider.as_str().to_string())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
 
         Ok(RequestRequesterDoc {
             user_id: actor.id.clone(),
@@ -680,36 +671,44 @@ impl AppUseCase {
             ..RequestCatalogContext::default()
         };
 
+        let lookups = draft
+            .external_ids
+            .iter()
+            .enumerate()
+            .map(|(lookup_index, external_id)| TitleExternalIdLookup {
+                lookup_index,
+                source: external_id.source.clone(),
+                external_id: external_id.value.clone(),
+            })
+            .collect::<Vec<_>>();
+        let matches = match self
+            .services
+            .catalog
+            .titles
+            .list_by_external_id_lookups(&lookups)
+            .await
+        {
+            Ok(matches) => matches,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "could not read the catalog for a request rule fact"
+                );
+                context.readable = false;
+                return context;
+            }
+        };
         let mut library_ids: Vec<String> = Vec::new();
-        for external_id in &draft.external_ids {
-            match self
-                .services
-                .catalog
-                .titles
-                .find_by_external_id_in_facet(
-                    draft.facet.clone(),
-                    &external_id.source,
-                    &external_id.value,
-                )
-                .await
-            {
-                // The request's own library is excluded: submit already refuses
-                // a title that is there, so including it would make the fact
-                // read as "already elsewhere" for a request that is not.
-                Ok(Some(title)) if title.library_id != library.id => {
-                    if !library_ids.contains(&title.library_id) {
-                        library_ids.push(title.library_id);
-                    }
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "could not read the catalog for a request rule fact"
-                    );
-                    context.readable = false;
-                    return context;
-                }
+        for matched in matches {
+            let title = matched.title;
+            // The request's own library is excluded: submit already refuses a
+            // title that is there, so including it would make the fact read as
+            // "already elsewhere" for a request that is not.
+            if title.facet != draft.facet || title.library_id == library.id {
+                continue;
+            }
+            if !library_ids.contains(&title.library_id) {
+                library_ids.push(title.library_id);
             }
         }
         context.exists_in_library_ids = library_ids;

@@ -368,3 +368,76 @@ async fn sync_state_upserts_in_place_and_keeps_its_error_until_the_next_success(
 
     let _ = std::fs::remove_file(db);
 }
+
+#[tokio::test]
+async fn retired_participant_cleanup_preserves_only_exact_current_account_pairs() {
+    let (services, db) = temp_services("retired_signal_participants").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[movie_signal("kept", Some("movie"), 1)],
+        )
+        .await
+        .unwrap();
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            "retired",
+            &[movie_signal("removed", Some("movie"), 1)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .retain_connection_participants(
+                CONNECTION_ID,
+                &[(PARTICIPANT.into(), "scryer-user-alpha".into())]
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    let rows = store
+        .movie_signals_for_titles(&["movie".into()])
+        .await
+        .unwrap();
+    assert_eq!(rows["movie"].len(), 1);
+    assert_eq!(rows["movie"][0].provider_item_id, "kept");
+    assert_eq!(
+        store
+            .retain_connection_participants(
+                CONNECTION_ID,
+                &[(PARTICIPANT.into(), "different-scryer-user".into())]
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[movie_signal("empty-participants", Some("movie"), 1)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .retain_connection_participants(CONNECTION_ID, &[])
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        store
+            .movie_signals_for_titles(&["movie".into()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    services.pool().close().await;
+    let _ = std::fs::remove_file(db);
+}

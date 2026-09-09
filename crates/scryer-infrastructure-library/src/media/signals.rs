@@ -79,6 +79,35 @@ const SYNC_STATE_COLUMNS: &str = "connection_id, provider, enabled, last_started
 
 #[async_trait]
 impl MediaServerSignalRepository for MediaServerSignalStore {
+    async fn retain_connection_participants(
+        &self,
+        connection_id: &str,
+        participants: &[(String, String)],
+    ) -> AppResult<u64> {
+        let mut args = vec![SqlArg::Text(connection_id.to_string())];
+        let mut sql =
+            "DELETE FROM media_server_user_media_signals WHERE connection_id = {}".to_string();
+        if !participants.is_empty() {
+            let predicates: Vec<_> = participants
+                .iter()
+                .map(|(external_id, user_id)| {
+                    args.push(SqlArg::Text(external_id.clone()));
+                    args.push(SqlArg::Text(user_id.clone()));
+                    "(external_user_id = {} AND scryer_user_id = {})"
+                })
+                .collect();
+            sql.push_str(" AND (scryer_user_id IS NULL OR NOT (");
+            sql.push_str(&predicates.join(" OR "));
+            sql.push_str("))");
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "retain_signal_participants", move |tx| {
+            let sql = sql.clone();
+            let args = args.clone();
+            Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+        })
+        .await
+    }
+
     async fn replace_participant_signals(
         &self,
         connection_id: &str,

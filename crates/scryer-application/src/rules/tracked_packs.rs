@@ -542,14 +542,8 @@ impl AppUseCase {
                 "tracked rule pack automatic updates are disabled".to_string(),
             ));
         }
-        let next_version = semver::Version::parse(&pack.registry.version).map_err(|_| {
-            AppError::Validation("rule pack version is not valid semantic version".to_string())
-        })?;
-        let current_version = semver::Version::parse(&current.version).map_err(|_| {
-            AppError::Validation(
-                "installed rule pack version is not valid semantic version".to_string(),
-            )
-        })?;
+        let next_version = parse_rule_pack_version(&pack.registry.version, "rule pack")?;
+        let current_version = parse_rule_pack_version(&current.version, "installed rule pack")?;
         if !next_version.cmp_precedence(&current_version).is_gt() {
             return Err(AppError::Validation(
                 "rule pack update must be a newer version".to_string(),
@@ -648,6 +642,12 @@ fn new_installation(pack: &VerifiedRulePack) -> RulePackInstallation {
         last_error: None,
         members: Vec::new(),
     }
+}
+
+fn parse_rule_pack_version(raw: &str, subject: &str) -> AppResult<semver::Version> {
+    semver::Version::parse(raw.trim().trim_start_matches('v')).map_err(|_| {
+        AppError::Validation(format!("{subject} version is not valid semantic version"))
+    })
 }
 
 struct AdoptedLocaleMembers {
@@ -759,10 +759,8 @@ fn rule_pack_preview(
 ) -> AppResult<TrackedRulePackPreview> {
     let installation = installation
         .ok_or_else(|| AppError::NotFound(format!("tracked rule pack {}", pack.registry.id)))?;
-    let version = semver::Version::parse(&pack.registry.version)
-        .map_err(|error| AppError::Validation(error.to_string()))?;
-    let installed = semver::Version::parse(&installation.version)
-        .map_err(|error| AppError::Validation(error.to_string()))?;
+    let version = parse_rule_pack_version(&pack.registry.version, "rule pack")?;
+    let installed = parse_rule_pack_version(&installation.version, "installed rule pack")?;
     if !version.cmp_precedence(&installed).is_gt() {
         return Err(AppError::Validation(
             "rule pack is already up to date".into(),

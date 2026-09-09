@@ -325,6 +325,9 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
 }
 
 async fn assert_decision_round_trip(store: &dyn RequestRuleDecisionRepository) -> AppResult<()> {
+    // No media request row is inserted in this fixture. This is the real-store
+    // regression for submit's pre-insert history snapshot: its decision trace
+    // must accept the generated request id before the request row exists.
     let mut first = decision(
         "decision-1",
         "request-1",

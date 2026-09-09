@@ -765,12 +765,28 @@ impl AppUseCase {
             config.last_error_at = Some(Utc::now());
         }
 
+        let proxy_assignment = self
+            .services
+            .integrations
+            .proxy_assignment_lock
+            .lock()
+            .await;
+        if let Some(proxy_config_id) = config.proxy_config_id.clone() {
+            config.proxy_config_id = Some(
+                self.validate_enabled_proxy_config_id_for_provider(
+                    &config.provider_type,
+                    &proxy_config_id,
+                )
+                .await?,
+            );
+        }
         let created = self
             .services
             .integrations
             .indexer_configs
             .create(config)
             .await?;
+        drop(proxy_assignment);
         self.ensure_indexer_routing_entry_for_indexer(actor, &created.id)
             .await?;
         if management_capabilities.supports_managed_children_sync && created.is_enabled {
@@ -882,7 +898,7 @@ impl AppUseCase {
         } else {
             false
         };
-        let normalized_proxy_config_id = match update.proxy_config_id.clone() {
+        let mut normalized_proxy_config_id = match update.proxy_config_id.clone() {
             Some(Some(id)) => {
                 if existing.managed_parent_config_id.is_some() {
                     return Err(AppError::Validation(
@@ -1010,6 +1026,28 @@ impl AppUseCase {
             )
             .await;
 
+        let proxy_assignment = self
+            .services
+            .integrations
+            .proxy_assignment_lock
+            .lock()
+            .await;
+        let proxy_config_id_to_validate = match normalized_proxy_config_id.as_ref() {
+            Some(Some(proxy_config_id)) => Some(proxy_config_id.as_str()),
+            Some(None) => None,
+            None if update.is_enabled == Some(true) && !existing.is_enabled => {
+                existing.proxy_config_id.as_deref()
+            }
+            None => None,
+        };
+        if let Some(proxy_config_id) = proxy_config_id_to_validate {
+            let validated_proxy_config_id = self
+                .validate_enabled_proxy_config_id_for_provider(&effective_provider, proxy_config_id)
+                .await?;
+            if normalized_proxy_config_id.is_some() {
+                normalized_proxy_config_id = Some(Some(validated_proxy_config_id));
+            }
+        }
         let mut updated = self
             .services
             .integrations
@@ -1043,6 +1081,7 @@ impl AppUseCase {
                 config_json: normalized_config_json,
             })
             .await?;
+        drop(proxy_assignment);
         if caps_refresh.error_message.is_none()
             && crate::indexer_search_identity(&existing, None)
                 != crate::indexer_search_identity(&updated, None)

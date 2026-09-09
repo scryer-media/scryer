@@ -538,8 +538,9 @@ pub trait OperationEpilogue: Send + Sync {
     /// call it instead.
     ///
     /// Returned warnings join the operation's own, which is what turns a
-    /// `Completed` into a `CompletedWithWarnings`. An `Err` fails the
-    /// operation: the epilogue is work the user asked for, not bookkeeping.
+    /// `Completed` into a `CompletedWithWarnings`. An `Err` leaves the run at
+    /// its active cleanup checkpoint so the operation can retry this required
+    /// work without repeating any settled title.
     async fn finish_operation(&self, operation: &LocationOperation) -> AppResult<Vec<String>>;
 }
 
@@ -872,7 +873,7 @@ impl<'a> LocationOperationRunner<'a> {
                             &operation,
                             plan,
                             &progress,
-                            LocationOperationState::Failed,
+                            LocationOperationState::CleaningUp,
                             Some(StopReason::Error),
                             Some(error.to_string()),
                         )
@@ -1332,13 +1333,16 @@ impl<'a> LocationOperationRunner<'a> {
     ) -> AppResult<OperationRunOutcome> {
         self.write_progress(operation, state, progress, plan, detail.clone(), false)
             .await?;
-        // A terminal operation holds no ownership: the guard must not keep
-        // refusing scans and imports for work that has stopped (FR-084).
-        self.store
-            .release_location_operation_ownership(&operation.id)
-            .await?;
-        if let Some(registry) = self.registry {
-            registry.release_operation(&operation.id);
+        // A terminal operation holds no ownership. An epilogue failure is
+        // deliberately non-terminal, so it keeps its claims until a retry can
+        // finish the root configuration it still owns (FR-084).
+        if state.is_terminal() {
+            self.store
+                .release_location_operation_ownership(&operation.id)
+                .await?;
+            if let Some(registry) = self.registry {
+                registry.release_operation(&operation.id);
+            }
         }
 
         Ok(OperationRunOutcome {
@@ -2318,24 +2322,25 @@ mod tests {
         );
     }
 
-    /// The epilogue is work the user asked for, not bookkeeping: a root whose
-    /// path could not be flipped is a failed root change, however many bytes
-    /// arrived safely.
+    /// A root whose path could not be flipped has unfinished operation-scoped
+    /// work, but every title remains settled and must not be moved again when
+    /// the epilogue is retried.
     #[tokio::test]
-    async fn an_epilogue_that_fails_fails_the_operation() {
+    async fn an_epilogue_failure_keeps_the_operation_resumable_without_repeating_titles() {
         let store = FakeStore::with_operation(operation());
         let mover = FakeMover::default();
         let admission = ScriptedAdmission::new(&[]);
         let reconciler = RecordingReconciler::default();
-        let epilogue = RecordingEpilogue::new(&store).failing("the root path could not be updated");
+        let failing_epilogue =
+            RecordingEpilogue::new(&store).failing("the root path could not be updated");
 
         let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
-            .with_epilogue(&epilogue)
+            .with_epilogue(&failing_epilogue)
             .run("op-1", &two_title_plan())
             .await
-            .expect("a failed epilogue is a failed operation, not an error out of `run`");
+            .expect("an epilogue error is reported as a resumable outcome");
 
-        assert_eq!(outcome.state, LocationOperationState::Failed);
+        assert_eq!(outcome.state, LocationOperationState::CleaningUp);
         assert_eq!(outcome.stop_reason, Some(StopReason::Error));
         assert!(
             outcome
@@ -2344,6 +2349,49 @@ mod tests {
                 .is_some_and(|detail| detail.contains("the root path could not be updated")),
             "detail was {:?}",
             outcome.detail
+        );
+        assert!(
+            store.open_claims() > 0,
+            "the retry still owns its roots and titles"
+        );
+        assert!(
+            store.released().is_empty(),
+            "active work must retain ownership"
+        );
+        assert_eq!(
+            LocationOperationRunner::resumable_operations(&store)
+                .await
+                .expect("list resumable operations")
+                .into_iter()
+                .map(|operation| operation.id)
+                .collect::<Vec<_>>(),
+            vec!["op-1".to_string()]
+        );
+
+        let moved_before_retry = mover.moved();
+        let reconciled_before_retry = reconciler.reconciled.lock().expect("lock").clone();
+        let successful_epilogue = RecordingEpilogue::new(&store);
+        let resumed = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_epilogue(&successful_epilogue)
+            .run("op-1", &two_title_plan())
+            .await
+            .expect("the epilogue retry should complete");
+
+        assert_eq!(resumed.state, LocationOperationState::Completed);
+        assert_eq!(
+            mover.moved(),
+            moved_before_retry,
+            "settled files are not moved again"
+        );
+        assert_eq!(
+            reconciler.reconciled.lock().expect("lock").clone(),
+            reconciled_before_retry,
+            "settled titles are not reconciled again"
+        );
+        assert_eq!(
+            store.open_claims(),
+            0,
+            "the completed retry releases ownership"
         );
     }
 

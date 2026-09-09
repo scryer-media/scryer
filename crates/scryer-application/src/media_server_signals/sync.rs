@@ -211,6 +211,27 @@ impl AppUseCase {
             }
         };
         outcome.participants = participants.len();
+        let identities: Vec<_> = participants
+            .iter()
+            .filter_map(|participant| {
+                participant
+                    .external_user_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(|id| (id.to_string(), participant.user_id.clone()))
+            })
+            .collect();
+        if let Err(error) = self
+            .services
+            .integrations
+            .media_server_signals
+            .retain_connection_participants(&connection.id, &identities)
+            .await
+        {
+            outcome.record_error(format!("could not retire participant signals: {error}"));
+            return outcome;
+        }
 
         for participant in participants {
             let Some(external_user_id) = participant

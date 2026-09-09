@@ -324,6 +324,60 @@ async fn title_tag_registry_reads_writes_and_rewrites_on_sqlite() {
 }
 
 #[tokio::test]
+async fn title_tag_delete_recovery_journal_round_trips_through_the_migrated_store() {
+    let (services, db) = temp_services("scryer_title_tag_delete_recovery_journal").await;
+    let settings = SettingsStore::new(services.datastore(), services.encryption_key_state());
+    let pending_delete = r#"{"archive":{"label":"archive","updated_by_user_id":"operator-one"}}"#;
+
+    SettingsRepository::upsert_setting_json(
+        &settings,
+        "system",
+        "title_tags.pending_deletions",
+        None,
+        pending_delete.to_string(),
+        "title_tag_delete",
+        Some("operator-one".to_string()),
+    )
+    .await
+    .expect("the migrated store should persist a pending title-tag deletion");
+
+    assert_eq!(
+        SettingsRepository::get_setting_json(
+            &settings,
+            "system",
+            "title_tags.pending_deletions",
+            None,
+        )
+        .await
+        .expect("the pending deletion journal should load"),
+        Some(pending_delete.to_string())
+    );
+
+    SettingsRepository::delete_setting_value(
+        &settings,
+        "system",
+        "title_tags.pending_deletions",
+        None,
+    )
+    .await
+    .expect("recovery should clear the persisted deletion journal");
+
+    assert_eq!(
+        SettingsRepository::get_setting_json_explicit(
+            &settings,
+            "system",
+            "title_tags.pending_deletions",
+            None,
+        )
+        .await
+        .expect("the cleared deletion journal should load"),
+        None
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn title_tag_registry_reads_writes_and_rewrites_on_postgres() -> AppResult<()> {
     let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
         .ok()

@@ -543,25 +543,22 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn list_by_external_ids(&self, source: &str, values: &[String]) -> AppResult<Vec<Title>> {
-        let requested: Vec<&str> = values
+        let requested: HashSet<&str> = values
             .iter()
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .collect();
         let list = self.store.lock().await;
-        let mut matches = Vec::new();
-        let mut seen = HashSet::new();
-        for value in requested {
-            if let Some(title) = list.iter().find(|title| {
+        Ok(list
+            .iter()
+            .filter(|title| {
                 title.external_ids.iter().any(|external_id| {
-                    external_id.source.eq_ignore_ascii_case(source) && external_id.value == value
+                    external_id.source.eq_ignore_ascii_case(source)
+                        && requested.contains(external_id.value.trim())
                 })
-            }) && seen.insert(title.id.clone())
-            {
-                matches.push(title.clone());
-            }
-        }
-        Ok(matches)
+            })
+            .cloned()
+            .collect())
     }
 
     async fn list_existing_external_ids_in_library_and_facet(

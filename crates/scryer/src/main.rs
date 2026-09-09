@@ -1468,6 +1468,12 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
+    app_use_case
+        .rebuild_request_rules_engine()
+        .await
+        .map_err(|error| {
+            format!("failed to rebuild persisted request rules at startup: {error}")
+        })?;
     if let Err(error) = app_use_case
         .refresh_download_client_category_admission()
         .await

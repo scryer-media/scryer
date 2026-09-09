@@ -474,6 +474,23 @@ impl InMemorySignalRepo {
 
 #[async_trait]
 impl MediaServerSignalRepository for InMemorySignalRepo {
+    async fn retain_connection_participants(
+        &self,
+        connection_id: &str,
+        participants: &[(String, String)],
+    ) -> AppResult<u64> {
+        let mut rows = self.rows.lock().await;
+        let before = rows.len();
+        rows.retain(|row| {
+            row.connection_id != connection_id
+                || participants.iter().any(|(external, user)| {
+                    row.external_user_id == *external
+                        && row.scryer_user_id.as_deref() == Some(user.as_str())
+                })
+        });
+        Ok((before - rows.len()) as u64)
+    }
+
     async fn replace_participant_signals(
         &self,
         connection_id: &str,
@@ -893,4 +910,54 @@ async fn an_assembly_with_no_connections_does_nothing_at_all() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn a_successful_sync_retires_unlinked_or_unverified_watchers() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource {
+            items: HashMap::from([(
+                PARTICIPANT_EXTERNAL_ID.into(),
+                vec![played_movie("movie", "603")],
+            )]),
+            ..Default::default()
+        },
+    );
+    seed_movie_title(&fixture.app, "title-movie", "603").await;
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .signals
+            .rows_for(PARTICIPANT_EXTERNAL_ID)
+            .await
+            .len(),
+        1
+    );
+    let mut unverified = verified_account();
+    unverified.verified_at = None;
+    let app = fixture.app.with_test_overrides(|services| {
+        services.with_external_account_store(Arc::new(StubExternalAccounts {
+            accounts: vec![unverified],
+        }))
+    });
+    let report = app.run_media_server_signal_sync_job().await.unwrap();
+    assert_eq!(report.connections_synced, 1);
+    assert_eq!(report.participants_considered, 0);
+    assert!(
+        fixture
+            .signals
+            .rows_for(PARTICIPANT_EXTERNAL_ID)
+            .await
+            .is_empty()
+    );
+    let state = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
+    assert_eq!(state.participant_count, 0);
+    assert_eq!(state.signal_count, 0);
+    assert!(state.last_error.is_none());
 }

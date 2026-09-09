@@ -413,7 +413,7 @@ pub(super) struct MaintenanceExecutionContext<'a> {
     pub(super) run: &'a mut LifecycleActionRun,
     pub(super) evaluator: &'a mut MaintenanceRulesEvaluator,
     pub(super) libraries: &'a HashMap<String, MaintenanceLibraryRef>,
-    pub(super) tag_conflicts: &'a HashSet<String>,
+    pub(super) tag_conflicts: &'a Option<HashSet<String>>,
 }
 
 // ── Arming ──────────────────────────────────────────────────────────────────
@@ -1071,7 +1071,7 @@ impl AppUseCase {
         &self,
         eligible_rules: &[(MaintenanceRuleSetDetail, EligibleRuleAction, bool)],
         now: chrono::DateTime<Utc>,
-    ) -> HashSet<String> {
+    ) -> Option<HashSet<String>> {
         let mut added: HashMap<String, HashSet<String>> = HashMap::new();
         let mut removed: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -1124,12 +1124,11 @@ impl AppUseCase {
             {
                 Ok(due) => due,
                 Err(error) => {
-                    // An unreadable selection means this rule's contribution to
-                    // the conflict picture is unknown. The pass still runs: the
-                    // same read fails again in the main loop and holds the
-                    // candidates there, with a reason of its own.
+                    // A later read may recover, but it cannot repair this
+                    // pass's incomplete conflict picture. Hold tag effects
+                    // without charging an attempt; unrelated effects may run.
                     warn!(error = %error, "could not scan a tag rule for patch conflicts");
-                    continue;
+                    return None;
                 }
             };
             for candidate in due {
@@ -1148,15 +1147,17 @@ impl AppUseCase {
             }
         }
 
-        added
-            .iter()
-            .filter(|(title_id, adds)| {
-                removed
-                    .get(*title_id)
-                    .is_some_and(|removes| adds.iter().any(|label| removes.contains(label)))
-            })
-            .map(|(title_id, _)| title_id.clone())
-            .collect()
+        Some(
+            added
+                .iter()
+                .filter(|(title_id, adds)| {
+                    removed
+                        .get(*title_id)
+                        .is_some_and(|removes| adds.iter().any(|label| removes.contains(label)))
+                })
+                .map(|(title_id, _)| title_id.clone())
+                .collect(),
+        )
     }
 
     /// Lease, recheck, and act on one candidate.
@@ -1167,7 +1168,7 @@ impl AppUseCase {
         evaluator: &mut MaintenanceRulesEvaluator,
         candidate: LifecycleCandidate,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
-        tag_conflicts: &HashSet<String>,
+        tag_conflicts: &Option<HashSet<String>>,
     ) -> AppResult<CandidateOutcome> {
         let now = Utc::now();
         let candidates = &self.services.customization.maintenance_evaluation;
@@ -1607,7 +1608,7 @@ impl AppUseCase {
         evaluator: &mut MaintenanceRulesEvaluator,
         candidate: &LifecycleCandidate,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
-        tag_conflicts: &HashSet<String>,
+        tag_conflicts: &Option<HashSet<String>>,
     ) -> SafetyDecision {
         // (1) Re-read the rule and the gates: both can move between selection
         // and execution, and a lowered gate must stop a leased worker before
@@ -1697,6 +1698,9 @@ impl AppUseCase {
                 .collect(),
         };
         if !tag_labels.is_empty() {
+            let Some(tag_conflicts) = tag_conflicts else {
+                return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            };
             if tag_conflicts.contains(&candidate.title_id) {
                 return SafetyDecision::Hold(execution_reason::TAG_PATCH_CONFLICT);
             }

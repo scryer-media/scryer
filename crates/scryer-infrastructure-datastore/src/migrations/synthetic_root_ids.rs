@@ -61,6 +61,7 @@ struct RootRemap {
     old_id: String,
     new_id: String,
     legacy_path_derived_id: String,
+    legacy_root_ids: Vec<String>,
     normalized_path: String,
 }
 
@@ -112,22 +113,24 @@ pub async fn migrate_synthetic_root_ids_sqlite(
             .await
             .map_err(repo_err)?;
 
-        sqlx::query(
-            "INSERT INTO library_root_id_remaps
-                 (legacy_root_id, root_id, normalized_path, remapped)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(legacy_root_id) DO UPDATE SET
-                 root_id = excluded.root_id,
-                 normalized_path = excluded.normalized_path,
-                 remapped = excluded.remapped",
-        )
-        .bind(&remap.legacy_path_derived_id)
-        .bind(&remap.new_id)
-        .bind(&remap.normalized_path)
-        .bind(i64::from(remap.id_changed()))
-        .execute(&mut **tx)
-        .await
-        .map_err(repo_err)?;
+        for legacy_root_id in &remap.legacy_root_ids {
+            sqlx::query(
+                "INSERT INTO library_root_id_remaps
+                     (legacy_root_id, root_id, normalized_path, remapped)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(legacy_root_id) DO UPDATE SET
+                     root_id = excluded.root_id,
+                     normalized_path = excluded.normalized_path,
+                     remapped = excluded.remapped",
+            )
+            .bind(legacy_root_id)
+            .bind(&remap.new_id)
+            .bind(&remap.normalized_path)
+            .bind(i64::from(remap.id_changed()))
+            .execute(&mut **tx)
+            .await
+            .map_err(repo_err)?;
+        }
     }
 
     sqlite_assert_no_path_derived_root_ids(tx).await
@@ -162,22 +165,24 @@ pub async fn migrate_synthetic_root_ids_postgres(
             .await
             .map_err(repo_err)?;
 
-        sqlx::query(
-            "INSERT INTO library_root_id_remaps
-                 (legacy_root_id, root_id, normalized_path, remapped)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (legacy_root_id) DO UPDATE SET
-                 root_id = excluded.root_id,
-                 normalized_path = excluded.normalized_path,
-                 remapped = excluded.remapped",
-        )
-        .bind(&remap.legacy_path_derived_id)
-        .bind(&remap.new_id)
-        .bind(&remap.normalized_path)
-        .bind(remap.id_changed())
-        .execute(&mut **tx)
-        .await
-        .map_err(repo_err)?;
+        for legacy_root_id in &remap.legacy_root_ids {
+            sqlx::query(
+                "INSERT INTO library_root_id_remaps
+                     (legacy_root_id, root_id, normalized_path, remapped)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (legacy_root_id) DO UPDATE SET
+                     root_id = excluded.root_id,
+                     normalized_path = excluded.normalized_path,
+                     remapped = excluded.remapped",
+            )
+            .bind(legacy_root_id)
+            .bind(&remap.new_id)
+            .bind(&remap.normalized_path)
+            .bind(remap.id_changed())
+            .execute(&mut **tx)
+            .await
+            .map_err(repo_err)?;
+        }
     }
 
     postgres_assert_no_path_derived_root_ids(tx).await
@@ -202,6 +207,10 @@ fn build_remaps(roots: Vec<RootRow>) -> AppResult<Vec<RootRemap>> {
             root_folder_id_for_normalized_path(&normalize_library_root_path(&root.path));
         let is_path_derived =
             root.id == legacy_path_derived_id || root.id == alternate_path_derived_id;
+        let mut legacy_root_ids = vec![legacy_path_derived_id.clone()];
+        if is_path_derived && root.id != legacy_path_derived_id {
+            legacy_root_ids.push(root.id.clone());
+        }
 
         let new_id = if is_path_derived {
             synthetic_root_id_from_legacy_id(&root.id)
@@ -222,17 +231,20 @@ fn build_remaps(roots: Vec<RootRow>) -> AppResult<Vec<RootRemap>> {
             )));
         }
         // `library_roots.normalized_path` is uniquely indexed, so two roots
-        // sharing a legacy id means the catalog is already inconsistent.
-        if !seen_legacy_ids.insert(legacy_path_derived_id.clone()) {
-            return Err(AppError::Repository(format!(
-                "two library roots share the path-derived id {legacy_path_derived_id}"
-            )));
+        // sharing any legacy alias means the catalog is already inconsistent.
+        for legacy_root_id in &legacy_root_ids {
+            if !seen_legacy_ids.insert(legacy_root_id.clone()) {
+                return Err(AppError::Repository(format!(
+                    "two library roots share the legacy root id {legacy_root_id}"
+                )));
+            }
         }
 
         remaps.push(RootRemap {
             old_id: root.id,
             new_id,
             legacy_path_derived_id,
+            legacy_root_ids,
             normalized_path,
         });
     }
@@ -363,6 +375,33 @@ mod tests {
         assert_ne!(
             synthetic_root_id_from_legacy_id(&legacy),
             synthetic_root_id_from_legacy_id("some-other-root")
+        );
+    }
+
+    #[test]
+    fn alternate_platform_path_derived_ids_keep_the_actual_old_id_as_an_alias() {
+        let path = r"C:\Media\Movies";
+        let alternate_path_derived_id =
+            root_folder_id_for_normalized_path(&normalize_library_root_path(path));
+        let root = RootRow {
+            id: alternate_path_derived_id.clone(),
+            path: path.to_string(),
+            // This was written on a platform that preserved the backslashes.
+            normalized_path: path.to_string(),
+        };
+        let primary_path_derived_id = root_folder_id_for_normalized_path(&root.normalized_path);
+        assert_ne!(primary_path_derived_id, alternate_path_derived_id);
+
+        let remap = build_remaps(vec![root])
+            .expect("the alternate path-derived spelling should be rekeyed")
+            .pop()
+            .expect("one root produces one remap");
+
+        assert!(remap.id_changed());
+        assert_eq!(remap.legacy_path_derived_id, primary_path_derived_id);
+        assert!(
+            remap.legacy_root_ids.contains(&alternate_path_derived_id),
+            "callers retaining the stored legacy id must resolve the rekeyed root"
         );
     }
 

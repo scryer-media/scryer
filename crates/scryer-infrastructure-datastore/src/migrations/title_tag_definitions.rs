@@ -60,11 +60,15 @@ struct TitleTagRow {
 struct AdoptionPlan {
     /// Sorted and deduplicated so both engines insert in the same order.
     labels: Vec<String>,
+    /// Non-canonical stored spellings, keyed so any dependent setting can be
+    /// rewritten to the label registered by this migration.
+    normalized_labels: BTreeMap<String, String>,
     rewritten_bags: Vec<TitleTagRow>,
 }
 
 fn build_adoption_plan(titles: Vec<TitleTagRow>) -> AdoptionPlan {
     let mut labels = BTreeMap::<String, ()>::new();
+    let mut normalized_labels = BTreeMap::new();
     let mut rewritten_bags = Vec::new();
 
     for title in titles {
@@ -80,6 +84,7 @@ fn build_adoption_plan(titles: Vec<TitleTagRow>) -> AdoptionPlan {
                     labels.insert(normalized.clone(), ());
                     if &normalized != tag {
                         changed = true;
+                        normalized_labels.insert(tag.clone(), normalized.clone());
                     }
                     // A bag can hold two spellings that normalize together; the
                     // rewrite collapses them rather than duplicating the label.
@@ -102,6 +107,7 @@ fn build_adoption_plan(titles: Vec<TitleTagRow>) -> AdoptionPlan {
 
     AdoptionPlan {
         labels: labels.into_keys().collect(),
+        normalized_labels,
         rewritten_bags,
     }
 }
@@ -152,6 +158,7 @@ pub async fn adopt_existing_title_tag_definitions_sqlite(
             .await
             .map_err(repo_err)?;
     }
+    rewrite_delay_profile_tags_sqlite(tx, &plan.normalized_labels).await?;
     Ok(())
 }
 
@@ -202,7 +209,112 @@ pub async fn adopt_existing_title_tag_definitions_postgres(
             .await
             .map_err(repo_err)?;
     }
+    rewrite_delay_profile_tags_postgres(tx, &plan.normalized_labels).await?;
     Ok(())
+}
+
+async fn rewrite_delay_profile_tags_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    normalized_labels: &BTreeMap<String, String>,
+) -> AppResult<()> {
+    if normalized_labels.is_empty() {
+        return Ok(());
+    }
+    let row = sqlx::query(
+        "SELECT values_table.id, values_table.value_json
+           FROM settings_values values_table
+           JOIN settings_definitions definitions
+             ON definitions.id = values_table.setting_definition_id
+          WHERE definitions.scope = 'system'
+            AND definitions.key_name = ?1
+            AND values_table.scope = 'system'
+            AND values_table.scope_id IS NULL",
+    )
+    .bind(scryer_application::DELAY_PROFILE_CATALOG_KEY)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(repo_err)?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let id: String = row.try_get("id").map_err(repo_err)?;
+    let raw: String = row.try_get("value_json").map_err(repo_err)?;
+    let Some(rewritten) = rewrite_delay_profile_tag_catalog(&raw, normalized_labels) else {
+        return Ok(());
+    };
+    sqlx::query("UPDATE settings_values SET value_json = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(rewritten)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(repo_err)?;
+    Ok(())
+}
+
+async fn rewrite_delay_profile_tags_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    normalized_labels: &BTreeMap<String, String>,
+) -> AppResult<()> {
+    if normalized_labels.is_empty() {
+        return Ok(());
+    }
+    let row = sqlx::query(
+        "SELECT values_table.id, values_table.value_json::text AS value_json
+           FROM settings_values values_table
+           JOIN settings_definitions definitions
+             ON definitions.id = values_table.setting_definition_id
+          WHERE definitions.scope = 'system'
+            AND definitions.key_name = $1
+            AND values_table.scope = 'system'
+            AND values_table.scope_id IS NULL",
+    )
+    .bind(scryer_application::DELAY_PROFILE_CATALOG_KEY)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(repo_err)?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let id: String = row.try_get("id").map_err(repo_err)?;
+    let raw: String = row.try_get("value_json").map_err(repo_err)?;
+    let Some(rewritten) = rewrite_delay_profile_tag_catalog(&raw, normalized_labels) else {
+        return Ok(());
+    };
+    sqlx::query("UPDATE settings_values SET value_json = $1::jsonb, updated_at = $2 WHERE id = $3")
+        .bind(rewritten)
+        .bind(chrono::Utc::now())
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(repo_err)?;
+    Ok(())
+}
+
+fn rewrite_delay_profile_tag_catalog(
+    raw: &str,
+    normalized_labels: &BTreeMap<String, String>,
+) -> Option<String> {
+    let mut catalog = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let profiles = catalog.as_array_mut()?;
+    let mut changed = false;
+    for profile in profiles {
+        let Some(tags) = profile
+            .get_mut("tags")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for tag in tags {
+            let Some(normalized) = tag.as_str().and_then(|label| normalized_labels.get(label))
+            else {
+                continue;
+            };
+            *tag = serde_json::Value::String(normalized.clone());
+            changed = true;
+        }
+    }
+    changed.then(|| serde_json::to_string(&catalog).expect("JSON values serialize"))
 }
 
 /// A malformed or non-array bag adopts nothing rather than failing the upgrade:

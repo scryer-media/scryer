@@ -299,7 +299,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
 
-        for (key, value) in [
+        let values: Vec<_> = [
             (MAINTENANCE_GATE_EVALUATION_KEY, update.evaluation_enabled),
             (
                 MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
@@ -317,11 +317,21 @@ impl AppUseCase {
                 MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
                 update.destructive_effects_enabled,
             ),
-        ] {
-            if let Some(value) = value {
-                self.upsert_system_setting_json(key, &value, Some(actor.id.clone()))
-                    .await?;
-            }
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| (key.to_string(), value.to_string())))
+        .collect();
+        if !values.is_empty() {
+            self.services
+                .config
+                .settings
+                .upsert_global_settings_json(
+                    crate::SETTINGS_SCOPE_SYSTEM,
+                    &values,
+                    crate::settings::keys::SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    Some(actor.id.clone()),
+                )
+                .await?;
         }
 
         self.load_maintenance_gates().await

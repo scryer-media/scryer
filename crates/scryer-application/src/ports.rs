@@ -1244,6 +1244,9 @@ pub trait TitleRepository: Send + Sync {
             maximum_year,
         })
     }
+    /// Every title matching any exact `(source, value)` pair. Titles are only
+    /// unique within a library, so callers must not treat this as a single-row
+    /// lookup.
     async fn list_by_external_ids(&self, source: &str, values: &[String]) -> AppResult<Vec<Title>>;
     async fn list_by_external_id_lookups(
         &self,
@@ -3917,6 +3920,19 @@ pub trait SettingsRepository: Send + Sync {
         source: &str,
         updated_by_user_id: Option<String>,
     ) -> AppResult<()>;
+
+    /// Persist a global settings patch atomically. A failed patch changes no key.
+    async fn upsert_global_settings_json(
+        &self,
+        _scope: &str,
+        _values: &[(String, String)],
+        _source: &str,
+        _updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic settings patches are not configured".into(),
+        ))
+    }
 
     async fn delete_setting_value(
         &self,
@@ -6669,6 +6685,14 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// Removes the rule set; the FK cascade takes its revisions with it.
     async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
 
+    /// Atomically refuse deletion while any live candidate or action audit
+    /// exists, coordinating with concurrent candidate/run insertion.
+    async fn delete_rule_set_if_unused(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "guarded maintenance deletion is not configured".into(),
+        ))
+    }
+
     /// Move a rule set between evaluation modes. `enabled` is derived by the
     /// caller from the mode so the two columns can never disagree; no revision
     /// is created, because the matcher is untouched.
@@ -9332,6 +9356,18 @@ pub trait MediaServerSignalRepository: Send + Sync {
         external_user_id: &str,
         signals: &[scryer_domain::NewUserMediaSignal],
     ) -> AppResult<u64>;
+
+    /// Remove stored observations for retired account identities. Each pair is
+    /// `(external_user_id, scryer_user_id)` from a successful verified-account read.
+    async fn retain_connection_participants(
+        &self,
+        _connection_id: &str,
+        _participants: &[(String, String)],
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "signal participant reconciliation is not configured".into(),
+        ))
+    }
 
     /// Movie-level signals for a batch of title ids (`kind = 'movie'` only),
     /// grouped by title id. Titles with no signals are absent from the map

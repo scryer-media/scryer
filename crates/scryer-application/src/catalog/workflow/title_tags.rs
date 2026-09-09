@@ -8,6 +8,7 @@
 // and the catalog filter need it for anyone who can see a title at all.
 
 const TITLE_TAG_PENDING_RENAMES_KEY: &str = "title_tags.pending_renames";
+const TITLE_TAG_PENDING_DELETIONS_KEY: &str = "title_tags.pending_deletions";
 static TITLE_TAG_REGISTRY_MUTATION: std::sync::LazyLock<tokio::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -19,13 +20,26 @@ struct PendingTitleTagRename {
 }
 type PendingTitleTagRenames = std::collections::BTreeMap<String, PendingTitleTagRename>;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingTitleTagDeletion {
+    label: String,
+    updated_by_user_id: Option<String>,
+}
+type PendingTitleTagDeletions = std::collections::BTreeMap<String, PendingTitleTagDeletion>;
+
 impl AppUseCase {
-    /// Resume committed renames after interruption. Called on startup and
+    /// Resume committed tag mutations after interruption. Called on startup and
     /// before registry mutations, so a stale label cannot be reused while its
     /// delay profiles or pending requests still need to move.
     pub async fn resume_pending_title_tag_renames(&self) -> AppResult<()> {
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
-        self.resume_pending_title_tag_renames_locked().await
+        self.resume_pending_title_tag_mutations_locked().await
+    }
+
+    async fn resume_pending_title_tag_mutations_locked(&self) -> AppResult<()> {
+        self.resume_pending_title_tag_renames_locked().await?;
+        self.resume_pending_title_tag_deletions_locked().await?;
+        Ok(())
     }
 
     async fn resume_pending_title_tag_renames_locked(&self) -> AppResult<()> {
@@ -76,6 +90,62 @@ impl AppUseCase {
         .await
     }
 
+    /// Complete the settings-backed half of any deletion whose registry
+    /// transaction already committed. The registry and memberships live in one
+    /// transaction; delay profiles and pending requests live elsewhere, so the
+    /// intent makes the latter two writes safe to repeat after an interruption.
+    async fn resume_pending_title_tag_deletions_locked(
+        &self,
+    ) -> AppResult<std::collections::BTreeMap<String, u64>> {
+        let pending = self
+            .read_setting_json_value::<PendingTitleTagDeletions>(
+                TITLE_TAG_PENDING_DELETIONS_KEY,
+                None,
+            )
+            .await?
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        let mut rewritten_delay_profiles = std::collections::BTreeMap::new();
+        for (id, deletion) in &pending {
+            if self
+                .services
+                .catalog
+                .titles
+                .get_title_tag_definition(id)
+                .await?
+                .is_some()
+            {
+                // The registry transaction never committed, so no external
+                // rewrite can have started. The next delete attempt writes a
+                // fresh intent before trying the transaction again.
+                continue;
+            }
+            let delay_profiles = self
+                .rewrite_delay_profile_tag(
+                    deletion.updated_by_user_id.clone(),
+                    &deletion.label,
+                    None,
+                )
+                .await?;
+            // Pending requests expose their tags to an approver, so they must
+            // not retain a label the registry no longer defines.
+            self.rewrite_pending_request_policy_tag(&deletion.label, None)
+                .await?;
+            rewritten_delay_profiles.insert(id.clone(), delay_profiles);
+        }
+
+        self.upsert_system_setting_json(
+            TITLE_TAG_PENDING_DELETIONS_KEY,
+            &PendingTitleTagDeletions::new(),
+            None,
+        )
+        .await?;
+        Ok(rewritten_delay_profiles)
+    }
+
     /// Every defined tag with its current title count.
     ///
     /// Deliberately unauthorized beyond being a request from a user: the tag
@@ -101,7 +171,7 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
-        self.resume_pending_title_tag_renames_locked().await?;
+        self.resume_pending_title_tag_mutations_locked().await?;
         let label = crate::normalize_user_title_tag(label).map_err(AppError::Validation)?;
         let now = Utc::now();
         let definition = scryer_domain::TitleTagDefinition {
@@ -146,7 +216,7 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
-        self.resume_pending_title_tag_renames_locked().await?;
+        self.resume_pending_title_tag_mutations_locked().await?;
         let next_label = label
             .map(|label| crate::normalize_user_title_tag(&label).map_err(AppError::Validation))
             .transpose()?;
@@ -262,6 +332,20 @@ impl AppUseCase {
             .await?;
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
         self.resume_pending_title_tag_renames_locked().await?;
+        let recovered = self.resume_pending_title_tag_deletions_locked().await?;
+        if let Some(delay_profiles) = recovered.get(id) {
+            self.emit_configuration_changed_event(
+                actor,
+                "title_tag",
+                Some(id.to_string()),
+                scryer_domain::ConfigurationChangeAction::Deleted,
+            )
+            .await;
+            return Ok(crate::TitleTagRewriteCounts {
+                delay_profiles: *delay_profiles,
+                ..Default::default()
+            });
+        }
 
         let existing = self
             .services
@@ -274,19 +358,35 @@ impl AppUseCase {
             .count_rule_sets_referencing_title_tag(&existing.label)
             .await?;
 
+        // The registry transaction removes memberships and the definition
+        // together. Record the label first so the settings-backed rewrites can
+        // resume after that transaction commits but before this call returns.
+        let pending = std::collections::BTreeMap::from([(
+            id.to_string(),
+            PendingTitleTagDeletion {
+                label: existing.label.clone(),
+                updated_by_user_id: Some(actor.id.clone()),
+            },
+        )]);
+        self.upsert_system_setting_json(
+            TITLE_TAG_PENDING_DELETIONS_KEY,
+            &pending,
+            Some(actor.id.clone()),
+        )
+        .await?;
+
         let (definition, membership) = self
             .services
             .catalog
             .titles
             .delete_title_tag_definition(id)
             .await?;
-        let delay_profiles = self
-            .rewrite_delay_profile_tag(Some(actor.id.clone()), &definition.label, None)
-            .await?;
-        // A pending request would otherwise keep offering an approver a label
-        // that no longer exists, which the approval would then drop in silence.
-        self.rewrite_pending_request_policy_tag(&definition.label, None)
-            .await?;
+        let recovered = self.resume_pending_title_tag_deletions_locked().await?;
+        let delay_profiles = recovered.get(id).copied().ok_or_else(|| {
+            AppError::Repository(format!(
+                "title tag {id} was deleted without a recoverable rewrite intent"
+            ))
+        })?;
 
         self.emit_configuration_changed_event(
             actor,

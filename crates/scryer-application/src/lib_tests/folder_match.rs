@@ -113,6 +113,7 @@ struct FolderMatchFixture {
     facet: MediaFacet,
     unmatched_items: Arc<TrackingLibraryScanUnmatchedItemRepo>,
     titles: Arc<MockTitleRepo>,
+    media_files: Arc<MockMediaFileRepo>,
     scanner: Arc<FolderScopedLibraryScanner>,
     root: tempfile::TempDir,
 }
@@ -154,9 +155,15 @@ impl FolderMatchFixture {
             .await
             .expect("reconcile library root");
         let scanner = Arc::new(FolderScopedLibraryScanner::default());
+        let media_files = Arc::new(MockMediaFileRepo::default());
         let app = app.with_test_overrides({
             let scanner = scanner.clone();
-            move |services| services.with_library_scanner(scanner)
+            let media_files = media_files.clone();
+            move |services| {
+                services
+                    .with_library_scanner(scanner)
+                    .with_media_files(media_files)
+            }
         });
         Self {
             app,
@@ -164,6 +171,7 @@ impl FolderMatchFixture {
             facet,
             unmatched_items,
             titles,
+            media_files,
             scanner,
             root,
         }
@@ -535,6 +543,101 @@ async fn the_folder_a_corrected_title_gave_up_returns_to_unmatched_discovery() {
             .iter()
             .all(|item| !Path::new(&item.item_path).starts_with(&right_folder)),
         "the newly owned folder should not be unmatched"
+    );
+}
+
+/// An assignment first changes folder ownership, then detaches the media from
+/// the previous folder. If the final unmatched-item cleanup fails, that partial
+/// work must be compensated so a retry still starts from the original folder.
+#[tokio::test]
+async fn assignment_cleanup_failure_restores_the_previous_folder_and_its_media() {
+    let fixture = FolderMatchFixture::new().await;
+    let previous_folder = fixture.folder("Previous Match (2019)");
+    let selected_folder = fixture.folder("Selected Match (2024)");
+    let previous_file = fixture.write_media(&previous_folder, "Previous.Match.2019.1080p.mkv");
+    let selected_file = fixture.write_media(&selected_folder, "Selected.Match.2024.1080p.mkv");
+    fixture
+        .scanner
+        .set_files(&[previous_file.as_path(), selected_file.as_path()])
+        .await;
+
+    let title = fixture
+        .create_title_with_folder("Selected Match", previous_folder.as_path())
+        .await;
+    fixture.seed_media_row(&title.id, &previous_file).await;
+    fixture
+        .unmatched_items
+        .fail_delete("injected unmatched-item cleanup failure")
+        .await;
+
+    let error = fixture
+        .app
+        .apply_title_folder_change(
+            &fixture.user,
+            &title.id,
+            selected_folder.to_string_lossy().as_ref(),
+            FolderMatchResolution::Assign,
+        )
+        .await
+        .expect_err("cleanup failure should abort the assignment");
+    assert!(
+        matches!(&error, AppError::Repository(message)
+            if message.contains("injected unmatched-item cleanup failure")),
+        "the cleanup error should reach the caller, got {error:?}"
+    );
+    assert_eq!(
+        fixture.folder_path_of(&title.id).await.as_deref(),
+        Some(previous_folder.to_string_lossy().as_ref()),
+        "the title should keep its previous folder after compensation"
+    );
+    assert_eq!(
+        fixture.media_paths(&title.id).await,
+        vec![previous_file.to_string_lossy().to_string()],
+        "the compensating rescan should rebuild the detached association"
+    );
+}
+
+#[tokio::test]
+async fn assignment_detach_failure_restores_the_previous_folder() {
+    let fixture = FolderMatchFixture::new().await;
+    let previous_folder = fixture.folder("Previous Match (2019)");
+    let selected_folder = fixture.folder("Selected Match (2024)");
+    let previous_file = fixture.write_media(&previous_folder, "Previous.Match.2019.1080p.mkv");
+    fixture.scanner.set_files(&[previous_file.as_path()]).await;
+
+    let title = fixture
+        .create_title_with_folder("Selected Match", previous_folder.as_path())
+        .await;
+    fixture.seed_media_row(&title.id, &previous_file).await;
+    fixture
+        .media_files
+        .fail_delete_media_file("injected media detach failure")
+        .await;
+
+    let error = fixture
+        .app
+        .apply_title_folder_change(
+            &fixture.user,
+            &title.id,
+            selected_folder.to_string_lossy().as_ref(),
+            FolderMatchResolution::Assign,
+        )
+        .await
+        .expect_err("detach failure should abort the assignment");
+    assert!(
+        matches!(&error, AppError::Repository(message)
+            if message.contains("injected media detach failure")),
+        "the detach error should reach the caller, got {error:?}"
+    );
+    assert_eq!(
+        fixture.folder_path_of(&title.id).await.as_deref(),
+        Some(previous_folder.to_string_lossy().as_ref()),
+        "the title should retain its previous folder after a detach error"
+    );
+    assert_eq!(
+        fixture.media_paths(&title.id).await,
+        vec![previous_file.to_string_lossy().to_string()],
+        "the failed detach must leave its original association intact"
     );
 }
 

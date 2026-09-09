@@ -239,6 +239,12 @@ impl AppUseCase {
         let config_json = self.normalize_download_client_config_json(input.config_json)?;
         crate::parse_download_client_remote_path_mappings(&config_json)?;
 
+        let proxy_assignment = self
+            .services
+            .integrations
+            .proxy_assignment_lock
+            .lock()
+            .await;
         let proxy_config_id = match input.proxy_config_id {
             Some(id) => Some(self.validate_enabled_download_client_proxy(&id).await?),
             None => None,
@@ -278,6 +284,7 @@ impl AppUseCase {
             .download_client_configs
             .create(config)
             .await?;
+        drop(proxy_assignment);
         self.refresh_download_client_category_admission_best_effort()
             .await;
         self.emit_configuration_changed_event(
@@ -331,6 +338,12 @@ impl AppUseCase {
             None => None,
         };
 
+        let proxy_assignment = self
+            .services
+            .integrations
+            .proxy_assignment_lock
+            .lock()
+            .await;
         // Tri-state, exactly like `IndexerConfigUpdate::proxy_config_id`:
         // omitted keeps the stored assignment, an explicit null clears it, and
         // a value has to name a proxy that exists and is enabled.
@@ -342,17 +355,44 @@ impl AppUseCase {
             None => None,
         };
 
+        let existing_client = if normalized_client_type.is_some() || update.is_enabled == Some(true)
+        {
+            Some(
+                self.services
+                    .integrations
+                    .download_client_configs
+                    .get_by_id(client_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::NotFound(format!(
+                            "download client config '{client_id}' not found"
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
+        if update.is_enabled == Some(true)
+            && existing_client
+                .as_ref()
+                .is_some_and(|client| !client.is_enabled)
+            && let Some(proxy_config_id) = match proxy_config_id_patch.as_ref() {
+                Some(Some(proxy_config_id)) => Some(proxy_config_id.as_str()),
+                Some(None) => None,
+                None => existing_client
+                    .as_ref()
+                    .and_then(|client| client.proxy_config_id.as_deref()),
+            }
+        {
+            self.validate_enabled_download_client_proxy(proxy_config_id)
+                .await?;
+        }
+
         if let Some(client_type) = normalized_client_type.as_deref() {
-            let existing_client = self
-                .services
-                .integrations
-                .download_client_configs
-                .get_by_id(client_id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::NotFound(format!("download client config '{client_id}' not found"))
-                })?;
-            let mut candidate_client = existing_client;
+            let mut candidate_client = existing_client
+                .as_ref()
+                .expect("client type changes load the existing download client")
+                .clone();
             candidate_client.client_type = client_type.to_string();
             let mapped_indexers = self
                 .services
@@ -381,6 +421,7 @@ impl AppUseCase {
                 proxy_config_id: proxy_config_id_patch,
             })
             .await?;
+        drop(proxy_assignment);
         self.refresh_download_client_category_admission_best_effort()
             .await;
         self.emit_configuration_changed_event(

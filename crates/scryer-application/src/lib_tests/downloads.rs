@@ -14054,3 +14054,400 @@ async fn alternate_numbered_verified_pack_member_reconciles_from_fused_label() {
         "catalog numbering must drive the destination"
     );
 }
+
+#[derive(Default)]
+struct RetainedProxyRepo {
+    entries: Arc<Mutex<Vec<scryer_domain::ProxyConfig>>>,
+    lookup_observed: Option<Arc<Notify>>,
+    delete_gate: Option<Arc<ProxyDeleteGate>>,
+}
+
+struct ProxyDeleteGate {
+    delete_started: Notify,
+    release_delete: Notify,
+}
+
+impl RetainedProxyRepo {
+    fn with_entry(entry: scryer_domain::ProxyConfig) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(vec![entry])),
+            lookup_observed: None,
+            delete_gate: None,
+        }
+    }
+
+    fn with_lookup_observer(
+        entry: scryer_domain::ProxyConfig,
+        lookup_observed: Arc<Notify>,
+    ) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(vec![entry])),
+            lookup_observed: Some(lookup_observed),
+            delete_gate: None,
+        }
+    }
+
+    fn with_delete_gate(
+        entry: scryer_domain::ProxyConfig,
+        delete_gate: Arc<ProxyDeleteGate>,
+    ) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(vec![entry])),
+            lookup_observed: None,
+            delete_gate: Some(delete_gate),
+        }
+    }
+
+    async fn set_enabled(&self, id: &str, is_enabled: bool) {
+        let mut entries = self.entries.lock().await;
+        entries
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .expect("test proxy should exist")
+            .is_enabled = is_enabled;
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ProxyConfigRepository for RetainedProxyRepo {
+    async fn list(
+        &self,
+        _provider_type: Option<scryer_domain::ProxyProviderType>,
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
+        Ok(self.entries.lock().await.clone())
+    }
+
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        let config = self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .find(|entry| entry.id == id)
+            .cloned();
+        if let Some(lookup_observed) = &self.lookup_observed {
+            lookup_observed.notify_one();
+        }
+        Ok(config)
+    }
+
+    async fn create(
+        &self,
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
+        self.entries.lock().await.push(config.clone());
+        Ok(config)
+    }
+
+    async fn update(
+        &self,
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
+        let mut entries = self.entries.lock().await;
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.id == config.id)
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{}'", config.id)))?;
+        *entry = config.clone();
+        Ok(config)
+    }
+
+    async fn delete(&self, id: &str) -> AppResult<()> {
+        if let Some(delete_gate) = &self.delete_gate {
+            delete_gate.delete_started.notify_one();
+            delete_gate.release_delete.notified().await;
+        }
+        let mut entries = self.entries.lock().await;
+        let before = entries.len();
+        entries.retain(|entry| entry.id != id);
+        if entries.len() == before {
+            return Err(AppError::NotFound(format!("proxy config '{id}'")));
+        }
+        Ok(())
+    }
+
+    async fn record_health(
+        &self,
+        _id: &str,
+        _status: scryer_domain::ProxyHealthStatus,
+        _error_message: Option<String>,
+        _error_at: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn pin_host_key(
+        &self,
+        _id: &str,
+        _fingerprint: &str,
+        _pinned_at: chrono::DateTime<Utc>,
+        _expected_updated_at: chrono::DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+fn retained_proxy_fixture(is_enabled: bool) -> scryer_domain::ProxyConfig {
+    let now = Utc::now();
+    scryer_domain::ProxyConfig {
+        id: "retained-proxy".to_string(),
+        name: "Retained proxy".to_string(),
+        provider_type: scryer_domain::ProxyProviderType::Http,
+        protocol: None,
+        base_url: "http://proxy.example.test".to_string(),
+        request_timeout_seconds: 60,
+        is_enabled,
+        username_encrypted: None,
+        password_encrypted: None,
+        remote_dns: false,
+        private_key_encrypted: None,
+        private_key_passphrase_encrypted: None,
+        peer_public_key: None,
+        preshared_key_encrypted: None,
+        tunnel_public_key: None,
+        tunnel_addresses: Vec::new(),
+        tunnel_dns_servers: Vec::new(),
+        tunnel_mtu: None,
+        tunnel_keepalive_seconds: None,
+        host_key_fingerprint: None,
+        host_key_pinned_at: None,
+        last_health_status: None,
+        last_error_message: None,
+        last_error_at: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[tokio::test]
+async fn enabling_a_disabled_client_revalidates_its_retained_proxy_assignment() {
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_entry(retained_proxy_fixture(true)));
+    let (base_app, user) = bootstrap();
+    let app = base_app
+        .with_test_overrides(|services| services.with_proxy_config_store(proxy_configs.clone()));
+    let now = Utc::now();
+    app.services
+        .integrations
+        .download_client_configs
+        .create(scryer_domain::DownloadClientConfig {
+            id: "disabled-client".to_string(),
+            name: "Disabled client".to_string(),
+            client_type: "nzbget".to_string(),
+            config_json: "{}".to_string(),
+            client_priority: 1,
+            is_enabled: false,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            proxy_config_id: Some("retained-proxy".to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("seed disabled download client");
+    proxy_configs.set_enabled("retained-proxy", false).await;
+
+    let error = app
+        .update_download_client_config(
+            &user,
+            crate::DownloadClientConfigUpdate {
+                id: "disabled-client".to_string(),
+                is_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a retained disabled proxy must block re-enabling its client");
+    assert!(error.to_string().contains("Proxy is disabled"));
+    assert!(
+        !app.services
+            .integrations
+            .download_client_configs
+            .get_by_id("disabled-client")
+            .await
+            .expect("read seeded client")
+            .expect("seeded client remains")
+            .is_enabled
+    );
+
+    let cleared = app
+        .update_download_client_config(
+            &user,
+            crate::DownloadClientConfigUpdate {
+                id: "disabled-client".to_string(),
+                is_enabled: Some(true),
+                proxy_config_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("explicitly clearing the proxy must allow re-enabling the client");
+    assert!(cleared.is_enabled);
+    assert_eq!(cleared.proxy_config_id, None);
+}
+
+#[tokio::test]
+async fn enabling_a_disabled_indexer_revalidates_its_retained_proxy_after_connection_probe() {
+    let lookup_observed = Arc::new(Notify::new());
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_lookup_observer(
+        retained_proxy_fixture(true),
+        lookup_observed.clone(),
+    ));
+    let mut indexer = synthetic_direct_nab_indexer_config("disabled-indexer", "nzbgeek");
+    indexer.is_enabled = false;
+    indexer.proxy_config_id = Some("retained-proxy".to_string());
+    indexer.config_json = Some(
+        serde_json::json!({
+            "base_url": "https://api.nzbgeek.info",
+            "api_key": "secret"
+        })
+        .to_string(),
+    );
+    let (base_app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockIndexerClient),
+        vec![indexer],
+    );
+    let app = base_app
+        .with_test_overrides(|services| services.with_proxy_config_store(proxy_configs.clone()));
+
+    let proxy_assignment = app.services.integrations.proxy_assignment_lock.lock().await;
+    let lookup = lookup_observed.notified();
+    let update_app = app.clone();
+    let update_user = user.clone();
+    let update = tokio::spawn(async move {
+        update_app
+            .update_indexer_config(
+                &update_user,
+                IndexerConfigUpdate {
+                    id: "disabled-indexer".to_string(),
+                    is_enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+    });
+    timeout(Duration::from_secs(5), lookup)
+        .await
+        .expect("indexer probe should read the retained proxy before locking");
+    proxy_configs.set_enabled("retained-proxy", false).await;
+    drop(proxy_assignment);
+
+    let error = update
+        .await
+        .expect("indexer update task should not panic")
+        .expect_err("the retained proxy must be revalidated after the connection probe");
+    assert!(error.to_string().contains("Proxy is disabled"));
+    assert!(
+        !app.services
+            .integrations
+            .indexer_configs
+            .get_by_id("disabled-indexer")
+            .await
+            .expect("read seeded indexer")
+            .expect("seeded indexer remains")
+            .is_enabled
+    );
+}
+
+#[tokio::test]
+async fn proxy_deletion_serializes_against_download_client_proxy_assignment() {
+    let delete_gate = Arc::new(ProxyDeleteGate {
+        delete_started: Notify::new(),
+        release_delete: Notify::new(),
+    });
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_delete_gate(
+        retained_proxy_fixture(true),
+        delete_gate.clone(),
+    ));
+    let (base_app, user) = bootstrap();
+    let app =
+        base_app.with_test_overrides(|services| services.with_proxy_config_store(proxy_configs));
+    let now = Utc::now();
+    app.services
+        .integrations
+        .download_client_configs
+        .create(scryer_domain::DownloadClientConfig {
+            id: "unassigned-client".to_string(),
+            name: "Unassigned client".to_string(),
+            client_type: "nzbget".to_string(),
+            config_json: "{}".to_string(),
+            client_priority: 1,
+            is_enabled: false,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            proxy_config_id: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("seed unassigned download client");
+
+    let delete_started = delete_gate.delete_started.notified();
+    let delete_app = app.clone();
+    let delete_user = user.clone();
+    let delete = tokio::spawn(async move {
+        delete_app
+            .delete_proxy_config(&delete_user, "retained-proxy")
+            .await
+    });
+    timeout(Duration::from_secs(5), delete_started)
+        .await
+        .expect("proxy deletion should reach its gated repository operation");
+
+    let mut assignment = Box::pin(app.update_download_client_config(
+        &user,
+        crate::DownloadClientConfigUpdate {
+            id: "unassigned-client".to_string(),
+            proxy_config_id: Some(Some("retained-proxy".to_string())),
+            ..Default::default()
+        },
+    ));
+    let assignment_waiting =
+        std::future::poll_fn(|context| match assignment.as_mut().poll(context) {
+            std::task::Poll::Pending => std::task::Poll::Ready(true),
+            std::task::Poll::Ready(_) => std::task::Poll::Ready(false),
+        })
+        .await;
+    assert!(
+        assignment_waiting,
+        "client assignment must wait while proxy deletion owns the assignment lock"
+    );
+    assert_eq!(
+        app.services
+            .integrations
+            .download_client_configs
+            .get_by_id("unassigned-client")
+            .await
+            .expect("read seeded client")
+            .expect("seeded client remains")
+            .proxy_config_id,
+        None
+    );
+
+    delete_gate.release_delete.notify_one();
+    delete
+        .await
+        .expect("proxy delete task should not panic")
+        .expect("unassigned proxy should delete");
+    let error = assignment
+        .await
+        .expect_err("assignment must observe the completed deletion");
+    assert!(error.to_string().contains("not found"));
+    assert_eq!(
+        app.services
+            .integrations
+            .download_client_configs
+            .get_by_id("unassigned-client")
+            .await
+            .expect("read seeded client")
+            .expect("seeded client remains")
+            .proxy_config_id,
+        None
+    );
+}
