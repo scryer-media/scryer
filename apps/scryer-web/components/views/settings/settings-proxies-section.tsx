@@ -118,6 +118,13 @@ function ProxyActionButton({
 /// whole width without the two drifting apart.
 const PROXY_TABLE_COLUMN_COUNT = 7;
 
+function redactWireguardPrivateKey(value: string): string {
+  if (value.length <= 10) {
+    return value ? "••••••" : value;
+  }
+  return `${value.slice(0, 6)}••••••••${value.slice(-4)}`;
+}
+
 export function SettingsProxiesSection({
   proxyConfigs,
   proxyDraft,
@@ -143,6 +150,8 @@ export function SettingsProxiesSection({
   // The paste buffer is transient: it is what the operator dropped in, not part
   // of the proxy being edited, so it lives here and never reaches the draft.
   const [configText, setConfigText] = React.useState("");
+  const [isWireguardPrivateKeyFocused, setIsWireguardPrivateKeyFocused] =
+    React.useState(false);
   const [isWireguardDetailsOpen, setIsWireguardDetailsOpen] =
     React.useState(
       () => editingProxyId !== null && isWireguardProxyProvider(proxyDraft.providerType),
@@ -456,10 +465,14 @@ export function SettingsProxiesSection({
                       htmlFor="settings-indexer-proxy-base-url"
                     >
                       {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
-                      {isTunnelDraft ? (
+                      {isTunnelDraft || isWireguardDraft ? (
                         <InfoHelp
                           ariaLabel={t("settings.proxyEndpoint")}
-                          text={t("settings.proxyEndpointHelp")}
+                          text={
+                            isWireguardDraft
+                              ? t("settings.proxyEndpointHelpWireguard")
+                              : t("settings.proxyEndpointHelp")
+                          }
                         />
                       ) : null}
                     </Label>
@@ -513,12 +526,13 @@ export function SettingsProxiesSection({
                     id="settings-indexer-proxy-import-config"
                     className="rounded border border-border bg-card/60 p-3"
                   >
-                    <div className="mb-1 text-sm font-medium">
+                    <div className="mb-1 flex items-center gap-1 text-sm font-medium">
                       {t("settings.proxyImportConfig")}
+                      <InfoHelp
+                        ariaLabel={t("settings.proxyImportConfig")}
+                        text={t("settings.proxyImportConfigHelp")}
+                      />
                     </div>
-                    <p className="mb-2 text-xs text-muted-foreground">
-                      {t("settings.proxyImportConfigHelp")}
-                    </p>
                     <Textarea
                       id="settings-indexer-proxy-import-config-text"
                       className="min-h-24 font-mono text-xs"
@@ -572,14 +586,6 @@ export function SettingsProxiesSection({
                       </Button>
                     </div>
                   </div>
-                ) : null}
-                {showProxyDetails && isWireguardDraft ? (
-                  <p
-                    id="settings-indexer-proxy-endpoint-help"
-                    className="text-xs text-muted-foreground"
-                  >
-                    {t("settings.proxyEndpointHelpWireguard")}
-                  </p>
                 ) : null}
                 {acceptsCredentials || acceptsRemoteDns ? (
                   <div
@@ -715,11 +721,6 @@ export function SettingsProxiesSection({
                           }
                         />
                       </Label>
-                      {/* A WireGuard key is one 44-character base64 line, not
-                          a PEM block, so it gets a single-line field. Neither
-                          is ever read back, so neither is a password input:
-                          masking a value the operator is pasting in helps
-                          nobody. */}
                       {isWireguardDraft ? (
                         <Input
                           id="settings-indexer-proxy-private-key"
@@ -728,7 +729,13 @@ export function SettingsProxiesSection({
                           spellCheck={false}
                           autoComplete="off"
                           ignorePasswordManagers
-                          value={proxyDraft.privateKey}
+                          value={
+                            isWireguardPrivateKeyFocused
+                              ? proxyDraft.privateKey
+                              : redactWireguardPrivateKey(proxyDraft.privateKey)
+                          }
+                          onFocus={() => setIsWireguardPrivateKeyFocused(true)}
+                          onBlur={() => setIsWireguardPrivateKeyFocused(false)}
                           disabled={proxyDraft.clearPrivateKey}
                           required={
                             !proxyDraft.hasStoredPrivateKey ||
@@ -816,6 +823,10 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-peer-public-key"
                             >
                               {t("settings.proxyPeerPublicKey")}
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyPeerPublicKey")}
+                                text={t("settings.proxyPeerPublicKeyHelp")}
+                              />
                             </Label>
                             {/* A public key is public: it is read back in full
                                 and shown as typed, never masked. */}
@@ -836,9 +847,6 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyPeerPublicKeyHelp")}
-                            </p>
                           </label>
                           {/* A div rather than a wrapping label: the clear
                               toggle sits in this cell, and a label around both
@@ -849,6 +857,10 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-preshared-key"
                             >
                               {t("settings.proxyPresharedKey")}
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyPresharedKey")}
+                                text={t("settings.proxyPresharedKeyHelp")}
+                              />
                             </Label>
                             <Input
                               id="settings-indexer-proxy-preshared-key"
@@ -871,9 +883,6 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyPresharedKeyHelp")}
-                            </p>
                             {proxyDraft.hasStoredPresharedKey ? (
                               <label className="mt-2 flex items-center gap-2">
                                 <Checkbox
@@ -899,6 +908,10 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-tunnel-addresses"
                             >
                               {t("settings.proxyTunnelAddresses")}
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyTunnelAddresses")}
+                                text={t("settings.proxyTunnelAddressesHelp")}
+                              />
                             </Label>
                             <Textarea
                               id="settings-indexer-proxy-tunnel-addresses"
@@ -915,9 +928,6 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyTunnelAddressesHelp")}
-                            </p>
                           </label>
                           <label>
                             <Label
@@ -925,6 +935,10 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-tunnel-dns-servers"
                             >
                               {t("settings.proxyTunnelDnsServers")}
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyTunnelDnsServers")}
+                                text={t("settings.proxyTunnelDnsServersHelp")}
+                              />
                             </Label>
                             <Textarea
                               id="settings-indexer-proxy-tunnel-dns-servers"
@@ -940,18 +954,23 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyTunnelDnsServersHelp")}
-                            </p>
                           </label>
                         </div>
-                        <div className="grid gap-3 md:grid-cols-[10rem_10rem_minmax(0,1fr)]">
+                        <div className="grid gap-3 md:grid-cols-[10rem_10rem]">
                           <label>
                             <Label
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-mtu"
                             >
                               {t("settings.proxyTunnelMtu")}
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyTunnelMtu")}
+                                text={t("settings.proxyTunnelMtuHelp", {
+                                  min: WIREGUARD_MTU_MIN,
+                                  max: WIREGUARD_MTU_MAX,
+                                  default: WIREGUARD_MTU_DEFAULT,
+                                })}
+                              />
                             </Label>
                             {/* Blank is a real value here — it means "use the
                                 engine's default" — so these are text fields
@@ -976,6 +995,12 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-tunnel-keepalive"
                             >
                               {t("settings.proxyTunnelKeepalive")}
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyTunnelKeepalive")}
+                                text={t("settings.proxyTunnelKeepaliveHelp", {
+                                  default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
+                                })}
+                              />
                             </Label>
                             <Input
                               id="settings-indexer-proxy-tunnel-keepalive"
@@ -994,20 +1019,6 @@ export function SettingsProxiesSection({
                               }
                             />
                           </label>
-                          <div className="flex flex-col justify-end gap-1 pb-2 text-xs text-muted-foreground">
-                            <span>
-                              {t("settings.proxyTunnelMtuHelp", {
-                                min: WIREGUARD_MTU_MIN,
-                                max: WIREGUARD_MTU_MAX,
-                                default: WIREGUARD_MTU_DEFAULT,
-                              })}
-                            </span>
-                            <span>
-                              {t("settings.proxyTunnelKeepaliveHelp", {
-                                default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
-                              })}
-                            </span>
-                          </div>
                         </div>
                         {/* The one value the operator has to carry back to
                             their server, so it is shown in full with a copy
@@ -1016,17 +1027,22 @@ export function SettingsProxiesSection({
                           id="settings-indexer-proxy-tunnel-public-key"
                           className="rounded border border-border bg-card/60 p-3"
                         >
-                          <div className="mb-1 text-sm font-medium">
+                          <div className="mb-1 flex items-center gap-1 text-sm font-medium">
                             {t("settings.proxyTunnelPublicKey")}
+                            <InfoHelp
+                              ariaLabel={t("settings.proxyTunnelPublicKey")}
+                              text={
+                                editingProxy?.tunnelPublicKey
+                                  ? t("settings.proxyTunnelPublicKeyHelp")
+                                  : t("settings.proxyTunnelPublicKeyPending")
+                              }
+                            />
                           </div>
                           {editingProxy?.tunnelPublicKey ? (
                             <>
                               <div className="break-all font-mono text-xs">
                                 {editingProxy.tunnelPublicKey}
                               </div>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                {t("settings.proxyTunnelPublicKeyHelp")}
-                              </p>
                               <Button
                                 id="settings-indexer-proxy-tunnel-public-key-copy"
                                 type="button"
@@ -1042,11 +1058,7 @@ export function SettingsProxiesSection({
                                 {t("settings.proxyTunnelPublicKeyCopy")}
                               </Button>
                             </>
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              {t("settings.proxyTunnelPublicKeyPending")}
-                            </p>
-                          )}
+                          ) : null}
                         </div>
                       </>
                     ) : null}
