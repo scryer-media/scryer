@@ -362,28 +362,84 @@ pub(crate) fn build_import_profile_decision(
     size_bytes: Option<i64>,
     has_existing_file: bool,
 ) -> crate::QualityProfileDecision {
-    let weights = crate::scoring_weights::build_weights_for_category(
-        &profile.criteria.scoring_persona,
-        &profile.criteria.scoring_overrides,
-        Some(category_hint),
-    );
-    let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
+    let mut decision = crate::quality_profile::evaluate_profile_requirements(
         profile,
         parsed,
         has_existing_file,
-        &weights,
         Some(category_hint),
     );
-    crate::quality_profile::apply_size_scoring_for_category_with_remux_preference(
+    crate::quality_profile::apply_size_requirement(
         &mut decision,
+        profile,
         parsed,
         size_bytes,
         Some(category_hint),
         size_basis,
-        profile.criteria.prefer_remux,
-        &weights,
     );
     decision
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+fn finalize_post_download_rule_scores(
+    profile: &crate::QualityProfile,
+    decision: &mut crate::QualityProfileDecision,
+    entries: Vec<scryer_rules::UserRuleEntry>,
+) -> Vec<String> {
+    // This legacy stage enforces rule-induced refusals. Existing built-in
+    // grab failures belong to the canonical, origin-aware import decision;
+    // installing an unrelated rule must not remove those policy exceptions.
+    let mut builtin_decision = decision.clone();
+    crate::quality_profile::apply_min_score_gate(profile, &mut builtin_decision);
+    let builtin_score_rejections: HashSet<_> = builtin_decision
+        .scoring_log
+        .iter()
+        .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::FinalScoreRejection)
+        .map(|entry| entry.code.as_str())
+        .collect();
+    let rules_reduce_score =
+        crate::quality_profile::sum_score_deltas(entries.iter().map(|entry| entry.delta)) < 0;
+    let contributing_rule_codes: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.delta < 0)
+        .map(|entry| entry.code.clone())
+        .collect();
+    for entry in entries {
+        let source = match entry.origin {
+            scryer_rules::PolicyOrigin::User => crate::quality_profile::ScoringSource::UserRule {
+                id: entry.rule_set_id,
+                name: entry.rule_set_name,
+            },
+            scryer_rules::PolicyOrigin::System => {
+                crate::quality_profile::ScoringSource::SystemRule {
+                    id: entry.rule_set_id,
+                    name: entry.rule_set_name,
+                }
+            }
+        };
+        decision.log_with_source(&entry.code, entry.delta, source);
+    }
+    crate::quality_profile::apply_min_score_gate(profile, decision);
+    // Mandatory checks retain their existing origin-aware import paths.
+    let mut blocking_codes: Vec<_> = decision
+        .scoring_log
+        .iter()
+        .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::FinalScoreRejection)
+        .filter(|entry| {
+            rules_reduce_score || !builtin_score_rejections.contains(entry.code.as_str())
+        })
+        .map(|entry| entry.code.clone())
+        .collect();
+    // Keep the rule provenance in import failures and blocklist reasons, but
+    // only after the completed score fails a gate. A recovered penalty is not
+    // itself a rejection.
+    if !blocking_codes.is_empty() {
+        for code in contributing_rule_codes {
+            if !blocking_codes.contains(&code) {
+                blocking_codes.push(code);
+            }
+        }
+    }
+    blocking_codes
 }
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -854,7 +910,7 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
             let scoped_file_doc = crate::user_rule_input::file_doc_from_analysis(scoped_analysis);
             let (rescored_for_rules, _) =
                 rescore_parsed_from_analysis(parsed, Some(scoped_analysis));
-            let decision = build_import_profile_decision(
+            let mut decision = build_import_profile_decision(
                 &resolved_profile,
                 &rescored_for_rules,
                 category_hint,
@@ -892,6 +948,9 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                     existing_score,
                     search_mode: "post_download",
                     runtime_minutes: title.runtime_minutes,
+                    coverage_total_runtime_minutes: title.runtime_minutes,
+                    coverage_member_runtime_minutes: title.runtime_minutes,
+                    coverage_member_count: Some(1),
                     is_filler,
                 },
                 Some(scoped_file_doc),
@@ -907,17 +966,17 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                         );
                     }
 
-                    let blocking_rule_codes: Vec<String> = result
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.delta <= scryer_rules::BLOCK_SCORE_THRESHOLD)
-                        .map(|entry| entry.code.clone())
-                        .collect();
+                    let blocking_rule_codes = finalize_post_download_rule_scores(
+                        &resolved_profile,
+                        &mut decision,
+                        result.entries,
+                    );
 
                     if !blocking_rule_codes.is_empty() {
                         return ImportedFileGateDecision::Rejected(ImportedFileRejection {
                             message: format!(
-                                "post-download rule(s) blocked import: {}",
+                                "post-download score {} rejected import: {}",
+                                decision.release_score,
                                 blocking_rule_codes.join(", ")
                             ),
                             recycle_reason: "post_download_rule_blocked",
@@ -1454,7 +1513,7 @@ pub(crate) fn resolve_truth_verdict_action_for_origin(
             }
             TruthVerdictAction::Reject(ImportedFileRejection {
                 message: format!(
-                    "the downloaded file carries something this quality profile refuses, which the release never advertised: {}",
+                    "the downloaded file does not meet the completed scoring policy: {}",
                     if codes.is_empty() {
                         "file evidence blocked by the quality profile".to_string()
                     } else {
@@ -1705,6 +1764,7 @@ fn serialize_post_download_scoring_log(
                 "code": entry.code,
                 "delta": entry.delta,
                 "source": scoring_source_json(&entry.source),
+                "kind": entry.kind,
             })
         })
         .collect::<Vec<_>>();
@@ -2084,12 +2144,6 @@ mod tests {
         RuntimeSampleValidation::manual_override(expected_runtime_seconds)
     }
 
-    // The title-facet guide-fact derivation formerly asserted here against
-    // `contextualize_import_release` now happens once, in the canonical import
-    // parse (`import_workflow::parse_import_release_for_title`); see
-    // `canonical_import_parse_derives_title_facet_guide_facts` in
-    // `import/app_usecase_import_tests.rs`.
-
     fn criteria(tiers: &[&str]) -> crate::QualityProfileCriteria {
         let tiers = tiers
             .iter()
@@ -2101,6 +2155,129 @@ mod tests {
         ))
         .expect("profile fixture should parse")
         .criteria
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[test]
+    fn recoverable_scores_post_download_sums_all_rules_once() {
+        let profile = crate::QualityProfile::default();
+        let parsed = crate::parse_release_metadata("Movie.2024.1080p.WEB-DL.H.264-GROUP");
+        let baseline = build_import_profile_decision(
+            &profile,
+            &parsed,
+            "movie",
+            crate::quality_profile::CoverageSizeBasis::default(),
+            None,
+            false,
+        );
+        for rescued in [false, true] {
+            let mut decision = baseline.clone();
+            let mut entries = vec![scryer_rules::UserRuleEntry {
+                code: "penalty".into(),
+                delta: -10_000,
+                rule_set_id: "pack".into(),
+                rule_set_name: "Pack".into(),
+                origin: scryer_rules::PolicyOrigin::System,
+            }];
+            if rescued {
+                entries.push(scryer_rules::UserRuleEntry {
+                    code: "boost".into(),
+                    delta: 20_000,
+                    rule_set_id: "custom".into(),
+                    rule_set_name: "Custom".into(),
+                    origin: scryer_rules::PolicyOrigin::User,
+                });
+            }
+            let codes = finalize_post_download_rule_scores(&profile, &mut decision, entries);
+            assert_eq!(codes.is_empty(), rescued);
+            assert_eq!(codes.iter().any(|code| code == "penalty"), !rescued);
+            assert_eq!(
+                decision.release_score,
+                baseline.release_score - 10_000 + if rescued { 20_000 } else { 0 }
+            );
+            assert_eq!(
+                decision
+                    .scoring_log
+                    .iter()
+                    .filter(|entry| entry.code == "penalty")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[test]
+    fn recoverable_scores_post_download_preserves_existing_grab_refusals() {
+        let profile = crate::QualityProfile::parse(
+            r#"{"id":"p","name":"P","criteria":{"quality_tiers":["1080P"],"min_score_to_grab":100000}}"#,
+        )
+        .unwrap();
+        let parsed = crate::parse_release_metadata("Movie.2024.1080p.WEB-DL.H.264-GROUP");
+        let baseline = build_import_profile_decision(
+            &profile,
+            &parsed,
+            "movie",
+            crate::quality_profile::CoverageSizeBasis::default(),
+            None,
+            false,
+        );
+        let entries = |deltas: &[i32]| {
+            deltas
+                .iter()
+                .enumerate()
+                .map(|(index, &delta)| scryer_rules::UserRuleEntry {
+                    code: format!("contribution_{index}"),
+                    delta,
+                    rule_set_id: "custom".into(),
+                    rule_set_name: "Custom".into(),
+                    origin: scryer_rules::PolicyOrigin::User,
+                })
+                .collect()
+        };
+
+        // Enabling an irrelevant rule or recovering its penalty must not turn
+        // a preexisting grab-floor refusal into a new import refusal.
+        for deltas in [&[][..], &[0], &[20_000], &[-10_000, 20_000]] {
+            let mut decision = baseline.clone();
+            let rejected =
+                finalize_post_download_rule_scores(&profile, &mut decision, entries(deltas));
+            assert!(rejected.is_empty(), "{deltas:?}: {rejected:?}");
+            assert!(
+                decision
+                    .block_codes
+                    .iter()
+                    .any(|code| code == "score_below_minimum")
+            );
+        }
+
+        // A net-negative rule still refuses a completed total below the gate,
+        // including when the built-in subtotal already failed both gates.
+        for builtin_penalty in [0, -20_000] {
+            let mut decision = baseline.clone();
+            decision.log_with_source(
+                "ordinary_builtin_penalty",
+                builtin_penalty,
+                crate::quality_profile::ScoringSource::Builtin,
+            );
+            let rejected =
+                finalize_post_download_rule_scores(&profile, &mut decision, entries(&[-10_000]));
+            assert!(
+                rejected
+                    .iter()
+                    .any(|code| code == "score_at_or_below_block_threshold")
+            );
+            assert!(rejected.iter().any(|code| code == "score_below_minimum"));
+        }
+
+        // Wide accumulation determines the sign independently of rule order.
+        for deltas in [[i32::MAX, 20_000, i32::MIN], [i32::MIN, 20_000, i32::MAX]] {
+            let mut decision = baseline.clone();
+            assert!(
+                finalize_post_download_rule_scores(&profile, &mut decision, entries(&deltas),)
+                    .is_empty()
+            );
+        }
     }
 
     #[cfg(feature = "runtime-media-analysis")]
@@ -2148,6 +2325,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "post_download",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,

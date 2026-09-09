@@ -488,12 +488,14 @@ export const deleteProxyConfigMutation = `mutation DeleteProxyConfig($id: ID!) {
 }
 }`;
 
-export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!) {
-  testProxyConfig(id: $id) {
+export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!, $url: String) {
+  testProxyConfig(id: $id, url: $url) {
     ok
     status
     message
     durationMs
+    observedIp
+    httpStatus
   }
 }`;
 
@@ -859,6 +861,7 @@ export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSett
 
 export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
   updateGeneralSettings(input: $input) {
+    apiExplorerEnabled
     experimentalFeaturesEnabled
     personalizedDiscoveryEnabled
     srrdbFilenameRecoveryEnabled
@@ -2253,6 +2256,9 @@ export const createRuleSetMutation = `mutation CreateRuleSet($input: CreateRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2270,6 +2276,9 @@ export const updateRuleSetMutation = `mutation UpdateRuleSet($input: UpdateRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2293,6 +2302,9 @@ export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2349,6 +2361,7 @@ export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInpu
         code
         delta
         blocked
+        kind
       }
       messages
     }
@@ -2452,6 +2465,14 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
     matcherContentHash
     evaluatedAt
     titles {
+      excluded
+      dueAt
+      dueAtIsEstimate
+      subjectKind
+      subjectId
+      subjectLabel
+      fileCount
+      totalSizeBytes
       titleId
       titleName
       facet

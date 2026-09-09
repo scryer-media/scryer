@@ -604,13 +604,18 @@ impl ConfigMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Proxy configuration identity to test.")] id: ID,
+        #[graphql(
+            desc = "HTTP(S) URL to fetch through this proxy or solver. Omit for the existing health check."
+        )]
+        url: Option<String>,
     ) -> GqlResult<ProxyTestResultPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
-        let result = app
-            .test_proxy_config(&actor, id.as_ref())
-            .await
-            .map_err(to_gql_error)?;
+        let result = match url {
+            Some(url) => app.test_proxy_url(&actor, id.as_ref(), &url).await,
+            None => app.test_proxy_config(&actor, id.as_ref()).await,
+        }
+        .map_err(to_gql_error)?;
         Ok(from_proxy_test_result(result))
     }
 

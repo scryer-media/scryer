@@ -171,7 +171,7 @@ test("every provider belongs to exactly one family", () => {
   assert.equal(proxyProviderFamily("wireguard"), "tunnel");
   assert.equal(isProxyProviderType("wireguard"), true);
   assert.deepEqual(PROXY_PROVIDER_TYPES_BY_FAMILY.tunnel, [
-    "ssh_tunnel",
+    "http3",    "ssh_tunnel",
     "wireguard",
   ]);
   // A provider from a newer server still has no family rather than a wrong one.
@@ -304,7 +304,7 @@ test("every provider has a default endpoint matching its own scheme", () => {
   assert.equal(PROXY_INITIAL_DRAFT.baseUrl, PROXY_DEFAULT_BASE_URLS.byparr);
   // A fresh draft opts into nothing that has to be cleared later.
   assert.equal(PROXY_INITIAL_DRAFT.clearCredentials, false);
-  assert.equal(PROXY_INITIAL_DRAFT.clearPassword, false);
+  assert.equal("clearPassword" in PROXY_INITIAL_DRAFT, false);
   assert.equal(PROXY_INITIAL_DRAFT.clearPrivateKey, false);
   assert.equal(PROXY_INITIAL_DRAFT.hasStoredPrivateKey, false);
   assert.equal(PROXY_INITIAL_DRAFT.clearPresharedKey, false);

@@ -1596,6 +1596,9 @@ impl AppUseCase {
                 category: r.category,
                 rego_source: r.rego_source,
                 applied_facets: r.applied_facets,
+                evaluation_phase: r.evaluation_phase,
+                default_enabled: r.default_enabled,
+                exclusive_group: r.exclusive_group,
             })
             .collect();
         Ok(VerifiedRulePack {

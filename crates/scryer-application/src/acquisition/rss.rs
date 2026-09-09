@@ -2951,6 +2951,132 @@ mod tests {
     use super::*;
     use scryer_domain::{MediaFacet, Title};
 
+    #[tokio::test]
+    async fn recoverable_scores_agree_in_search_rss_and_pending_reevaluation() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                scryer_domain::NewTitle {
+                    name: "Score Movie".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    tags: vec!["scryer:quality-profile:1080p".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let raw = "Score.Movie.2024.1080p.WEB-DL.H.264-GROUP";
+        let release = IndexerSearchResult {
+            indexer_id: None,
+            source: "fixture".into(),
+            title: raw.into(),
+            link: None,
+            download_url: None,
+            // This scoring fixture has no configured download client.
+            source_kind: None,
+            size_bytes: None,
+            published_at: None,
+            thumbs_up: None,
+            thumbs_down: None,
+            indexer_languages: None,
+            indexer_subtitles: None,
+            indexer_grabs: None,
+            password_hint: None,
+            parsed_release_metadata: None,
+            quality_profile_decision: None,
+            extra: Default::default(),
+            response_attributes: Default::default(),
+            guid: None,
+            info_url: None,
+            provenance: None,
+            candidate_token: None,
+            queue_scope: None,
+            coverage_scope: None,
+            auto_eligible: None,
+            auto_decision_code: None,
+            auto_decision_summary: None,
+        };
+        let parse_context = crate::release_parser::build_release_parse_context_for_title(
+            &title,
+            &[],
+            Some("movie"),
+        );
+        let profile = app.resolve_quality_profile_for_title(&title).await.unwrap();
+        for rescued in [false, true] {
+            let mut policies = vec![scryer_rules::UserPolicy {
+                id: "pack".into(),
+                name: "Pack".into(),
+                applied_facets: vec![],
+                origin: scryer_rules::PolicyOrigin::System,
+                rego_source: scryer_rules::rewrite_package_declaration(
+                    "score_entry[\"penalty\"] := scryer.block_score()",
+                    "pack",
+                ),
+            }];
+            if rescued {
+                policies.push(scryer_rules::UserPolicy {
+                    id: "boost".into(), name: "Boost".into(), applied_facets: vec![],
+                    origin: scryer_rules::PolicyOrigin::User,
+                    rego_source: scryer_rules::rewrite_package_declaration("score_entry[\"boost\"] := 20000 if { lower(input.release.release_group) == \"group\" }", "boost"),
+                });
+            }
+            *app.services.customization.user_rules.write().unwrap() =
+                scryer_rules::UserRulesEngine::build(&policies).unwrap();
+            let rss = app
+                .score_rss_releases(
+                    std::slice::from_ref(&release),
+                    &title.id,
+                    &title.library_id,
+                    None,
+                    None,
+                    Some("movie".into()),
+                    &title.tags,
+                    title.runtime_minutes,
+                    &parse_context,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let search = app
+                .score_release_results(
+                    vec![release.clone()],
+                    &profile,
+                    &title.id,
+                    None,
+                    title.runtime_minutes,
+                    &parse_context,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let context = app
+                .resolve_canonical_scoring_context(&title, &profile)
+                .await;
+            let parked = crate::quality::canonical_context::score_parked_release_title(
+                &title,
+                raw,
+                None,
+                &[],
+                &[],
+                &context,
+            );
+            let rss_decision = rss[0].quality_profile_decision.as_ref().unwrap();
+            assert_eq!(rss_decision.allowed, rescued, "{rss_decision:?}");
+            assert_eq!(
+                search[0].quality_profile_decision.as_ref().unwrap(),
+                rss_decision
+            );
+            assert_eq!(parked.allowed, rescued);
+            assert_eq!(parked.score, rss_decision.release_score);
+        }
+    }
+
     #[test]
     fn multilingual_spelling_rss_retains_raw_id_proof() {
         let mut title = make_title("popes", "Die zwei Päpste", Some(2019));

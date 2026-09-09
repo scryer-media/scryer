@@ -579,6 +579,8 @@ pub struct ProxyTestResult {
     pub status: scryer_domain::ProxyHealthStatus,
     pub message: Option<String>,
     pub duration_ms: Option<u64>,
+    pub observed_ip: Option<String>,
+    pub http_status: Option<u16>,
 }
 
 impl IndexerConfigUpdate {

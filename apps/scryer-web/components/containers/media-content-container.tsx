@@ -4634,7 +4634,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         if (library) {
           setSelectedLibraryIds([library.id]);
           setGlobalStatus(t("settings.libraryCreated"));
-          toast.success(t("settings.libraryCreated"));
         }
         return library;
       } catch (error) {
@@ -4686,7 +4685,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         await refreshRootValidationLibraries();
         if (library) {
           setGlobalStatus(t("settings.librarySaved"));
-          toast.success(t("settings.librarySaved"));
         }
         return library;
       } catch (error) {

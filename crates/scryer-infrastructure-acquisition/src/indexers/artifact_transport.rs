@@ -1,5 +1,5 @@
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use scryer_application::challenge_solver as solver;
@@ -41,6 +41,7 @@ pub enum ArtifactFetchResponse {
 #[derive(Clone)]
 pub struct IndexerArtifactTransport {
     outbound_http: OutboundHttpClient,
+    proxy_clients: Arc<Mutex<HashMap<String, ArtifactProxyClient>>>,
     indexer_configs: Arc<dyn IndexerConfigRepository>,
     proxy_configs: Arc<dyn ProxyConfigRepository>,
     indexer_stats: Arc<dyn IndexerStatsTracker>,
@@ -48,6 +49,16 @@ pub struct IndexerArtifactTransport {
     /// artifacts ahead of the host's direct, transport-proxy, and
     /// challenge-solver fetches.
     indexer_plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+}
+
+const MAX_ARTIFACT_PROXY_CLIENTS: usize = 32;
+const ARTIFACT_PROXY_CLIENT_TTL: Duration = Duration::from_secs(300);
+
+struct ArtifactProxyClient {
+    revision: String,
+    endpoint: String,
+    created_at: Instant,
+    client: reqwest::Client,
 }
 
 /// How one artifact hop leaves the host.
@@ -91,6 +102,7 @@ impl IndexerArtifactTransport {
                 generic_reqwest_client(),
                 RateLimitRegistry::new(),
             ),
+            proxy_clients: Arc::new(Mutex::new(HashMap::new())),
             indexer_configs,
             proxy_configs,
             indexer_stats: Arc::new(NullIndexerStatsTracker),
@@ -176,6 +188,51 @@ impl IndexerArtifactTransport {
         client.resolve_download(download_url).await
     }
 
+    /// Reuse connection pools across artifact requests and redirect hops. The
+    /// cache belongs to this transport, carries no indexer credentials, and
+    /// never bypasses the route lookup or the redirect loop's per-hop checks.
+    fn proxy_client(&self, proxy: &ProxyConfig) -> Result<reqwest::Client, String> {
+        let revision = transport_proxy::transport_proxy_revision(proxy);
+        // A restarted tunnel front must invalidate the pool even if settings
+        // did not change. SSH also rechecks the current host-key decision here.
+        let endpoint = transport_proxy::proxy_egress_url(proxy)?;
+        let mut clients = self
+            .proxy_clients
+            .lock()
+            .expect("artifact proxy client cache lock");
+        clients.retain(|_, entry| entry.created_at.elapsed() < ARTIFACT_PROXY_CLIENT_TTL);
+        if let Some(entry) = clients.get(&proxy.id)
+            && entry.revision == revision
+            && entry.endpoint == endpoint
+        {
+            return Ok(entry.client.clone());
+        }
+        clients.remove(&proxy.id);
+        let client = transport_proxy::transport_proxied_reqwest_client_with_redirect_policy(
+            proxy,
+            "",
+            reqwest::redirect::Policy::none(),
+        )?;
+        if clients.len() >= MAX_ARTIFACT_PROXY_CLIENTS
+            && let Some(oldest) = clients
+                .iter()
+                .min_by_key(|(_, entry)| entry.created_at)
+                .map(|(id, _)| id.clone())
+        {
+            clients.remove(&oldest);
+        }
+        clients.insert(
+            proxy.id.clone(),
+            ArtifactProxyClient {
+                revision,
+                endpoint,
+                created_at: Instant::now(),
+                client: client.clone(),
+            },
+        );
+        Ok(client)
+    }
+
     /// Pick the client and URL for one redirect hop under the chosen egress.
     async fn hop_target(
         &self,
@@ -218,12 +275,10 @@ impl IndexerArtifactTransport {
                         "Scryer refused an unsafe download artifact destination.".into(),
                     )
                 })?;
-                let client = transport_proxy::transport_proxied_reqwest_client(proxy, "").map_err(
-                    |message| {
-                        transport_proxy::record_transport_proxy_failure(proxy, &message);
-                        AppError::DownloadSubmitUnavailable(message)
-                    },
-                )?;
+                let client = self.proxy_client(proxy).map_err(|message| {
+                    transport_proxy::record_transport_proxy_failure(proxy, &message);
+                    AppError::DownloadSubmitUnavailable(message)
+                })?;
                 Ok((client, url))
             }
         }
@@ -1387,6 +1442,102 @@ mod tests {
         gate: Option<scryer_application::IndexerDispatchGate>,
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn artifact_proxy_pool_reuses_connections_and_expires_on_profile_edits() {
+        use scryer_tunnel::test_support::{CLIENT_ED25519_PEM, SshServerDouble, SshServerOptions};
+        let ssh = SshServerDouble::start(SshServerOptions::default()).await;
+        let origin = MockServer::start().await;
+        Mock::given(path("/artifact"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("artifact"))
+            .mount(&origin)
+            .await;
+        Mock::given(path("/redirect"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/artifact"))
+            .mount(&origin)
+            .await;
+        let transport = transport(Arc::new(CountingStats::default()));
+        let mut proxy = test_proxy(&format!("ssh://{}", ssh.addr()), true);
+        proxy.id = "artifact-proxy-pool".into();
+        proxy.provider_type = scryer_domain::ProxyProviderType::SshTunnel;
+        proxy.protocol = None;
+        proxy.username_encrypted = Some("operator".into());
+        proxy.private_key_encrypted = Some(CLIENT_ED25519_PEM.into());
+        for _ in 0..3 {
+            let client = transport.proxy_client(&proxy).unwrap();
+            assert_eq!(
+                client
+                    .get(format!("{}/artifact", origin.uri()))
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                "artifact"
+            );
+        }
+        assert_eq!(
+            ssh.forwarded_targets().len(),
+            1,
+            "three requests share a single SSH channel and TCP connection"
+        );
+        let client = transport.proxy_client(&proxy).unwrap();
+        let response = client
+            .get(format!("{}/redirect", origin.uri()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            302,
+            "redirect policy remains owned by the artifact loop"
+        );
+        response.bytes().await.unwrap();
+        proxy.updated_at += chrono::Duration::seconds(1);
+        let client = transport.proxy_client(&proxy).unwrap();
+        assert_eq!(
+            client
+                .get(format!("{}/artifact", origin.uri()))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "artifact"
+        );
+        assert_eq!(ssh.forwarded_targets().len(), 2);
+        {
+            let mut clients = transport.proxy_clients.lock().unwrap();
+            clients.get_mut(&proxy.id).unwrap().created_at -= ARTIFACT_PROXY_CLIENT_TTL;
+        }
+        let client = transport.proxy_client(&proxy).unwrap();
+        assert_eq!(
+            client
+                .get(format!("{}/artifact", origin.uri()))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "artifact"
+        );
+        assert_eq!(ssh.forwarded_targets().len(), 3);
+        scryer_application::tunnel_proxy::stop_tunnel(&proxy.id);
+        for i in 0..40 {
+            let mut proxy = test_proxy("http://127.0.0.1:1", true);
+            proxy.id = format!("bounded-cache-{i}");
+            proxy.provider_type = scryer_domain::ProxyProviderType::Http;
+            proxy.protocol = None;
+            transport.proxy_client(&proxy).unwrap();
+        }
+        assert_eq!(
+            transport.proxy_clients.lock().unwrap().len(),
+            MAX_ARTIFACT_PROXY_CLIENTS
+        );
+    }
+
     impl IndexerStatsTracker for CountingStats {
         fn dispatch_gate(&self) -> Option<scryer_application::IndexerDispatchGate> {
             self.gate.clone()
@@ -1722,8 +1873,14 @@ mod tests {
         ) -> AppResult<()> {
             Ok(())
         }
-        async fn pin_host_key(&self, _: &str, _: &str, _: chrono::DateTime<Utc>) -> AppResult<()> {
-            Ok(())
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(true)
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())

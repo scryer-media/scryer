@@ -41,8 +41,8 @@ use tracing::{debug, warn};
 use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness, build_title_input,
-    unknown_reason,
+    MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness,
+    build_subject_input, unknown_reason,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
 use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
@@ -137,6 +137,9 @@ pub struct MaintenanceGatesUpdate {
 /// honest answer to "what was this".
 #[derive(Clone, Debug)]
 pub struct MaintenanceCandidateView {
+    pub subject_label: String,
+    pub file_count: Option<i64>,
+    pub total_size_bytes: Option<i64>,
     pub candidate: LifecycleCandidate,
     pub rule_name: String,
     pub title_name: String,
@@ -144,6 +147,7 @@ pub struct MaintenanceCandidateView {
 
 #[derive(Clone, Debug)]
 pub struct MaintenanceExclusionView {
+    pub subject_label: String,
     pub exclusion: MaintenanceRuleExclusion,
     pub title_name: String,
 }
@@ -348,9 +352,24 @@ impl AppUseCase {
             .maintenance_title_names(exclusions.iter().map(|row| row.title_id.clone()))
             .await?;
 
+        let summaries = self
+            .maintenance_subject_summaries(exclusions.iter().map(|row| {
+                (
+                    row.subject_kind.as_storage_str().to_string(),
+                    row.title_id.clone(),
+                )
+            }))
+            .await?;
         Ok(exclusions
             .into_iter()
             .map(|exclusion| MaintenanceExclusionView {
+                subject_label: summaries
+                    .get(&(
+                        exclusion.subject_kind.as_storage_str().to_string(),
+                        exclusion.subject_id.clone(),
+                    ))
+                    .map(|summary| summary.0.clone())
+                    .unwrap_or_else(|| exclusion.subject_id.clone()),
                 title_name: maintenance_title_name(&names, &exclusion.title_id),
                 exclusion,
             })
@@ -370,6 +389,26 @@ impl AppUseCase {
         rule_set_id: Option<String>,
         reason: Option<String>,
     ) -> AppResult<MaintenanceExclusionView> {
+        self.exclude_maintenance_scoped_subject(
+            actor,
+            title_id,
+            scryer_domain::MaintenanceRuleSubjectKind::Title,
+            title_id,
+            rule_set_id,
+            reason,
+        )
+        .await
+    }
+
+    pub async fn exclude_maintenance_scoped_subject(
+        &self,
+        actor: &User,
+        title_id: &str,
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind,
+        subject_id: &str,
+        rule_set_id: Option<String>,
+        reason: Option<String>,
+    ) -> AppResult<MaintenanceExclusionView> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
@@ -384,10 +423,15 @@ impl AppUseCase {
             self.require_maintenance_rule_set(rule_set_id).await?;
         }
 
+        let subject = self
+            .maintenance_resolve_subject(subject_kind.as_storage_str(), subject_id, &title, &[])
+            .await?;
         let exclusion = MaintenanceRuleExclusion {
             id: Id::new().0,
             rule_set_id,
             title_id: title.id.clone(),
+            subject_kind,
+            subject_id: subject_id.to_string(),
             reason: reason.unwrap_or_default(),
             created_by: Some(actor.id.clone()),
             created_at: Utc::now(),
@@ -399,6 +443,7 @@ impl AppUseCase {
             .await?;
 
         Ok(MaintenanceExclusionView {
+            subject_label: subject.label,
             exclusion,
             title_name: title.name,
         })
@@ -493,9 +538,26 @@ impl AppUseCase {
             .maintenance_title_names(visible.iter().map(|candidate| candidate.title_id.clone()))
             .await?;
 
+        let summaries = self
+            .maintenance_subject_summaries(
+                visible
+                    .iter()
+                    .map(|row| (row.subject_kind.clone(), row.title_id.clone())),
+            )
+            .await?;
         Ok(visible
             .into_iter()
             .map(|candidate| MaintenanceCandidateView {
+                subject_label: summaries
+                    .get(&(candidate.subject_kind.clone(), candidate.subject_id.clone()))
+                    .map(|summary| summary.0.clone())
+                    .unwrap_or_else(|| candidate.subject_id.clone()),
+                file_count: summaries
+                    .get(&(candidate.subject_kind.clone(), candidate.subject_id.clone()))
+                    .map(|summary| summary.1),
+                total_size_bytes: summaries
+                    .get(&(candidate.subject_kind.clone(), candidate.subject_id.clone()))
+                    .map(|summary| summary.2),
                 rule_name: rules_by_id
                     .get(&candidate.rule_set_id)
                     .map(|rule_set| rule_set.name.clone())
@@ -830,9 +892,14 @@ impl AppUseCase {
         })?;
         let mut evaluator = engine.evaluator();
 
-        let excluded = self.maintenance_excluded_title_ids(&rule_set.id).await?;
-        let titles = self.maintenance_scoped_titles(rule_set).await?;
-        let in_scope: HashSet<String> = titles.iter().map(|title| title.id.clone()).collect();
+        let excluded = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_exclusions(Some(&rule_set.id))
+            .await?;
+
+        let mut in_scope: HashSet<String> = HashSet::new();
         // Users are read once for the whole rule, not per chunk: the roster is
         // small and bounded, and one snapshot keeps every subject in the run
         // resolving names against the same view, exactly like the clock.
@@ -842,7 +909,26 @@ impl AppUseCase {
         let watch_context = self.maintenance_watch_context().await?;
 
         let mut counts = RuleCounts::default();
-        for chunk in titles.chunks(MAINTENANCE_EVALUATION_TITLE_CHUNK) {
+        let mut after_id = None;
+        loop {
+            let page = self
+                .services
+                .catalog
+                .titles
+                .list_page_after_id(after_id.clone(), MAINTENANCE_EVALUATION_TITLE_CHUNK)
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            after_id = page.last().map(|title| title.id.clone());
+            let selected: Vec<_> = page
+                .into_iter()
+                .filter(|title| {
+                    rule_set.library_ids.is_empty()
+                        || rule_set.library_ids.contains(&title.library_id)
+                })
+                .collect();
+            let chunk = selected.as_slice();
             let files_by_title = self.maintenance_files_for_titles(chunk).await?;
             let series_movies_by_title = self.maintenance_series_movies_for_titles(chunk).await?;
             let requesters_by_title = self.maintenance_requesters_for_titles(chunk).await?;
@@ -885,36 +971,42 @@ impl AppUseCase {
                         .map(Vec::as_slice),
                     store_readable: claims_by_title.is_some(),
                 };
-                if let Err(error) = self
-                    .reconcile_maintenance_title(
-                        detail,
-                        &mut evaluator,
-                        title,
-                        files,
-                        people,
-                        watch,
-                        claims,
-                        series_movies_by_title
-                            .get(&title.id)
-                            .map(Vec::as_slice)
-                            .unwrap_or_default(),
-                        libraries,
-                        &excluded,
-                        evaluation_time,
-                        &mut counts,
-                    )
-                    .await
+                for subject in self
+                    .maintenance_subjects_for_title(rule_set.subject_kind, title, files)
+                    .await?
                 {
-                    // One subject's write or evaluation failing is bounded to
-                    // that subject: the rule keeps going and the count carries
-                    // the failure into the run row.
-                    counts.errors += 1;
-                    warn!(
-                        rule_set_id = rule_set.id.as_str(),
-                        title_id = title.id.as_str(),
-                        error = %error,
-                        "maintenance evaluation failed for one subject"
-                    );
+                    in_scope.insert(subject.id.clone());
+                    if let Err(error) = self
+                        .reconcile_maintenance_title(
+                            detail,
+                            &mut evaluator,
+                            title,
+                            &subject,
+                            people,
+                            watch,
+                            claims,
+                            series_movies_by_title
+                                .get(&title.id)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default(),
+                            libraries,
+                            &excluded,
+                            evaluation_time,
+                            &mut counts,
+                        )
+                        .await
+                    {
+                        // One subject's write or evaluation failing is bounded to
+                        // that subject: the rule keeps going and the count carries
+                        // the failure into the run row.
+                        counts.errors += 1;
+                        warn!(
+                            rule_set_id = rule_set.id.as_str(),
+                            title_id = title.id.as_str(),
+                            error = %error,
+                            "maintenance evaluation failed for one subject"
+                        );
+                    }
                 }
             }
         }
@@ -964,7 +1056,7 @@ impl AppUseCase {
             .await?;
 
         for candidate in live {
-            if in_scope.contains(&candidate.title_id) {
+            if in_scope.contains(&candidate.subject_id) {
                 continue;
             }
             if candidates
@@ -990,13 +1082,13 @@ impl AppUseCase {
         detail: &MaintenanceRuleSetDetail,
         evaluator: &mut MaintenanceRulesEvaluator,
         title: &Title,
-        files: &[crate::types::TitleMediaFile],
+        subject: &super::subjects::MaintenanceSubject,
         people: MaintenanceTitlePeople<'_>,
         watch: MaintenanceTitleWatch<'_>,
         claims: MaintenanceTitleClaims<'_>,
         series_movies: &[MaintenanceSeriesMovieDoc],
         libraries: &HashMap<String, MaintenanceLibraryRef>,
-        excluded: &HashSet<String>,
+        excluded: &[MaintenanceRuleExclusion],
         evaluation_time: DateTime<Utc>,
         counts: &mut RuleCounts,
     ) -> AppResult<()> {
@@ -1004,7 +1096,7 @@ impl AppUseCase {
         let candidates = &self.services.customization.maintenance_evaluation;
 
         let mut active = candidates
-            .get_active_candidate(rule_set_id, &title.id)
+            .get_active_subject_candidate(rule_set_id, subject.kind.as_storage_str(), &subject.id)
             .await?;
 
         // A candidate under an execution lease belongs to the action handler for
@@ -1029,7 +1121,7 @@ impl AppUseCase {
         // Exclusions are honoured from the first shadow evaluation (RFC 11):
         // an excluded subject is never evaluated, and an existing candidate for
         // it becomes terminal rather than lingering as live membership.
-        if excluded.contains(&title.id) {
+        if subject.excluded_by(&title.id, excluded) {
             if let Some(candidate) = active
                 && candidates
                     .transition_candidate_state(
@@ -1077,16 +1169,22 @@ impl AppUseCase {
                 id: title.library_id.clone(),
                 name: String::new(),
             });
-        let input = build_title_input(
+        let mut input = build_subject_input(
             evaluation_time,
             title,
             &library,
-            files,
+            subject,
             people,
             watch,
             claims,
             series_movies,
         );
+        if let Some(candidate) = active.as_ref()
+            && candidate.action_kind == "unmonitor_scope_delete_files"
+            && let Some(checkpoint) = self.maintenance_deletion_checkpoint(candidate).await?
+        {
+            checkpoint.baseline.restore(&mut input);
+        }
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;
 
@@ -1127,7 +1225,11 @@ impl AppUseCase {
                     }
                     None => {
                         let generation = candidates
-                            .max_match_generation(rule_set_id, &title.id)
+                            .max_subject_match_generation(
+                                rule_set_id,
+                                subject.kind.as_storage_str(),
+                                &subject.id,
+                            )
                             .await?
                             + 1;
                         let grace_days = detail.revision.grace_days.max(0);
@@ -1138,6 +1240,7 @@ impl AppUseCase {
                                 revision_number: detail.rule_set.current_revision_number,
                                 matcher_content_hash: detail.revision.matcher_content_hash.clone(),
                                 title_id: title.id.clone(),
+                                subject_id: subject.id.clone(),
                                 library_id: title.library_id.clone(),
                                 facet: title.facet.as_str().to_string(),
                                 subject_kind: detail
@@ -1196,39 +1299,6 @@ impl AppUseCase {
         }
 
         Ok(())
-    }
-
-    /// Global exclusions plus this rule's own, as a subject lookup set.
-    async fn maintenance_excluded_title_ids(
-        &self,
-        rule_set_id: &str,
-    ) -> AppResult<HashSet<String>> {
-        Ok(self
-            .services
-            .customization
-            .maintenance_evaluation
-            .list_exclusions(Some(rule_set_id))
-            .await?
-            .into_iter()
-            .map(|exclusion| exclusion.title_id)
-            .collect())
-    }
-
-    /// Every title the rule is scoped to. An empty library scope means the
-    /// whole catalog.
-    async fn maintenance_scoped_titles(
-        &self,
-        rule_set: &MaintenanceRuleSet,
-    ) -> AppResult<Vec<Title>> {
-        if rule_set.library_ids.is_empty() {
-            self.services.catalog.titles.list(None, None).await
-        } else {
-            self.services
-                .catalog
-                .titles
-                .list_for_libraries(None, &rule_set.library_ids, None)
-                .await
-        }
     }
 
     /// One batched media-file load per chunk, grouped by title, exactly as
@@ -1515,17 +1585,33 @@ impl AppUseCase {
         }
         let title_ids: Vec<String> = titles
             .iter()
-            .filter(|title| matches!(title.facet, scryer_domain::MediaFacet::Movie))
+            .filter(|title| title.facet == scryer_domain::MediaFacet::Movie)
             .map(|title| title.id.clone())
             .collect();
-        if title_ids.is_empty() {
-            return Ok(HashMap::new());
+        let series_ids: Vec<String> = titles
+            .iter()
+            .filter(|title| title.facet != scryer_domain::MediaFacet::Movie)
+            .map(|title| title.id.clone())
+            .collect();
+        let mut signals = if title_ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.services
+                .integrations
+                .media_server_signals
+                .movie_signals_for_titles(&title_ids)
+                .await?
+        };
+        if !series_ids.is_empty() {
+            signals.extend(
+                self.services
+                    .integrations
+                    .media_server_signals
+                    .episode_signals_for_titles(&series_ids)
+                    .await?,
+            );
         }
-        self.services
-            .integrations
-            .media_server_signals
-            .movie_signals_for_titles(&title_ids)
-            .await
+        Ok(signals)
     }
 
     /// Username by user id, read once per evaluation run.

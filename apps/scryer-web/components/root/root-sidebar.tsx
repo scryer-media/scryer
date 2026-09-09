@@ -37,6 +37,7 @@ import {
   Bell,
   BookOpen,
   Captions,
+  Code2,
   ChevronDown,
   Database,
   Download,
@@ -71,7 +72,7 @@ import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
 import { setMyUiSettingsMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
+import { useExperimentalFeaturesEnabled, useInstanceFeatures } from "@/lib/context/instance-features-context";
 import {
   useUiSettings,
   uiSettingsInputFromSettings,
@@ -86,6 +87,7 @@ import {
 } from "@/lib/utils/permissions";
 import type { AppPermission, LibraryPermission } from "@/lib/utils/permissions";
 import {
+  canAccessApiExplorer,
   canAccessDashboard,
   canAccessSystemSection,
 } from "@/lib/utils/routes";
@@ -112,6 +114,7 @@ type TopNavGroup = {
 
 type TopNavGroupItemDefinition =
   | { kind: "view"; id: ViewId }
+  | { kind: "apiExplorer"; icon: LucideIcon }
   | { kind: "requests"; icon: LucideIcon }
   | { kind: "logs"; id: LogsSection; labelKey: string; icon: LucideIcon }
   | { kind: "system"; id: SystemSection; labelKey: string; icon: LucideIcon }
@@ -141,6 +144,12 @@ function isSettingsNavEntryActive(
 
 type TopNavGroupItem =
   | (NavItem & { kind: "view" })
+  | {
+      kind: "apiExplorer";
+      id: "api-explorer";
+      label: string;
+      icon: LucideIcon;
+    }
   | {
       kind: "requests";
       id: "requests";
@@ -231,6 +240,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       },
       { kind: "settings", id: "security", icon: ShieldCheck },
       { kind: "view", id: "system" },
+      { kind: "apiExplorer", icon: Code2 },
       { kind: "system", id: "jobs", labelKey: "system.jobsTitle", icon: Timer },
       {
         kind: "system",
@@ -637,6 +647,7 @@ function RootSidebarContent({
   const client = useClient();
   const t = useTranslate();
   const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const { apiExplorerEnabled } = useInstanceFeatures();
   const setGlobalStatus = useGlobalStatus();
   const { isMobile, setOpenMobile } = useSidebar();
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -842,6 +853,19 @@ function RootSidebarContent({
             },
           ];
         }
+        if (definition.kind === "apiExplorer") {
+          if (!canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)) {
+            return [];
+          }
+          return [
+            {
+              kind: "apiExplorer",
+              id: "api-explorer",
+              label: "API",
+              icon: definition.icon,
+            },
+          ];
+        }
         if (definition.kind === "requests") {
           if (!canManageTitle && !canRequestMedia) {
             return [];
@@ -907,6 +931,7 @@ function RootSidebarContent({
         ]
       : groups;
   }, [
+    apiExplorerEnabled,
     canManageSystemSettings,
     canManageTitle,
     canRequestMedia,
@@ -1149,6 +1174,26 @@ function RootSidebarContent({
               <SidebarMenu id={groupContentId} className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon;
+                  if (item.kind === "apiExplorer") {
+                    return (
+                      <React.Fragment key="api-explorer">
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            id="root-sidebar-api-explorer"
+                            tooltip="API"
+                            isActive={view === "api-explorer"}
+                            className={TOP_NAV_BUTTON_CLASS}
+                            onClick={(event) => {
+                              handleNavigate(event, "api-explorer");
+                            }}
+                          >
+                            <Icon className="h-4 w-4" />
+                            {item.label}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      </React.Fragment>
+                    );
+                  }
                   if (item.kind === "requests") {
                     return (
                       <React.Fragment key="requests">

@@ -64,6 +64,26 @@ impl ArtworkEncodingSummary {
 }
 
 impl AppUseCase {
+    async fn has_pending_artwork(&self) -> AppResult<bool> {
+        if !self
+            .services
+            .library
+            .title_images
+            .list_title_image_refresh_work(1, &[])
+            .await?
+            .is_empty()
+        {
+            return Ok(true);
+        }
+        Ok(!self
+            .services
+            .library
+            .image_proxy_cache_control
+            .list_cached_jpegs(1, None)
+            .await?
+            .is_empty())
+    }
+
     pub(crate) async fn artwork_progress(
         &self,
         run: &JobRunRecord,
@@ -125,6 +145,7 @@ impl AppUseCase {
             ..Default::default()
         };
         let mut skipped = Vec::new();
+        let mut jpeg_cursor: Option<(String, String)> = None;
         loop {
             if token.is_cancelled() {
                 summary.reason = "Stopped for shutdown; remaining artwork is pending".into();
@@ -166,7 +187,21 @@ impl AppUseCase {
                 .title_images
                 .list_title_image_refresh_work(workers, &skipped)
                 .await?;
-            if batch.is_empty() {
+            let jpegs = if batch.is_empty() {
+                self.services
+                    .library
+                    .image_proxy_cache_control
+                    .list_cached_jpegs(
+                        workers,
+                        jpeg_cursor
+                            .as_ref()
+                            .map(|(token, variant)| (token.as_str(), variant.as_str())),
+                    )
+                    .await?
+            } else {
+                Vec::new()
+            };
+            if batch.is_empty() && jpegs.is_empty() {
                 summary.reason = if summary.failed == 0 {
                     "Artwork backlog drained"
                 } else {
@@ -199,10 +234,26 @@ impl AppUseCase {
                             .title_images
                             .upsert_title_image_source_result(&task.title_id, image, None)
                             .await
-                            .map(|_| ()),
+                            .map(|_| true),
                         Err(error) => Err(error),
                     };
-                    (task, result)
+                    (Some(task), result)
+                });
+            }
+            for entry in jpegs.into_iter().take(workers) {
+                if token.is_cancelled() || (!manual && !artwork_window_open(&now())) {
+                    break;
+                }
+                jpeg_cursor = Some((entry.token.clone(), entry.variant.clone()));
+                let app = self.clone();
+                tasks.spawn(async move {
+                    let result = app.services.library.image_proxy_cache_control
+                        .optimize_cached_jpeg(entry.clone(), app.services.library.title_image_processor.clone())
+                        .await;
+                    if let Err(error) = &result {
+                        warn!(token = %entry.token, variant = %entry.variant, %error, "cached JPEG failed; deferring");
+                    }
+                    (None, result)
                 });
             }
             // The nightly cutoff drains admitted images; shutdown abandons them for a later run.
@@ -218,10 +269,13 @@ impl AppUseCase {
                 };
                 let Some(result) = result else { break };
                 match result {
-                    Ok((_, Ok(()))) => summary.processed += 1,
+                    Ok((_, Ok(true))) => summary.processed += 1,
+                    Ok((_, Ok(false))) => {}
                     Ok((task, Err(error))) => {
-                        warn!(title_id = %task.title_id, %error, "artwork image failed; deferring");
-                        skipped.push(task);
+                        if let Some(task) = task {
+                            warn!(title_id = %task.title_id, %error, "artwork image failed; deferring");
+                            skipped.push(task);
+                        }
                         summary.failed += 1;
                     }
                     Err(error) => {
@@ -316,14 +370,8 @@ pub async fn start_background_title_image_loop(app: AppUseCase, token: Cancellat
                     .is_empty()
             {
                 pending_wake = false;
-                let result = match app
-                    .services
-                    .library
-                    .title_images
-                    .list_title_image_refresh_work(1, &[])
-                    .await
-                {
-                    Ok(batch) if !batch.is_empty() => {
+                let result = match app.has_pending_artwork().await {
+                    Ok(true) => {
                         app.run_scheduled_job_now(
                             JobKey::ArtworkEncoding,
                             JobTriggerSource::ScheduledDaily,
@@ -359,6 +407,7 @@ pub async fn start_background_title_image_loop(app: AppUseCase, token: Cancellat
             _ = token.cancelled() => return,
             _ = app.runtime.catalog.poster_wake.notified() => pending_wake = true,
             _ = app.runtime.catalog.fanart_wake.notified() => pending_wake = true,
+            _ = app.services.library.image_proxy_cache_control.wait_for_cached_jpeg() => pending_wake = true,
             _ = tokio::time::sleep(SCHEDULE_POLL) => {},
         }
     }

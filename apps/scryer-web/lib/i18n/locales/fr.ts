@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const fr: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Exigence obligatoire non satisfaite",
+  "scoring.finalScoreRejection": "Score final refusé",
+  "settings.refFnBlockScore": "Renvoie -10000 comme pénalité que les autres scores peuvent compenser",
+  "settings.arrImportBlockScoreHelp": "Le score total doit dépasser -9000 et atteindre le minimum du profil. Les exigences obligatoires restent applicables.",
   "label.ready": "Prêt",
   "label.moreInfo": "Plus d'informations",
   "label.search": "Rechercher",
@@ -241,7 +245,7 @@ const fr: LocaleDictionary = {
   "settings.proxyDisabledHelp": "Le proxy affecté est désactivé.",
   "settings.proxyDisabledSuffix": "(désactivé)",
   "settings.proxyClearPassword": "Effacer le mot de passe enregistré",
-  "settings.proxyTunnelAuthHelp": "Un tunnel nécessite un nom d'utilisateur et soit un mot de passe, soit une clé privée.",
+  "settings.proxyTunnelAuthHelp": "SSH nécessite un nom d’utilisateur et une clé privée Ed25519. L’authentification par mot de passe n’est pas prise en charge.",
   "settings.proxyPrivateKey": "Clé privée",
   "settings.proxyPrivateKeyHelp": "seules les clés privées Ed25519 sont prises en charge ; générez-en une avec `ssh-keygen -t ed25519` et collez ici la clé privée OpenSSH",
   "settings.proxyPrivateKeyStored": "Clé privée définie",
@@ -255,7 +259,7 @@ const fr: LocaleDictionary = {
   "settings.proxyHostKeyReset": "Réinitialiser la clé d'hôte",
   "settings.proxyHostKeyResetDescription": "Oublier la clé d'hôte épinglée. La prochaine connexion fera confiance à celle que le serveur propose et l'épinglera : ne le faites que si vous savez que la clé du serveur a réellement changé.",
   "settings.proxyValidationTunnelUsername": "Un tunnel nécessite un nom d'utilisateur.",
-  "settings.proxyValidationTunnelAuth": "Un tunnel nécessite un mot de passe ou une clé privée.",
+  "settings.proxyValidationTunnelAuth": "Un tunnel SSH nécessite une clé privée Ed25519.",
   "settings.downloadClientProxyHelp": "N'importe quel type de proxy peut être affecté. Un solveur de défis n'a aucun effet sur un client natif, dont les requêtes ne sont pas émises par un plugin.",
   "status.proxyCreated": "Proxy créé.",
   "status.proxyUpdated": "Proxy mis à jour.",

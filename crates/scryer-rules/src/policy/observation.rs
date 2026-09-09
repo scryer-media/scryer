@@ -27,7 +27,7 @@ pub(crate) const KNOWN_STATUS: &str = "known";
 /// `Unknown`. It answers a different question — *why is there no value*, not
 /// *why could Scryer not look* — and is optional, so an absence with nothing
 /// useful to say still serializes without the field.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Observation<T: Serialize> {
     Known {

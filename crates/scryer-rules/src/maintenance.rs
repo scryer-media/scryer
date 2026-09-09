@@ -119,6 +119,8 @@ pub enum MaintenanceSubjectKind {
 /// are populated only for the matching subject kind.
 #[derive(Debug, Clone, Serialize)]
 pub struct MaintenanceSubjectDoc {
+    pub subject_id: String,
+    pub collection_id: Option<String>,
     pub kind: MaintenanceSubjectKind,
     pub title_id: String,
     pub season_number: Option<i32>,
@@ -236,7 +238,7 @@ pub struct MaintenanceSeriesMovieDoc {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct MaintenanceFileDoc {
     pub size_bytes: Option<i64>,
     pub quality: Option<String>,
@@ -527,6 +529,8 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
         evaluation_time: DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
             .expect("fixed synthetic timestamp is in range"),
         subject: MaintenanceSubjectDoc {
+            subject_id: "title-1".into(),
+            collection_id: None,
             kind: MaintenanceSubjectKind::Title,
             title_id: "title-1".to_string(),
             season_number: None,

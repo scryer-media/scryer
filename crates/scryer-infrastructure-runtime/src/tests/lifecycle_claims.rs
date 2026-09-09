@@ -153,8 +153,16 @@ async fn assert_claim_round_trip(store: &dyn LifecycleClaimRepository) -> AppRes
 
     // Expiry only touches active retention claims whose window has elapsed.
     let past = Utc::now() - chrono::Duration::days(1);
-    store.extend("claim-1", past, Utc::now()).await?;
-    assert_eq!(store.expire_due(Utc::now()).await?, 1);
+    store
+        .extend("claim-1", past, Utc::now())
+        .await
+        .expect_err("an extension must not shorten a live claim into the past");
+    assert_eq!(
+        store
+            .expire_due(extended_to + chrono::Duration::seconds(1))
+            .await?,
+        1
+    );
     assert_eq!(
         store.get("claim-1").await?.expect("claim exists").state,
         LifecycleClaimState::Expired

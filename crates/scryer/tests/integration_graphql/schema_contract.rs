@@ -5917,6 +5917,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(general_names.contains(&"keepHistoryForever"));
     assert!(general_names.contains(&"historyRetentionDays"));
     assert!(general_names.contains(&"experimentalFeaturesEnabled"));
+    assert!(general_names.contains(&"apiExplorerEnabled"));
     assert!(general_names.contains(&"personalizedDiscoveryEnabled"));
     assert!(general_names.contains(&"srrdbFilenameRecoveryEnabled"));
 
@@ -6124,6 +6125,7 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
     assert!(general_input_names.contains(&"keepHistoryForever"));
     assert!(general_input_names.contains(&"historyRetentionDays"));
     assert!(general_input_names.contains(&"experimentalFeaturesEnabled"));
+    assert!(general_input_names.contains(&"apiExplorerEnabled"));
     assert!(general_input_names.contains(&"personalizedDiscoveryEnabled"));
     assert!(general_input_names.contains(&"srrdbFilenameRecoveryEnabled"));
 }

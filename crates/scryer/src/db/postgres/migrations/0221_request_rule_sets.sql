@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0219_request_rule_sets.sql.
+-- PostgreSQL twin of migrations/0221_request_rule_sets.sql.
 -- Request rules (spec 0003 section 6): rule sets, their append-only matcher
 -- revisions, and the durable trace of every evaluation.
 CREATE TABLE request_rule_sets (
@@ -7,11 +7,23 @@ CREATE TABLE request_rule_sets (
     description text NOT NULL DEFAULT '',
     enabled boolean NOT NULL DEFAULT false,
     evaluation_mode text NOT NULL DEFAULT 'disabled',
-    library_ids text NOT NULL DEFAULT '[]',
     current_revision_number bigint NOT NULL DEFAULT 1,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW()
 );
+
+-- No scope rows means all libraries. Restrict library deletion so removing
+-- the last selected library cannot silently turn a scoped rule into a global one.
+CREATE TABLE request_rule_set_libraries (
+    rule_set_id text NOT NULL REFERENCES request_rule_sets(id) ON DELETE CASCADE,
+    library_id text NOT NULL REFERENCES libraries(id) ON DELETE RESTRICT,
+    position bigint NOT NULL CHECK (position >= 0),
+    PRIMARY KEY (rule_set_id, library_id),
+    UNIQUE (rule_set_id, position)
+);
+
+CREATE INDEX idx_request_rule_set_libraries_library
+    ON request_rule_set_libraries(library_id);
 
 CREATE TABLE request_rule_revisions (
     id text PRIMARY KEY NOT NULL,

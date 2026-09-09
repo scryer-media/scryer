@@ -266,6 +266,7 @@ export function DownloadClientConfigField({
                 ? "number"
                 : "text"
           }
+          ignorePasswordManagers={field.fieldType === "PASSWORD"}
           required={field.required && !hasStoredSecretValue}
           placeholder={
             hasStoredSecretValue

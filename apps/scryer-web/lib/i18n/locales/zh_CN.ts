@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
+  "scoring.mandatoryRejection": "未满足强制要求",
+  "scoring.finalScoreRejection": "最终评分不合格",
+  "settings.refFnBlockScore": "返回可由其他加分抵消的 -10000 分惩罚",
+  "settings.arrImportBlockScoreHelp": "总分必须高于 -9000 且达到配置的最低分数。强制要求仍然有效。",
   "label.ready": "就绪",
   "label.moreInfo": "更多信息",
   "label.search": "搜索",
@@ -236,7 +240,7 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyDisabledHelp": "已分配的代理已停用。",
   "settings.proxyDisabledSuffix": "（已停用）",
   "settings.proxyClearPassword": "清除已保存的密码",
-  "settings.proxyTunnelAuthHelp": "隧道需要用户名，以及密码或私钥其中之一。",
+  "settings.proxyTunnelAuthHelp": "SSH 需要用户名和 Ed25519 私钥，不支持密码认证。",
   "settings.proxyPrivateKey": "私钥",
   "settings.proxyPrivateKeyHelp": "仅支持 Ed25519 私钥；请使用 `ssh-keygen -t ed25519` 生成，并粘贴 OpenSSH 格式的私钥。",
   "settings.proxyPrivateKeyStored": "已设置私钥",
@@ -250,7 +254,7 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyHostKeyReset": "重置主机密钥",
   "settings.proxyHostKeyResetDescription": "忘记已固定的主机密钥。下次连接会直接信任并固定服务器提供的密钥，因此只有在确认服务器密钥确实更换时才执行。",
   "settings.proxyValidationTunnelUsername": "隧道需要用户名。",
-  "settings.proxyValidationTunnelAuth": "隧道需要密码或私钥。",
+  "settings.proxyValidationTunnelAuth": "SSH 隧道需要 Ed25519 私钥。",
   "settings.downloadClientProxyHelp": "可以分配任意类型的代理。原生客户端的请求并非由插件发出，因此挑战求解器对其无效。",
   "status.proxyCreated": "已创建代理。",
   "status.proxyUpdated": "已更新代理。",

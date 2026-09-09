@@ -795,6 +795,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "maintenance_rule_set_libraries",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "maintenance_rule_revisions",
         classification: BackupTableClassification::Export,
     },
@@ -819,6 +823,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     // would leave every trace naming a rule revision that no longer exists.
     BackupTableCatalogEntry {
         table: "request_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "request_rule_set_libraries",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {

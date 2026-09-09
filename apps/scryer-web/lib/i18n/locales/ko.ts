@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
+  "scoring.mandatoryRejection": "필수 조건 미충족",
+  "scoring.finalScoreRejection": "최종 점수 기준 미달",
+  "settings.refFnBlockScore": "다른 점수로 상쇄할 수 있는 -10000점 감점을 반환합니다",
+  "settings.arrImportBlockScoreHelp": "총점은 -9000을 초과하고 프로필의 최소 점수 이상이어야 합니다. 필수 조건은 계속 적용됩니다.",
   "label.ready": "준비됨",
   "label.moreInfo": "추가 정보",
   "label.search": "검색",
@@ -240,7 +244,7 @@ const ko: LocaleDictionary = {
   "settings.proxyDisabledHelp": "할당된 프록시가 비활성화되어 있습니다.",
   "settings.proxyDisabledSuffix": "(비활성화됨)",
   "settings.proxyClearPassword": "저장된 비밀번호 지우기",
-  "settings.proxyTunnelAuthHelp": "터널에는 사용자 이름과 비밀번호 또는 개인 키가 필요합니다.",
+  "settings.proxyTunnelAuthHelp": "SSH에는 사용자 이름과 Ed25519 개인 키가 필요합니다. 비밀번호 인증은 지원하지 않습니다.",
   "settings.proxyPrivateKey": "개인 키",
   "settings.proxyPrivateKeyHelp": "Ed25519 개인 키만 지원합니다. `ssh-keygen -t ed25519`로 생성한 뒤 OpenSSH 개인 키를 붙여넣으세요.",
   "settings.proxyPrivateKeyStored": "개인 키 설정됨",
@@ -254,7 +258,7 @@ const ko: LocaleDictionary = {
   "settings.proxyHostKeyReset": "호스트 키 초기화",
   "settings.proxyHostKeyResetDescription": "고정된 호스트 키를 잊습니다. 다음 연결에서 서버가 제시하는 키를 그대로 신뢰하고 고정하므로, 서버의 키가 실제로 바뀐 경우에만 실행하세요.",
   "settings.proxyValidationTunnelUsername": "터널에는 사용자 이름이 필요합니다.",
-  "settings.proxyValidationTunnelAuth": "터널에는 비밀번호 또는 개인 키가 필요합니다.",
+  "settings.proxyValidationTunnelAuth": "SSH 터널에는 Ed25519 개인 키가 필요합니다.",
   "settings.downloadClientProxyHelp": "어떤 종류의 프록시든 할당할 수 있습니다. 네이티브 클라이언트의 요청은 플러그인이 보내지 않으므로 챌린지 솔버는 효과가 없습니다.",
   "status.proxyCreated": "프록시를 만들었습니다.",
   "status.proxyUpdated": "프록시를 업데이트했습니다.",

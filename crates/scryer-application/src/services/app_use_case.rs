@@ -815,25 +815,11 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::View,
         )
         .await?;
-        let gateway = &self.services.library.metadata_gateway;
-        let mut legacy = gateway.search_tvdb_multi(query, limit, language).await?;
-        match gateway
-            .search_titles(query, "movie", limit, language, None)
+        self.services
+            .library
+            .metadata_gateway
+            .search_titles_multi(query, limit, language)
             .await
-        {
-            Ok(movies) => legacy.movies = movies,
-            Err(error) if crate::catalog_workflow::movie_title_queries_not_supported(&error) => {}
-            // The legacy multi-search already succeeded for every facet. A
-            // failure of the added movie call must not throw away the series and
-            // anime results with it; keep the legacy movie bucket instead.
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "metadata gateway title search failed during multi-search; keeping the legacy movie results"
-                );
-            }
-        }
-        Ok(legacy)
     }
 
     pub async fn get_metadata_movie(

@@ -7216,7 +7216,13 @@ mod tests {
         ) -> AppResult<()> {
             unreachable!()
         }
-        async fn pin_host_key(&self, _: &str, _: &str, _: chrono::DateTime<Utc>) -> AppResult<()> {
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
             unreachable!()
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {

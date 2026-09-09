@@ -1925,7 +1925,7 @@ async fn library_settings_inherit_facet_quality_and_persona_when_library_scope_o
         .await;
 
     let (app, user) = bootstrap_with_settings_repo_and_profiles(
-        settings,
+        settings.clone(),
         quality_profiles,
         Arc::new(MockIndexerClient),
     );
@@ -1939,6 +1939,71 @@ async fn library_settings_inherit_facet_quality_and_persona_when_library_scope_o
     assert_eq!(library_settings.quality_profile_id, "wizard-series");
     assert_eq!(library_settings.scoring_persona_override, None);
     assert_eq!(library_settings.scoring_persona, ScoringPersona::Audiophile);
+
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let movie = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Global Persona Movie".into(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                ..Default::default()
+            },
+            movie_library_id,
+        )
+        .await
+        .expect("movie title should be created");
+    let series = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Facet Persona Series".into(),
+                facet: MediaFacet::Series,
+                monitored: false,
+                ..Default::default()
+            },
+            series_library_id.clone(),
+        )
+        .await
+        .expect("series title should be created");
+
+    assert_eq!(
+        app.resolve_canonical_scoring_context(&movie.title, &test_quality_profile("4k"))
+            .await
+            .profile()
+            .criteria
+            .scoring_persona,
+        ScoringPersona::Compatible,
+        "canonical Rego input keeps the resolved global persona"
+    );
+    assert_eq!(
+        app.resolve_canonical_scoring_context(&series.title, &test_quality_profile("4k"))
+            .await
+            .profile()
+            .criteria
+            .scoring_persona,
+        ScoringPersona::Audiophile,
+        "canonical Rego input keeps the resolved facet persona"
+    );
+
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            SCORING_PERSONA_KEY,
+            &series_library_id,
+            "\"Efficient\"",
+        )
+        .await;
+    assert_eq!(
+        app.resolve_canonical_scoring_context(&series.title, &test_quality_profile("4k"))
+            .await
+            .profile()
+            .criteria
+            .scoring_persona,
+        ScoringPersona::Efficient,
+        "canonical Rego input keeps the resolved library persona"
+    );
 }
 
 #[tokio::test]

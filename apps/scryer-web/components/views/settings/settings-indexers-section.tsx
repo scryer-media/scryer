@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "react-router";
 import {
   ChevronRight,
   Edit,
@@ -9,7 +8,6 @@ import {
   Power,
   PowerOff,
   RefreshCw,
-  ScanSearch,
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
@@ -48,7 +46,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { visibleIndexerConfigFields } from "@/lib/types";
 import type {
   IndexerRecord,
@@ -64,7 +61,6 @@ import {
   resolveConfigFieldsForValues,
   splitAdvancedConfigFields,
 } from "@/lib/utils/provider-config-fields";
-import { buildIndexerSettingsPath } from "@/lib/utils/routing";
 import { applyIndexerConfigOption } from "@/lib/utils/indexer-setup";
 import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
@@ -129,6 +125,21 @@ const FALLBACK_PROVIDER_OPTIONS = [
   { value: "nzbgeek", label: "NZBGeek Indexer" },
   { value: "newznab", label: "Newznab Indexer" },
 ];
+
+function selectedIndexerPresetName(
+  fields: ConfigFieldDef[],
+  key: string,
+  value: string,
+): string | null {
+  const selectedOption = fields
+    .find((field) => field.key === key)
+    ?.options.find((option) => option.value === value);
+  return selectedOption?.configOverrides?.some(
+    (override) => override.key === "base_url",
+  )
+    ? selectedOption.label
+    : null;
+}
 
 function formatIndexerProviderTypeLabel(
   providerType: string,
@@ -785,9 +796,6 @@ export function SettingsIndexersSection({
   startCreateIndexer,
 }: SettingsIndexersSectionProps) {
   const t = useTranslate();
-  // The search pane this jumps to exists only while experimental features are
-  // on, so the row action comes and goes with it.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [errorHistoryIndexer, setErrorHistoryIndexer] =
     React.useState<IndexerErrorHistoryScope | null>(null);
   const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
@@ -881,13 +889,48 @@ export function SettingsIndexersSection({
           ),
         ),
       [indexerDraft.configValues, selectedProviderFields],
-    );
+  );
   const [advancedConfigOpen, setAdvancedConfigOpen] = React.useState(false);
+  const [hasCustomizedName, setHasCustomizedName] = React.useState(false);
+  const wasEditorOpen = React.useRef(false);
+
+  React.useEffect(() => {
+    if (isEditorOpen && !wasEditorOpen.current) {
+      const currentPresetName = selectedProviderFields
+        .map((field) =>
+          selectedIndexerPresetName(
+            selectedProviderFields,
+            field.key,
+            indexerDraft.configValues[field.key] ?? field.defaultValue ?? "",
+          ),
+        )
+        .find((name): name is string => name !== null);
+      setHasCustomizedName(
+        editorMode === "edit" && currentPresetName !== indexerDraft.name,
+      );
+    } else if (!isEditorOpen) {
+      setHasCustomizedName(false);
+    }
+    wasEditorOpen.current = isEditorOpen;
+  }, [
+    editorMode,
+    indexerDraft.configValues,
+    indexerDraft.name,
+    isEditorOpen,
+    selectedProviderFields,
+  ]);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
+      const presetName = selectedIndexerPresetName(
+        selectedProviderFields,
+        key,
+        value,
+      );
       setIndexerDraft((prev) => ({
         ...prev,
+        name:
+          !hasCustomizedName && presetName !== null ? presetName : prev.name,
         configValues: applyIndexerConfigOption(
           selectedProviderFields,
           prev.configValues,
@@ -896,7 +939,7 @@ export function SettingsIndexersSection({
         ),
       }));
     },
-    [selectedProviderFields, setIndexerDraft],
+    [hasCustomizedName, selectedProviderFields, setIndexerDraft],
   );
 
   const handleProviderTypeChange = React.useCallback(
@@ -907,14 +950,8 @@ export function SettingsIndexersSection({
       const nextMappingCompatibility =
         indexerDownloadClientMappingCatalogResource.catalog?.providerCompatibility.find(
           (provider) => provider.providerType === nextProviderType,
-        );
+      );
       setIndexerDraft((prev: IndexerDraft) => {
-        const previousProvider = providerTypes.find(
-          (providerType) => providerType.providerType === prev.providerType,
-        );
-        const shouldAutofillName =
-          prev.name.trim().length === 0 ||
-          prev.name === (previousProvider?.name ?? prev.providerType);
         const nextConfigValues: Record<string, string> = {};
         for (const field of nextProvider?.configFields ?? []) {
           if (field.valueSource === "HOST_BINDING") {
@@ -926,7 +963,6 @@ export function SettingsIndexersSection({
         return {
           ...prev,
           providerType: nextProviderType,
-          name: shouldAutofillName ? (nextProvider?.name ?? prev.name) : prev.name,
           downloadClientId:
             nextMappingCompatibility?.supportsMapping === false
               ? null
@@ -1161,26 +1197,6 @@ export function SettingsIndexersSection({
                       >
                         <Logs className="h-4 w-4" />
                       </IndexerActionButton>
-                      {experimentalFeaturesEnabled &&
-                      indexer.isEnabled &&
-                      indexer.enableInteractiveSearch &&
-                      !indexer.supportsManagedChildrenSync ? (
-                        <IndexerActionButton
-                          asChild
-                          id={selectorId(
-                            "settings-indexer-search-with",
-                            indexer.name,
-                          )}
-                          tone="search"
-                          label={t("indexerSearch.searchWithThisIndexer")}
-                        >
-                          <Link
-                            to={`${buildIndexerSettingsPath("search")}?indexer=${encodeURIComponent(indexer.id)}`}
-                          >
-                            <ScanSearch className="h-4 w-4" />
-                          </Link>
-                        </IndexerActionButton>
-                      ) : null}
                       {!indexer.isManaged && indexer.supportsManagedChildrenSync ? (
                         <IndexerActionButton
                           id={selectorId("settings-indexer-sync", indexer.name)}
@@ -1321,12 +1337,13 @@ export function SettingsIndexersSection({
                 <Input
                   id="settings-indexer-name"
                   value={indexerDraft.name}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setHasCustomizedName(true);
                     setIndexerDraft((prev: IndexerDraft) => ({
                       ...prev,
                       name: event.target.value,
-                    }))
-                  }
+                    }));
+                  }}
                   required
                   placeholder={t("form.indexerNamePlaceholder")}
                 />
@@ -1381,16 +1398,15 @@ export function SettingsIndexersSection({
                 onRetry={refreshIndexerDownloadClientMappingCatalog}
               />
             )}
-            {indexerDownloadClientMappingCatalogResource.catalog ? (
+            {indexerDownloadClientMappingCatalogResource.catalog &&
+            !isManagedSyncProvider &&
+            supportsSeedingProfileAssignment(draftProtocolFamilies) ? (
               <IndexerSeedingProfileSelect
                 selectId="settings-indexer-seeding-profile-form"
                 label={t("settings.seedingProfileColumn")}
                 value={indexerDraft.seedingProfileId}
                 options={seedingProfileOptions}
-                supported={
-                  !isManagedSyncProvider &&
-                  supportsSeedingProfileAssignment(draftProtocolFamilies)
-                }
+                supported
                 isPending={mutatingIndexerId !== null}
                 showLabel
                 onChange={(seedingProfileId) =>
@@ -1452,40 +1468,7 @@ export function SettingsIndexersSection({
               <p className="text-sm text-muted-foreground">
                 {t("settings.indexerManagedParentHint")}
               </p>
-            ) : (
-              <div className="flex items-center gap-6">
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    id="settings-indexer-enable-interactive-search"
-                    checked={indexerDraft.enableInteractiveSearch}
-                    onCheckedChange={(value) =>
-                      setIndexerDraft((prev: IndexerDraft) => ({
-                        ...prev,
-                        enableInteractiveSearch: value === true,
-                      }))
-                    }
-                  />
-                  <span className="text-sm">
-                    {t("settings.indexerInteractiveSearch")}
-                  </span>
-                </label>
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    id="settings-indexer-enable-auto-search"
-                    checked={indexerDraft.enableAutoSearch}
-                    onCheckedChange={(value) =>
-                      setIndexerDraft((prev: IndexerDraft) => ({
-                        ...prev,
-                        enableAutoSearch: value === true,
-                      }))
-                    }
-                  />
-                  <span className="text-sm">
-                    {t("settings.indexerAutoSearch")}
-                  </span>
-                </label>
-              </div>
-            )}
+            ) : null}
             <div className="flex gap-2">
               <Button id="settings-indexer-save" type="submit" disabled={mutatingIndexerId === "new"}>
                 {mutatingIndexerId === "new"
@@ -1513,6 +1496,44 @@ export function SettingsIndexersSection({
               >
                 {t("label.cancel")}
               </Button>
+              {!isManagedSyncProvider ? (
+                <>
+                  <label className="flex h-9 items-center gap-3">
+                    <Checkbox
+                      id="settings-indexer-enable-interactive-search"
+                      className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                      checked={indexerDraft.enableInteractiveSearch}
+                      disabled={mutatingIndexerId !== null}
+                      onCheckedChange={(value) =>
+                        setIndexerDraft((prev: IndexerDraft) => ({
+                          ...prev,
+                          enableInteractiveSearch: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">
+                      {t("settings.indexerInteractiveSearch")}
+                    </span>
+                  </label>
+                  <label className="flex h-9 items-center gap-3">
+                    <Checkbox
+                      id="settings-indexer-enable-auto-search"
+                      className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                      checked={indexerDraft.enableAutoSearch}
+                      disabled={mutatingIndexerId !== null}
+                      onCheckedChange={(value) =>
+                        setIndexerDraft((prev: IndexerDraft) => ({
+                          ...prev,
+                          enableAutoSearch: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">
+                      {t("settings.indexerAutoSearch")}
+                    </span>
+                  </label>
+                </>
+              ) : null}
             </div>
               </form>
             </CardContent>

@@ -19,6 +19,12 @@ pub struct RuleSetPayload {
     pub enabled: bool,
     /// Evaluation priority.
     pub priority: i32,
+    /// Baseline rules establish the subtotal read by additional rules.
+    pub evaluation_phase: String,
+    /// Why a retained rule was disabled during a context migration.
+    pub disabled_reason: Option<String>,
+    /// Other rules with this group cannot be enabled simultaneously.
+    pub exclusive_group: Option<String>,
     /// Media facets to which the rule set applies.
     pub applied_facets: Vec<String>,
     /// Whether the rule set is managed by a trusted pack.
@@ -145,25 +151,27 @@ pub struct RuleSetTestRuleSetPayload {
     pub score: i32,
     /// Whether this rule set matched the candidate facts.
     pub matched: bool,
-    /// Whether this rule set emitted a blocking signal.
+    /// Whether this group contains an explicit rejection. Numeric penalties are recoverable.
     pub blocked: bool,
     /// Whether this entry represents the current editor draft.
     pub is_draft: bool,
-    /// Individual matched score and block entries emitted by this rule set.
+    /// Individual numeric contributions and explicit rejection reasons.
     pub entries: Vec<RuleSetTestEntryPayload>,
     /// Evaluation messages and diagnostics for this rule set.
     pub messages: Vec<String>,
 }
 
 #[derive(SimpleObject, Clone)]
-/// One score or block entry emitted by a rule set in a scoring preview.
+/// One numeric contribution or explicit rejection in a scoring preview.
 pub struct RuleSetTestEntryPayload {
-    /// Stable score or block code.
+    /// Stable explanation code; the code does not determine rejection type.
     pub code: String,
     /// Signed score delta associated with the entry.
     pub delta: i32,
-    /// Whether the entry is a blocking signal.
+    /// Whether this is an explicit rejection, as identified by kind.
     pub blocked: bool,
+    /// score_contribution, mandatory_rejection, or final_score_rejection.
+    pub kind: String,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -173,7 +181,7 @@ pub struct RuleSetTestDraftContributionPayload {
     pub score: i32,
     /// Whether the draft matched the candidate facts.
     pub matched: bool,
-    /// Whether the draft emitted a blocking signal.
+    /// Compatibility field, always false: drafts emit recoverable numeric contributions.
     pub blocked: bool,
     /// Whether the draft applies to the selected title facet.
     pub applies: bool,
@@ -199,9 +207,9 @@ pub struct RuleSetTestErrorPayload {
 pub struct TestRuleSetPayload {
     /// Aggregate score after normal policy aggregation.
     pub score: i32,
-    /// Whether the preview passes normal quality and minimum-score gates.
+    /// Whether mandatory requirements and both final score gates pass.
     pub allowed: bool,
-    /// Whether any policy emitted a blocking signal.
+    /// Whether the completed decision is rejected by a requirement or score gate.
     pub blocked: bool,
     /// Whether the configured minimum-score gate passed.
     pub minimum_score_met: bool,

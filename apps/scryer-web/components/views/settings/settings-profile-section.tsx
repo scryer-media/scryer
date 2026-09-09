@@ -515,6 +515,7 @@ export function SettingsProfileSection({
                     id="current-password"
                     type="password"
                     autoComplete="current-password"
+                    ignorePasswordManagers
                     value={currentPassword}
                     onChange={(e) => onCurrentPasswordChange(e.target.value)}
                   />
@@ -526,6 +527,7 @@ export function SettingsProfileSection({
                   id="new-password"
                   type="password"
                   autoComplete="new-password"
+                  ignorePasswordManagers
                   value={newPassword}
                   onChange={(e) => onNewPasswordChange(e.target.value)}
                 />
@@ -538,6 +540,7 @@ export function SettingsProfileSection({
                   id="confirm-password"
                   type="password"
                   autoComplete="new-password"
+                  ignorePasswordManagers
                   value={confirmPassword}
                   onChange={(e) => onConfirmPasswordChange(e.target.value)}
                 />
@@ -1052,6 +1055,7 @@ export function SettingsProfileSection({
                   id="profile-link-jellyfin-password"
                   type="password"
                   autoComplete="current-password"
+                  ignorePasswordManagers
                   value={linkAccountPassword}
                   onChange={(event) =>
                     onLinkAccountPasswordChange(event.target.value)
@@ -1164,6 +1168,7 @@ export function SettingsProfileSection({
                 <Input
                   id="profile-link-emby-password"
                   type="password"
+                  ignorePasswordManagers
                   value={linkAccountPassword}
                   onChange={(event) => onLinkAccountPasswordChange(event.target.value)}
                   disabled={linkAccountBusy}

@@ -299,6 +299,8 @@ pub struct ClearTitleImageCachePayload {
 #[derive(SimpleObject, Clone)]
 /// Instance-wide feature switches readable by any signed-in user.
 pub struct InstanceFeaturesPayload {
+    /// Whether the API explorer is enabled and the current user may access it.
+    pub api_explorer_enabled: bool,
     /// Whether surfaces that are still being finished are shown on this instance.
     pub experimental_features_enabled: bool,
     /// Whether this instance sends its library context to the metadata gateway for personalized discovery.

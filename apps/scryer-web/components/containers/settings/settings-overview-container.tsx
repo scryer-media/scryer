@@ -30,6 +30,7 @@ import type {
 } from "@/lib/types/settings";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  apiExplorerEnabled: false,
   experimentalFeaturesEnabled: false,
   personalizedDiscoveryEnabled: true,
   srrdbFilenameRecoveryEnabled: false,
@@ -272,6 +273,7 @@ export function SettingsOverviewContainer({
       // actor-only query, so a save has to push the new value into the
       // provider for the gated surfaces to react without a reload.
       if (
+        update.apiExplorerEnabled !== undefined ||
         update.experimentalFeaturesEnabled !== undefined ||
         update.personalizedDiscoveryEnabled !== undefined
       ) {

@@ -282,6 +282,33 @@ impl ImageProxyRepository for ImageProxyStore {
         .collect()
     }
 
+    async fn list_cached_jpegs(
+        &self,
+        limit: usize,
+        after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        let (token, variant) = after.unwrap_or(("", ""));
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT token, variant, content_type, byte_size, upstream_etag, upstream_last_modified, fetched_at, last_accessed_at
+               FROM image_proxy_cache_entries
+              WHERE content_type = 'image/jpeg'
+                AND (token > {} OR (token = {} AND variant > {}))
+              ORDER BY token, variant
+              LIMIT {}",
+            &[
+                SqlArg::Text(token.to_string()),
+                SqlArg::Text(token.to_string()),
+                SqlArg::Text(variant.to_string()),
+                SqlArg::I64(limit.min(64) as i64),
+            ],
+        )
+        .await?
+        .into_iter()
+        .map(cache_entry_from_row)
+        .collect()
+    }
+
     async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
@@ -695,6 +722,26 @@ mod tests {
                 .last_accessed_at,
             original_accessed_at
         );
+        let jpeg_batch = store.list_cached_jpegs(1, None).await.unwrap();
+        assert_eq!(jpeg_batch.len(), 1);
+        assert_eq!(jpeg_batch[0].token, token);
+        assert!(
+            store
+                .list_cached_jpegs(1, Some((&token, "w250")))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let mut avif = jpeg_batch[0].clone();
+        avif.variant = "w70".into();
+        avif.content_type = "image/avif".into();
+        store.upsert_image_proxy_cache_entry(&avif).await.unwrap();
+        assert_eq!(store.list_cached_jpegs(4, None).await.unwrap().len(), 1);
+        store
+            .delete_image_proxy_cache_entry(&token, "w70")
+            .await
+            .unwrap();
+
         let latest_accessed_at = fetched_at + chrono::Duration::seconds(30);
         store
             .touch_image_proxy_cache_entry(&token, "w250", fetched_at, latest_accessed_at)

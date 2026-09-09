@@ -1,6 +1,194 @@
 use super::*;
 use tokio_util::sync::CancellationToken;
 
+struct GatedJpegCache {
+    pending: Mutex<Vec<ImageProxyCacheEntryRecord>>,
+    started: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+impl GatedJpegCache {
+    fn new() -> Self {
+        Self {
+            pending: Mutex::new(
+                (0..8)
+                    .map(|i| ImageProxyCacheEntryRecord {
+                        token: format!("{i:064}"),
+                        variant: "w250".into(),
+                        content_type: "image/jpeg".into(),
+                        byte_size: 100,
+                        upstream_etag: None,
+                        upstream_last_modified: None,
+                        fetched_at: Utc::now(),
+                        last_accessed_at: Utc::now(),
+                    })
+                    .collect(),
+            ),
+            started: AtomicUsize::new(0),
+            gate: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    async fn wait_started(&self, count: usize) {
+        timeout(Duration::from_secs(5), async {
+            while self.started.load(Ordering::SeqCst) < count {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[async_trait]
+impl ImageProxyCacheControl for GatedJpegCache {
+    async fn clear_cache(&self) -> AppResult<()> {
+        panic!("encoding must not purge the cache")
+    }
+    async fn set_configured_max_bytes(&self, _: u64) -> AppResult<()> {
+        Ok(())
+    }
+    async fn list_cached_jpegs(
+        &self,
+        limit: usize,
+        after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(self
+            .pending
+            .lock()
+            .await
+            .iter()
+            .filter(|e| after.is_none_or(|cursor| (e.token.as_str(), e.variant.as_str()) > cursor))
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+    async fn optimize_cached_jpeg(
+        &self,
+        entry: ImageProxyCacheEntryRecord,
+        _: Arc<dyn TitleImageProcessor>,
+    ) -> AppResult<bool> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.gate.acquire().await.unwrap().forget();
+        if entry.token == "0".repeat(64) {
+            return Err(AppError::Repository("invalid JPEG fixture".into()));
+        }
+        self.pending.lock().await.retain(|e| e.token != entry.token);
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+async fn artwork_jpegs_obey_schedule_admission_shutdown_and_failure_bounds() {
+    for workers in [2, 4] {
+        let (app, _) = bootstrap();
+        let cache = Arc::new(GatedJpegCache::new());
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_title_images(Arc::new(ChunkedTitleImageRepo::new(0)))
+                .with_image_proxy_cache_control(cache.clone())
+                .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+        });
+        let noon = || artwork_local_time(12, 0).with_timezone(&chrono::Local);
+        let summary = app
+            .run_artwork_encoding_with_workers(
+                &artwork_test_run(JobTriggerSource::ScheduledDaily),
+                workers,
+                &CancellationToken::new(),
+                &noon,
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary.processed, 0);
+        assert_eq!(cache.started.load(Ordering::SeqCst), 0);
+
+        let stop = CancellationToken::new();
+        let task_app = app.clone();
+        let task_stop = stop.clone();
+        let task = tokio::spawn(async move {
+            task_app
+                .run_artwork_encoding_with_workers(
+                    &artwork_test_run(JobTriggerSource::Manual),
+                    workers,
+                    &task_stop,
+                    &noon,
+                )
+                .await
+                .unwrap()
+        });
+        cache.wait_started(workers).await;
+        sleep(Duration::from_millis(20)).await;
+        assert_eq!(cache.started.load(Ordering::SeqCst), workers);
+        stop.cancel();
+        let summary = timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.processed, 0);
+        assert_eq!(cache.pending.lock().await.len(), 8);
+
+        cache.gate.add_permits(8);
+        let summary = app
+            .run_artwork_encoding_with_workers(
+                &artwork_test_run(JobTriggerSource::Manual),
+                workers,
+                &CancellationToken::new(),
+                &noon,
+            )
+            .await
+            .unwrap();
+        assert_eq!((summary.processed, summary.failed), (7, 1));
+        assert_eq!(cache.started.load(Ordering::SeqCst), workers + 8);
+        assert_eq!(cache.pending.lock().await.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn artwork_jpeg_cutoff_drains_only_admitted_work() {
+    let (app, _) = bootstrap();
+    let cache = Arc::new(GatedJpegCache::new());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_title_images(Arc::new(ChunkedTitleImageRepo::new(0)))
+            .with_image_proxy_cache_control(cache.clone())
+            .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+    });
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(artwork_local_time(8, 59)));
+    let task_app = app.clone();
+    let task = tokio::spawn(async move {
+        task_app
+            .run_artwork_encoding_with_workers(
+                &artwork_test_run(JobTriggerSource::ScheduledDaily),
+                2,
+                &CancellationToken::new(),
+                &|| {
+                    task_app
+                        .runtime
+                        .environment
+                        .now()
+                        .with_timezone(&chrono::Local)
+                },
+            )
+            .await
+            .unwrap()
+    });
+    cache.wait_started(2).await;
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(artwork_local_time(9, 0)));
+    cache.gate.add_permits(2);
+    let summary = timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((summary.processed, summary.failed), (1, 1));
+    assert_eq!(cache.started.load(Ordering::SeqCst), 2);
+    assert_eq!(cache.pending.lock().await.len(), 7);
+    assert!(summary.reason.contains("nightly"));
+}
+
 #[tokio::test]
 async fn clear_title_image_cache_collapses_duplicate_requests_and_waits_for_scans() {
     let (app, admin) = bootstrap_with_user_repo(Arc::new(MockUserRepo::default()));

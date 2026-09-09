@@ -1,3 +1,5 @@
+import type { ScoringEntryKind } from "@/lib/utils/release-decision-explanation";
+
 export type DownloadSourceKind = "NZB_FILE" | "NZB_URL" | "TORRENT_FILE" | "MAGNET_URI";
 
 export type ReleaseQueueScope =
@@ -52,7 +54,7 @@ export type Release = {
     blockCodes: string[];
     releaseScore: number;
     preferenceScore: number;
-    scoringLog: { code: string; delta: number; source: string; ruleSetName?: string | null }[];
+    scoringLog: { code: string; delta: number; kind?: ScoringEntryKind; source: string; ruleSetName?: string | null }[];
   } | null;
   autoEligible?: boolean | null;
   autoDecisionCode?: string | null;

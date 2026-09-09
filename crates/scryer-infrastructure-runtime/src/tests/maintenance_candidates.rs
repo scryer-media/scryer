@@ -62,6 +62,7 @@ fn candidate(id: &str, rule_set_id: &str, title_id: &str, generation: i64) -> Li
         revision_number: 1,
         matcher_content_hash: "hash-1".to_string(),
         title_id: title_id.to_string(),
+        subject_id: title_id.to_string(),
         library_id: "library-1".to_string(),
         facet: "movie".to_string(),
         subject_kind: "title".to_string(),
@@ -343,6 +344,8 @@ async fn exclusions_allow_one_global_row_and_one_row_per_rule_and_title() {
         id: "excl-global".to_string(),
         rule_set_id: None,
         title_id: "title-1".to_string(),
+        subject_id: "title-1".to_string(),
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         reason: "operator pinned".to_string(),
         created_by: Some("user-1".to_string()),
         created_at: Utc::now(),
@@ -368,6 +371,8 @@ async fn exclusions_allow_one_global_row_and_one_row_per_rule_and_title() {
         id: "excl-rule-a".to_string(),
         rule_set_id: Some("rule-a".to_string()),
         title_id: "title-1".to_string(),
+        subject_id: "title-1".to_string(),
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         reason: String::new(),
         created_by: None,
         created_at: Utc::now(),
@@ -507,6 +512,8 @@ async fn deleting_a_rule_set_takes_its_candidates_runs_and_exclusions_with_it() 
             id: "excl-1".to_string(),
             rule_set_id: Some("rule-a".to_string()),
             title_id: "title-1".to_string(),
+            subject_id: "title-1".to_string(),
+            subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
             reason: String::new(),
             created_by: None,
             created_at: Utc::now(),
@@ -851,6 +858,8 @@ async fn action_runs_append_finish_and_enforce_attempt_uniqueness() {
         rule_set_id: "rule-a".to_string(),
         revision_number: 1,
         title_id: "title-1".to_string(),
+        subject_id: "title-1".to_string(),
+        subject_kind: "title".to_string(),
         action_kind: "unmonitor_scope_keep_files".to_string(),
         match_generation: 1,
         idempotency_key: "cand-1:1:unmonitor:abcd".to_string(),
@@ -911,6 +920,78 @@ async fn action_runs_append_finish_and_enforce_attempt_uniqueness() {
 }
 
 #[tokio::test]
+async fn maintenance_scoped_deletion_checkpoint_survives_unbounded_safety_holds() {
+    let (services, db) = temp_services("scryer_maintenance_checkpoint_holds").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    store
+        .create_candidate(&candidate("cand-1", "rule-a", "title-1", 1))
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let checkpoint = scryer_domain::LifecycleActionRun {
+        id: "checkpoint".into(),
+        candidate_id: "cand-1".into(),
+        rule_set_id: "rule-a".into(),
+        revision_number: 1,
+        title_id: "title-1".into(),
+        subject_kind: "episode".into(),
+        subject_id: "episode-1".into(),
+        action_kind: "unmonitor_scope_delete_files".into(),
+        match_generation: 1,
+        idempotency_key: "checkpoint:1".into(),
+        attempt: 1,
+        status: scryer_domain::LifecycleActionRunStatus::Failed,
+        hold_reason: None,
+        error: Some("interrupted deletion".into()),
+        detail: r#"{"scoped_deletion":1,"files":[]}"#.into(),
+        started_at: now,
+        finished_at: Some(now),
+        created_at: now,
+    };
+    store.start_action_run(&checkpoint).await.unwrap();
+    for index in 0..102 {
+        let mut hold = checkpoint.clone();
+        hold.id = format!("hold-{index}");
+        hold.idempotency_key = hold.id.clone();
+        hold.status = scryer_domain::LifecycleActionRunStatus::Held;
+        hold.detail = if index == 101 {
+            // The underscore in the checkpoint key is literal, not a LIKE wildcard.
+            r#"{"scopedXdeletion":1}"#.into()
+        } else {
+            "{}".into()
+        };
+        hold.started_at = now + chrono::Duration::seconds(index + 1);
+        store.start_action_run(&hold).await.unwrap();
+    }
+    assert!(
+        store
+            .list_action_runs(None, Some("cand-1"), Some(100))
+            .await
+            .unwrap()
+            .iter()
+            .all(|run| run.id != checkpoint.id)
+    );
+    assert_eq!(
+        store
+            .latest_scoped_deletion_action_run("cand-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        checkpoint.id
+    );
+    assert!(
+        store
+            .latest_scoped_deletion_action_run("other-candidate")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn effect_arming_and_attempts_round_trip() {
     let (services, db) = temp_services("scryer_maintenance_arming").await;
     seed_rule_set(&services, "rule-a").await;
@@ -954,4 +1035,110 @@ async fn effect_arming_and_attempts_round_trip() {
     assert_eq!(stored.action_attempts, 2);
 
     let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn maintenance_scope_candidates_and_exclusions_have_independent_subject_identity() {
+    let (services, db) = temp_services("maintenance_scope_identity").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    for (index, (kind, subject)) in [
+        ("title", "title-1"),
+        ("season", "season-1"),
+        ("episode", "episode-1"),
+        ("episode", "episode-2"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut row = candidate(&format!("candidate-{index}"), "rule-a", "title-1", 1);
+        row.subject_kind = kind.into();
+        row.subject_id = subject.into();
+        store.create_candidate(&row).await.unwrap();
+        let loaded = store
+            .get_active_subject_candidate("rule-a", kind, subject)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.id, row.id);
+        assert_eq!(loaded.due_at, row.due_at);
+        assert_eq!(
+            store
+                .max_subject_match_generation("rule-a", kind, subject)
+                .await
+                .unwrap(),
+            1
+        );
+        let mut duplicate = row.clone();
+        duplicate.id.push_str("-duplicate");
+        assert!(store.create_candidate(&duplicate).await.is_err());
+        let exclusion = MaintenanceRuleExclusion {
+            id: format!("exclusion-{index}"),
+            rule_set_id: None,
+            title_id: "title-1".into(),
+            subject_kind: MaintenanceRuleSubjectKind::parse_storage(kind).unwrap(),
+            subject_id: subject.into(),
+            reason: "scope".into(),
+            created_by: None,
+            created_at: Utc::now(),
+        };
+        store.create_exclusion(&exclusion).await.unwrap();
+    }
+    assert_eq!(store.list_exclusions(None).await.unwrap().len(), 4);
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn maintenance_scope_migration_preserves_grace_arming_and_history() {
+    crate::spellfix::register_spellfix_auto_extension().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let db = directory.path().join("legacy.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .unwrap();
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(227), true)
+        .await
+        .unwrap();
+    run_embedded_migration(&pool, r#"
+        INSERT INTO maintenance_rule_sets (id, name, enabled, evaluation_mode, effect_arming) VALUES ('rule', 'legacy', 1, 'observe', 'destructive');
+        INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, title_id, match_generation, first_matched_at, due_at, action_attempts) VALUES ('candidate', 'rule', 3, 'title', 7, '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z', 2);
+        INSERT INTO maintenance_rule_exclusions (id, title_id, reason) VALUES ('exclusion', 'title', 'keep');
+        INSERT INTO lifecycle_action_runs (id, candidate_id, rule_set_id, revision_number, title_id, action_kind, match_generation, idempotency_key, attempt, status, detail, started_at) VALUES ('run', 'candidate', 'rule', 3, 'title', 'unmonitor_scope_keep_files', 7, 'legacy-key', 2, 'failed', '{"evidence":true}', '2026-01-02T00:00:00Z');
+    "#).await;
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .unwrap();
+    let row = sqlx::query("SELECT subject_kind, subject_id, first_matched_at, due_at, match_generation, action_attempts FROM lifecycle_candidates WHERE id = 'candidate'").fetch_one(&pool).await.unwrap();
+    assert_eq!(row.get::<String, _>("subject_kind"), "title");
+    assert_eq!(row.get::<String, _>("subject_id"), "title");
+    assert_eq!(
+        row.get::<String, _>("first_matched_at"),
+        "2026-01-01T00:00:00Z"
+    );
+    assert_eq!(row.get::<String, _>("due_at"), "2026-02-01T00:00:00Z");
+    assert_eq!(row.get::<i64, _>("match_generation"), 7);
+    assert_eq!(row.get::<i64, _>("action_attempts"), 2);
+    let row = sqlx::query("SELECT subject_kind, subject_id, detail, idempotency_key FROM lifecycle_action_runs WHERE id = 'run'").fetch_one(&pool).await.unwrap();
+    assert_eq!(row.get::<String, _>("subject_kind"), "title");
+    assert_eq!(row.get::<String, _>("subject_id"), "title");
+    assert_eq!(row.get::<String, _>("detail"), r#"{"evidence":true}"#);
+    assert_eq!(row.get::<String, _>("idempotency_key"), "legacy-key");
+    let arming: String =
+        sqlx::query_scalar("SELECT effect_arming FROM maintenance_rule_sets WHERE id = 'rule'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(arming, "destructive");
+    let exclusion: String = sqlx::query_scalar(
+        "SELECT subject_id FROM maintenance_rule_exclusions WHERE id = 'exclusion'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(exclusion, "title");
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::ValidateOnly)
+        .await
+        .unwrap();
 }

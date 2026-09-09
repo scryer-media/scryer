@@ -16,6 +16,7 @@ ALTER TABLE proxy_configs
 ALTER TABLE proxy_configs
     ADD COLUMN IF NOT EXISTS username_encrypted text;
 
+-- Transport proxy passwords. SSH authenticates with an Ed25519 private key.
 ALTER TABLE proxy_configs
     ADD COLUMN IF NOT EXISTS password_encrypted text;
 

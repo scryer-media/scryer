@@ -12,6 +12,36 @@ impl AppUseCase {
         indexer_id: Option<&str>,
         proxy_config_id_override: Option<Option<&str>>,
     ) -> AppResult<()> {
+        if let Some(indexer_id) = self
+            .probe_indexer_connection(
+                actor,
+                provider_type,
+                config_json,
+                indexer_id,
+                proxy_config_id_override,
+            )
+            .await?
+        {
+            self.services
+                .integrations
+                .indexer_configs
+                .clear_last_error(&indexer_id)
+                .await?;
+            self.publish_indexers_changed();
+        }
+        Ok(())
+    }
+
+    /// Validate the proposed connection without clearing the saved config's
+    /// health. A save clears health only after its remaining checks succeed.
+    pub(crate) async fn probe_indexer_connection(
+        &self,
+        actor: &User,
+        provider_type: &str,
+        config_json: Option<&str>,
+        indexer_id: Option<&str>,
+        proxy_config_id_override: Option<Option<&str>>,
+    ) -> AppResult<Option<String>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
 
@@ -176,15 +206,7 @@ impl AppUseCase {
                 let result = client.validate_connection().await?;
                 validate_indexer_connection_result(result)?;
             }
-            if let Some(config) = persisted_config.as_ref() {
-                self.services
-                    .integrations
-                    .indexer_configs
-                    .clear_last_error(&config.id)
-                    .await?;
-                self.publish_indexers_changed();
-            }
-            return Ok(());
+            return Ok(persisted_config.map(|config| config.id));
         }
 
         let client = provider
@@ -240,16 +262,7 @@ impl AppUseCase {
             ));
         }
 
-        if let Some(config) = persisted_config.as_ref() {
-            self.services
-                .integrations
-                .indexer_configs
-                .clear_last_error(&config.id)
-                .await?;
-            self.publish_indexers_changed();
-        }
-
-        Ok(())
+        Ok(persisted_config.map(|config| config.id))
     }
 
     pub async fn preview_managed_indexer_children(
@@ -1742,8 +1755,14 @@ mod tests {
         ) -> AppResult<()> {
             Ok(())
         }
-        async fn pin_host_key(&self, _: &str, _: &str, _: chrono::DateTime<Utc>) -> AppResult<()> {
-            Ok(())
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(true)
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())

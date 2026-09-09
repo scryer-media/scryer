@@ -300,6 +300,8 @@ fn action_run(rule_set_id: &str, title_id: &str) -> LifecycleActionRun {
         rule_set_id: rule_set_id.to_string(),
         revision_number: 1,
         title_id: title_id.to_string(),
+        subject_id: title_id.to_string(),
+        subject_kind: "title".to_string(),
         action_kind: MaintenanceActionKind::DeleteTitleAndFiles
             .as_wire_str()
             .to_string(),
@@ -325,6 +327,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
         revision_number: 1,
         matcher_content_hash: "hash".to_string(),
         title_id: title_id.to_string(),
+        subject_id: title_id.to_string(),
         library_id: "library-a".to_string(),
         facet: MediaFacet::Movie.as_str().to_string(),
         subject_kind: MaintenanceRuleSubjectKind::Title
@@ -351,6 +354,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
 
 fn draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: "Unwatched for a long time".to_string(),
         rego_source: rego_source.to_string(),
@@ -994,6 +998,8 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
             &outsider,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: MONITORED_MATCHER.to_string(),
                     action_spec: MaintenanceActionSpec::new(
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
@@ -1076,6 +1082,8 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
             &user,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: NEEDS_UPGRADE_HISTORY_MATCHER.to_string(),
                     action_spec: MaintenanceActionSpec::new(
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
@@ -1112,6 +1120,8 @@ async fn an_inline_preview_persists_nothing() {
         &user,
         MaintenancePreviewRequest {
             matcher: MaintenancePreviewMatcher::Inline {
+                library_ids: vec![],
+                subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                 rego_source: MONITORED_MATCHER.to_string(),
                 action_spec: MaintenanceActionSpec::new(
                     MaintenanceActionKind::UnmonitorScopeKeepFiles,
@@ -1139,6 +1149,8 @@ async fn preview_refuses_a_selection_above_the_cap() {
             &user,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: MONITORED_MATCHER.to_string(),
                     action_spec: MaintenanceActionSpec::new(
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
@@ -1212,6 +1224,8 @@ async fn file_facts_distinguish_having_files_from_having_none() {
             &user,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: matcher.to_string(),
                     action_spec: MaintenanceActionSpec::new(
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
@@ -1249,6 +1263,8 @@ async fn episode_counts_are_absent_for_movies() {
             &user,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: "package whatever\n\
                          import rego.v1\n\n\
                          match if {\n\
@@ -1335,6 +1351,8 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
             &user,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: matcher.to_string(),
                     action_spec: MaintenanceActionSpec::new(
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,

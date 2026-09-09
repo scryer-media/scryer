@@ -620,6 +620,77 @@ fn split_season_episode_tokens_parse_as_standard_episode() {
 }
 
 #[test]
+fn split_season_episode_revision_suffix_requires_digits() {
+    for episode_token in [
+        "17v",
+        "17vTwo",
+        "17v2extra",
+        "17x2",
+        "17v2v3",
+        "17v4294967296",
+    ] {
+        let raw = format!("Show S4 - {episode_token} [1080p]");
+        let analysis = analyze_release_for_target(&raw, &context(ContextFacetHint::Anime, "Show"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+        assert_ne!(candidate.family, ParseFamily::StandardEpisode, "{raw}");
+    }
+}
+
+#[test]
+fn split_season_episode_revision_suffix_preserves_packs_and_ranges() {
+    for (raw, expected_episodes, full_season) in [
+        ("Show S4 [1080p]", vec![], true),
+        ("Show S4.1080p", vec![], true),
+        ("Show S4 - 17-19 [1080p]", vec![17, 18, 19], false),
+    ] {
+        let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Anime, "Show"));
+        let episode = analysis
+            .best_candidate()
+            .expect("best candidate")
+            .projected
+            .episode
+            .as_ref()
+            .expect("episode");
+        assert_eq!(episode.season, Some(4), "{raw}");
+        assert_eq!(episode.episode_numbers, expected_episodes, "{raw}");
+        assert_eq!(episode.full_season, full_season, "{raw}");
+    }
+}
+
+#[test]
+fn split_season_episode_revision_suffix_is_not_a_pack() {
+    let mut target = context(ContextFacetHint::Anime, "Ascendance of a Bookworm");
+    target.aliases.push(ContextAlias {
+        name: "Honzuki no Gekokujou".to_string(),
+    });
+    for quality in ["1080p", "720p"] {
+        for episode_token in ["17v1", "17v2", "17v3", "17V3", "17v12", "17", "20"] {
+            let raw = format!(
+                "Honzuki no Gekokujou S4 - {episode_token} [{quality} CR WEB-DL AVC AAC][MultiSub][BC7A5FC1] [Erai-raws]"
+            );
+            let analysis = analyze_release_for_target(&raw, &target);
+            let candidate = analysis.best_candidate().expect("best candidate");
+            let episode = candidate.projected.episode.as_ref().expect("episode");
+
+            assert_eq!(candidate.family, ParseFamily::StandardEpisode, "{raw}");
+            assert_eq!(episode.season, Some(4), "{raw}");
+            assert_eq!(
+                episode.episode_numbers,
+                vec![if episode_token == "20" { 20 } else { 17 }],
+                "{raw}"
+            );
+            assert_eq!(
+                episode.release_type,
+                ParsedEpisodeReleaseType::SingleEpisode,
+                "{raw}"
+            );
+            assert!(!episode.full_season, "{raw}");
+            assert!(episode.absolute_episode_numbers.is_empty(), "{raw}");
+        }
+    }
+}
+
+#[test]
 fn standard_episode_range_token_projects_multi_episode() {
     let analysis = analyze_release_for_target(
         "Umbra.Vector.S01E01-11.BDRemux.1080p",

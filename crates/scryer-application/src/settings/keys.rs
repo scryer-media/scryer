@@ -43,6 +43,7 @@ pub const DISCOVERY_REGION_KEY: &str = "discovery.region";
 // Instance-wide opt in for surfaces that are still being finished. Absent row
 // means disabled, so existing installs keep the unfinished surfaces hidden.
 pub const EXPERIMENTAL_FEATURES_ENABLED_KEY: &str = "ui.experimental_features_enabled";
+pub const API_EXPLORER_ENABLED_KEY: &str = "ui.api_explorer_enabled";
 // Instance-wide opt out for sending the library context to the metadata
 // gateway. Stored in the positive sense; absent row means enabled, so existing
 // installs keep personalized discovery working with no data change.

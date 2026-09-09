@@ -279,11 +279,13 @@ impl AppUseCase {
         validate_persisted_proxy_config(&config)?;
         config.updated_at = Utc::now();
 
-        self.services
-            .integrations
-            .proxy_configs
-            .update(config)
-            .await
+        let config = self.services.integrations.proxy_configs.update(config).await?;
+        crate::tunnel_proxy::activate_tunnel_config(&config);
+        if config.provider_type == scryer_domain::ProxyProviderType::SshTunnel {
+            crate::tunnel_proxy::TunnelHostKeyLedger::shared().register(&config)
+                .map_err(AppError::Repository)?;
+        }
+        Ok(config)
     }
 
     pub async fn delete_proxy_config(&self, actor: &User, id: &str) -> AppResult<()> {
@@ -323,10 +325,9 @@ impl AppUseCase {
             ));
         }
         self.services.integrations.proxy_configs.delete(id).await?;
-        // A deleted tunnel has no configuration left to justify its session.
-        // (An *edited* one needs no help: the revision moves, so the next
-        // request restarts it.) No-op for every other kind.
-        crate::tunnel_proxy::stop_tunnel(id);
+        // Reject retained snapshots as well as closing the current front.
+        crate::tunnel_proxy::forget_tunnel_config(id);
+        crate::tunnel_proxy::TunnelHostKeyLedger::shared().forget(id);
         Ok(())
     }
 
@@ -355,9 +356,9 @@ impl AppUseCase {
             .get_by_id(id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
-        if !config.is_tunnel() {
+        if !config.is_tunnel() || config.provider_type == scryer_domain::ProxyProviderType::Http3 {
             return Err(AppError::Validation(
-                "only tunnel proxies pin a host key".into(),
+                "only SSH tunnel proxies pin a host key".into(),
             ));
         }
         // WireGuard is a tunnel with no trust-on-first-use step: the peer's
@@ -368,17 +369,70 @@ impl AppUseCase {
                 "WireGuard tunnels have no host key to reset".into(),
             ));
         }
+        crate::tunnel_proxy::TunnelHostKeyLedger::shared().begin_reset(&config)
+            .map_err(AppError::Repository)?;
         self.services
             .integrations
             .proxy_configs
             .clear_host_key(&config.id)
             .await?;
-        self.services
+        let config = self.services.integrations.proxy_configs.get_by_id(&config.id).await?
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+        crate::tunnel_proxy::TunnelHostKeyLedger::shared().register(&config)
+            .map_err(AppError::Repository)?;
+        crate::tunnel_proxy::stop_tunnel(&config.id);
+        Ok(config)
+    }
+
+    /// Fetch an operator-selected URL without treating destination failures as proxy health changes.
+    pub async fn test_proxy_url(
+        &self,
+        actor: &User,
+        id: &str,
+        url: &str,
+    ) -> AppResult<ProxyTestResult> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let url = normalize_proxy_test_url(url)?;
+        let config = self
+            .services
             .integrations
             .proxy_configs
-            .get_by_id(&config.id)
+            .get_by_id(id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))
+            .ok_or_else(|| AppError::NotFound("proxy config not found".into()))?;
+        if !config.is_enabled {
+            return Err(AppError::Validation(
+                "Enable this proxy before testing its outbound route.".into(),
+            ));
+        }
+        let started = std::time::Instant::now();
+        let timeout = crate::transport_proxy::transport_proxy_request_timeout(&config);
+        let result = tokio::time::timeout(timeout, async {
+            // Keep the existing SSH handshake diagnostics and atomic host-key pinning.
+            let config = if config.provider_type == scryer_domain::ProxyProviderType::SshTunnel {
+                self.probe_ssh_handshake(&config).await?.0
+            } else {
+                config
+            };
+            fetch_proxy_test_url(&config, &url).await
+        })
+        .await
+        .unwrap_or_else(|_| Err(AppError::Repository("Proxy URL test timed out.".into())));
+        let duration_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        Ok(match result {
+            Ok((status, body)) => proxy_url_test_result(status, &body, duration_ms),
+            Err(error) => ProxyTestResult {
+                ok: false,
+                status: scryer_domain::ProxyHealthStatus::Unhealthy,
+                message: Some(crate::challenge_solver::sanitize_proxy_error(
+                    &error.to_string(),
+                )),
+                duration_ms,
+                observed_ip: None,
+                http_status: None,
+            },
+        })
     }
 
     pub async fn test_proxy_config(&self, actor: &User, id: &str) -> AppResult<ProxyTestResult> {
@@ -416,6 +470,8 @@ impl AppUseCase {
                 status: scryer_domain::ProxyHealthStatus::Healthy,
                 message: Some(message),
                 duration_ms: Some(duration_ms),
+                observed_ip: None,
+                http_status: None,
             },
             Err(error) => ProxyTestResult {
                 ok: false,
@@ -424,6 +480,8 @@ impl AppUseCase {
                     &error.to_string(),
                 )),
                 duration_ms: Some(duration_ms),
+                observed_ip: None,
+                http_status: None,
             },
         };
 
@@ -470,6 +528,11 @@ impl AppUseCase {
                     config.clone(),
                     self.probe_wireguard_handshake(config).await?,
                 )
+            } else if config.provider_type == scryer_domain::ProxyProviderType::Http3 {
+                if destination.is_none() {
+                    return Err(AppError::Validation("Assign an indexer to test HTTP/3 CONNECT through its destination".into()));
+                }
+                (config.clone(), "HTTP/3 CONNECT".to_string())
             } else {
                 self.probe_ssh_handshake(config).await?
             };
@@ -551,15 +614,22 @@ impl AppUseCase {
         let mut config = config.clone();
         let message = if handshake.newly_pinned {
             let pinned_at = Utc::now();
-            self.services
-                .integrations
-                .proxy_configs
-                .pin_host_key(&config.id, &handshake.fingerprint, pinned_at)
-                .await?;
+            let pin = crate::tunnel_proxy::PendingHostKeyPin {
+                proxy_config_id: config.id.clone(),
+                fingerprint: handshake.fingerprint.clone(),
+                pinned_at,
+                updated_at: config.updated_at,
+            };
+            if !self.services.integrations.proxy_configs.pin_host_key(
+                &config.id, &handshake.fingerprint, pinned_at, config.updated_at,
+            ).await? {
+                crate::tunnel_proxy::TunnelHostKeyLedger::shared().reject(&pin);
+                return Err(AppError::Repository("SSH host key pin conflicts with the current configuration; retry with the current settings".into()));
+            }
             // The handshake also queued this pin on the ledger the egress paths
             // use; take it back rather than leave a duplicate write for the
             // next flush.
-            crate::tunnel_proxy::TunnelHostKeyLedger::shared().take(&config.id);
+            crate::tunnel_proxy::TunnelHostKeyLedger::shared().take_revision(&config.id, config.updated_at);
             config.host_key_fingerprint = Some(handshake.fingerprint.clone());
             config.host_key_pinned_at = Some(pinned_at);
             format!(
@@ -610,6 +680,148 @@ impl AppUseCase {
             .into_iter()
             .next()
             .map(|indexer| indexer.base_url.trim().to_string())
+    }
+}
+
+fn normalize_proxy_test_url(raw: &str) -> AppResult<String> {
+    let mut url = url::Url::parse(raw.trim()).map_err(|_| {
+        AppError::Validation("Test URL must be an absolute HTTP or HTTPS URL.".into())
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(AppError::Validation(
+            "Test URL must use HTTP or HTTPS and contain no credentials.".into(),
+        ));
+    }
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+/// Both routes use the same transport as normal requests; neither falls back to direct egress.
+async fn fetch_proxy_test_url(
+    config: &scryer_domain::ProxyConfig,
+    url: &str,
+) -> AppResult<(u16, String)> {
+    if config.kind() == scryer_domain::ProxyKind::ChallengeSolver {
+        let timeout = crate::transport_proxy::transport_proxy_request_timeout(config);
+        let client = scryer_outbound_http::proxy_health_reqwest_client(timeout)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let response = send_solver_probe_request(
+            client
+                .post(crate::challenge_solver::solver_solve_endpoint(
+                    &config.base_url,
+                ))
+                .json(&crate::challenge_solver::solver_solve_request(
+                    config.provider_type,
+                    url,
+                    config.request_timeout_seconds,
+                )),
+            config.provider_type,
+            tokio::time::Instant::now() + timeout,
+        )
+        .await?;
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "Solver service returned HTTP {}.",
+                response.status().as_u16()
+            )));
+        }
+        let body = read_solver_health_body_bounded(response, config.provider_type).await?;
+        let solution = crate::challenge_solver::parse_solver_solution(&body)
+            .map_err(|error| AppError::Repository(error.message(config.provider_type).into()))?;
+        let status = solution
+            .status
+            .filter(|status| (100..=599).contains(status))
+            .ok_or_else(|| {
+                AppError::Repository("Solver did not return a destination HTTP status.".into())
+            })?;
+        let body = solution.response.ok_or_else(|| {
+            AppError::Repository("Solver did not return destination content.".into())
+        })?;
+        Ok((status, body))
+    } else {
+        let client = crate::transport_proxy::transport_proxied_reqwest_client(config, "")
+            .map_err(AppError::Repository)?;
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| AppError::Repository(error.without_url().to_string()))?;
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| AppError::Repository(error.without_url().to_string()))?
+        {
+            if body.len().saturating_add(chunk.len()) > SOLVER_HEALTH_RESPONSE_MAX_BYTES {
+                return Err(AppError::Repository(
+                    "Test response exceeds the 1 MiB limit.".into(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok((status, String::from_utf8_lossy(&body).into_owned()))
+    }
+}
+
+fn observed_proxy_ip(body: &str) -> Option<String> {
+    fn parse_payload(text: &str) -> Option<String> {
+        if let Ok(ip) = text.trim().parse::<std::net::IpAddr>() {
+            return Some(ip.to_string());
+        }
+        let json: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+        json.get("ip")?
+            .as_str()?
+            .trim()
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .map(|ip| ip.to_string())
+    }
+    if let Some(ip) = parse_payload(body) {
+        return Some(ip);
+    }
+    // Browser solvers wrap text/JSON responses in a <pre> element. Only accept
+    // a complete IP payload there, never an arbitrary address embedded in a page.
+    static PRE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?is)<pre(?:\s[^>]*)?>(.*?)</pre\s*>").expect("valid pre expression")
+    });
+    let captures = PRE.captures(body)?;
+    let text = captures
+        .get(1)?
+        .as_str()
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    parse_payload(&text)
+}
+
+fn proxy_url_test_result(status: u16, body: &str, duration_ms: Option<u64>) -> ProxyTestResult {
+    let ok = (200..300).contains(&status);
+    let observed_ip = ok.then(|| observed_proxy_ip(body)).flatten();
+    let message = if !ok {
+        format!("Destination returned HTTP {status}.")
+    } else if observed_ip.is_none() {
+        "Response did not contain a recognizable IP.".to_string()
+    } else {
+        "Outbound IP resolved successfully.".to_string()
+    };
+    ProxyTestResult {
+        ok,
+        status: if ok {
+            scryer_domain::ProxyHealthStatus::Healthy
+        } else {
+            scryer_domain::ProxyHealthStatus::Unhealthy
+        },
+        message: Some(message),
+        duration_ms,
+        observed_ip,
+        http_status: Some(status),
     }
 }
 
@@ -687,6 +899,7 @@ fn default_proxy_scheme(provider_type: scryer_domain::ProxyProviderType) -> &'st
         Provider::Socks4 => "socks4",
         Provider::Socks5 => "socks5",
         Provider::SshTunnel => "ssh",
+        Provider::Http3 => "https",
         Provider::WireGuard => "wireguard",
     }
 }
@@ -790,6 +1003,13 @@ fn normalize_proxy_endpoint(
     }
 
     match (provider_type, parsed.scheme()) {
+        (Provider::Http3, "https") => {
+            if !matches!(parsed.path(), "" | "/") || parsed.query().is_some() || parsed.fragment().is_some() || parsed.port() == Some(0) {
+                return Err(AppError::Validation("HTTP/3 CONNECT endpoint must be https://host[:port] without a path, query or fragment".into()));
+            }
+            Ok(NormalizedProxyEndpoint { base_url: trimmed, scheme_remote_dns: None })
+        }
+        (Provider::Http3, _) => Err(AppError::Validation("HTTP/3 CONNECT requires an https endpoint".into())),
         (Provider::Http, "http" | "https") => Ok(NormalizedProxyEndpoint {
             base_url: trimmed,
             scheme_remote_dns: None,
@@ -925,6 +1145,10 @@ fn validate_proxy_credentials(
             "SOCKS4 proxies do not carry credentials; use SOCKS5 for an authenticated proxy".into(),
         ));
     }
+    if provider_type == scryer_domain::ProxyProviderType::Http3 && let Some(username) = username {
+        scryer_tunnel::Http3ProxyCredentials::new(username.into(), password.unwrap_or_default().into())
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+    }
     if password.is_some() && username.is_none() {
         return Err(AppError::Validation(
             "proxy password requires a username".into(),
@@ -1020,7 +1244,7 @@ fn validate_tunnel_auth(
             "only SSH tunnels take a private key passphrase".into(),
         ));
     }
-    if !provider_type.is_tunnel() && fields.private_key.is_some() {
+    if !matches!(provider_type, Provider::SshTunnel | Provider::WireGuard) && fields.private_key.is_some() {
         return Err(AppError::Validation(
             "only tunnels take a private key".into(),
         ));
@@ -1039,24 +1263,21 @@ fn validate_ssh_tunnel_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
             "SSH tunnels require a username".into(),
         ));
     }
-    if fields.password.is_none() && fields.private_key.is_none() {
+    if fields.password.is_some() {
         return Err(AppError::Validation(
-            "SSH tunnels require a password or a private key".into(),
+            "SSH tunnels do not accept passwords; use an Ed25519 private key".into(),
         ));
     }
-    if fields.private_key_passphrase.is_some() && fields.private_key.is_none() {
+    let Some(private_key) = fields.private_key else {
         return Err(AppError::Validation(
-            "a private key passphrase requires a private key".into(),
+            "SSH tunnels require an Ed25519 private key".into(),
         ));
-    }
-    if let Some(private_key) = fields.private_key {
-        validate_private_key_pem(private_key)?;
-        // Then parse it the way the engine will, so a non-Ed25519 key, an
-        // unreadable paste or a wrong passphrase is refused at save time rather
-        // than on the first connect.
-        scryer_tunnel::validate_private_key(private_key, fields.private_key_passphrase)
-            .map_err(|error| AppError::Validation(error.to_string()))?;
-    }
+    };
+    validate_private_key_pem(private_key)?;
+    // Parse with the engine so an unsupported key, unreadable paste or wrong
+    // passphrase is refused at save time.
+    scryer_tunnel::validate_private_key(private_key, fields.private_key_passphrase)
+        .map_err(|error| AppError::Validation(error.to_string()))?;
     Ok(())
 }
 
@@ -1384,6 +1605,7 @@ pub const TRANSPORT_PROXY_DOWNSTREAM_MESSAGE: &str =
 fn transport_proxy_name(provider_type: scryer_domain::ProxyProviderType) -> &'static str {
     match provider_type {
         scryer_domain::ProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::ProxyProviderType::Http3 => "HTTP/3 CONNECT proxy",
         scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
         scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
@@ -1402,6 +1624,7 @@ fn proxy_default_port(provider_type: scryer_domain::ProxyProviderType) -> Option
             Some(1080)
         }
         scryer_domain::ProxyProviderType::SshTunnel => Some(22),
+        scryer_domain::ProxyProviderType::Http3 => Some(443),
         // WireGuard's own default listen port, and what every `wg-quick`
         // server config uses unless the operator changed it.
         scryer_domain::ProxyProviderType::WireGuard => Some(51820),
@@ -1521,6 +1744,165 @@ mod proxy_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use scryer_domain::ProxyProviderType as Provider;
+
+    #[test]
+    fn proxy_url_test_validates_http_destinations() {
+        assert_eq!(
+            normalize_proxy_test_url(" https://example.com/ip?q=1#fragment ").unwrap(),
+            "https://example.com/ip?q=1"
+        );
+        for url in [
+            "",
+            "/ip",
+            "file:///etc/hosts",
+            "ftp://example.com",
+            "https://user:secret@example.com",
+        ] {
+            assert!(normalize_proxy_test_url(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn proxy_url_test_recognizes_only_complete_ip_payloads() {
+        for body in [
+            " 203.0.113.42\n",
+            r#"{"ip":"203.0.113.42"}"#,
+            r#"<html><body><pre style="color: black">{"ip":"203.0.113.42"}</pre></body></html>"#,
+            "<PRE>{&quot;ip&quot;:&quot;203.0.113.42&quot;}</PRE>",
+        ] {
+            assert_eq!(observed_proxy_ip(body).as_deref(), Some("203.0.113.42"));
+        }
+        assert_eq!(
+            observed_proxy_ip("2001:db8::42").as_deref(),
+            Some("2001:db8::42")
+        );
+        for body in [
+            "<p>Contact 203.0.113.42</p>",
+            "203.0.113.42, 203.0.113.43",
+            "999.1.1.1",
+            r#"{"ip":"not an IP"}"#,
+            "<pre>Access denied for 203.0.113.42</pre>",
+        ] {
+            assert_eq!(observed_proxy_ip(body), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn proxy_url_test_reports_http_failure_and_success_without_ip() {
+        let failed = proxy_url_test_result(403, "203.0.113.42", Some(25));
+        assert!(!failed.ok);
+        assert_eq!(failed.http_status, Some(403));
+        assert_eq!(failed.observed_ip, None);
+        let page = proxy_url_test_result(200, "<html>A regular page</html>", Some(25));
+        assert!(page.ok);
+        assert_eq!(page.observed_ip, None);
+        assert_eq!(
+            page.message.as_deref(),
+            Some("Response did not contain a recognizable IP.")
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_url_test_uses_saved_http_proxy_and_credentials() {
+        let proxy = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::header(
+                "proxy-authorization",
+                "Basic dXNlcjpwYXNz",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ip":"203.0.113.42"}"#))
+            .expect(1)
+            .mount(&proxy)
+            .await;
+        let mut config = transport_config(Provider::Http, &proxy.uri());
+        config.username_encrypted = Some("user".into());
+        config.password_encrypted = Some("pass".into());
+        let (status, body) = fetch_proxy_test_url(&config, "http://unresolvable.invalid/ip")
+            .await
+            .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(observed_proxy_ip(&body).as_deref(), Some("203.0.113.42"));
+    }
+
+    #[tokio::test]
+    async fn proxy_url_test_never_falls_back_to_direct() {
+        let target = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&target)
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let config = transport_config(Provider::Http, &format!("http://{address}"));
+        assert!(fetch_proxy_test_url(&config, &target.uri()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn proxy_url_test_fetches_through_each_solver_even_when_health_is_good() {
+        for (provider, timeout) in [(Provider::Byparr, 60), (Provider::Trawl, 60_000)] {
+            let solver = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&solver)
+                .await;
+            Mock::given(method("POST")).and(path("/v1"))
+                .and(body_json(serde_json::json!({"cmd":"request.get", "url":"https://example.com/ip", "maxTimeout":timeout})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status":"ok", "solution":{"status":200, "response":"<html><pre>2001:db8::42</pre></html>"}
+                }))).expect(1).mount(&solver).await;
+            let (status, body) =
+                fetch_proxy_test_url(&test_config(&solver, provider), "https://example.com/ip")
+                    .await
+                    .unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(observed_proxy_ip(&body).as_deref(), Some("2001:db8::42"));
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_url_test_rejects_oversized_responses_and_incomplete_solutions() {
+        let proxy = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("x".repeat(SOLVER_HEALTH_RESPONSE_MAX_BYTES + 1)),
+            )
+            .mount(&proxy)
+            .await;
+        assert!(
+            fetch_proxy_test_url(
+                &transport_config(Provider::Http, &proxy.uri()),
+                "http://unresolvable.invalid/ip"
+            )
+            .await
+            .is_err()
+        );
+        for solution in [
+            serde_json::json!({"status":200}),
+            serde_json::json!({"response":"203.0.113.42"}),
+        ] {
+            let solver = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"status":"ok", "solution":solution})),
+                )
+                .mount(&solver)
+                .await;
+            assert!(
+                fetch_proxy_test_url(
+                    &test_config(&solver, Provider::Trawl),
+                    "https://example.com/ip"
+                )
+                .await
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn proxy_timeout_validation_uses_indexer_ceiling() {
@@ -1687,7 +2069,7 @@ mod proxy_tests {
     }
 
     #[test]
-    fn ssh_tunnels_require_a_username_and_one_form_of_authentication() {
+    fn ssh_tunnels_require_a_username_and_key_and_reject_passwords() {
         const PEM: &str = scryer_tunnel::test_support::CLIENT_ED25519_PEM;
 
         // Username is not optional: there is no "current user" to fall back to.
@@ -1706,14 +2088,13 @@ mod proxy_tests {
             )
             .is_err()
         );
-        // Either alone is enough, and both together is allowed (WP6 prefers the
-        // key).
+        // Passwords are rejected even if a valid key is supplied.
         assert!(
             validate_tunnel_auth(
                 Provider::SshTunnel,
                 &ssh_auth(Some("operator"), Some("s3cret"), None, None)
             )
-            .is_ok()
+            .is_err()
         );
         assert!(
             validate_tunnel_auth(
@@ -1732,7 +2113,7 @@ mod proxy_tests {
                     Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM_PASSPHRASE)
                 )
             )
-            .is_ok()
+            .is_err()
         );
         // A passphrase without a key protects nothing.
         assert!(
@@ -2253,6 +2634,22 @@ mod proxy_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn http3_requires_https_and_accepts_only_optional_basic_credentials() {
+        let config = transport_config(Provider::Http3, "https://proxy.example");
+        assert!(validate_persisted_proxy_config(&config).is_ok());
+        assert_eq!(transport_proxy_endpoint(&config).unwrap(), ("proxy.example".into(), 443));
+        for endpoint in ["http://proxy.example", "https://proxy.example/path", "https://proxy.example?key=secret", "https://user:pass@proxy.example", "https://proxy.example:0"] {
+            assert!(normalize_proxy_endpoint(Provider::Http3, endpoint).is_err(), "{endpoint}");
+        }
+        assert!(validate_proxy_credentials(Provider::Http3, Some("user"), Some("secret")).is_ok());
+        assert!(validate_proxy_credentials(Provider::Http3, None, Some("secret")).is_err());
+        assert!(validate_proxy_credentials(Provider::Http3, Some("user:other"), None).is_err());
+        let mut config = config;
+        config.private_key_encrypted = Some("not applicable".into());
+        assert!(validate_persisted_proxy_config(&config).is_err());
     }
 
     #[test]

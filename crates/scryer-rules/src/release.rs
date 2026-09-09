@@ -49,23 +49,21 @@ pub struct UserPolicy {
     pub applied_facets: Vec<String>,
 }
 
-/// Score delta at or below this value is treated as a hard block.
-/// Matches `scryer.block_score()` builtin which returns -10000.
+/// A completed release total at or below this value is rejected by score.
+/// Individual deltas are never rejection signals.
 pub const BLOCK_SCORE_THRESHOLD: i32 = -9000;
 
-/// The veto sentinel itself, as returned by the `scryer.block_score()` builtin
-/// and as upstream TRaSH Guides spells its own vetoes.
+/// Strong recoverable penalty returned by `scryer.block_score()`.
 pub const BLOCK_SCORE: i32 = -10000;
 
 /// Managed policies rank within this band. The bounds match the ceiling the
 /// normalized TRaSH scores are compressed into, so a pack can express its full
-/// range without reaching the veto sentinel by accident.
+/// range without emitting the strong penalty by accident.
 pub const MANAGED_POLICY_MIN_SCORE: i32 = -1000;
 pub const MANAGED_POLICY_MAX_SCORE: i32 = 1000;
 
-/// Ranking entries from one managed policy sum within this band. Vetoes are
-/// excluded: a veto is decisive on its own, so aggregating it with rankings
-/// would compare two different currencies.
+/// Legacy managed-policy validation bounds. Packs using the strong penalty
+/// retain their existing aggregate exemption; this is not release eligibility.
 pub const MANAGED_POLICY_MIN_AGGREGATE_SCORE: i64 = -3000;
 pub const MANAGED_POLICY_MAX_AGGREGATE_SCORE: i64 = 3000;
 
@@ -144,6 +142,8 @@ pub struct SubtitleStreamDoc {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseDoc {
     pub raw_title: String,
+    /// Lexer-normalized release tokens in source order.
+    pub normalized_tokens: Vec<String>,
     pub quality: Option<String>,
     pub source: Option<String>,
     pub video_codec: Option<String>,
@@ -155,6 +155,7 @@ pub struct ReleaseDoc {
     pub is_dual_audio: bool,
     pub is_atmos: bool,
     pub is_dolby_vision: bool,
+    pub has_hdr_fallback: bool,
     pub detected_hdr: bool,
     pub is_remux: bool,
     pub is_bd_disk: bool,
@@ -184,12 +185,18 @@ pub struct ReleaseDoc {
     pub age_days: Option<i64>,
     pub thumbs_up: Option<i32>,
     pub thumbs_down: Option<i32>,
-    /// Stable, parser-supplied guide facts for managed scoring packs.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub guide_facts: Vec<String>,
     /// Arbitrary plugin-supplied metadata, accessible as `input.release.extra.*` in Rego.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ScoringOverridesDoc {
+    pub allow_x265_non4k: Option<bool>,
+    pub block_dv_without_fallback: Option<bool>,
+    pub prefer_compact_encodes: Option<bool>,
+    pub prefer_lossless_audio: Option<bool>,
+    pub block_upscaled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,6 +220,10 @@ pub struct ProfileDoc {
     pub allow_upgrades: bool,
     pub prefer_dual_audio: bool,
     pub required_audio_languages: Vec<String>,
+    /// Resolved for the current media category, in lowercase.
+    pub scoring_persona: String,
+    /// Explicit optional overrides; `null` preserves an unset preference.
+    pub scoring_overrides: ScoringOverridesDoc,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,13 +240,18 @@ pub struct ContextDoc {
     pub existing_score: Option<i32>,
     pub search_mode: String,
     pub runtime_minutes: Option<i32>,
+    pub coverage_total_runtime_minutes: Option<i32>,
+    pub coverage_member_runtime_minutes: Option<i32>,
+    pub coverage_member_count: Option<i32>,
     pub is_anime: bool,
     pub is_filler: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuiltinScoreDoc {
+    /// Built-in numeric subtotal, including every penalty, before rules run.
     pub total: i32,
+    /// Mandatory built-in failures only; no provisional score threshold.
     pub blocked: bool,
     pub codes: Vec<String>,
 }
@@ -353,6 +369,8 @@ pub struct ReleaseRuleExtra {
     /// Facets this rule applies to. Empty means every facet.
     pub applied_facets: Vec<String>,
     pub origin: PolicyOrigin,
+    pub baseline: bool,
+    pub tag_filter: Vec<String>,
 }
 
 impl PolicyRecord for UserPolicy {
@@ -415,6 +433,8 @@ impl PolicyFamily for ReleaseFamily {
         ReleaseRuleExtra {
             applied_facets: policy.applied_facets.clone(),
             origin: policy.origin,
+            baseline: false,
+            tag_filter: Vec::new(),
         }
     }
 
@@ -484,6 +504,79 @@ impl PolicyFamily for ReleaseFamily {
 pub type UserRulesEngine = PolicyEngine<ReleaseFamily>;
 
 impl UserRulesEngine {
+    /// Build one combined policy set, retaining package identities and marking
+    /// the rules that establish the subtotal seen by subsequent policies.
+    pub fn build_with_baseline_rules(
+        policies: &[UserPolicy],
+        baseline_ids: &std::collections::HashSet<String>,
+    ) -> Result<Self, RulesError> {
+        Self::build_with_baseline_rules_and_tag_filters(
+            policies,
+            baseline_ids,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    pub fn build_with_baseline_rules_and_tag_filters(
+        policies: &[UserPolicy],
+        baseline_ids: &std::collections::HashSet<String>,
+        tag_filters: &std::collections::HashMap<String, Vec<String>>,
+    ) -> Result<Self, RulesError> {
+        if baseline_ids
+            .iter()
+            .any(|id| !policies.iter().any(|policy| &policy.id == id))
+        {
+            return Err(RulesError::Compilation(
+                "unknown baseline rule identity".into(),
+            ));
+        }
+        let additional_ids = policies
+            .iter()
+            .filter(|policy| !baseline_ids.contains(&policy.id))
+            .map(|policy| policy.id.clone())
+            .collect::<Vec<_>>();
+        for policy in policies
+            .iter()
+            .filter(|policy| baseline_ids.contains(&policy.id))
+        {
+            validation::validate_baseline_dependencies(&policy.rego_source, &additional_ids)
+                .map_err(|error| RulesError::Compilation(format!("{}: {error}", policy.id)))?;
+        }
+        if tag_filters
+            .keys()
+            .any(|id| !policies.iter().any(|policy| &policy.id == id))
+        {
+            return Err(RulesError::Compilation(
+                "unknown rule identity in tag filter metadata".into(),
+            ));
+        }
+        // Configuration stays in Rego so references between rules see the same
+        // scope as direct evaluation. Locale rules declare an empty default.
+        let configured = policies
+            .iter()
+            .map(|policy| {
+                let mut policy = policy.clone();
+                if let Some(tags) = tag_filters.get(&policy.id).filter(|tags| !tags.is_empty()) {
+                    let tags = tags
+                        .iter()
+                        .map(|tag| tag.to_lowercase())
+                        .collect::<Vec<_>>();
+                    policy.rego_source.push_str(&format!(
+                        "\nconfigured_tags := {}\n",
+                        serde_json::to_string(&tags).expect("string array serializes")
+                    ));
+                }
+                policy
+            })
+            .collect::<Vec<_>>();
+        let mut engine = Self::build(&configured)?;
+        for rule in &mut engine.rules {
+            rule.extra.baseline = baseline_ids.contains(&rule.id);
+            rule.extra.tag_filter = tag_filters.get(&rule.id).cloned().unwrap_or_default();
+        }
+        Ok(engine)
+    }
+
     /// A stable description of which rules are loaded, in policy order.
     ///
     /// Scores produced under one rule set must not be compared against scores
@@ -496,11 +589,20 @@ impl UserRulesEngine {
             .iter()
             .map(|rule| {
                 let origin = rule.extra.origin;
-                format!(
+                let mut identity = format!(
                     "{}:{origin:?}:{}",
                     rule.id,
                     rule.extra.applied_facets.join("+")
-                )
+                );
+                if !rule.extra.tag_filter.is_empty() {
+                    identity.push_str(":tags=");
+                    identity.push_str(&rule.extra.tag_filter.join("+"));
+                }
+                if rule.extra.baseline {
+                    format!("{identity}:baseline")
+                } else {
+                    identity
+                }
             })
             .collect::<Vec<_>>()
             .join("|")
@@ -529,7 +631,34 @@ impl UserRulesEvaluator {
         input: &UserRuleInput,
         facet: &str,
     ) -> Result<EvalResult, RulesError> {
-        let outcome = self.evaluate_policies(input, facet)?;
+        let outcome = if self.rules.iter().any(|rule| rule.extra.baseline) {
+            let mut phased_input = input.clone();
+            phased_input.builtin_score.total = 0;
+            let mut baseline =
+                self.evaluate_policies_where(&phased_input, facet, |extra| extra.baseline)?;
+            let subtotal = baseline
+                .records
+                .iter()
+                .flat_map(|record| &record.decision)
+                .try_fold(0_i64, |sum, entry| sum.checked_add(i64::from(entry.delta)))
+                .ok_or_else(|| RulesError::Evaluation("baseline score overflow".into()))?;
+            phased_input.builtin_score.total =
+                subtotal.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+            phased_input.builtin_score.codes.extend(
+                baseline
+                    .records
+                    .iter()
+                    .flat_map(|record| &record.decision)
+                    .map(|entry| entry.code.clone()),
+            );
+            let additional =
+                self.evaluate_policies_where(&phased_input, facet, |extra| !extra.baseline)?;
+            baseline.records.extend(additional.records);
+            baseline.errors.extend(additional.errors);
+            baseline
+        } else {
+            self.evaluate_policies(input, facet)?
+        };
         Ok(EvalResult {
             entries: outcome
                 .records
@@ -604,7 +733,7 @@ impl UserRulesEvaluator {
 
 /// Enforce the managed-policy score contract at evaluation time.
 ///
-/// Managed packs are opt-in, so a pack the user enabled may veto.
+/// Managed packs may emit a strong recoverable penalty.
 /// A managed entry is therefore either a ranking inside
 /// `[MANAGED_POLICY_MIN_SCORE, MANAGED_POLICY_MAX_SCORE]` or exactly the veto
 /// sentinel. Nothing lives in between: a value below the ranking band but above
@@ -624,8 +753,8 @@ fn validate_managed_entries(entries: &[UserRuleEntry]) -> Result<(), String> {
         ));
     }
 
-    // A veto decides the release on its own, so there is no ranking total left
-    // to bound.
+    // Preserve the legacy validation exemption for strong-penalty packs.
+    // Every accepted entry still contributes to the finalized release score.
     if entries.iter().any(|entry| is_veto(entry.delta)) {
         return Ok(());
     }
@@ -658,6 +787,133 @@ mod tests {
         let result = evaluator.evaluate(&input, "movie").unwrap();
         assert!(result.entries.is_empty());
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn tag_filter_applies_only_to_matching_titles_and_empty_filter_is_open() {
+        let policy = UserPolicy {
+            id: "locale".into(),
+            name: "Locale".into(),
+            rego_source: rewrite_package_declaration(
+                r#"default configured_tags := []
+scope_matches if { count(configured_tags) == 0 }
+scope_matches if { some tag in input.context.tags; lower(tag) in configured_tags }
+score_entry["locale"] := 20 if { scope_matches }"#,
+                "locale",
+            ),
+            origin: PolicyOrigin::System,
+            applied_facets: vec![],
+        };
+        let tagged = std::collections::HashMap::from([(
+            "locale".to_string(),
+            vec!["locale:german".to_string()],
+        )]);
+        let baseline = std::collections::HashSet::new();
+        let engine = UserRulesEngine::build_with_baseline_rules_and_tag_filters(
+            std::slice::from_ref(&policy),
+            &baseline,
+            &tagged,
+        )
+        .unwrap();
+        let mut matching = test_input();
+        matching.context.tags = vec!["LOCALE:GERMAN".to_string()];
+        assert_eq!(
+            engine
+                .evaluator()
+                .evaluate(&matching, "movie")
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        let unmatched = test_input();
+        assert!(
+            engine
+                .evaluator()
+                .evaluate(&unmatched, "movie")
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        let open =
+            UserRulesEngine::build_with_baseline_rules(std::slice::from_ref(&policy), &baseline)
+                .unwrap();
+        assert_eq!(
+            open.evaluator()
+                .evaluate(&unmatched, "movie")
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn baseline_subtotal_is_complete_recoverable_and_reused_without_stacking() {
+        let policy = |id: &str, source: &str| UserPolicy {
+            id: id.into(),
+            name: id.into(),
+            rego_source: rewrite_package_declaration(source, id),
+            origin: PolicyOrigin::User,
+            applied_facets: vec![],
+        };
+        let policies = [
+            policy(
+                "additional",
+                "score_entry[\"subtotal\"] := input.builtin_score.total\nscore_entry[\"reference\"] := data.scryer.rules.user.base.score_entry[\"reward\"]",
+            ),
+            policy(
+                "base",
+                "score_entry[\"penalty\"] := -10000\nscore_entry[\"reward\"] := 15000 if { input.release.year == 2024 }",
+            ),
+        ];
+        let baseline = std::collections::HashSet::from(["base".to_string()]);
+        let engine = UserRulesEngine::build_with_baseline_rules(&policies, &baseline).unwrap();
+        let mut evaluator = engine.evaluator();
+        let mut input = test_input();
+        for year in [2024, 2023, 2024] {
+            input.release.year = Some(year);
+            let result = evaluator.evaluate(&input, "movie").unwrap();
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+            let entries = result
+                .entries
+                .iter()
+                .map(|entry| (entry.code.as_str(), entry.delta))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(entries.len(), result.entries.len(), "duplicate score entry");
+            assert_eq!(
+                entries["subtotal"],
+                if year == 2024 { 5000 } else { -10000 }
+            );
+            assert_eq!(result.entries[0].rule_set_id, "base");
+        }
+    }
+
+    #[test]
+    fn baseline_cannot_read_later_policies_or_its_own_subtotal() {
+        let baseline = std::collections::HashSet::from(["base".to_string()]);
+        for source in [
+            "score_entry[\"x\"] := input.builtin_score.total",
+            "score_entry[\"x\"] := data.scryer.rules.user.later.score_entry[\"x\"]",
+        ] {
+            let policies = [
+                UserPolicy {
+                    id: "base".into(),
+                    name: "base".into(),
+                    rego_source: rewrite_package_declaration(source, "base"),
+                    origin: PolicyOrigin::User,
+                    applied_facets: vec![],
+                },
+                UserPolicy {
+                    id: "later".into(),
+                    name: "later".into(),
+                    rego_source: rewrite_package_declaration("score_entry[\"x\"] := 1", "later"),
+                    origin: PolicyOrigin::User,
+                    applied_facets: vec![],
+                },
+            ];
+            assert!(UserRulesEngine::build_with_baseline_rules(&policies, &baseline).is_err());
+        }
     }
 
     #[test]
@@ -848,8 +1104,7 @@ mod tests {
         assert_eq!(result.entries[0].origin, PolicyOrigin::System);
     }
 
-    /// An opt-in managed pack may veto, and the builtin is the
-    /// canonical spelling of that veto.
+    /// An opt-in managed pack may emit the standard recoverable penalty.
     #[test]
     fn managed_rule_accepts_block_builtin_source() {
         let policy = UserPolicy {
@@ -1576,6 +1831,7 @@ score_entry["internal"] := 300 if {
         UserRuleInput {
             release: ReleaseDoc {
                 raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265".to_string(),
+                normalized_tokens: vec![],
                 quality: Some("2160P".to_string()),
                 source: Some("WEB-DL".to_string()),
                 video_codec: Some("H.265".to_string()),
@@ -1587,6 +1843,7 @@ score_entry["internal"] := 300 if {
                 is_dual_audio: false,
                 is_atmos: false,
                 is_dolby_vision: false,
+                has_hdr_fallback: false,
                 detected_hdr: false,
                 is_remux: false,
                 is_bd_disk: false,
@@ -1616,7 +1873,6 @@ score_entry["internal"] := 300 if {
                 age_days: Some(5),
                 thumbs_up: None,
                 thumbs_down: None,
-                guide_facts: vec![],
                 extra: Default::default(),
             },
             profile: ProfileDoc {
@@ -1639,6 +1895,8 @@ score_entry["internal"] := 300 if {
                 allow_upgrades: true,
                 prefer_dual_audio: false,
                 required_audio_languages: vec![],
+                scoring_persona: "balanced".to_string(),
+                scoring_overrides: Default::default(),
             },
             context: ContextDoc {
                 title_id: Some("tt1234567".to_string()),
@@ -1653,6 +1911,9 @@ score_entry["internal"] := 300 if {
                 existing_score: None,
                 search_mode: "auto".to_string(),
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_anime: false,
                 is_filler: false,
             },

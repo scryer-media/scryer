@@ -224,6 +224,20 @@ export function SettingsOverviewSection({
             </div>
 
             <div className="flex items-center gap-3">
+              <Label>{t("settings.apiExplorerLabel")}</Label>
+              <InfoHelp text={t("settings.apiExplorerHelp")} ariaLabel={t("settings.apiExplorerLabel")} />
+              <SettingsToggleSwitch
+                checked={generalSettings.apiExplorerEnabled}
+                ariaLabel={t("settings.apiExplorerLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ apiExplorerEnabled: nextValue });
+                  onGeneralSettingsCommit({ apiExplorerEnabled: nextValue });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
               <div className="flex min-w-0 items-center gap-1.5">
                 <Label>{t("settings.personalizedDiscoveryLabel")}</Label>
                 <InfoHelp

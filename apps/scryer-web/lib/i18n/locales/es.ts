@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const es: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Requisito obligatorio incumplido",
+  "scoring.finalScoreRejection": "Puntuación final rechazada",
+  "settings.refFnBlockScore": "Devuelve -10000 como penalización que otras puntuaciones pueden compensar",
+  "settings.arrImportBlockScoreHelp": "La puntuación total debe superar -9000 y alcanzar el mínimo del perfil. Los requisitos obligatorios siguen vigentes.",
   "label.ready": "Listo",
   "label.moreInfo": "Más información",
   "label.search": "Buscar",
@@ -240,7 +244,7 @@ const es: LocaleDictionary = {
   "settings.proxyDisabledHelp": "El proxy asignado está desactivado.",
   "settings.proxyDisabledSuffix": "(desactivado)",
   "settings.proxyClearPassword": "Borrar la contraseña guardada",
-  "settings.proxyTunnelAuthHelp": "Un túnel necesita un nombre de usuario y una contraseña o una clave privada.",
+  "settings.proxyTunnelAuthHelp": "SSH requiere un nombre de usuario y una clave privada Ed25519. No se admite la autenticación con contraseña.",
   "settings.proxyPrivateKey": "Clave privada",
   "settings.proxyPrivateKeyHelp": "solo se admiten claves privadas Ed25519; genere una con `ssh-keygen -t ed25519` y pegue aquí la clave privada de OpenSSH",
   "settings.proxyPrivateKeyStored": "Clave privada definida",
@@ -254,7 +258,7 @@ const es: LocaleDictionary = {
   "settings.proxyHostKeyReset": "Restablecer la clave del servidor",
   "settings.proxyHostKeyResetDescription": "Olvida la clave fijada. La próxima conexión confiará en la que ofrezca el servidor y la fijará, así que hágalo solo si sabe que la clave del servidor cambió de verdad.",
   "settings.proxyValidationTunnelUsername": "Un túnel necesita un nombre de usuario.",
-  "settings.proxyValidationTunnelAuth": "Un túnel necesita una contraseña o una clave privada.",
+  "settings.proxyValidationTunnelAuth": "Un túnel SSH requiere una clave privada Ed25519.",
   "settings.downloadClientProxyHelp": "Puede asignarse cualquier tipo de proxy. Un solver de desafíos no tiene efecto en un cliente nativo, cuyas solicitudes no las hace un plugin.",
   "status.proxyCreated": "Proxy creado.",
   "status.proxyUpdated": "Proxy actualizado.",

@@ -1,12 +1,12 @@
 import type { DownloadClientDraft } from "@/lib/types/download-clients";
 
 export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = [
-  "nzbget",
-  "sabnzbd",
   "weaver",
+  "sabnzbd",
+  "nzbget",
 ] as const;
 
-export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "nzbget";
+export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "weaver";
 
 export const BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS: Record<string, string> = {
   nzbget: "NZBGet",
@@ -26,7 +26,7 @@ export const DEFAULT_PORT_FOR_CLIENT_TYPE: Record<string, string> = {
 };
 
 export const DEFAULT_DOWNLOAD_CLIENT_DRAFT: DownloadClientDraft = {
-  name: "",
+  name: "Weaver",
   clientType: DEFAULT_DOWNLOAD_CLIENT_TYPE,
   host: "",
   port: DEFAULT_PORT_FOR_CLIENT_TYPE[DEFAULT_DOWNLOAD_CLIENT_TYPE] ?? "8080",

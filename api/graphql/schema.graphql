@@ -2252,7 +2252,7 @@ input CreateProxyConfigInput {
 	"""
 	name: String!
 	"""
-	Proxy provider implementation identifier.
+	Proxy provider identifier: byparr, trawl, http, http3, socks4, socks5, ssh_tunnel, or wireguard.
 	"""
 	providerType: String!
 	"""
@@ -2275,7 +2275,7 @@ input CreateProxyConfigInput {
 	username: String
 	"""
 	Transport-proxy password. Write-only: stored encrypted and never read
-	back. Requires a username; challenge solvers reject it.
+	back. Requires a username; challenge solvers and SSH tunnels reject it.
 	"""
 	password: String
 	"""
@@ -2286,7 +2286,7 @@ input CreateProxyConfigInput {
 	"""
 	Private key for a tunnel provider: PEM for an SSH tunnel, base64 for
 	WireGuard. Write-only: stored encrypted and never read back. An SSH
-	tunnel needs either this or a password; WireGuard requires it.
+	tunnel and WireGuard both require a private key.
 	"""
 	privateKey: String
 	"""
@@ -6911,6 +6911,10 @@ General service settings, including effective image-cache limits and trusted cer
 """
 type GeneralSettingsPayload {
 	"""
+	Whether administrators may use the API explorer.
+	"""
+	apiExplorerEnabled: Boolean!
+	"""
 	Whether surfaces that are still being finished are shown on this instance.
 	"""
 	experimentalFeaturesEnabled: Boolean!
@@ -8058,6 +8062,10 @@ type IndexerSearchResultPayload {
 Instance-wide feature switches readable by any signed-in user.
 """
 type InstanceFeaturesPayload {
+	"""
+	Whether the API explorer is enabled and the current user may access it.
+	"""
+	apiExplorerEnabled: Boolean!
 	"""
 	Whether surfaces that are still being finished are shown on this instance.
 	"""
@@ -14337,7 +14345,11 @@ type MutationRoot {
 		"""
 		Proxy configuration identity to test.
 		"""
-		id: ID!
+		id: ID!,
+		"""
+		HTTP(S) URL to fetch through this proxy or solver. Omit for the existing health check.
+		"""
+		url: String
 	): ProxyTestResultPayload!
 	"""
 	Forget the pinned tunnel host key so the next connection trusts the server again.
@@ -18065,6 +18077,14 @@ type ProxyTestResultPayload {
 	Test duration in milliseconds, or null when unavailable.
 	"""
 	durationMs: Int
+	"""
+	Public outbound IP reported by the destination, or null when unrecognized.
+	"""
+	observedIp: String
+	"""
+	Destination HTTP status, or null when no destination response was received.
+	"""
+	httpStatus: Int
 }
 
 """
@@ -21410,6 +21430,18 @@ type RuleSetPayload {
 	"""
 	priority: Int!
 	"""
+	Baseline rules establish the subtotal read by additional rules.
+	"""
+	evaluationPhase: String!
+	"""
+	Why a retained rule was disabled during a context migration.
+	"""
+	disabledReason: String
+	"""
+	Other rules with this group cannot be enabled simultaneously.
+	"""
+	exclusiveGroup: String
+	"""
 	Media facets to which the rule set applies.
 	"""
 	appliedFacets: [String!]!
@@ -21479,7 +21511,7 @@ type RuleSetTestDraftContributionPayload {
 	"""
 	matched: Boolean!
 	"""
-	Whether the draft emitted a blocking signal.
+	Compatibility field, always false: drafts emit recoverable numeric contributions.
 	"""
 	blocked: Boolean!
 	"""
@@ -21527,11 +21559,11 @@ input RuleSetTestDraftInput {
 }
 
 """
-One score or block entry emitted by a rule set in a scoring preview.
+One numeric contribution or explicit rejection in a scoring preview.
 """
 type RuleSetTestEntryPayload {
 	"""
-	Stable score or block code.
+	Stable explanation code; the code does not determine rejection type.
 	"""
 	code: String!
 	"""
@@ -21539,9 +21571,13 @@ type RuleSetTestEntryPayload {
 	"""
 	delta: Int!
 	"""
-	Whether the entry is a blocking signal.
+	Whether this is an explicit rejection, as identified by kind.
 	"""
 	blocked: Boolean!
+	"""
+	score_contribution, mandatory_rejection, or final_score_rejection.
+	"""
+	kind: String!
 }
 
 """
@@ -21637,7 +21673,7 @@ type RuleSetTestRuleSetPayload {
 	"""
 	matched: Boolean!
 	"""
-	Whether this rule set emitted a blocking signal.
+	Whether this group contains an explicit rejection. Numeric penalties are recoverable.
 	"""
 	blocked: Boolean!
 	"""
@@ -21645,7 +21681,7 @@ type RuleSetTestRuleSetPayload {
 	"""
 	isDraft: Boolean!
 	"""
-	Individual matched score and block entries emitted by this rule set.
+	Individual numeric contributions and explicit rejection reasons.
 	"""
 	entries: [RuleSetTestEntryPayload!]!
 	"""
@@ -21784,6 +21820,10 @@ type ScoringEntryPayload {
 	Signed score delta contributed by the rule.
 	"""
 	delta: Int!
+	"""
+	score_contribution, mandatory_rejection, or final_score_rejection.
+	"""
+	kind: String!
 	"""
 	Source of the scoring rule.
 	"""
@@ -23352,11 +23392,11 @@ type TestRuleSetPayload {
 	"""
 	score: Int!
 	"""
-	Whether the preview passes normal quality and minimum-score gates.
+	Whether mandatory requirements and both final score gates pass.
 	"""
 	allowed: Boolean!
 	"""
-	Whether any policy emitted a blocking signal.
+	Whether the completed decision is rejected by a requirement or score gate.
 	"""
 	blocked: Boolean!
 	"""
@@ -25623,6 +25663,10 @@ General retention, cache, and plugin trust settings.
 """
 input UpdateGeneralSettingsInput {
 	"""
+	Whether administrators may use the API explorer. Omission preserves the saved setting.
+	"""
+	apiExplorerEnabled: Boolean
+	"""
 	Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
 	"""
 	experimentalFeaturesEnabled: Boolean
@@ -26221,8 +26265,8 @@ input UpdateProxyConfigInput {
 	"""
 	username: String
 	"""
-	Replacement transport-proxy password. Write-only: omission preserves
-	the stored value, null clears it, and it is never read back.
+	Replacement transport-proxy password. SSH tunnels reject passwords.
+	Write-only: omission preserves the stored value, null clears it.
 	"""
 	password: String
 	"""

@@ -11,13 +11,14 @@ use reqwest::header::{
 };
 use scryer_application::{
     AppError, AppResult, ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage,
-    ImageProxyRepository, ImageProxySourceRecord, TitleImageKind, TitleImageRepository,
+    ImageProxyRepository, ImageProxySourceRecord, TitleImageKind, TitleImageProcessor,
+    TitleImageRepository,
 };
 use scryer_outbound_http::{
     HostRpsProfile, OutboundHttpClient, OutboundHttpError, RateLimitRegistry, RequestPolicy,
     no_redirect_reqwest_client,
 };
-use tokio::sync::{Mutex, OnceCell, OwnedRwLockReadGuard, RwLock};
+use tokio::sync::{Mutex, Notify, OnceCell, OwnedRwLockReadGuard, RwLock};
 
 use super::image_proxy_store::approved_upstream_url;
 
@@ -62,10 +63,13 @@ pub struct ImageProxyRuntime {
     inflight: Arc<Mutex<HashMap<String, Weak<InflightFetch>>>>,
     source_flush: Arc<Mutex<()>>,
     cache_lifecycle: Arc<RwLock<()>>,
+    /// Readers must see bytes and MIME metadata from the same publication.
+    cache_publication: Arc<RwLock<()>>,
     /// Coalesces budget enforcement across concurrent background persists:
     /// one pass runs at a time and overlapping writers request another pass.
     budget_gate: Arc<Mutex<()>>,
     budget_dirty: Arc<AtomicBool>,
+    jpeg_wake: Arc<Notify>,
 }
 
 impl ImageProxyRuntime {
@@ -87,8 +91,10 @@ impl ImageProxyRuntime {
             inflight: Arc::new(Mutex::new(HashMap::new())),
             source_flush: Arc::new(Mutex::new(())),
             cache_lifecycle: Arc::new(RwLock::new(())),
+            cache_publication: Arc::new(RwLock::new(())),
             budget_gate: Arc::new(Mutex::new(())),
             budget_dirty: Arc::new(AtomicBool::new(false)),
+            jpeg_wake: Arc::new(Notify::new()),
         }
     }
 
@@ -123,7 +129,11 @@ impl ImageProxyRuntime {
             return Some(blob);
         }
 
-        if let Some((entry, bytes, freshness)) = self.read_cached(token, variant).await {
+        let cached = {
+            let _guard = self.cache_lifecycle.read().await;
+            self.read_cached(token, variant).await
+        };
+        if let Some((entry, bytes, freshness)) = cached {
             if freshness == CacheFreshness::Fresh {
                 return Some(cached_blob(&entry, bytes));
             }
@@ -238,12 +248,13 @@ impl ImageProxyRuntime {
         token: &str,
         variant: &str,
     ) -> Option<(ImageProxyCacheEntryRecord, Vec<u8>, CacheFreshness)> {
+        let _publication = self.cache_publication.read().await;
         let mut entry = self
             .repository
             .get_image_proxy_cache_entry(token, variant)
             .await
             .ok()??;
-        let path = self.cache_path(token, variant);
+        let path = self.existing_cache_path(&entry).await;
         let bytes = match tokio::fs::read(&path).await {
             Ok(bytes) if bytes.len() as i64 == entry.byte_size => bytes,
             _ => {
@@ -387,7 +398,7 @@ impl ImageProxyRuntime {
             let Some(mut entry) = existing else {
                 return Ok(None);
             };
-            let bytes = tokio::fs::read(self.cache_path(token, variant))
+            let bytes = tokio::fs::read(self.existing_cache_path(&entry).await)
                 .await
                 .map_err(|error| {
                     AppError::Repository(format!("failed to read image cache: {error}"))
@@ -563,11 +574,18 @@ impl ImageProxyRuntime {
         tokio::spawn(async move {
             let _lifecycle_guard = lifecycle_guard;
             let result = async {
-                runtime.write_cache_file(&token, &variant, &bytes).await?;
+                let _publication = runtime.cache_publication.write().await;
+                runtime
+                    .write_cache_file_at(&runtime.entry_cache_path(&entry), &bytes)
+                    .await?;
                 runtime
                     .repository
                     .upsert_image_proxy_cache_entry(&entry)
                     .await?;
+                runtime.remove_obsolete_cache_file(&entry).await?;
+                if entry.content_type == "image/jpeg" {
+                    runtime.jpeg_wake.notify_one();
+                }
                 runtime.enforce_budget_after_write().await
             }
             .await;
@@ -604,18 +622,23 @@ impl ImageProxyRuntime {
         }
     }
 
+    #[cfg(test)]
     async fn write_cache_file(&self, token: &str, variant: &str, bytes: &[u8]) -> AppResult<()> {
+        self.write_cache_file_at(&self.cache_path(token, variant), bytes)
+            .await
+    }
+
+    async fn write_cache_file_at(&self, path: &Path, bytes: &[u8]) -> AppResult<()> {
         tokio::fs::create_dir_all(&self.cache_dir)
             .await
             .map_err(|error| {
                 AppError::Repository(format!("failed to create image cache: {error}"))
             })?;
-        let path = self.cache_path(token, variant);
-        let temp = path.with_extension(format!("{}.part", Utc::now().timestamp_micros()));
+        let temp = path.with_extension(format!("{}.part", uuid::Uuid::new_v4()));
         tokio::fs::write(&temp, bytes).await.map_err(|error| {
             AppError::Repository(format!("failed to write image cache: {error}"))
         })?;
-        if let Err(error) = tokio::fs::rename(&temp, &path).await {
+        if let Err(error) = tokio::fs::rename(&temp, path).await {
             let _ = tokio::fs::remove_file(&temp).await;
             return Err(AppError::Repository(format!(
                 "failed to atomically commit image cache: {error}"
@@ -631,10 +654,10 @@ impl ImageProxyRuntime {
                 AppError::Repository(format!("failed to create image cache: {error}"))
             })?;
         let entries = self.repository.list_image_proxy_cache_entries_lru().await?;
-        let mut expected = entries
-            .into_iter()
-            .map(|entry| (self.cache_path(&entry.token, &entry.variant), entry))
-            .collect::<HashMap<_, _>>();
+        let mut expected = HashMap::new();
+        for entry in entries {
+            expected.insert(self.existing_cache_path(&entry).await, entry);
+        }
         let mut files = tokio::fs::read_dir(&self.cache_dir)
             .await
             .map_err(|error| {
@@ -686,8 +709,9 @@ impl ImageProxyRuntime {
                 if total_bytes <= max {
                     return Ok(());
                 }
-                self.remove_cache_file(&self.cache_path(&entry.token, &entry.variant))
+                self.remove_cache_file(&self.existing_cache_path(&entry).await)
                     .await?;
+                self.remove_obsolete_cache_file(&entry).await?;
                 self.repository
                     .delete_image_proxy_cache_entry(&entry.token, &entry.variant)
                     .await?;
@@ -709,6 +733,40 @@ impl ImageProxyRuntime {
         }
     }
 
+    fn entry_cache_path(&self, entry: &ImageProxyCacheEntryRecord) -> PathBuf {
+        let path = self.cache_path(&entry.token, &entry.variant);
+        if entry.content_type == "image/avif" {
+            path.with_extension("avif")
+        } else {
+            path
+        }
+    }
+
+    async fn existing_cache_path(&self, entry: &ImageProxyCacheEntryRecord) -> PathBuf {
+        let path = self.entry_cache_path(entry);
+        // Older upstream AVIF responses used the format-independent filename.
+        if entry.content_type == "image/avif"
+            && !tokio::fs::try_exists(&path).await.unwrap_or(false)
+        {
+            self.cache_path(&entry.token, &entry.variant)
+        } else {
+            path
+        }
+    }
+
+    async fn remove_obsolete_cache_file(
+        &self,
+        entry: &ImageProxyCacheEntryRecord,
+    ) -> AppResult<()> {
+        let legacy = self.cache_path(&entry.token, &entry.variant);
+        let obsolete = if entry.content_type == "image/avif" {
+            legacy
+        } else {
+            legacy.with_extension("avif")
+        };
+        self.remove_cache_file(&obsolete).await
+    }
+
     fn cache_path(&self, token: &str, variant: &str) -> PathBuf {
         let key = blake3::hash(format!("{token}\0{variant}").as_bytes())
             .to_hex()
@@ -719,6 +777,109 @@ impl ImageProxyRuntime {
 
 #[async_trait]
 impl ImageProxyCacheControl for ImageProxyRuntime {
+    async fn list_cached_jpegs(
+        &self,
+        limit: usize,
+        after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        if !cfg!(feature = "image-processing") {
+            return Ok(Vec::new());
+        }
+        self.repository.list_cached_jpegs(limit, after).await
+    }
+
+    async fn wait_for_cached_jpeg(&self) {
+        self.jpeg_wake.notified().await;
+    }
+
+    async fn optimize_cached_jpeg(
+        &self,
+        entry: ImageProxyCacheEntryRecord,
+        processor: Arc<dyn TitleImageProcessor>,
+    ) -> AppResult<bool> {
+        let (bytes, width) = {
+            let _guard = self.cache_lifecycle.read().await;
+            let Some(current) = self
+                .repository
+                .get_image_proxy_cache_entry(&entry.token, &entry.variant)
+                .await?
+            else {
+                return Ok(false);
+            };
+            if entry.content_type != "image/jpeg" || !same_cached_image(&entry, &current) {
+                return Ok(false);
+            }
+            if entry.byte_size <= 0 || entry.byte_size as u64 > MAX_SOURCE_BYTES as u64 {
+                return Err(AppError::Validation(
+                    "cached JPEG exceeds source size limit".into(),
+                ));
+            }
+            let Some(source) = self.repository.get_image_proxy_source(&entry.token).await? else {
+                return Ok(false);
+            };
+            let width = match (source.image_kind.as_str(), entry.variant.as_str()) {
+                ("poster", "w70") => 70,
+                ("poster", _) => 300,
+                ("fanart", _) => 1280,
+                ("episode_still", _) => 300,
+                ("person", _) => 185,
+                _ => return Err(AppError::Validation("unsupported cached JPEG kind".into())),
+            };
+            let bytes = match tokio::fs::read(self.cache_path(&entry.token, &entry.variant)).await {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => {
+                    return Err(AppError::Repository(format!(
+                        "failed to read cached JPEG: {error}"
+                    )));
+                }
+            };
+            if bytes.len() as i64 != entry.byte_size {
+                return Ok(false);
+            }
+            (bytes, width)
+        };
+        let original_digest = blake3::hash(&bytes);
+        let encoded = processor.encode_cached_jpeg(bytes, width).await?;
+        if !valid_raster_bytes("image/avif", &encoded) {
+            return Err(AppError::Validation(
+                "cached JPEG encoder returned invalid AVIF".into(),
+            ));
+        }
+
+        // Encoding holds no cache lock. Recheck after refresh/eviction/reset, then publish
+        // the separate AVIF file before switching metadata and deleting the JPEG.
+        let _guard = self.cache_lifecycle.write().await;
+        let Some(mut current) = self
+            .repository
+            .get_image_proxy_cache_entry(&entry.token, &entry.variant)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if !same_cached_image(&entry, &current) {
+            return Ok(false);
+        }
+        let legacy = self.cache_path(&entry.token, &entry.variant);
+        let Ok(original) = tokio::fs::read(&legacy).await else {
+            return Ok(false);
+        };
+        if blake3::hash(&original) != original_digest {
+            return Ok(false);
+        }
+        current.content_type = "image/avif".into();
+        current.byte_size = encoded.len() as i64;
+        self.write_cache_file_at(&self.entry_cache_path(&current), &encoded)
+            .await?;
+        self.repository
+            .upsert_image_proxy_cache_entry(&current)
+            .await?;
+        self.remove_cache_file(&legacy).await?;
+        self.enforce_budget().await?;
+        tracing::debug!(token = %entry.token, variant = %entry.variant, width, source_bytes = entry.byte_size, avif_bytes = encoded.len(), "optimized cached JPEG");
+        Ok(true)
+    }
+
     async fn clear_cache(&self) -> AppResult<()> {
         ImageProxyRuntime::clear_cache(self).await
     }
@@ -728,6 +889,14 @@ impl ImageProxyCacheControl for ImageProxyRuntime {
         self.configured_cache_bytes.store(value, Ordering::Relaxed);
         self.enforce_budget().await
     }
+}
+
+fn same_cached_image(a: &ImageProxyCacheEntryRecord, b: &ImageProxyCacheEntryRecord) -> bool {
+    a.content_type == b.content_type
+        && a.byte_size == b.byte_size
+        && a.fetched_at == b.fetched_at
+        && a.upstream_etag == b.upstream_etag
+        && a.upstream_last_modified == b.upstream_last_modified
 }
 
 fn image_outbound_http_client() -> OutboundHttpClient {
@@ -946,6 +1115,249 @@ mod tests {
     use scryer_domain::{DomainEvent, NewDomainEvent};
     use scryer_outbound_http::{HostKey, HostRpsProfile, HostRpsProfileSource, RateLimitRegistry};
     use tokio::sync::Notify;
+
+    struct GatedJpegProcessor {
+        started: Notify,
+        release: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl scryer_application::TitleImageProcessor for GatedJpegProcessor {
+        async fn encode_cached_jpeg(&self, _bytes: Vec<u8>, width: u32) -> AppResult<Vec<u8>> {
+            assert_eq!(width, 300);
+            self.started.notify_one();
+            self.release.acquire().await.unwrap().forget();
+            Ok([&[0, 0, 0, 0x1c][..], b"ftypavif", &[0u8; 16]].concat())
+        }
+
+        async fn fetch_and_process_image(
+            &self,
+            _: TitleImageKind,
+            _: &str,
+            _: Vec<scryer_application::TitleImageVariantSpec>,
+        ) -> AppResult<TitleImageSourceResult> {
+            unreachable!("disk conversion must never fetch a library master")
+        }
+    }
+
+    async fn jpeg_fixture(
+        block_metadata: bool,
+    ) -> (
+        tempfile::TempDir,
+        Arc<ImageProxyRuntime>,
+        Arc<TestImageRepository>,
+        ImageProxyCacheEntryRecord,
+        Arc<GatedJpegProcessor>,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let entry = ImageProxyCacheEntryRecord {
+            token: "a".repeat(64),
+            variant: "w250".into(),
+            content_type: "image/jpeg".into(),
+            byte_size: 4,
+            upstream_etag: Some("original-etag".into()),
+            upstream_last_modified: None,
+            fetched_at: Utc::now(),
+            last_accessed_at: Utc::now(),
+        };
+        let repo = Arc::new(TestImageRepository {
+            source: ImageProxySourceRecord {
+                token: entry.token.clone(),
+                upstream_url: None,
+                owner_type: Some("discovery".into()),
+                owner_id: Some("discovery-1".into()),
+                image_kind: "poster".into(),
+                fallback_class: "portrait".into(),
+                last_seen_at: Utc::now(),
+            },
+            cache_entries: Mutex::new(vec![entry.clone()]),
+            cache_reads: AtomicUsize::new(0),
+            cache_read_delay: None,
+            cache_write_started: block_metadata.then(|| Arc::new(Notify::new())),
+            cache_write_release: block_metadata.then(|| Arc::new(Notify::new())),
+            cache_deletes: AtomicUsize::new(0),
+            cache_clears: AtomicUsize::new(0),
+            memory_clears: AtomicUsize::new(0),
+            full_lru_lists: AtomicUsize::new(0),
+            usage_reads: AtomicUsize::new(0),
+            usage_pause: Mutex::new(None),
+            orphan_sweeps: AtomicUsize::new(0),
+        });
+        let titles = Arc::new(TestTitleImageRepository {
+            blob: TitleImageBlob {
+                content_type: "image/avif".into(),
+                etag: "unused".into(),
+                bytes: vec![],
+            },
+            reads: AtomicUsize::new(0),
+        });
+        let mut runtime = ImageProxyRuntime::new(repo.clone(), titles, temp.path());
+        runtime.environment_override_bytes = None;
+        let runtime = Arc::new(runtime);
+        runtime
+            .write_cache_file(&entry.token, &entry.variant, b"jpeg")
+            .await
+            .unwrap();
+        let processor = Arc::new(GatedJpegProcessor {
+            started: Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        (temp, runtime, repo, entry, processor)
+    }
+
+    #[tokio::test]
+    async fn jpeg_conversion_survives_restart_and_obeys_cache_budget() {
+        let (temp, runtime, repo, entry, processor) = jpeg_fixture(false).await;
+        processor.release.add_permits(1);
+        assert!(
+            runtime
+                .optimize_cached_jpeg(entry.clone(), processor.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !tokio::fs::try_exists(runtime.cache_path(&entry.token, &entry.variant))
+                .await
+                .unwrap()
+        );
+        let converted = repo
+            .get_image_proxy_cache_entry(&entry.token, &entry.variant)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(converted.content_type, "image/avif");
+        assert_eq!(converted.upstream_etag, entry.upstream_etag);
+        assert_eq!(converted.fetched_at, entry.fetched_at);
+        assert!(
+            !runtime
+                .optimize_cached_jpeg(entry.clone(), processor)
+                .await
+                .unwrap()
+        );
+        let mut restarted = ImageProxyRuntime::new(repo, runtime.title_images.clone(), temp.path());
+        restarted.environment_override_bytes = None;
+        let restarted = Arc::new(restarted);
+        restarted.prune().await.unwrap();
+        let blob = restarted
+            .resolve(&entry.token, &entry.variant)
+            .await
+            .unwrap();
+        assert_eq!(blob.content_type, "image/avif");
+        assert_eq!(blob.bytes.len() as i64, converted.byte_size);
+        restarted.set_configured_max_bytes(0).await.unwrap();
+        assert!(
+            !tokio::fs::try_exists(restarted.entry_cache_path(&converted))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn jpeg_refresh_publishes_format_and_bytes_together_and_wakes_encoding() {
+        let (_temp, runtime, repo, jpeg, _processor) = jpeg_fixture(true).await;
+        let mut avif = jpeg.clone();
+        avif.content_type = "image/avif".into();
+        avif.byte_size = 3;
+        repo.cache_entries.lock().unwrap()[0] = avif.clone();
+        runtime
+            .write_cache_file_at(&runtime.entry_cache_path(&avif), b"old")
+            .await
+            .unwrap();
+        let guard = runtime.cache_lifecycle.clone().read_owned().await;
+        runtime.persist_cache_entry_in_background(
+            jpeg.token.clone(),
+            jpeg.variant.clone(),
+            b"jpeg".to_vec(),
+            jpeg.clone(),
+            guard,
+        );
+        repo.cache_write_started.as_ref().unwrap().notified().await;
+        let reader_runtime = runtime.clone();
+        let reader_entry = jpeg.clone();
+        let reader = tokio::spawn(async move {
+            reader_runtime
+                .resolve(&reader_entry.token, &reader_entry.variant)
+                .await
+                .unwrap()
+        });
+        tokio::task::yield_now().await;
+        assert!(!reader.is_finished());
+        repo.cache_write_release.as_ref().unwrap().notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            runtime.wait_for_cached_jpeg(),
+        )
+        .await
+        .unwrap();
+        let blob = reader.await.unwrap();
+        assert_eq!(blob.content_type, "image/jpeg");
+        assert_eq!(blob.bytes, b"jpeg");
+        assert!(
+            !tokio::fs::try_exists(runtime.entry_cache_path(&avif))
+                .await
+                .unwrap()
+        );
+        assert_eq!(repo.cache_deletes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn jpeg_conversion_does_not_resurrect_a_cleared_cache() {
+        let (_temp, runtime, _repo, entry, processor) = jpeg_fixture(false).await;
+        let task_runtime = runtime.clone();
+        let task_processor = processor.clone();
+        let task_entry = entry.clone();
+        let task = tokio::spawn(async move {
+            task_runtime
+                .optimize_cached_jpeg(task_entry, task_processor)
+                .await
+        });
+        processor.started.notified().await;
+        runtime.clear_cache().await.unwrap();
+        processor.release.add_permits(1);
+        assert!(!task.await.unwrap().unwrap());
+        assert!(
+            runtime
+                .resolve(&entry.token, &entry.variant)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn jpeg_conversion_abandoned_before_metadata_commit_preserves_original() {
+        let (_temp, runtime, repo, entry, processor) = jpeg_fixture(true).await;
+        processor.release.add_permits(1);
+        let task_runtime = runtime.clone();
+        let task_entry = entry.clone();
+        let task = tokio::spawn(async move {
+            task_runtime
+                .optimize_cached_jpeg(task_entry, processor)
+                .await
+        });
+        repo.cache_write_started.as_ref().unwrap().notified().await;
+        let avif_path = runtime
+            .cache_path(&entry.token, &entry.variant)
+            .with_extension("avif");
+        assert!(tokio::fs::try_exists(&avif_path).await.unwrap());
+        assert_eq!(
+            tokio::fs::read(runtime.cache_path(&entry.token, &entry.variant))
+                .await
+                .unwrap(),
+            b"jpeg"
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let blob = runtime.resolve(&entry.token, &entry.variant).await.unwrap();
+        assert_eq!(blob.content_type, "image/jpeg");
+        assert_eq!(blob.bytes, b"jpeg");
+        runtime.prune().await.unwrap();
+        assert!(!tokio::fs::try_exists(avif_path).await.unwrap());
+        assert!(
+            tokio::fs::try_exists(runtime.cache_path(&entry.token, &entry.variant))
+                .await
+                .unwrap()
+        );
+    }
 
     struct TestImageRepository {
         source: ImageProxySourceRecord,

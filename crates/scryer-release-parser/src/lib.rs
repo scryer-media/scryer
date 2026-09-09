@@ -18,7 +18,7 @@ pub use context::{
 pub use lex::{BracketKind, CstNode, ReleaseCst, SeparatorKind, TextSpan, Token};
 pub use model::{
     AudioCodec, CandidateZones, ContextTitleMatch, ContextTitleMatchKind, ExternalIdSource,
-    GuideFact, MetadataAst, MetadataEnrichment, ParseDisposition, ParseFamily, ParseReason,
+    MetadataAst, MetadataEnrichment, ParseDisposition, ParseFamily, ParseReason,
     ParsedEpisodeMetadata, ParsedEpisodeReleaseType, ParsedExternalId, ParsedReleaseMetadata,
     ParsedSpecialKind, ReleaseIdentity, ReleaseParseAnalysis, ReleaseParseCandidate, ReleaseSource,
     StreamingService, TargetScoredAnalysis, TargetedReleaseParseAnalysis, TitleSegment,
@@ -26,7 +26,6 @@ pub use model::{
 };
 pub use parse::SCORING_MODEL_VERSION;
 pub use trash_guides::TRASH_GUIDES_SOURCE_REVISION;
-pub use trash_guides::detect_blocked_title as detect_trash_guides_blocked_title;
 
 use parse::{AnalysisInputs, analyze_inputs};
 use sanitize::sanitize_input;

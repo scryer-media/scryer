@@ -17,7 +17,6 @@ use super::release_search::{
 use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
 use crate::domain_events::{new_global_domain_event, title_context_snapshot};
-use crate::quality_profile::evaluate_against_profile_for_category;
 use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use std::sync::Arc;
@@ -238,7 +237,7 @@ enum InteractiveReleaseSearchSubject {
         /// Boxed: a `Title` dwarfs the query variant, and the subject is moved
         /// into the job context once and then only borrowed.
         title_for_search: Box<Title>,
-        subject: ResolvedReleaseSearchSubject,
+        subject: Box<ResolvedReleaseSearchSubject>,
         preserve_subject_scope: bool,
     },
     /// An operator's raw query, with no title to score or judge against (D6).
@@ -247,9 +246,9 @@ enum InteractiveReleaseSearchSubject {
         /// Search facet and id-search facet; `None` for a raw text query.
         facet: Option<String>,
         newznab_categories: Option<Vec<String>>,
-        /// Facet default profile, its weights and the facet name. `None` for
+        /// Facet default profile and the facet name. `None` for
         /// the raw kind, and when the profile could not be resolved.
-        judge: Option<(QualityProfile, ScoringWeights, String)>,
+        judge: Option<Box<(QualityProfile, String)>>,
     },
 }
 
@@ -328,7 +327,7 @@ impl AppUseCase {
                 (
                     InteractiveReleaseSearchSubject::Title {
                         title_for_search: Box::new(title_for_search),
-                        subject,
+                        subject: Box::new(subject),
                         preserve_subject_scope,
                     },
                     indexer_routing,
@@ -380,7 +379,7 @@ impl AppUseCase {
                         query: query.to_string(),
                         facet: facet_name,
                         newznab_categories,
-                        judge,
+                        judge: judge.map(Box::new),
                     },
                     indexer_routing,
                 )
@@ -752,7 +751,7 @@ impl AppUseCase {
                             query,
                             facet,
                             newznab_categories,
-                            judge,
+                            judge.as_deref(),
                             &routing_base,
                             &indexer_id,
                             child_token,
@@ -953,7 +952,7 @@ impl AppUseCase {
         query: &str,
         facet: &Option<String>,
         newznab_categories: &Option<Vec<String>>,
-        judge: &Option<(QualityProfile, ScoringWeights, String)>,
+        judge: Option<&(QualityProfile, String)>,
         routing_base: &HashMap<String, IndexerRoutingEntry>,
         indexer_id: &str,
         cancel_token: CancellationToken,
@@ -997,7 +996,7 @@ impl AppUseCase {
                 None,
                 Vec::new(),
                 None,
-                cancel_token,
+                cancel_token.clone(),
             )
             .await?;
         let failure_reason = response
@@ -1005,49 +1004,83 @@ impl AppUseCase {
             .iter()
             .find(|outcome| outcome.indexer_id == indexer_id)
             .and_then(|outcome| incomplete_indexer_reason(outcome.outcome));
-        let results = response
-            .results
-            .into_iter()
-            .map(|mut result| {
-                if result
-                    .indexer_id
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                {
-                    result.indexer_id = Some(indexer_id.to_string());
+        let rules = self.user_rules_engine_snapshot();
+        let judge = judge.cloned();
+        let indexer_id = indexer_id.to_string();
+        let results = tokio::task::spawn_blocking(move || {
+            // Reuse one evaluator for this response and keep synchronous rule
+            // evaluation off the async worker handling requests/cancellation.
+            let context = judge.as_ref().map(|(profile, category)| {
+                crate::canonical_scoring::ScoringContext {
+                    profile,
+                    required_audio_languages: &profile.criteria.required_audio_languages,
+                    category,
+                    size_basis: Default::default(),
+                    rules: Some(&rules),
+                    title_id: None,
+                    library_name: None,
+                    original_language: None,
+                    original_country: None,
+                    title_tags: &[],
+                    is_filler: false,
                 }
-                let parsed = result
-                    .parsed_release_metadata
-                    .take()
-                    .unwrap_or_else(|| crate::parse_release_metadata(&result.title));
-                if let Some((profile, weights, category)) = judge {
-                    // `has_existing_file: false` — with no title there is no
-                    // incumbent, so cutoff and upgrade blocks cannot fire.
-                    result.quality_profile_decision = Some(evaluate_against_profile_for_category(
-                        profile,
-                        &parsed,
-                        false,
-                        weights,
-                        Some(category.as_str()),
-                    ));
-                }
-                result.parsed_release_metadata = Some(parsed);
-                result
-            })
-            .collect();
+            });
+            let mut evaluator = context
+                .as_ref()
+                .map(crate::canonical_scoring::RuleEvaluationBatch::from_context);
+            let context = context.map(crate::canonical_scoring::ScoringContext::without_rules);
+            response
+                .results
+                .into_iter()
+                .take_while(|_| !cancel_token.is_cancelled())
+                .map(|mut result| {
+                    if result
+                        .indexer_id
+                        .as_deref()
+                        .is_none_or(|value| value.trim().is_empty())
+                    {
+                        result.indexer_id = Some(indexer_id.to_string());
+                    }
+                    let parsed = result
+                        .parsed_release_metadata
+                        .take()
+                        .unwrap_or_else(|| crate::parse_release_metadata(&result.title));
+                    if let (Some(context), Some(evaluator)) = (context.as_ref(), evaluator.as_mut())
+                    {
+                        // No title or incumbent context exists yet. Still collect
+                        // every applicable contribution before judging eligibility.
+                        result.quality_profile_decision = Some(
+                            crate::canonical_scoring::score_release_in_batch(
+                                &crate::canonical_scoring::ReleaseEvidence::announced(
+                                    parsed.clone(),
+                                    result.size_bytes,
+                                ),
+                                context,
+                                evaluator,
+                            )
+                            .announced_decision,
+                        );
+                    }
+                    result.parsed_release_metadata = Some(parsed);
+                    result
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("query scoring worker failed: {error}")))?;
         Ok((results, failure_reason))
     }
 
-    /// The facet's default quality profile and its weights — everything a
+    /// The facet's default quality profile — everything a
     /// context-free rejection can be based on (D6). Best effort: an
     /// unresolvable profile means the pane shows releases without profile
     /// rejections, never a failed search.
     async fn resolve_query_subject_judge(
         &self,
         facet: MediaFacet,
-    ) -> Option<(QualityProfile, ScoringWeights, String)> {
+    ) -> Option<(QualityProfile, String)> {
         let category = facet.as_str().to_string();
-        let profile = match self
+        let mut profile = match self
             .resolve_quality_profile(QualityProfileLookup {
                 title_tags: &[],
                 library_id: None,
@@ -1067,16 +1100,12 @@ impl AppUseCase {
                 return None;
             }
         };
-        let persona = self
+        profile.criteria.scoring_persona = self
             .resolve_scoring_persona(None, Some(category.as_str()))
             .await
             .unwrap_or_default();
-        let weights = crate::build_weights_for_category(
-            &persona,
-            &profile.criteria.scoring_overrides,
-            Some(category.as_str()),
-        );
-        Some((profile, weights, category))
+        profile.criteria.facet_persona_overrides.clear();
+        Some((profile, category))
     }
 
     /// Mint a candidate token for one release of an existing search (D4).

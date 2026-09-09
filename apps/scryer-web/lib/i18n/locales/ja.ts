@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "scoring.mandatoryRejection": "必須条件を満たしていません",
+  "scoring.finalScoreRejection": "最終スコアが基準未満",
+  "settings.refFnBlockScore": "他の加点で相殺できる -10000 点の減点を返します",
+  "settings.arrImportBlockScoreHelp": "合計スコアは -9000 を超え、プロファイルの最低スコア以上である必要があります。必須条件は引き続き適用されます。",
   "label.ready": "準備完了",
   "label.moreInfo": "詳細情報",
   "label.search": "検索",
@@ -240,7 +244,7 @@ const ja: LocaleDictionary = {
   "settings.proxyDisabledHelp": "割り当てられたプロキシは無効です。",
   "settings.proxyDisabledSuffix": "（無効）",
   "settings.proxyClearPassword": "保存済みのパスワードを削除",
-  "settings.proxyTunnelAuthHelp": "トンネルにはユーザー名と、パスワードまたは秘密鍵のいずれかが必要です。",
+  "settings.proxyTunnelAuthHelp": "SSH にはユーザー名と Ed25519 秘密鍵が必要です。パスワード認証には対応していません。",
   "settings.proxyPrivateKey": "秘密鍵",
   "settings.proxyPrivateKeyHelp": "対応している秘密鍵は Ed25519 のみです。`ssh-keygen -t ed25519` で生成し、OpenSSH 形式の秘密鍵を貼り付けてください。",
   "settings.proxyPrivateKeyStored": "秘密鍵設定済み",
@@ -254,7 +258,7 @@ const ja: LocaleDictionary = {
   "settings.proxyHostKeyReset": "ホスト鍵をリセット",
   "settings.proxyHostKeyResetDescription": "固定済みのホスト鍵を破棄します。次回の接続ではサーバーが提示した鍵をそのまま信頼して固定するため、サーバーの鍵が実際に変わったと分かっている場合のみ実行してください。",
   "settings.proxyValidationTunnelUsername": "トンネルにはユーザー名が必要です。",
-  "settings.proxyValidationTunnelAuth": "トンネルにはパスワードまたは秘密鍵が必要です。",
+  "settings.proxyValidationTunnelAuth": "SSH トンネルには Ed25519 秘密鍵が必要です。",
   "settings.downloadClientProxyHelp": "どの種類のプロキシでも割り当てられます。ネイティブクライアントの通信はプラグインが行うものではないため、チャレンジソルバーは効果がありません。",
   "status.proxyCreated": "プロキシを作成しました。",
   "status.proxyUpdated": "プロキシを更新しました。",

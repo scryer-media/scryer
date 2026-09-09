@@ -43,7 +43,7 @@ import { useConfigStepUp } from "@/lib/hooks/use-config-step-up";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
+import { useExperimentalFeaturesEnabled, useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { RootHeader } from "@/components/root/root-header";
 import { buildRouteCommands } from "@/components/root/route-commands";
 import { JobRunProvider } from "@/components/root/job-run-provider";
@@ -102,6 +102,7 @@ import {
   resolveAppRoute,
 } from "@/lib/utils/routing";
 import {
+  canAccessApiExplorer,
   canAccessDashboard,
   canAccessMediaSettingsSection,
   canAccessSettingsSection,
@@ -430,6 +431,8 @@ function readOverviewTargetFromLocationState(
 /**
  * Renders the main content area.
  */
+const ApiExplorerContainer = lazy(() => import("@/components/containers/api-explorer-container"));
+
 function MainContent({
   view,
   overviewTitleId,
@@ -503,6 +506,13 @@ function MainContent({
   canManageConfig: boolean;
   canManageLibrarySettings: boolean;
 }) {
+  const { apiExplorerEnabled } = useInstanceFeatures();
+  if (view === "api-explorer") {
+    if (!canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)) {
+      return <div role="status" className="p-8 text-muted-foreground">API explorer is unavailable.</div>;
+    }
+    return <ApiExplorerContainer key={userId} />;
+  }
   if (view === "dashboard") {
     if (!canAccessDashboard(canManageSystemSettings)) {
       return <ViewLoadingFallback />;

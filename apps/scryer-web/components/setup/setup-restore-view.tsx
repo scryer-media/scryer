@@ -399,6 +399,7 @@ export function SetupRestoreView({
                 <Input
                   id="setup-restore-password"
                   type="password"
+                  ignorePasswordManagers
                   value={password}
                   onChange={(event) => {
                     setError(null);

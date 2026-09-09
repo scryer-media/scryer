@@ -34,17 +34,15 @@ impl AppUseCase {
     ) -> AppResult<bool> {
         if installation.source_kind != PluginSourceKind::Bundled
             && !installation_is_host_blocked(&installation)
-        {
-            if let Ok(current) = self
+            && let Ok(current) = self
                 .load_runtime_plugin_for_installation(&installation)
                 .await
-                && self
-                    .validate_component_upgrade_runtime(&installation, &current)
-                    .await
-                    .is_ok()
-            {
-                return Ok(false);
-            }
+            && self
+                .validate_component_upgrade_runtime(&installation, &current)
+                .await
+                .is_ok()
+        {
+            return Ok(false);
         }
 
         if let Some(bundled) = bundled

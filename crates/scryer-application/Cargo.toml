@@ -38,7 +38,7 @@ scryer-release-parser = { path = "../scryer-release-parser" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-mediainfo = { path = "../scryer-mediainfo", optional = true }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
-scryer-tunnel = { path = "../scryer-tunnel" }
+scryer-tunnel = { workspace = true }
 scryer-logging = { path = "../scryer-logging" }
 scryer-runtime-info = { path = "../scryer-runtime-info" }
 jsonwebtoken = { workspace = true }
@@ -97,4 +97,11 @@ wiremock = { workspace = true }
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 # The in-process SSH server double, so the end-to-end tunnel chain is tested
 # against a real SSH peer rather than a mock of one.
-scryer-tunnel = { path = "../scryer-tunnel", features = ["test-support"] }
+scryer-tunnel = { workspace = true, features = ["test-support"] }
+# Local HTTP/3 CONNECT fixture, using the same approved transport and crypto.
+bytes = "1"
+http = "1"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+h3 = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0" }
+h3-quinn = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0" }

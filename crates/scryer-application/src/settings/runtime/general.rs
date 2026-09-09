@@ -185,6 +185,7 @@ fn summarize_plugin_http_trusted_certificates(
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
+    pub api_explorer_enabled: bool,
     pub experimental_features_enabled: bool,
     pub personalized_discovery_enabled: bool,
     pub srrdb_filename_recovery_enabled: bool,
@@ -218,6 +219,7 @@ pub struct BackupSettings {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateGeneralSettings {
+    pub api_explorer_enabled: Option<bool>,
     pub experimental_features_enabled: Option<bool>,
     pub personalized_discovery_enabled: Option<bool>,
     pub srrdb_filename_recovery_enabled: Option<bool>,
@@ -289,6 +291,7 @@ fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
 /// Instance-wide feature switches that any signed-in user may read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstanceFeatures {
+    pub api_explorer_enabled: bool,
     pub experimental_features_enabled: bool,
     pub personalized_discovery_enabled: bool,
 }
@@ -299,6 +302,14 @@ impl AppUseCase {
     pub async fn experimental_features_enabled(&self) -> AppResult<bool> {
         Ok(self
             .read_setting_bool_value(EXPERIMENTAL_FEATURES_ENABLED_KEY, None)
+            .await?
+            .unwrap_or(false))
+    }
+
+    /// Whether administrators may use the API explorer. Defaults to disabled.
+    pub async fn api_explorer_enabled(&self) -> AppResult<bool> {
+        Ok(self
+            .read_setting_bool_value(API_EXPLORER_ENABLED_KEY, None)
             .await?
             .unwrap_or(false))
     }
@@ -323,11 +334,15 @@ impl AppUseCase {
             .unwrap_or(false))
     }
 
-    /// Read both instance-wide switches. The actor is taken to prove a session
-    /// exists; there is deliberately no app-permission check, because the
-    /// gated surfaces are used by non-administrators.
-    pub async fn instance_features(&self, _actor: &User) -> AppResult<InstanceFeatures> {
+    /// Read effective feature visibility for an authenticated actor. Public
+    /// switches are shared; administrator-only surfaces also require permission.
+    pub async fn instance_features(&self, actor: &User) -> AppResult<InstanceFeatures> {
         Ok(InstanceFeatures {
+            api_explorer_enabled: actor
+                .authorization
+                .app
+                .contains(scryer_domain::AppPermissionMask::MANAGE_SYSTEM_SETTINGS)
+                && self.api_explorer_enabled().await?,
             experimental_features_enabled: self.experimental_features_enabled().await?,
             personalized_discovery_enabled: self.personalized_discovery_enabled().await?,
         })
@@ -336,6 +351,7 @@ impl AppUseCase {
 
 impl AppUseCase {
     async fn load_general_settings(&self) -> AppResult<GeneralSettings> {
+        let api_explorer_enabled = self.api_explorer_enabled().await?;
         let experimental_features_enabled = self.experimental_features_enabled().await?;
         let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let srrdb_filename_recovery_enabled = self.srrdb_filename_recovery_enabled().await?;
@@ -380,6 +396,7 @@ impl AppUseCase {
             };
 
         Ok(GeneralSettings {
+            api_explorer_enabled,
             experimental_features_enabled,
             personalized_discovery_enabled,
             srrdb_filename_recovery_enabled,
@@ -515,6 +532,9 @@ impl AppUseCase {
             .await?;
 
         let current = self.load_general_settings().await?;
+        let api_explorer_enabled = input
+            .api_explorer_enabled
+            .unwrap_or(current.api_explorer_enabled);
         let experimental_features_enabled = input
             .experimental_features_enabled
             .unwrap_or(current.experimental_features_enabled);
@@ -562,6 +582,15 @@ impl AppUseCase {
             summarize_plugin_http_trusted_certificates(&plugin_http_ca_bundle_pem)?;
 
         let mut changed_keys = Vec::new();
+        if input.api_explorer_enabled.is_some() {
+            self.upsert_system_setting_json(
+                API_EXPLORER_ENABLED_KEY,
+                &api_explorer_enabled,
+                Some(actor.id.clone()),
+            )
+            .await?;
+            changed_keys.push(API_EXPLORER_ENABLED_KEY.to_string());
+        }
         if input.experimental_features_enabled.is_some() {
             self.upsert_system_setting_json(
                 EXPERIMENTAL_FEATURES_ENABLED_KEY,
@@ -645,6 +674,7 @@ impl AppUseCase {
             image_cache_max_size_env_override_active,
         ) = effective_image_cache_limit(image_cache_max_size_mb);
         Ok(GeneralSettings {
+            api_explorer_enabled,
             experimental_features_enabled,
             personalized_discovery_enabled,
             srrdb_filename_recovery_enabled,

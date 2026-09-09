@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Обязательное требование не выполнено",
+  "scoring.finalScoreRejection": "Итоговая оценка отклонена",
+  "settings.arrImportBlockScoreHelp": "Итоговая оценка должна быть выше -9000 и не ниже минимума профиля. Обязательные требования сохраняются.",
   brand: "scryer",
 
     "label.ready": "Готово",
@@ -346,7 +349,7 @@ const ru: LocaleDictionary = {
     "settings.proxyDisabledHelp": "Назначенный прокси отключён.",
     "settings.proxyDisabledSuffix": "(отключён)",
     "settings.proxyClearPassword": "Удалить сохранённый пароль",
-    "settings.proxyTunnelAuthHelp": "Туннелю нужны имя пользователя и либо пароль, либо закрытый ключ.",
+    "settings.proxyTunnelAuthHelp": "Для SSH нужны имя пользователя и закрытый ключ Ed25519. Аутентификация по паролю не поддерживается.",
     "settings.proxyPrivateKey": "Закрытый ключ",
     "settings.proxyPrivateKeyHelp": "поддерживаются только закрытые ключи Ed25519; создайте ключ командой `ssh-keygen -t ed25519` и вставьте закрытый ключ в формате OpenSSH",
     "settings.proxyPrivateKeyStored": "Закрытый ключ задан",
@@ -360,7 +363,7 @@ const ru: LocaleDictionary = {
     "settings.proxyHostKeyReset": "Сбросить ключ хоста",
     "settings.proxyHostKeyResetDescription": "Забыть закреплённый ключ хоста. Следующее подключение доверится ключу, который предложит сервер, и закрепит его, поэтому делайте это, только если знаете, что ключ сервера действительно изменился.",
     "settings.proxyValidationTunnelUsername": "Туннелю нужно имя пользователя.",
-    "settings.proxyValidationTunnelAuth": "Туннелю нужен пароль или закрытый ключ.",
+    "settings.proxyValidationTunnelAuth": "Для SSH-туннеля нужен закрытый ключ Ed25519.",
     "settings.downloadClientProxyHelp": "Назначить можно прокси любого вида. Решатель проверок не влияет на встроенный клиент, запросы которого отправляет не плагин.",
     "status.proxyCreated": "Прокси создан.",
     "status.proxyUpdated": "Прокси обновлён.",
@@ -2350,7 +2353,7 @@ const ru: LocaleDictionary = {
     "settings.refBuiltinsIntro":
         "Эти вспомогательные функции доступны в ваших правилах Rego в дополнение ко всем стандартным встроенным функциям OPA.",
     "settings.refFnBlockScore":
-        "Возвращает -10000 — константу, используемую для полной блокировки релиза",
+        "Возвращает штраф -10000, который можно компенсировать другими баллами",
     "settings.refFnSizeGib":
         "Преобразует байты в ГиБ (например, scryer.size_gib(input.release.size_bytes) > 50)",
     "settings.refFnLangMatches":
@@ -2380,7 +2383,7 @@ const ru: LocaleDictionary = {
 
     "settings.refSectionOutput": "Формат вывода правила",
     "settings.refOutputIntro":
-        "Правила должны определять правило score_entry, которое возвращает карту со строковыми ключами (кодами оценки) и целочисленными значениями (изменениями баллов). Положительные значения повышают оценку релиза, отрицательные — снижают её, а scryer.block_score() полностью блокирует релиз. Правила, основанные на файлах, до загрузки автоматически ничего не делают, поскольку input.file имеет значение null до этапа оценки после загрузки.",
+        "Правила должны определять правило score_entry, которое возвращает карту со строковыми ключами (кодами оценки) и целочисленными значениями (изменениями баллов). Положительные значения повышают оценку релиза, отрицательные — снижают её, а scryer.block_score() добавляет штраф -10000, который можно компенсировать. Решение принимается после суммирования всех баллов; обязательные требования профиля остаются в силе. Правила, основанные на файлах, до загрузки автоматически ничего не делают, поскольку input.file имеет значение null до этапа оценки после загрузки.",
 
     "settings.subtitles": "Субтитры",
     "settings.subtitlesDescription":

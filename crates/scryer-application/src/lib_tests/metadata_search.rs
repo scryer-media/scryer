@@ -27,18 +27,14 @@ fn search_item(name: &str) -> RichMetadataSearchItem {
 struct RecordingSearchMetadataGateway {
     title_search_limits: Mutex<Vec<i32>>,
     legacy_search_limits: Mutex<Vec<i32>>,
+    combined_search_limits: Mutex<Vec<i32>>,
+    combined_search_empty: bool,
+    combined_search_error: Option<String>,
     /// A non-capability gateway failure for `searchTitles`, if the test wants one.
     title_search_error: Option<String>,
 }
 
 impl RecordingSearchMetadataGateway {
-    fn failing_title_search(message: &str) -> Self {
-        Self {
-            title_search_error: Some(message.to_string()),
-            ..Default::default()
-        }
-    }
-
     async fn title_search_limits(&self) -> Vec<i32> {
         self.title_search_limits.lock().await.clone()
     }
@@ -90,6 +86,35 @@ impl MetadataGateway for RecordingSearchMetadataGateway {
             movies: vec![search_item("Legacy Movie")],
             series: vec![search_item("Legacy Series")],
             anime: vec![search_item("Legacy Anime")],
+        })
+    }
+
+    async fn search_titles_multi(
+        &self,
+        _query: &str,
+        limit: i32,
+        _language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        self.combined_search_limits.lock().await.push(limit);
+        if let Some(message) = &self.combined_search_error {
+            return Err(AppError::Repository(message.clone()));
+        }
+        let mut movie = search_item("TMDB Movie");
+        movie.tvdb_id.clear();
+        movie.smg_id = Some(123);
+        movie.primary_source = Some("tmdb".into());
+        Ok(if self.combined_search_empty {
+            MultiMetadataSearchResult {
+                movies: vec![],
+                series: vec![],
+                anime: vec![],
+            }
+        } else {
+            MultiMetadataSearchResult {
+                movies: vec![movie],
+                series: vec![search_item("Combined Series")],
+                anime: vec![search_item("Combined Anime")],
+            }
         })
     }
 
@@ -146,6 +171,58 @@ async fn movie_search_with_the_maximum_public_limit_succeeds() {
 }
 
 #[tokio::test]
+async fn multi_search_uses_only_the_combined_gateway_call() {
+    for empty in [false, true] {
+        let gateway = Arc::new(RecordingSearchMetadataGateway {
+            combined_search_empty: empty,
+            ..Default::default()
+        });
+        let (app, user, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+        let results = app
+            .search_metadata_multi(&user, "fixture", 100, "jpn")
+            .await
+            .unwrap();
+        assert_eq!(
+            gateway.combined_search_limits.lock().await.as_slice(),
+            &[100]
+        );
+        assert!(gateway.title_search_limits().await.is_empty());
+        assert!(gateway.legacy_search_limits().await.is_empty());
+        if empty {
+            assert!(
+                results.movies.is_empty() && results.series.is_empty() && results.anime.is_empty()
+            );
+        } else {
+            assert_eq!(results.movies[0].smg_id, Some(123));
+            assert!(results.movies[0].tvdb_id.is_empty());
+            assert_eq!(results.movies[0].primary_source.as_deref(), Some("tmdb"));
+            assert_eq!(results.series[0].name, "Combined Series");
+            assert_eq!(results.anime[0].name, "Combined Anime");
+        }
+    }
+}
+
+#[tokio::test]
+async fn multi_search_does_not_add_requests_after_a_combined_search_failure() {
+    let gateway = Arc::new(RecordingSearchMetadataGateway {
+        combined_search_error: Some("upstream unavailable".into()),
+        ..Default::default()
+    });
+    let (app, user, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    assert!(
+        app.search_metadata_multi(&user, "fixture", 25, "eng")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        gateway.combined_search_limits.lock().await.as_slice(),
+        &[25]
+    );
+    assert!(gateway.title_search_limits().await.is_empty());
+    assert!(gateway.legacy_search_limits().await.is_empty());
+}
+
+#[tokio::test]
 async fn multi_search_with_the_maximum_public_limit_succeeds() {
     let gateway = Arc::new(RecordingSearchMetadataGateway::default());
     let (app, user, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
@@ -156,35 +233,15 @@ async fn multi_search_with_the_maximum_public_limit_succeeds() {
         .expect("a limit inside the public range must not fail multi-search");
 
     assert_eq!(results.movies.len(), 1);
-    assert_eq!(results.movies[0].name, "Title Surface Movie");
+    assert_eq!(results.movies[0].name, "TMDB Movie");
     assert_eq!(results.series.len(), 1);
     assert_eq!(results.anime.len(), 1);
-    assert_eq!(gateway.title_search_limits().await, vec![100]);
-    assert_eq!(gateway.legacy_search_limits().await, vec![100]);
-}
-
-/// The legacy multi-search already answered for every facet before the movie
-/// title search runs. A non-capability failure of that added call must not throw
-/// the series and anime results away with it.
-#[tokio::test]
-async fn multi_search_keeps_legacy_results_when_the_title_search_fails() {
-    let gateway = Arc::new(RecordingSearchMetadataGateway::failing_title_search(
-        "metadata gateway request failed (503): upstream down",
-    ));
-    let (app, user, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
-
-    let results = app
-        .search_metadata_multi(&user, "fixture", 25, "eng")
-        .await
-        .expect("a failed movie title search must not fail the whole multi-search");
-
-    assert_eq!(results.movies.len(), 1);
     assert_eq!(
-        results.movies[0].name, "Legacy Movie",
-        "the legacy movie bucket survives the failed title search"
+        gateway.combined_search_limits.lock().await.as_slice(),
+        &[100]
     );
-    assert_eq!(results.series.len(), 1);
-    assert_eq!(results.anime.len(), 1);
+    assert!(gateway.title_search_limits().await.is_empty());
+    assert!(gateway.legacy_search_limits().await.is_empty());
 }
 
 /// A validation error is not a capability error, so before the limit was clamped

@@ -2867,6 +2867,7 @@ impl SystemQueries {
         let actor = actor_from_ctx(ctx)?;
         let features = app.instance_features(&actor).await.map_err(to_gql_error)?;
         Ok(InstanceFeaturesPayload {
+            api_explorer_enabled: features.api_explorer_enabled,
             experimental_features_enabled: features.experimental_features_enabled,
             personalized_discovery_enabled: features.personalized_discovery_enabled,
         })

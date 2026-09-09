@@ -1338,7 +1338,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             decision
                 .scoring_log
                 .iter()
-                .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
+                .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta, "kind": entry.kind}))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();

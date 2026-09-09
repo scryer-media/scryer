@@ -10,6 +10,7 @@ import type {
   MaintenanceRuleSetDetail,
   MaintenanceRuleSetDraft,
   MaintenanceRuleSetRecord,
+  MaintenanceRuleScope,
 } from "@/lib/types/maintenance-rule-sets";
 // Relative rather than aliased on purpose: `node --test` runs these modules
 // without the bundler's path aliases, so a value import through `@/` would
@@ -45,6 +46,7 @@ const DEFAULT_ACTION_KIND: MaintenanceActionKind = "DO_NOTHING";
 
 export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
   return {
+    subjectKind: "TITLE",
     name: "",
     description: "",
     regoSource: MAINTENANCE_STARTER_SOURCE,
@@ -60,6 +62,7 @@ export function maintenanceRuleDraftFromDetail(
   detail: MaintenanceRuleSetDetail,
 ): MaintenanceRuleSetDraft {
   return {
+    subjectKind: detail.ruleSet.subjectKind,
     name: detail.ruleSet.name,
     description: detail.ruleSet.description ?? "",
     regoSource: detail.revision.regoSource,
@@ -117,6 +120,7 @@ export function createMaintenanceRuleSetInput(
   descriptors: MaintenanceActionDescriptor[],
 ) {
   return {
+    subjectKind: draft.subjectKind,
     name: draft.name.trim(),
     description: draft.description.trim() || undefined,
     regoSource: draft.regoSource,
@@ -151,34 +155,15 @@ export function updateMaintenanceRuleMetadataInput(
   };
 }
 
-/// Kinds the backend's title executor has no implementation for, even though
-/// their descriptor claims a title subject.
-///
-/// This mirrors `EXECUTABLE_TITLE_RULE_ACTIONS` in
-/// `crates/scryer-application/src/maintenance_rules/action_execution.rs`: the
-/// season- and episode-only kinds are already excluded by the subject filter
-/// below, so this list carries the remaining incomplete kinds. The API refuses
-/// to save a rule using them, so offering them here
-/// would only produce a validation error the operator cannot act on. Change one
-/// side, change the other.
-const TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS: MaintenanceActionKind[] = [
-  "UNMONITOR_TITLE_DELETE_ALL_FILES",
-  "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
-];
-
-/// Descriptors offerable for a title-scoped rule. The season- and episode-only
-/// kinds stay in the enum but are never selectable here, and the filter reads
-/// the descriptors rather than hardcoding which kinds those are — except for the
-/// executor gap above, which no descriptor field expresses.
-export function titleScopedActionDescriptors(
-  descriptors: MaintenanceActionDescriptor[],
+/// The API owns the supported scope/action matrix.
+export function scopedActionDescriptors(
+  descriptors: MaintenanceActionDescriptor[], scope: MaintenanceRuleScope,
 ): MaintenanceActionDescriptor[] {
-  return descriptors.filter(
-    (descriptor) =>
-      descriptor.supportedSubjects.some(
-        (subject) => subject === "MOVIE" || subject === "SHOW",
-      ) && !TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS.includes(descriptor.kind),
-  );
+  return descriptors.filter((descriptor) => descriptor.supportedRuleScopes?.includes(scope));
+}
+
+export function titleScopedActionDescriptors(descriptors: MaintenanceActionDescriptor[]) {
+  return scopedActionDescriptors(descriptors, "TITLE");
 }
 
 export function descriptorForActionKind(
@@ -218,6 +203,7 @@ type MaintenancePreviewInputOptions = {
   libraryId?: string | null;
   limit?: number;
   titleIds?: string[];
+  subjectIds?: string[];
 };
 
 /// Build the preview input. The API accepts either a stored rule set or an
@@ -231,11 +217,14 @@ export function maintenancePreviewInput({
   libraryId,
   limit,
   titleIds,
+  subjectIds,
 }: MaintenancePreviewInputOptions) {
   const matcher = ruleSetId
     ? { ruleSetId }
     : draft
       ? {
+          subjectKind: draft.subjectKind,
+          libraryIds: [...draft.libraryIds],
           regoSource: draft.regoSource,
           action: maintenanceActionInput(draft, descriptors),
           graceDays: draft.graceDays,
@@ -243,7 +232,7 @@ export function maintenancePreviewInput({
       : {};
   const subjects =
     titleIds && titleIds.length > 0
-      ? { titleIds: [...titleIds] }
+      ? { titleIds: [...titleIds], ...(subjectIds?.length ? { subjectIds: [...subjectIds] } : {}) }
       : {
           libraryId: libraryId || undefined,
           limit: clampMaintenancePreviewLimit(
@@ -706,12 +695,16 @@ export function setMaintenanceRuleArmingInput(
 
 export function excludeMaintenanceSubjectInput(options: {
   titleId: string;
+  subjectKind?: string;
+  subjectId?: string;
   ruleSetId?: string | null;
   reason?: string;
 }) {
   const reason = options.reason?.trim();
   return {
     titleId: options.titleId,
+    ...(options.subjectKind ? { subjectKind: options.subjectKind.toUpperCase() } : {}),
+    ...(options.subjectId ? { subjectId: options.subjectId } : {}),
     ruleSetId: options.ruleSetId || undefined,
     reason: reason || undefined,
   };

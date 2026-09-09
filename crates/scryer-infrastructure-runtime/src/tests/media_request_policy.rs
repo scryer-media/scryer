@@ -15,6 +15,7 @@ async fn media_request_policy_columns_round_trip() {
     seed_library(&services, "library-1").await;
     seed_user(&services, "requester-1").await;
     seed_user(&services, "resolver-1").await;
+    super::media_request_requesters::seed_title(&services, "title-1").await;
     let store = request_store(&services);
 
     let mut request = new_request("request-1", "library-1", "requester-1");
@@ -67,7 +68,7 @@ async fn media_request_policy_columns_round_trip() {
                 status: MediaRequestStatus::Approved,
                 resolved_by_user_id: Some("resolver-1".to_string()),
                 resolved_at: Utc::now(),
-                created_title_id: None,
+                created_title_id: Some("title-1".to_string()),
                 approved_quality_profile_id: None,
                 approved_quality_profile_name: None,
                 approved_lease_days: Some(30),

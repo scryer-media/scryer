@@ -8,6 +8,10 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  CalendarEventHoverCard,
+  type CalendarEpisodeItem,
+} from "@/components/views/calendar-view";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -21,6 +25,7 @@ import {
 import type { TitleHistoryEvent } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { formatUiDate, formatUiTime } from "@/lib/utils/date-format";
 import {
   compareHistoryEpisodes,
@@ -96,6 +101,170 @@ function historyEpisodeHref(event: TitleHistoryEvent, episodeId: string): string
 
 type HistoryEpisode = HistoryEpisodeDisplay;
 
+function historyHoverData(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      return historyHoverData(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function historyHoverString(
+  value: Record<string, unknown> | null,
+  key: string,
+): string | null {
+  const candidate = value?.[key];
+  return typeof candidate === "string" && candidate.trim() ? candidate : null;
+}
+
+function historyHoverDetails(event: TitleHistoryEvent): {
+  facet: string | null;
+  posterUrl: string | null;
+} {
+  const payload = historyHoverData(event.dataJson);
+  const title = historyHoverData(payload?.title) ?? payload;
+  const rawFacet = historyHoverString(title, "facet") ?? event.facet;
+  const facet = rawFacet?.trim().toUpperCase() ?? null;
+  return {
+    facet: facet === "MOVIE" || facet === "SERIES" || facet === "ANIME" ? facet : null,
+    posterUrl:
+      historyHoverString(title, "poster_url") ?? historyHoverString(title, "posterUrl"),
+  };
+}
+
+function calendarEpisodeForHistoryEvent(
+  event: TitleHistoryEvent,
+  details: ReturnType<typeof historyHoverDetails>,
+  episodeLabel?: string | null,
+): CalendarEpisodeItem {
+  const libraryName = event.sourceSystem ?? event.clientName ?? null;
+  return {
+    id: event.id,
+    titleId: event.titleId,
+    libraryId: libraryName ?? "Scryer",
+    libraryName,
+    titleName: event.titleName ?? event.titleId,
+    titleFacet: details.facet?.toLowerCase() ?? "series",
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: episodeLabel ?? null,
+    overview: event.quality,
+    imageUrl: details.posterUrl,
+    airDate: event.occurredAt,
+    monitored: true,
+    playbackLinks: [],
+    mediaAvailability: { state: "UNMONITORED", primaryQualityLabel: null },
+  };
+}
+
+function HistoryTitleHoverLink({
+  event,
+  label,
+  href,
+  className,
+  episodeLabel,
+}: {
+  event: TitleHistoryEvent;
+  label: string;
+  href: string | null;
+  className: string;
+  episodeLabel?: string | null;
+}) {
+  const isMobile = useIsMobile();
+  const [previewAnchor, setPreviewAnchor] = React.useState<{
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  } | null>(null);
+  const hoverTimerRef = React.useRef<number | null>(null);
+  const canPreview = event.eventType === "imported" || event.eventType === "file_upgraded";
+  const details = historyHoverDetails(event);
+
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleClose = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setPreviewAnchor(null);
+      hoverTimerRef.current = null;
+    }, 180);
+  }, [clearHoverTimer]);
+
+  const handleMouseEnter = React.useCallback(
+    (target: HTMLElement) => {
+      if (!canPreview || isMobile) return;
+      clearHoverTimer();
+      const rect = target.getBoundingClientRect();
+      setPreviewAnchor({
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+      });
+    },
+    [canPreview, clearHoverTimer, isMobile],
+  );
+
+  React.useEffect(() => () => clearHoverTimer(), [clearHoverTimer]);
+
+  React.useEffect(() => {
+    if (!previewAnchor) return;
+    const closePreview = () => setPreviewAnchor(null);
+    window.addEventListener("resize", closePreview);
+    window.addEventListener("scroll", closePreview, true);
+    return () => {
+      window.removeEventListener("resize", closePreview);
+      window.removeEventListener("scroll", closePreview, true);
+    };
+  }, [previewAnchor]);
+
+  const hoverProps = canPreview
+    ? {
+        onMouseEnter: (mouseEvent: React.MouseEvent<HTMLElement>) =>
+          handleMouseEnter(mouseEvent.currentTarget),
+        onMouseLeave: scheduleClose,
+      }
+    : undefined;
+  const content = href ? (
+    <Link to={href} className={className} title={label} {...hoverProps}>
+      {label}
+    </Link>
+  ) : (
+    <span className={className} title={label} {...hoverProps}>
+      {label}
+    </span>
+  );
+
+  return (
+    <>
+      {content}
+      {!isMobile && previewAnchor ? (
+        <CalendarEventHoverCard
+          key={event.id}
+          preview={{
+            episode: calendarEpisodeForHistoryEvent(event, details, episodeLabel),
+            anchor: previewAnchor,
+          }}
+          onMouseEnter={clearHoverTimer}
+          onMouseLeave={scheduleClose}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function historyEpisodesQuery(episodeCount: number): string {
   const variables = Array.from(
     { length: episodeCount },
@@ -157,19 +326,19 @@ function HistoryEpisodes({
           const label = fetching
             ? t("label.loading")
             : formatHistoryEpisodeLabel(episode, episodeId);
-          return href ? (
-            <Link
+          return (
+            <HistoryTitleHoverLink
               key={episodeId}
-              to={href}
-              className="max-w-full truncate text-[var(--scry-accent-text)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              title={label}
-            >
-              {label}
-            </Link>
-          ) : (
-            <span key={episodeId} className="truncate text-foreground" title={label}>
-              {label}
-            </span>
+              event={event}
+              label={label}
+              href={href}
+              episodeLabel={label}
+              className={
+                href
+                  ? "max-w-full truncate text-[var(--scry-accent-text)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  : "truncate text-foreground"
+              }
+            />
           );
         })}
       </div>
@@ -339,34 +508,20 @@ export function HistoryEventTable({
                   </TableCell>
                   {showTitle ? (
                     <TableCell className="align-middle">
-                      {titleHref ? (
-                        <Link
-                          to={titleHref}
-                          className="block truncate text-sm font-medium text-foreground transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          title={
-                            titleNameMap?.[event.titleId] ??
-                            event.titleName ??
-                            event.titleId
-                          }
-                        >
-                          {titleNameMap?.[event.titleId] ??
-                            event.titleName ??
-                            event.titleId}
-                        </Link>
-                      ) : (
-                        <div
-                          className="truncate text-sm font-medium text-foreground"
-                          title={
-                            titleNameMap?.[event.titleId] ??
-                            event.titleName ??
-                            event.titleId
-                          }
-                        >
-                          {titleNameMap?.[event.titleId] ??
-                            event.titleName ??
-                            event.titleId}
-                        </div>
-                      )}
+                      <HistoryTitleHoverLink
+                        event={event}
+                        label={
+                          titleNameMap?.[event.titleId] ??
+                          event.titleName ??
+                          event.titleId
+                        }
+                        href={titleHref}
+                        className={
+                          titleHref
+                            ? "block truncate text-sm font-medium text-foreground transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            : "block truncate text-sm font-medium text-foreground"
+                        }
+                      />
                       {event.episodeIds.length > 0 ? (
                         <div className="mt-1 text-xs text-muted-foreground">
                           {event.episodeIds.length === 1

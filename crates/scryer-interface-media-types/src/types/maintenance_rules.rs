@@ -22,6 +22,10 @@ pub enum MaintenanceEvaluationMode {
 pub enum MaintenanceRuleSubjectKind {
     /// The rule evaluates whole titles, both movies and shows.
     Title,
+    /// The rule evaluates each season independently, including specials.
+    Season,
+    /// The rule evaluates each episode independently.
+    Episode,
 }
 
 /// How far a rule set's effects are armed. Arming is per rule and independent
@@ -229,6 +233,8 @@ pub struct MaintenanceRuleSetDetail {
 /// Static registry entry describing one maintenance action to the rule builder.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceActionDescriptor {
+    /// Scopes for which this build implements the action.
+    pub supported_rule_scopes: Vec<MaintenanceRuleSubjectKind>,
     /// Catalog action this descriptor describes.
     pub kind: MaintenanceActionKind,
     /// Subjects the action may be configured against.
@@ -263,11 +269,27 @@ pub struct MaintenanceRuleValidationPayload {
     pub errors: Vec<String>,
 }
 
-/// One title's preview outcome. `outcome` is null exactly when `error` is set:
+/// One subject's preview outcome. `outcome` is null exactly when `error` is set:
 /// a rule that failed produced no decision, and a failure is never rendered as
 /// a no-match.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenancePreviewTitle {
+    /// Whether a direct or inherited exclusion protects this subject.
+    pub excluded: bool,
+    /// Existing grace deadline, or an estimated deadline for a new match.
+    pub due_at: Option<DateTime<Utc>>,
+    /// True when the deadline is estimated rather than persisted on a candidate.
+    pub due_at_is_estimate: bool,
+    /// Display label for the exact title, season, or episode being evaluated.
+    pub subject_label: String,
+    /// Number of current files associated with this subject.
+    pub file_count: i32,
+    /// Combined size in bytes of this subject's current files.
+    pub total_size_bytes: i64,
+    /// Subject scope: title, season, or episode.
+    pub subject_kind: String,
+    /// Scryer title, collection, or episode ID for the selected scope.
+    pub subject_id: ID,
     /// Evaluated title ID.
     pub title_id: ID,
     /// Evaluated title name.
@@ -280,11 +302,11 @@ pub struct MaintenancePreviewTitle {
     pub outcome: Option<MaintenanceOutcome>,
     /// Reason codes the matcher emitted; empty when it emitted none.
     pub reason_codes: Vec<String>,
-    /// Why evaluation failed for this title, or null when it succeeded.
+    /// Why evaluation failed for this subject, or null when it succeeded.
     pub error: Option<String>,
 }
 
-/// Outcome of running one matcher against a bounded title selection. Preview
+/// Outcome of running one matcher against a bounded subject selection. Preview
 /// persists nothing.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenancePreviewPayload {
@@ -295,7 +317,7 @@ pub struct MaintenancePreviewPayload {
     pub matcher_content_hash: String,
     /// UTC time the preview evaluated the selection.
     pub evaluated_at: DateTime<Utc>,
-    /// One entry per evaluated title, in selection order.
+    /// One entry per evaluated subject, including its owning title.
     pub titles: Vec<MaintenancePreviewTitle>,
 }
 
@@ -308,6 +330,16 @@ pub struct MaintenancePreviewPayload {
 /// `FAILED` mean an action was attempted.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceCandidate {
+    /// Number of current subject files, or null if the subject is unavailable.
+    pub file_count: Option<i32>,
+    /// Current subject file size in bytes, or null if the subject is unavailable.
+    pub total_size_bytes: Option<i64>,
+    /// Exact subject display label, falling back to its ID if unavailable.
+    pub subject_label: String,
+    /// Subject scope: title, season, or episode.
+    pub subject_kind: String,
+    /// Scryer title, collection, or episode ID identifying this candidate's subject.
+    pub subject_id: ID,
     /// Candidate ID.
     pub id: ID,
     /// Rule set that produced the candidate.
@@ -419,6 +451,12 @@ pub struct MaintenanceInstanceGates {
 /// A subject a maintenance rule must never act on.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceExclusion {
+    /// Exact excluded subject label, falling back to its ID if unavailable.
+    pub subject_label: String,
+    /// Excluded scope: title, season, or episode. Parent exclusions cover descendants.
+    pub subject_kind: String,
+    /// Scryer title, collection, or episode ID of the excluded subject.
+    pub subject_id: ID,
     /// Exclusion ID.
     pub id: ID,
     /// Rule the exclusion is confined to, or null when it is global.
@@ -445,6 +483,14 @@ pub struct DeleteMaintenanceExclusionPayload {
 /// One recorded action-handler attempt on one candidate, holds included.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceActionRun {
+    /// Exact subject display label from execution evidence or the current catalog.
+    pub subject_label: String,
+    /// Persisted per-file outcomes and policy provenance.
+    pub detail: String,
+    /// Persisted subject scope: title, season, or episode.
+    pub subject_kind: String,
+    /// Persisted Scryer title, collection, or episode ID targeted by this attempt.
+    pub subject_id: ID,
     /// Action-run ID.
     pub id: ID,
     /// Rule set the attempt belongs to.
@@ -502,6 +548,8 @@ pub struct MaintenanceActionInput {
 /// Creates a maintenance rule set together with its first matcher revision.
 #[derive(InputObject)]
 pub struct CreateMaintenanceRuleSetInput {
+    /// Defaults to title scope when omitted.
+    pub subject_kind: Option<MaintenanceRuleSubjectKind>,
     /// Rule-set name.
     pub name: String,
     /// Optional description.
@@ -590,6 +638,10 @@ pub struct SetMaintenanceInstanceGatesInput {
 /// Excludes one subject from maintenance rules.
 #[derive(InputObject)]
 pub struct ExcludeMaintenanceSubjectInput {
+    /// Required for episode or season scope.
+    pub subject_id: Option<ID>,
+    /// Defaults to title scope when omitted.
+    pub subject_kind: Option<MaintenanceRuleSubjectKind>,
     /// Title to exclude.
     pub title_id: ID,
     /// Rule to confine the exclusion to. Omitted means every rule.
@@ -612,6 +664,10 @@ pub struct ValidateMaintenanceRuleInput {
 /// `titleIds` or `libraryId`, never both.
 #[derive(InputObject)]
 pub struct PreviewMaintenanceRuleInput {
+    /// Selected libraries for an unsaved matcher; empty means all libraries.
+    pub library_ids: Option<Vec<String>>,
+    /// Defaults to title scope when omitted.
+    pub subject_kind: Option<MaintenanceRuleSubjectKind>,
     /// Stored rule set to preview at its current revision.
     pub rule_set_id: Option<ID>,
     /// Unsaved matcher source to preview, as written in the editor.
@@ -620,6 +676,8 @@ pub struct PreviewMaintenanceRuleInput {
     pub action: Option<MaintenanceActionInput>,
     /// Grace period for the unsaved draft; defaults to zero.
     pub grace_days: Option<i32>,
+    /// Optional exact subjects, requiring their owning `titleIds`.
+    pub subject_ids: Option<Vec<ID>>,
     /// Evaluate exactly these titles.
     pub title_ids: Option<Vec<ID>>,
     /// Evaluate the first titles of this library.

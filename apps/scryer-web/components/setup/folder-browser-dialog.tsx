@@ -30,6 +30,7 @@ interface FolderBrowserDialogProps {
   selectionTypes: Array<"folder" | "file">;
   initialPath?: string;
   title?: string;
+  preventCloseAutoFocus?: boolean;
 }
 
 export function FolderBrowserDialog({
@@ -39,6 +40,7 @@ export function FolderBrowserDialog({
   selectionTypes,
   initialPath = "/",
   title,
+  preventCloseAutoFocus = false,
 }: FolderBrowserDialogProps) {
   const client = useClient();
   const t = useTranslate();
@@ -105,6 +107,9 @@ export function FolderBrowserDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         id="folder-browser-dialog"
+        onCloseAutoFocus={
+          preventCloseAutoFocus ? (event) => event.preventDefault() : undefined
+        }
         className="w-[calc(100vw-2rem)] overflow-hidden border-[var(--scry-border)] bg-[var(--scry-surf)] p-0 text-[var(--scry-ink2)] shadow-[0_24px_80px_rgba(0,0,0,0.55)] sm:max-w-[42rem]"
       >
         <DialogHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0))] px-4 py-3 sm:px-5">

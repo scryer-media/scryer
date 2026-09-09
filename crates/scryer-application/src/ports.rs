@@ -2320,6 +2320,15 @@ pub trait ImageProxyRepository: Send + Sync {
         limit: u32,
     ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
 
+    /// Keyset pagination keeps both admission and failure retries bounded per run.
+    async fn list_cached_jpegs(
+        &self,
+        _limit: usize,
+        _after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
     /// Sums the persisted `byte_size` scalars without reading entry rows.
     async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage>;
 
@@ -2339,10 +2348,38 @@ pub trait ImageProxyRepository: Send + Sync {
 pub trait ImageProxyCacheControl: Send + Sync {
     async fn clear_cache(&self) -> AppResult<()>;
     async fn set_configured_max_bytes(&self, value: u64) -> AppResult<()>;
+
+    async fn list_cached_jpegs(
+        &self,
+        _limit: usize,
+        _after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
+    /// Returns false when an entry was evicted or refreshed since admission.
+    async fn optimize_cached_jpeg(
+        &self,
+        _entry: ImageProxyCacheEntryRecord,
+        _processor: std::sync::Arc<dyn TitleImageProcessor>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn wait_for_cached_jpeg(&self) {
+        std::future::pending::<()>().await;
+    }
 }
 
 #[async_trait]
 pub trait TitleImageProcessor: Send + Sync {
+    /// A separate fast preset for disposable proxy artwork, on the configured pool.
+    async fn encode_cached_jpeg(&self, _bytes: Vec<u8>, _width: u32) -> AppResult<Vec<u8>> {
+        Err(AppError::Validation(
+            "cached JPEG encoding is unavailable".into(),
+        ))
+    }
+
     /// Configure the shared CPU budget before an exclusive artwork run starts.
     async fn configure_encoding_workers(&self, _workers: usize) -> AppResult<()> {
         Ok(())
@@ -3684,7 +3721,8 @@ pub trait ProxyConfigRepository: Send + Sync {
         error_message: Option<String>,
         error_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<()>;
-    /// Pin a tunnel host key on trust-on-first-use.
+    /// Atomically pin a host key for the expected config revision. Returns false
+    /// for a stale/deleted row or a conflicting existing pin; matching pins are idempotent.
     ///
     /// Like `record_health` this deliberately leaves `updated_at` alone. The
     /// tunnel engine pins immediately after the connect that just succeeded;
@@ -3695,7 +3733,8 @@ pub trait ProxyConfigRepository: Send + Sync {
         id: &str,
         fingerprint: &str,
         pinned_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<()>;
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool>;
     /// Drop the pin so the next connect trusts the server afresh, after a
     /// legitimate rekey.
     ///
@@ -6573,7 +6612,7 @@ pub struct MaintenanceCandidateQuery {
 /// Durable lifecycle candidates (RFC 137 section 8).
 ///
 /// The store, not just the migration's partial unique index, is responsible for
-/// the one-active-candidate-per-(rule, title) invariant: a create is refused
+/// the one-active-candidate-per-(rule, kind, subject) invariant: a create is refused
 /// when an active candidate already exists.
 #[async_trait]
 pub trait MaintenanceCandidateRepository: Send + Sync {
@@ -6582,6 +6621,16 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         &self,
         rule_set_id: &str,
         title_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
+        self.get_active_subject_candidate(rule_set_id, "title", title_id)
+            .await
+    }
+
+    async fn get_active_subject_candidate(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleCandidate>>;
 
     async fn list_candidates(
@@ -6591,7 +6640,17 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
 
     /// Highest match generation ever recorded for this subject, terminal rows
     /// included. Zero when the subject has never had a candidate.
-    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64>;
+    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
+        self.max_subject_match_generation(rule_set_id, "title", title_id)
+            .await
+    }
+
+    async fn max_subject_match_generation(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<i64>;
 
     async fn create_candidate(
         &self,
@@ -6710,6 +6769,13 @@ pub trait LifecycleActionRunRepository: Send + Sync {
 
     /// Write the attempt's terminal status, hold reason, error, and detail.
     async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// The newest durable scoped-deletion checkpoint, independently of the
+    /// number of later safety holds in the candidate's history.
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        candidate_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionRun>>;
 
     /// Newest first, optionally narrowed by rule set and/or candidate.
     async fn list_action_runs(

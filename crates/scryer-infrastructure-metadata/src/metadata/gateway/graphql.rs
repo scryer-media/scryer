@@ -30,6 +30,8 @@ pub const METADATA_BULK_QUERY: &str = include_str!("metadata_gateway/metadata_bu
 pub const TITLES_QUERY: &str = include_str!("metadata_gateway/titles.graphql");
 pub const RESOLVE_TITLES_QUERY: &str = include_str!("metadata_gateway/resolve_titles.graphql");
 pub const SEARCH_TITLES_QUERY: &str = include_str!("metadata_gateway/search_titles.graphql");
+pub const SEARCH_TITLES_MULTI_QUERY: &str =
+    include_str!("metadata_gateway/search_titles_multi.graphql");
 pub const SEARCH_TITLES_BATCH_QUERY: &str =
     include_str!("metadata_gateway/search_titles_batch.graphql");
 pub const DISCOVER_PUBLIC_FEED_QUERY: &str =

@@ -196,6 +196,8 @@ pub struct ScoringEntryPayload {
     pub code: String,
     /// Signed score delta contributed by the rule.
     pub delta: i32,
+    /// score_contribution, mandatory_rejection, or final_score_rejection.
+    pub kind: String,
     /// Source of the scoring rule.
     pub source: String,
     /// Rule-set name, or null when not associated with a named set.
@@ -524,6 +526,10 @@ pub struct ProxyTestResultPayload {
     pub message: Option<String>,
     /// Test duration in milliseconds, or null when unavailable.
     pub duration_ms: Option<i32>,
+    /// Public outbound IP reported by the destination, or null when unrecognized.
+    pub observed_ip: Option<String>,
+    /// Destination HTTP status, or null when no destination response was received.
+    pub http_status: Option<i32>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -940,7 +946,7 @@ pub struct SetIndexerDownloadClientMappingInput {
 pub struct CreateProxyConfigInput {
     /// Display name of the proxy.
     pub name: String,
-    /// Proxy provider implementation identifier.
+    /// Proxy provider identifier: byparr, trawl, http, http3, socks4, socks5, ssh_tunnel, or wireguard.
     pub provider_type: String,
     /// Challenge-solver protocol. Omit to take the single protocol Scryer
     /// speaks; transport proxies reject any value because they speak none.
@@ -953,14 +959,14 @@ pub struct CreateProxyConfigInput {
     /// back. Challenge solvers reject it.
     pub username: Option<String>,
     /// Transport-proxy password. Write-only: stored encrypted and never read
-    /// back. Requires a username; challenge solvers reject it.
+    /// back. Requires a username; challenge solvers and SSH tunnels reject it.
     pub password: Option<String>,
     /// SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
     /// base URL implies true.
     pub remote_dns: Option<bool>,
     /// Private key for a tunnel provider: PEM for an SSH tunnel, base64 for
     /// WireGuard. Write-only: stored encrypted and never read back. An SSH
-    /// tunnel needs either this or a password; WireGuard requires it.
+    /// tunnel and WireGuard both require a private key.
     pub private_key: Option<String>,
     /// Passphrase protecting the private key above. Write-only: stored
     /// encrypted and never read back. Requires a private key, and only SSH
@@ -1005,8 +1011,8 @@ pub struct UpdateProxyConfigInput {
     /// Replacement transport-proxy username. Write-only: omission preserves
     /// the stored value, null clears it, and it is never read back.
     pub username: MaybeUndefined<String>,
-    /// Replacement transport-proxy password. Write-only: omission preserves
-    /// the stored value, null clears it, and it is never read back.
+    /// Replacement transport-proxy password. SSH tunnels reject passwords.
+    /// Write-only: omission preserves the stored value, null clears it.
     pub password: MaybeUndefined<String>,
     /// Replacement SOCKS5 remote-DNS state; omission preserves it.
     pub remote_dns: Option<bool>,

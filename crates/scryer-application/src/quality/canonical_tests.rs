@@ -9,7 +9,6 @@ use super::canonical::*;
 use crate::import::post_download_gate::build_stream_pointer_media_file_analysis;
 use crate::quality_profile::{BLOCK_SCORE, CoverageSizeBasis, SIZE_PACK_MEMBER_BASIS_CODE};
 use crate::release_parser::{VideoCodec, parse_release_metadata};
-use crate::scoring_weights::balanced_weights;
 use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
 
 const GIB: i64 = 1024 * 1024 * 1024;
@@ -184,18 +183,13 @@ fn movie_profile() -> QualityProfile {
     )
 }
 
-fn ctx<'a>(
-    profile: &'a QualityProfile,
-    weights: &'a crate::scoring_weights::ScoringWeights,
-    tags: &'a [String],
-) -> ScoringContext<'a> {
+fn ctx<'a>(profile: &'a QualityProfile, tags: &'a [String]) -> ScoringContext<'a> {
     ScoringContext {
         profile,
-        weights,
         required_audio_languages: &[],
         category: "movie",
         size_basis: CoverageSizeBasis::default(),
-        rules: None,
+        rules: Some(crate::rules::builtin_trash::baseline_engine()),
         title_id: None,
         library_name: None,
         original_language: None,
@@ -239,9 +233,8 @@ fn analyzed(size_gib: f64, codec: Option<&str>) -> AnalyzedFacts {
 #[test]
 fn announced_half_is_unchanged_by_analysis() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     for (announced_gib, actual_gib) in [(8.0, 8.0), (8.0, 6.0), (8.0, 3.0), (3.0, 8.0)] {
         let without = score_release(&announced(announced_gib), &context);
@@ -263,9 +256,8 @@ fn announced_half_is_unchanged_by_analysis() {
 #[test]
 fn variance_is_zero_without_analysis() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     let scored = score_release(&announced(8.0), &context);
 
@@ -279,7 +271,6 @@ fn variance_is_zero_without_analysis() {
 /// inject a `BLOCK_SCORE` into the score itself.
 #[test]
 fn incumbent_policy_cannot_change_the_score() {
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
 
     let upgrades_on = profile(
@@ -289,8 +280,8 @@ fn incumbent_policy_cannot_change_the_score() {
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":false}}"#,
     );
 
-    let on = score_release(&announced(8.0), &ctx(&upgrades_on, &weights, &tags));
-    let off = score_release(&announced(8.0), &ctx(&upgrades_off, &weights, &tags));
+    let on = score_release(&announced(8.0), &ctx(&upgrades_on, &tags));
+    let off = score_release(&announced(8.0), &ctx(&upgrades_off, &tags));
 
     assert_eq!(
         on.total, off.total,
@@ -304,10 +295,9 @@ fn incumbent_policy_cannot_change_the_score() {
 #[test]
 fn listing_age_is_never_scored() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
 
-    let scored = score_release(&announced(8.0), &ctx(&profile, &weights, &tags));
+    let scored = score_release(&announced(8.0), &ctx(&profile, &tags));
 
     assert!(
         !scored
@@ -334,9 +324,8 @@ fn analyzed_hard_block_is_a_verdict_not_a_number() {
     let blocking = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"video_codec_blocklist":["H.265"]}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&blocking, &weights, &tags);
+    let context = ctx(&blocking, &tags);
 
     let evidence = announced(8.0).with_analysis(analyzed(8.0, Some("h265")));
     let scored = score_release(&evidence, &context);
@@ -381,12 +370,11 @@ fn announced_hard_block_is_a_verdict_not_a_number() {
     let unreachable_floor = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"min_score_to_grab":100000}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&unreachable_floor, &weights, &tags);
+    let context = ctx(&unreachable_floor, &tags);
 
     let permissive = movie_profile();
-    let unblocked = score_release(&announced(8.0), &ctx(&permissive, &weights, &tags));
+    let unblocked = score_release(&announced(8.0), &ctx(&permissive, &tags));
     let scored = score_release(&announced(8.0), &context);
 
     assert!(
@@ -434,11 +422,10 @@ fn a_veto_that_fires_on_the_name_alone_is_not_the_release_lying() {
     let blocked_codec = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"video_codec_blocklist":["H.264"]}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
 
     for blocking in [unreachable_floor, blocked_codec] {
-        let context = ctx(&blocking, &weights, &tags);
+        let context = ctx(&blocking, &tags);
         let evidence = announced(8.0).with_analysis(analyzed(8.0, Some("h264")));
         let scored = score_release(&evidence, &context);
 
@@ -478,9 +465,8 @@ fn a_veto_only_the_file_could_raise_is_the_release_lying() {
     let blocking = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"video_codec_blocklist":["H.265"]}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&blocking, &weights, &tags);
+    let context = ctx(&blocking, &tags);
 
     // Announced as H.264 (permitted); the file is really H.265 (blocked).
     let evidence = announced(8.0).with_analysis(analyzed(8.0, Some("h265")));
@@ -502,9 +488,8 @@ fn a_veto_only_the_file_could_raise_is_the_release_lying() {
 #[test]
 fn large_analyzed_swing_is_contradicted_and_clamped() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     // 8 GiB announced sits in `size_expected`; 1 GiB actual lands in
     // `size_tiny` — a swing well past the bound.
@@ -523,14 +508,52 @@ fn large_analyzed_swing_is_contradicted_and_clamped() {
     );
 }
 
+#[test]
+fn size_contradictions_require_comparable_facts_even_without_scoring_rules() {
+    let profile = movie_profile();
+    let mut context = ctx(&profile, &[]);
+    context.rules = None;
+    for (claim, actual, contradicts) in [
+        (Some(8 * GIB), 2 * GIB, false),
+        (Some(8 * GIB), 2 * GIB - 1, true),
+        (Some(GIB), 4 * GIB, false),
+        (Some(GIB), 4 * GIB + 1, true),
+        (None, GIB, false),
+        (Some(0), GIB, false),
+        (Some(-1), GIB, false),
+        (Some(8 * GIB), 0, false),
+    ] {
+        let mut evidence = announced(8.0).with_analysis(analyzed(1.0, None));
+        evidence.announced_size_bytes = claim;
+        evidence.analyzed.as_mut().unwrap().actual_size_bytes = actual;
+        let scored = score_release(&evidence, &context);
+        assert_eq!(
+            matches!(scored.truth_verdict, TruthVerdict::Contradicted { .. }),
+            contradicts,
+            "claim={claim:?}, actual={actual}: {:?}",
+            scored.truth_verdict
+        );
+        assert_eq!(
+            scored.truth_variance, 0,
+            "facts do not invent score contributions"
+        );
+    }
+    context.size_basis = CoverageSizeBasis::aggregate(Some(540), Some(45), 12);
+    let scored = score_release(&announced(8.0).with_analysis(analyzed(1.0, None)), &context);
+    assert_eq!(
+        scored.truth_verdict,
+        TruthVerdict::Consistent,
+        "a pack's announced bytes are not comparable to one landed member"
+    );
+}
+
 /// A small, honest difference is a variance, not a contradiction, and it lands
 /// in the persisted bar unclamped.
 #[test]
 fn small_analyzed_swing_is_a_consistent_variance() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     // 8 GiB → 6 GiB drops one bucket (`size_expected` → `size_slightly_small`).
     let evidence = announced(8.0).with_analysis(analyzed(6.0, None));
@@ -549,9 +572,8 @@ fn small_analyzed_swing_is_a_consistent_variance() {
 #[test]
 fn scoring_is_deterministic() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
     let evidence = announced(8.0).with_analysis(analyzed(6.0, None));
 
     let first = score_release(&evidence, &context);
@@ -655,9 +677,8 @@ fn media_row_as_import_would_write(
 #[test]
 fn re_deriving_a_stored_file_reproduces_the_imported_score() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     // Announced 8 GiB, landed 7.2 GiB — a real but honest difference.
     let evidence = announced(8.0).with_analysis(analyzed(7.2, None));
@@ -679,9 +700,8 @@ fn re_deriving_a_stored_file_reproduces_the_imported_score() {
 #[test]
 fn the_bar_is_the_analyzed_score() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     let evidence = announced(8.0).with_analysis(analyzed(6.0, None));
     let scored = score_release(&evidence, &context);
@@ -699,9 +719,8 @@ fn the_bar_is_the_analyzed_score() {
 #[test]
 fn a_row_without_analysis_still_yields_a_bar() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     let evidence = announced(8.0).with_analysis(analyzed(8.0, None));
     let scored = score_release(&evidence, &context);
@@ -731,9 +750,8 @@ fn a_row_without_analysis_still_yields_a_bar() {
 #[test]
 fn a_stored_row_rebuilds_the_file_rule_document_import_scored_with() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     let evidence = announced(8.0).with_analysis(analyzed(7.2, None));
     let at_import = score_release(&evidence, &context);
@@ -765,17 +783,15 @@ fn series_profile() -> QualityProfile {
 
 fn episode_ctx<'a>(
     profile: &'a QualityProfile,
-    weights: &'a crate::scoring_weights::ScoringWeights,
     tags: &'a [String],
     size_basis: CoverageSizeBasis,
 ) -> ScoringContext<'a> {
     ScoringContext {
         profile,
-        weights,
         required_audio_languages: &[],
         category: "series",
         size_basis,
-        rules: None,
+        rules: Some(crate::rules::builtin_trash::baseline_engine()),
         title_id: None,
         library_name: None,
         original_language: None,
@@ -826,7 +842,6 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
     };
 
     let profile = series_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
 
     // A 90-minute premiere in a series whose nominal runtime is 25 minutes.
@@ -856,21 +871,12 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
     assert_eq!(grab_basis, bar_basis);
 
     let evidence = ReleaseEvidence::announced(parsed.clone(), Some(size_bytes));
-    let grab_score = score_release(
-        &evidence,
-        &episode_ctx(&profile, &weights, &tags, grab_basis),
-    )
-    .release_score;
-    let import_score = score_release(
-        &evidence,
-        &episode_ctx(&profile, &weights, &tags, import_basis),
-    )
-    .release_score;
-    let bar_score = score_release(
-        &evidence,
-        &episode_ctx(&profile, &weights, &tags, bar_basis),
-    )
-    .release_score;
+    let grab_score =
+        score_release(&evidence, &episode_ctx(&profile, &tags, grab_basis)).release_score;
+    let import_score =
+        score_release(&evidence, &episode_ctx(&profile, &tags, import_basis)).release_score;
+    let bar_score =
+        score_release(&evidence, &episode_ctx(&profile, &tags, bar_basis)).release_score;
 
     assert_eq!(grab_score, import_score);
     assert_eq!(grab_score, bar_score);
@@ -881,7 +887,6 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
         &evidence,
         &episode_ctx(
             &profile,
-            &weights,
             &tags,
             CoverageSizeBasis::single(TITLE_RUNTIME_MINUTES),
         ),
@@ -940,7 +945,6 @@ fn a_pack_listed_at_one_members_size_scores_the_same_everywhere() {
     };
 
     let profile = series_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
 
     // A twelve-episode season of 45-minute episodes.
@@ -976,8 +980,7 @@ fn a_pack_listed_at_one_members_size_scores_the_same_everywhere() {
     assert_eq!(grab_basis.member_count, 12);
 
     let evidence = ReleaseEvidence::announced(parsed.clone(), Some(size_bytes));
-    let scored_with =
-        |basis| score_release(&evidence, &episode_ctx(&profile, &weights, &tags, basis));
+    let scored_with = |basis| score_release(&evidence, &episode_ctx(&profile, &tags, basis));
     let grab = scored_with(grab_basis);
     let import = scored_with(import_basis);
     let bar = scored_with(bar_basis);
@@ -1037,9 +1040,8 @@ fn whatever_grab_admits_import_admits() {
     };
 
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     // Each release with sizes that are plausible for what it claims (a
     // 120-minute movie, the category default). An implausible pairing would test
@@ -1232,9 +1234,8 @@ fn a_file_doc_survives_mediainfo_to_row_to_re_derivation() {
         rule_file_doc: Some(at_import.clone()),
     });
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let scored = score_release(&evidence, &ctx(&profile, &weights, &tags));
+    let scored = score_release(&evidence, &ctx(&profile, &tags));
     let row = media_row_as_import_would_write(&evidence, &scored);
     let re_derived = analyzed_facts_from_media_file(&row)
         .rule_file_doc
@@ -1271,9 +1272,8 @@ fn a_veto_on_a_fact_the_name_never_stated_is_vetoed_not_blocked() {
     let blocking = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"video_codec_blocklist":["H.264"]}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&blocking, &weights, &tags);
+    let context = ctx(&blocking, &tags);
 
     // No codec token anywhere in the name.
     let silent = ReleaseEvidence::announced(
@@ -1303,9 +1303,8 @@ fn a_veto_that_contradicts_a_stated_codec_is_blocked() {
     let blocking = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"video_codec_blocklist":["H.264"]}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&blocking, &weights, &tags);
+    let context = ctx(&blocking, &tags);
 
     let stated = ReleaseEvidence::announced(
         parse_release_metadata("Movie.2024.1080p.WEB-DL.H.265-GRP"),
@@ -1334,9 +1333,8 @@ fn an_hdr_veto_the_name_never_disclosed_is_vetoed() {
     let no_hdr = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"detected_hdr_allowed":false}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&no_hdr, &weights, &tags);
+    let context = ctx(&no_hdr, &tags);
 
     let mut facts = analyzed(8.0, Some("h264"));
     facts.analysis.video_hdr_format = Some("HDR10".to_string());
@@ -1362,9 +1360,8 @@ fn a_landed_resolution_outside_the_profile_tiers_is_blocked() {
     let profile_1080_only = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile_1080_only, &weights, &tags);
+    let context = ctx(&profile_1080_only, &tags);
 
     let mut facts = analyzed(8.0, Some("h264"));
     facts.analysis.video_width = Some(1280);
@@ -1394,9 +1391,8 @@ fn a_block_on_both_passes_imports_with_an_honest_bar() {
     let blocked_codec = profile(
         r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true,"video_codec_blocklist":["H.264"]}}"#,
     );
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&blocked_codec, &weights, &tags);
+    let context = ctx(&blocked_codec, &tags);
 
     // The name says H.264 and so does the file.
     let scored = score_release(
@@ -1449,9 +1445,8 @@ score_entry["quality_not_in_profile_tiers"] := -10000 if {
     let engine =
         scryer_rules::UserRulesEngine::build(&[policy]).expect("rule fixture should compile");
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let mut context = ctx(&profile, &weights, &tags);
+    let mut context = ctx(&profile, &tags);
     context.rules = Some(&engine);
 
     let scored = score_release(
@@ -1465,9 +1460,18 @@ score_entry["quality_not_in_profile_tiers"] := -10000 if {
             scored.truth_verdict
         );
     };
-    // Deliberately named like a builtin quality veto: the source is what
-    // decides, not the string.
-    assert_eq!(codes, &["quality_not_in_profile_tiers".to_string()]);
+    // A rule cannot manufacture a mandatory requirement by copying its code.
+    assert_eq!(codes, &["score_at_or_below_block_threshold".to_string()]);
+    assert!(
+        scored
+            .analyzed_decision
+            .as_ref()
+            .unwrap()
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "quality_not_in_profile_tiers"
+                && entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution)
+    );
 }
 
 fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
@@ -1478,20 +1482,157 @@ fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
         origin: scryer_rules::PolicyOrigin::User,
         applied_facets: vec!["movie".to_string()],
     };
-    scryer_rules::UserRulesEngine::build(&[policy]).expect("rule fixture should compile")
+    rule_engine_with_builtin_baseline(vec![policy])
+}
+
+fn rule_engine_with_builtin_baseline(
+    policies: Vec<scryer_rules::UserPolicy>,
+) -> scryer_rules::UserRulesEngine {
+    let mut all_policies = crate::rules::builtin_trash::baseline_policies();
+    let baseline_ids = all_policies
+        .iter()
+        .map(|policy| policy.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    all_policies.extend(policies);
+    scryer_rules::UserRulesEngine::build_with_baseline_rules(&all_policies, &baseline_ids)
+        .expect("bundled baseline and rule fixture should compile")
+}
+
+#[test]
+fn recoverable_scores_cannot_forge_quality_contradictions_during_size_drift() {
+    let engine = rule_engine(
+        "quality_label",
+        r#"
+score_entry["quality_contradicted:1080P->720P"] := -10000 if { input.file != null }
+score_entry["recovery"] := 20000 if { input.file != null }
+"#,
+    );
+    let profile = movie_profile();
+    let mut context = ctx(&profile, &[]);
+    context.rules = Some(&engine);
+
+    // The size difference produces real built-in variance, but the measured
+    // resolution still matches the release. A rule's label cannot invent a lie.
+    let scored = score_release(
+        &announced(8.0).with_analysis(analyzed(1.0, Some("h264"))),
+        &context,
+    );
+    assert!(scored.analyzed_decision.as_ref().unwrap().allowed);
+    let TruthVerdict::Contradicted { codes } = &scored.truth_verdict else {
+        panic!(
+            "expected size contradiction, got {:?}",
+            scored.truth_verdict
+        );
+    };
+    assert!(codes.iter().any(|code| code.starts_with("size_")));
+    assert!(
+        !codes
+            .iter()
+            .any(|code| code.starts_with("quality_contradicted:"))
+    );
+    assert!(matches!(
+        crate::post_download_gate::resolve_truth_verdict_action_for_origin(
+            &scored.truth_verdict,
+            &profile.criteria,
+            true,
+            crate::import_decide::ImportOrigin::OperatorQueued,
+        ),
+        crate::post_download_gate::TruthVerdictAction::Import
+    ));
+}
+
+#[test]
+fn recoverable_scores_survive_analysis_and_incumbent_rederivation() {
+    let profile = movie_profile();
+    let evidence = ReleaseEvidence::announced(
+        parse_release_metadata("Movie.2024.1080p.WEB-DL.H.264-GROUP"),
+        Some(8 * GIB),
+    )
+    .with_analysis(analyzed(8.0, Some("h264")));
+    for file_only in [false, true] {
+        let penalty = if file_only {
+            "score_entry[\"penalty\"] := scryer.block_score() if { input.file != null }"
+        } else {
+            "score_entry[\"penalty\"] := scryer.block_score()"
+        };
+        let policies = [
+            scryer_rules::UserPolicy {
+                id: "pack".into(),
+                name: "Pack".into(),
+                rego_source: scryer_rules::rewrite_package_declaration(penalty, "pack"),
+                origin: scryer_rules::PolicyOrigin::System,
+                applied_facets: vec!["movie".into()],
+            },
+            scryer_rules::UserPolicy {
+                id: "boost".into(),
+                name: "Group boost".into(),
+                rego_source: scryer_rules::rewrite_package_declaration(
+                    "score_entry[\"boost\"] := 20000 if { lower(input.release.release_group) == \"group\" }",
+                    "boost",
+                ),
+                origin: scryer_rules::PolicyOrigin::User,
+                applied_facets: vec!["movie".into()],
+            },
+        ];
+        let engine = rule_engine_with_builtin_baseline(policies.to_vec());
+        let mut context = ctx(&profile, &[]);
+        let baseline = score_release(&evidence, &context);
+        context.rules = Some(&engine);
+        let scored = score_release(&evidence, &context);
+        assert!(scored.announced_decision.allowed);
+        assert!(scored.analyzed_decision.as_ref().unwrap().allowed);
+        assert_eq!(scored.total, baseline.total + 10_000);
+        assert_eq!(scored.truth_verdict, TruthVerdict::Consistent);
+        let row = media_row_as_import_would_write(&evidence, &scored);
+        assert_eq!(score_media_file(&row, &context).total, scored.total);
+        assert_eq!(
+            score_release_preview(&evidence, &context).scored.total,
+            scored.total
+        );
+    }
+}
+
+#[test]
+fn recoverable_scores_never_override_profile_requirements() {
+    let engine = rule_engine("boost", "score_entry[\"boost\"] := 20000000");
+    let profile = profile(
+        r#"{"id":"t","name":"T","criteria":{"video_codec_blocklist":["H.264"],"quality_tiers":["1080P"]}}"#,
+    );
+    let mut context = ctx(&profile, &[]);
+    context.rules = Some(&engine);
+    let scored = score_release(&announced(8.0), &context);
+    assert!(scored.total > 10_000_000);
+    assert!(!scored.announced_decision.allowed);
+    assert_eq!(
+        scored.announced_decision.block_codes,
+        ["video_codec_in_profile_blocklist"]
+    );
+
+    let profile = movie_profile();
+    let mut context = ctx(&profile, &[]);
+    context.rules = Some(&engine);
+    let oversized = score_release(&announced(10_000.0), &context);
+    assert!(oversized.total > 10_000_000);
+    assert!(!oversized.announced_decision.allowed);
+    assert!(
+        oversized
+            .announced_decision
+            .block_codes
+            .iter()
+            .any(|code| code == "size_implausible_for_quality")
+    );
 }
 
 #[test]
 fn scoring_preview_preserves_canonical_scores_and_blocks() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     for source in [
         r#"score_entry["bonus"] := 200"#,
         r#"score_entry["bonus"] := 200
            score_entry["veto"] := scryer.block_score()"#,
     ] {
         let engine = rule_engine("preview", source);
-        let mut context = ctx(&profile, &weights, &[]);
+        let mut context = ctx(&profile, &[]);
         context.rules = Some(&engine);
         let evidence = announced(8.0);
         let normal = score_release(&evidence, &context);
@@ -1521,8 +1662,7 @@ fn scoring_preview_reports_rule_failures_without_retaining_normal_batch_diagnost
         r#"score_entry["broken"] := lower(input.release.year)"#,
     );
     let profile = movie_profile();
-    let weights = balanced_weights();
-    let mut context = ctx(&profile, &weights, &[]);
+    let mut context = ctx(&profile, &[]);
     context.rules = Some(&engine);
     let evidence = announced(8.0);
     let preview = score_release_preview(&evidence, &context);
@@ -1561,9 +1701,8 @@ score_entry["marked"] := 200 if {
 "#,
     );
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let mut context = ctx(&profile, &weights, &tags);
+    let mut context = ctx(&profile, &tags);
     context.rules = Some(&engine);
     let mut batch = RuleEvaluationBatch::from_context(&context);
     let batch_context = context.without_rules();
@@ -1608,9 +1747,8 @@ score_entry["analysis_bonus"] := 250 if {
 "#,
     );
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let mut context = ctx(&profile, &weights, &tags);
+    let mut context = ctx(&profile, &tags);
     context.rules = Some(&engine);
     let evidence = announced(8.0).with_analysis(analyzed(8.0, Some("h264")));
 
@@ -1637,15 +1775,14 @@ score_entry["analysis_bonus"] := 250 if {
 fn batch_rule_evaluator_keeps_its_original_engine_snapshot() {
     let first_engine = rule_engine("first_snapshot", r#"score_entry["first"] := 100"#);
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let mut original_context = ctx(&profile, &weights, &tags);
+    let mut original_context = ctx(&profile, &tags);
     original_context.rules = Some(&first_engine);
     let mut batch = RuleEvaluationBatch::from_context(&original_context);
     let batch_context = original_context.without_rules();
 
     let updated_engine = rule_engine("updated_snapshot", r#"score_entry["updated"] := 200"#);
-    let mut updated_context = ctx(&profile, &weights, &tags);
+    let mut updated_context = ctx(&profile, &tags);
     updated_context.rules = Some(&updated_engine);
     assert!(updated_context.rules.is_some());
 
@@ -1672,12 +1809,11 @@ fn batch_rule_evaluator_rejects_a_different_context_snapshot() {
     let first_engine = rule_engine("first_snapshot", r#"score_entry["first"] := 100"#);
     let second_engine = rule_engine("second_snapshot", r#"score_entry["second"] := 200"#);
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let mut first_context = ctx(&profile, &weights, &tags);
+    let mut first_context = ctx(&profile, &tags);
     first_context.rules = Some(&first_engine);
     let mut batch = RuleEvaluationBatch::from_context(&first_context);
-    let mut second_context = ctx(&profile, &weights, &tags);
+    let mut second_context = ctx(&profile, &tags);
     second_context.rules = Some(&second_engine);
 
     let _ = score_release_in_batch(&announced(8.0), &second_context, &mut batch);
@@ -1730,7 +1866,6 @@ fn a_material_excess_is_scored_on_what_landed() {
 #[test]
 fn a_landed_aggregate_does_not_keep_a_member_sized_announcement() {
     let profile = series_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
     let basis = CoverageSizeBasis::aggregate(Some(12 * 45), Some(45), 12);
     let parsed = parse_release_metadata("Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag");
@@ -1746,7 +1881,7 @@ fn a_landed_aggregate_does_not_keep_a_member_sized_announcement() {
 
     let landed_score = score_release(
         &ReleaseEvidence::announced(parsed.clone(), Some(selected)),
-        &episode_ctx(&profile, &weights, &tags, basis),
+        &episode_ctx(&profile, &tags, basis),
     );
     assert!(
         !landed_score
@@ -1760,7 +1895,7 @@ fn a_landed_aggregate_does_not_keep_a_member_sized_announcement() {
 
     let member_score = score_release(
         &ReleaseEvidence::announced(parsed, Some(announced)),
-        &episode_ctx(&profile, &weights, &tags, basis),
+        &episode_ctx(&profile, &tags, basis),
     );
     assert!(
         member_score
@@ -1786,9 +1921,8 @@ fn without_an_announced_size_the_landed_size_is_the_basis() {
 #[test]
 fn inside_the_overhead_band_the_size_term_matches_the_grab() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
     let parsed = parse_release_metadata("Glass.Harbor.2021.1080p.WEB-DL.H.264-GRP");
     let announced = 8 * GIB;
 
@@ -1855,9 +1989,8 @@ fn only_an_engaged_announced_size_is_persisted_on_the_row() {
 #[test]
 fn a_row_that_remembers_its_announced_size_reproduces_the_import_score() {
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags: Vec<String> = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
 
     // Announced 8 GiB, landed 7.2 GiB (90 %): inside the band, so both of the
     // import's passes scored the size term on 8 GiB.

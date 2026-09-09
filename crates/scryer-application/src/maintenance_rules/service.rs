@@ -29,7 +29,7 @@ use crate::maintenance_rules::action_execution::{
 };
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    build_title_input,
+    build_subject_input,
 };
 use crate::maintenance_rules::{
     MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
@@ -59,6 +59,7 @@ pub const MAINTENANCE_MAX_GRACE_DAYS: i64 = 3650;
 /// A new rule set plus its first matcher revision.
 #[derive(Clone, Debug)]
 pub struct MaintenanceRuleDraft {
+    pub subject_kind: MaintenanceRuleSubjectKind,
     pub name: String,
     pub description: String,
     pub rego_source: String,
@@ -86,6 +87,8 @@ pub enum MaintenancePreviewMatcher {
     Stored { rule_set_id: String },
     /// An unsaved draft from the editor. Validated and compiled, never stored.
     Inline {
+        library_ids: Vec<String>,
+        subject_kind: MaintenanceRuleSubjectKind,
         rego_source: String,
         action_spec: MaintenanceActionSpec,
         grace_days: i64,
@@ -97,6 +100,11 @@ pub enum MaintenancePreviewMatcher {
 pub enum MaintenancePreviewSelection {
     /// Exactly these titles, at most [`MAINTENANCE_PREVIEW_MAX_TITLES`].
     Titles(Vec<String>),
+    /// Exact subjects within explicitly selected owning titles.
+    Subjects {
+        title_ids: Vec<String>,
+        subject_ids: Vec<String>,
+    },
     /// The first `limit` titles of one library, clamped to the cap.
     Library {
         library_id: String,
@@ -137,6 +145,14 @@ pub struct MaintenancePreviewResult {
 /// no-match.
 #[derive(Clone, Debug)]
 pub struct MaintenancePreviewTitleResult {
+    pub excluded: bool,
+    pub due_at: Option<chrono::DateTime<Utc>>,
+    pub due_at_is_estimate: bool,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    pub subject_id: String,
+    pub subject_label: String,
+    pub file_count: i64,
+    pub total_size_bytes: i64,
     pub title_id: String,
     pub title_name: String,
     pub facet: MediaFacet,
@@ -228,6 +244,7 @@ impl AppUseCase {
         let id = Id::new_rego_safe().0;
         let prepared = prepare_matcher(
             &id,
+            draft.subject_kind,
             &draft.rego_source,
             &draft.action_spec,
             draft.grace_days,
@@ -249,7 +266,7 @@ impl AppUseCase {
             evaluation_mode: MaintenanceEvaluationMode::Disabled,
             effect_arming: scryer_domain::MaintenanceEffectArming::None,
             library_ids: draft.library_ids,
-            subject_kind: MaintenanceRuleSubjectKind::Title,
+            subject_kind: draft.subject_kind,
             current_revision_number: 1,
             created_at: now,
             updated_at: now,
@@ -298,6 +315,7 @@ impl AppUseCase {
         let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let prepared = prepare_matcher(
             &rule_set.id,
+            rule_set.subject_kind,
             &draft.rego_source,
             &draft.action_spec,
             draft.grace_days,
@@ -479,7 +497,8 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let policy = self.resolve_preview_policy(request.matcher).await?;
+        let (policy, subject_kind, library_ids, grace_days) =
+            self.resolve_preview_policy(request.matcher).await?;
         // Preview evaluates against real subjects and reports per-title
         // outcomes, so an ungated one is a person-fact oracle: ask "did user x
         // watch this" title by title and read the answers off the results. The
@@ -488,8 +507,32 @@ impl AppUseCase {
         self.require_person_fact_authority(actor, &policy.rego_source, &policy.id)
             .await?;
 
-        let titles = self.select_preview_titles(&request.selection).await?;
+        let mut titles = self.select_preview_titles(&request.selection).await?;
+        titles.retain(|title| library_ids.is_empty() || library_ids.contains(&title.library_id));
+        let (result_limit, selected_subjects) = match &request.selection {
+            MaintenancePreviewSelection::Library { limit, .. } => (
+                limit
+                    .unwrap_or(MAINTENANCE_PREVIEW_DEFAULT_TITLES)
+                    .clamp(1, MAINTENANCE_PREVIEW_MAX_TITLES),
+                None,
+            ),
+            MaintenancePreviewSelection::Subjects { subject_ids, .. } => {
+                if subject_ids.is_empty() || subject_ids.len() > MAINTENANCE_PREVIEW_MAX_TITLES {
+                    return Err(AppError::Validation(
+                        "preview requires between one and fifty subjects".into(),
+                    ));
+                }
+                (MAINTENANCE_PREVIEW_MAX_TITLES, Some(subject_ids))
+            }
+            MaintenancePreviewSelection::Titles(_) => (MAINTENANCE_PREVIEW_MAX_TITLES, None),
+        };
         let libraries = self.maintenance_library_refs().await?;
+        let exclusions = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_exclusions(Some(&policy.id))
+            .await?;
 
         let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
         // One batched load for the whole selection; a per-title query here
@@ -572,50 +615,95 @@ impl AppUseCase {
                     .map(Vec::as_slice),
                 store_readable: claims_by_title.is_some(),
             };
-            let input = build_title_input(
-                evaluated_at,
-                &title,
-                &library,
-                files,
-                people,
-                watch,
-                claims,
-                series_movies_by_title
-                    .get(&title.id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
-            );
+            for subject in self
+                .maintenance_subjects_for_title(subject_kind, &title, files)
+                .await?
+            {
+                if results.len() >= result_limit {
+                    break;
+                }
+                if selected_subjects.is_some_and(|ids| !ids.contains(&subject.id)) {
+                    continue;
+                }
+                let input = build_subject_input(
+                    evaluated_at,
+                    &title,
+                    &library,
+                    &subject,
+                    people,
+                    watch,
+                    claims,
+                    series_movies_by_title
+                        .get(&title.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                );
 
-            let evaluation = evaluator
-                .evaluate(&input)
-                .map_err(|e| AppError::Validation(format!("rule evaluation failed: {e}")))?;
+                let evaluation = evaluator
+                    .evaluate(&input)
+                    .map_err(|e| AppError::Validation(format!("rule evaluation failed: {e}")))?;
 
-            let (outcome, reason_codes, error) =
-                match (evaluation.records.first(), evaluation.errors.first()) {
-                    (Some(record), _) => (
-                        Some(record.decision.outcome),
-                        record.decision.reason_codes.clone(),
-                        None,
-                    ),
-                    (None, Some(failure)) => (None, Vec::new(), Some(failure.message.clone())),
-                    (None, None) => (
-                        None,
-                        Vec::new(),
-                        Some("rule produced no decision".to_string()),
-                    ),
+                let (outcome, reason_codes, error) =
+                    match (evaluation.records.first(), evaluation.errors.first()) {
+                        (Some(record), _) => (
+                            Some(record.decision.outcome),
+                            record.decision.reason_codes.clone(),
+                            None,
+                        ),
+                        (None, Some(failure)) => (None, Vec::new(), Some(failure.message.clone())),
+                        (None, None) => (
+                            None,
+                            Vec::new(),
+                            Some("rule produced no decision".to_string()),
+                        ),
+                    };
+
+                let excluded = subject.excluded_by(&title.id, &exclusions);
+                let active = self
+                    .services
+                    .customization
+                    .maintenance_evaluation
+                    .get_active_subject_candidate(
+                        &rule_set_id,
+                        subject_kind.as_storage_str(),
+                        &subject.id,
+                    )
+                    .await?
+                    .filter(|candidate| candidate.matcher_content_hash == matcher_content_hash);
+                let due_at = if !excluded && outcome == Some(MaintenanceOutcome::Match) {
+                    Some(active.as_ref().map_or(
+                        evaluated_at + chrono::Duration::days(grace_days),
+                        |candidate| candidate.due_at,
+                    ))
+                } else {
+                    None
                 };
-
-            results.push(MaintenancePreviewTitleResult {
-                title_id: title.id,
-                title_name: title.name,
-                facet: title.facet,
-                library_id: title.library_id,
-                outcome,
-                reason_codes,
-                error,
-            });
+                results.push(MaintenancePreviewTitleResult {
+                    excluded,
+                    due_at,
+                    due_at_is_estimate: due_at.is_some() && active.is_none(),
+                    subject_kind,
+                    subject_id: subject.id,
+                    subject_label: subject.label,
+                    file_count: subject.files.len() as i64,
+                    total_size_bytes: subject.files.iter().map(|file| file.size_bytes).sum(),
+                    title_id: title.id.clone(),
+                    title_name: title.name.clone(),
+                    facet: title.facet.clone(),
+                    library_id: title.library_id.clone(),
+                    outcome,
+                    reason_codes,
+                    error,
+                });
+            }
         }
 
+        if selected_subjects.is_some_and(|ids| {
+            ids.iter()
+                .any(|id| !results.iter().any(|result| &result.subject_id == id))
+        }) {
+            return Err(AppError::Validation("preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope".into()));
+        }
         Ok(MaintenancePreviewResult {
             rule_set_id,
             matcher_content_hash,
@@ -709,30 +797,52 @@ impl AppUseCase {
     async fn resolve_preview_policy(
         &self,
         matcher: MaintenancePreviewMatcher,
-    ) -> AppResult<MaintenancePolicy> {
+    ) -> AppResult<(
+        MaintenancePolicy,
+        MaintenanceRuleSubjectKind,
+        Vec<String>,
+        i64,
+    )> {
         match matcher {
             MaintenancePreviewMatcher::Stored { rule_set_id } => {
                 let rule_set = self.require_maintenance_rule_set(&rule_set_id).await?;
                 let detail = self.load_maintenance_rule_detail(rule_set).await?;
-                Ok(MaintenancePolicy {
-                    id: detail.rule_set.id,
-                    name: detail.rule_set.name,
-                    rego_source: detail.revision.rego_source,
-                })
+                Ok((
+                    MaintenancePolicy {
+                        id: detail.rule_set.id,
+                        name: detail.rule_set.name,
+                        rego_source: detail.revision.rego_source,
+                    },
+                    detail.rule_set.subject_kind,
+                    detail.rule_set.library_ids,
+                    detail.revision.grace_days,
+                ))
             }
             MaintenancePreviewMatcher::Inline {
+                library_ids,
+                subject_kind,
                 rego_source,
                 action_spec,
                 grace_days,
             } => {
                 let scratch_id = Id::new_rego_safe().0;
-                let prepared =
-                    prepare_matcher(&scratch_id, &rego_source, &action_spec, grace_days)?;
-                Ok(MaintenancePolicy {
-                    id: scratch_id,
-                    name: "preview".to_string(),
-                    rego_source: prepared.rego_source,
-                })
+                let prepared = prepare_matcher(
+                    &scratch_id,
+                    subject_kind,
+                    &rego_source,
+                    &action_spec,
+                    grace_days,
+                )?;
+                Ok((
+                    MaintenancePolicy {
+                        id: scratch_id,
+                        name: "preview".to_string(),
+                        rego_source: prepared.rego_source,
+                    },
+                    subject_kind,
+                    library_ids,
+                    grace_days,
+                ))
             }
         }
     }
@@ -742,7 +852,8 @@ impl AppUseCase {
         selection: &MaintenancePreviewSelection,
     ) -> AppResult<Vec<Title>> {
         match selection {
-            MaintenancePreviewSelection::Titles(title_ids) => {
+            MaintenancePreviewSelection::Titles(title_ids)
+            | MaintenancePreviewSelection::Subjects { title_ids, .. } => {
                 if title_ids.len() > MAINTENANCE_PREVIEW_MAX_TITLES {
                     return Err(AppError::Validation(format!(
                         "preview accepts at most {MAINTENANCE_PREVIEW_MAX_TITLES} titles, {} were requested",
@@ -755,13 +866,28 @@ impl AppUseCase {
                 let limit = limit
                     .unwrap_or(MAINTENANCE_PREVIEW_DEFAULT_TITLES)
                     .clamp(1, MAINTENANCE_PREVIEW_MAX_TITLES);
-                let mut titles = self
-                    .services
-                    .catalog
-                    .titles
-                    .list_for_libraries(None, std::slice::from_ref(library_id), None)
-                    .await?;
-                titles.truncate(limit);
+                let mut titles = Vec::new();
+                let mut after_id = None;
+                loop {
+                    let page = self
+                        .services
+                        .catalog
+                        .titles
+                        .list_page_after_id(after_id, MAINTENANCE_PREVIEW_MAX_TITLES)
+                        .await?;
+                    if page.is_empty() {
+                        break;
+                    }
+                    after_id = page.last().map(|title| title.id.clone());
+                    titles.extend(
+                        page.into_iter()
+                            .filter(|title| &title.library_id == library_id)
+                            .take(limit - titles.len()),
+                    );
+                    if titles.len() >= limit {
+                        break;
+                    }
+                }
                 Ok(titles)
             }
         }
@@ -828,6 +954,7 @@ struct PreparedMatcher {
 /// period is a real duration.
 fn prepare_matcher(
     rule_id: &str,
+    subject_kind: MaintenanceRuleSubjectKind,
     rego_source: &str,
     action_spec: &MaintenanceActionSpec,
     grace_days: i64,
@@ -842,7 +969,7 @@ fn prepare_matcher(
             "grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"
         )));
     }
-    validate_title_scope_action(action_spec)?;
+    validate_scope_action(subject_kind, action_spec)?;
 
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
     let validation = validate_maintenance_rule(&rewritten, rule_id)
@@ -874,6 +1001,27 @@ fn prepare_matcher(
 /// at execution, burning its three attempts into a terminal `Failed` candidate,
 /// so [`EXECUTABLE_TITLE_RULE_ACTIONS`] — the executor's own list — is the gate
 /// on both sides.
+pub(super) fn validate_scope_action(
+    scope: MaintenanceRuleSubjectKind,
+    spec: &MaintenanceActionSpec,
+) -> AppResult<()> {
+    if scope == MaintenanceRuleSubjectKind::Title {
+        return validate_title_scope_action(spec);
+    }
+    if !super::action_execution::supported_scope_actions(scope).contains(&spec.kind) {
+        return Err(AppError::Validation(
+            "action is not supported for this maintenance scope".into(),
+        ));
+    }
+    let subject = match scope {
+        MaintenanceRuleSubjectKind::Season => ActionSubjectKind::Season,
+        MaintenanceRuleSubjectKind::Episode => ActionSubjectKind::Episode,
+        _ => unreachable!(),
+    };
+    spec.validate(subject)
+        .map_err(|error| AppError::Validation(error.to_string()))
+}
+
 pub(super) fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
     if !EXECUTABLE_TITLE_RULE_ACTIONS.contains(&spec.kind) {
         return Err(AppError::Validation(title_rule_action_not_executable(

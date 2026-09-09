@@ -1054,6 +1054,10 @@ fn merge_cookie_headers(original: Option<&str>, solved: &str) -> Option<String> 
 /// and because the count must happen *after* the cooldown gate below: that gate
 /// can reject a request before it is dispatched, and a request that never left
 /// is not one the indexer served.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared dispatch boundary carries request, proxy, and accounting context explicitly"
+)]
 fn execute_request_with_extra_headers(
     client: &Client,
     request: &PluginHttpRequest,
@@ -1829,7 +1833,8 @@ mod tests {
         );
         policy.config.id = "tunnel-blocking-host".to_string();
         policy.config.username_encrypted = Some("operator".to_string());
-        policy.config.password_encrypted = Some("s3cret".to_string());
+        policy.config.private_key_encrypted =
+            Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.to_string());
 
         let host_for_request = origin_authority.clone();
         let response = tokio::task::spawn_blocking(move || {
@@ -1969,7 +1974,8 @@ mod tests {
         );
         policy.config.id = "tunnel-blocking-host-dead".to_string();
         policy.config.username_encrypted = Some("operator".to_string());
-        policy.config.password_encrypted = Some("s3cret".to_string());
+        policy.config.private_key_encrypted =
+            Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM.to_string());
 
         let host_for_request = host_port.clone();
         let error = tokio::task::spawn_blocking(move || {

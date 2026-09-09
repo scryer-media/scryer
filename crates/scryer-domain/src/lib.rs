@@ -1315,6 +1315,8 @@ pub enum ProxyProviderType {
     Socks4,
     Socks5,
     SshTunnel,
+    /// Multiplexed HTTP/3 CONNECT over an authenticated QUIC connection.
+    Http3,
     /// A userspace WireGuard tunnel Scryer brings up itself. Same family as
     /// [`Self::SshTunnel`] — it owns credentials and a lifecycle — but it
     /// authenticates with keys alone and has no trust-on-first-use step, so it
@@ -1328,6 +1330,7 @@ impl ProxyProviderType {
             Self::Byparr => "byparr",
             Self::Trawl => "trawl",
             Self::Http => "http",
+            Self::Http3 => "http3",
             Self::Socks4 => "socks4",
             Self::Socks5 => "socks5",
             Self::SshTunnel => "ssh_tunnel",
@@ -1340,6 +1343,7 @@ impl ProxyProviderType {
             "byparr" => Some(Self::Byparr),
             "trawl" => Some(Self::Trawl),
             "http" => Some(Self::Http),
+            "http3" => Some(Self::Http3),
             "socks4" => Some(Self::Socks4),
             "socks5" => Some(Self::Socks5),
             "ssh_tunnel" => Some(Self::SshTunnel),
@@ -1355,7 +1359,7 @@ impl ProxyProviderType {
         match self {
             Self::Byparr | Self::Trawl => ProxyKind::ChallengeSolver,
             Self::Http | Self::Socks4 | Self::Socks5 => ProxyKind::Transport,
-            Self::SshTunnel | Self::WireGuard => ProxyKind::Tunnel,
+            Self::SshTunnel | Self::WireGuard | Self::Http3 => ProxyKind::Tunnel,
         }
     }
 
@@ -4365,6 +4369,31 @@ pub struct PluginCatalogStatusRecord {
 }
 
 /// A user-authored rule set definition.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleEvaluationPhase {
+    Baseline,
+    #[default]
+    Additional,
+}
+
+impl RuleEvaluationPhase {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Additional => "additional",
+            Self::Baseline => "baseline",
+        }
+    }
+
+    pub fn from_storage_str(value: &str) -> Option<Self> {
+        match value {
+            "additional" => Some(Self::Additional),
+            "baseline" => Some(Self::Baseline),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleSet {
     pub id: String,
@@ -4373,6 +4402,12 @@ pub struct RuleSet {
     pub rego_source: String,
     pub enabled: bool,
     pub priority: i32,
+    #[serde(default)]
+    pub evaluation_phase: RuleEvaluationPhase,
+    #[serde(default)]
+    pub exclusive_group: Option<String>,
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
     /// Facets this rule applies to. Empty = all facets.
     pub applied_facets: Vec<MediaFacet>,
     pub created_at: DateTime<Utc>,
@@ -4449,26 +4484,30 @@ impl MaintenanceEvaluationMode {
 
 /// Granularity a maintenance rule set is scoped to.
 ///
-/// Season- and episode-scoped rule sets are an RFC concept but have no
-/// persistence or evaluation path yet, so this wave stores only `Title`. The
-/// column is a string so widening the enum stays a code change.
+/// Scope is immutable after creation. Omitted scope retains title behavior.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MaintenanceRuleSubjectKind {
     #[default]
     Title,
+    Season,
+    Episode,
 }
 
 impl MaintenanceRuleSubjectKind {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Title => "title",
+            Self::Season => "season",
+            Self::Episode => "episode",
         }
     }
 
     pub fn parse_storage(value: &str) -> Option<Self> {
         match value {
             "title" => Some(Self::Title),
+            "season" => Some(Self::Season),
+            "episode" => Some(Self::Episode),
             _ => None,
         }
     }
@@ -4619,7 +4658,9 @@ pub struct LifecycleCandidate {
     pub library_id: String,
     pub facet: String,
     pub subject_kind: String,
-    /// Increments per (rule, title) each time a fresh candidate is created, so
+    /// Title, collection, or episode ID, according to `subject_kind`.
+    pub subject_id: String,
+    /// Increments per (rule, subject kind, subject ID) for each fresh candidate, so
     /// a cancel-then-rematch is distinguishable from a continuing membership.
     pub match_generation: i64,
     pub state: MaintenanceCandidateState,
@@ -4657,6 +4698,8 @@ pub struct MaintenanceRuleExclusion {
     /// `None` means the exclusion is global.
     pub rule_set_id: Option<String>,
     pub title_id: String,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    pub subject_id: String,
     pub reason: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -4798,6 +4841,8 @@ pub struct LifecycleActionRun {
     pub rule_set_id: String,
     pub revision_number: i64,
     pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     /// Catalog wire name of the action, as stored on the candidate.
     pub action_kind: String,
     pub match_generation: i64,

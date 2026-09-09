@@ -29,6 +29,7 @@ CREATE TABLE proxy_configs (
     request_timeout_seconds INTEGER NOT NULL DEFAULT 60,
     is_enabled INTEGER NOT NULL DEFAULT 1,
     username_encrypted TEXT,
+    -- Transport proxy passwords. SSH authenticates with an Ed25519 private key.
     password_encrypted TEXT,
     remote_dns INTEGER NOT NULL DEFAULT 0,
     private_key_encrypted TEXT,

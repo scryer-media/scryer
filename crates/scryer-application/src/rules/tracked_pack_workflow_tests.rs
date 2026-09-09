@@ -102,6 +102,9 @@ fn tracked_fixture(
                     "package example\nimport rego.v1\nscore_entry[\"bonus\"] := {score}"
                 ),
                 applied_facets: vec!["movie".into()],
+                evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
+                default_enabled: true,
+                exclusive_group: None,
             })
             .collect(),
     }
@@ -124,6 +127,9 @@ async fn tracked_app() -> (
         ),
         enabled: true,
         priority: 17,
+        evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
+        exclusive_group: None,
+        disabled_reason: None,
         applied_facets: vec![MediaFacet::Movie],
         created_at: now,
         updated_at: now,
@@ -423,4 +429,364 @@ async fn tracked_pack_automatic_apply_rechecks_opt_in_and_version_boundary() {
     .await
     .unwrap();
     assert_eq!(tracked_score(&app), 400);
+}
+
+#[tokio::test]
+async fn builtin_trash_bootstrap_preserves_user_choices_and_rebuilds_after_restart() {
+    let (app, repo) = build_test_app_with_rule_repo(vec![], vec![]);
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    let first = repo.list_rule_pack_installations().await.unwrap().remove(0);
+    assert!(!first.auto_update);
+    let rules = repo.list_rule_sets().await.unwrap();
+    assert!(rules.iter().any(|rule| rule.enabled));
+    assert!(
+        rules
+            .iter()
+            .filter(|rule| rule.exclusive_group.is_some())
+            .all(|rule| !rule.enabled)
+    );
+    let actor = User::system_execution_actor();
+    let updated = app
+        .set_tracked_rule_pack_settings(&actor, &first.pack_id, &[], &[], true, first.revision)
+        .await
+        .unwrap();
+    assert_eq!(tracked_score(&app), 0);
+    *app.services.customization.user_rules.write().unwrap() =
+        scryer_rules::UserRulesEngine::empty();
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    let restarted = repo.list_rule_pack_installations().await.unwrap().remove(0);
+    assert_eq!(restarted.version, updated.version);
+    assert_eq!(restarted.revision, updated.revision);
+    assert!(restarted.auto_update);
+    assert_eq!(repo.list_rule_sets().await.unwrap().len(), rules.len());
+    assert!(
+        repo.list_rule_sets()
+            .await
+            .unwrap()
+            .iter()
+            .all(|rule| !rule.enabled)
+    );
+
+    let enabled = vec![first.members[0].template_id.clone()];
+    app.set_tracked_rule_pack_settings(
+        &actor,
+        &first.pack_id,
+        &enabled,
+        &[],
+        true,
+        restarted.revision,
+    )
+    .await
+    .unwrap();
+    let identity = app
+        .services
+        .customization
+        .user_rules
+        .read()
+        .unwrap()
+        .rule_identity();
+    *app.services.customization.user_rules.write().unwrap() =
+        scryer_rules::UserRulesEngine::empty();
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    assert_eq!(
+        app.services
+            .customization
+            .user_rules
+            .read()
+            .unwrap()
+            .rule_identity(),
+        identity
+    );
+}
+
+#[tokio::test]
+async fn builtin_trash_migration_disables_retired_sources_and_requires_repair_to_enable() {
+    let mut affected = legacy_managed_rule("retired_custom", "unused", "Keep my rule", "");
+    affected.is_managed = false;
+    affected.managed_key = None;
+    affected.priority = 42;
+    affected.rego_source = scryer_rules::rewrite_package_declaration(
+        "score_entry[\"legacy\"] := 7 if { \"x\" in input.release.guide_facts }",
+        &affected.id,
+    );
+    let mut already_disabled = affected.clone();
+    already_disabled.id = "already_disabled".into();
+    already_disabled.enabled = false;
+    already_disabled.disabled_reason = Some("operator disabled".into());
+    already_disabled.rego_source =
+        scryer_rules::rewrite_package_declaration(&affected.rego_source, &already_disabled.id);
+    let (app, repo) =
+        build_test_app_with_rule_repo(vec![], vec![affected.clone(), already_disabled.clone()]);
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    for original in [&affected, &already_disabled] {
+        let saved = repo.get_rule_set(&original.id).await.unwrap().unwrap();
+        assert!(!saved.enabled);
+        assert!(
+            saved
+                .disabled_reason
+                .as_deref()
+                .unwrap()
+                .contains("guide_facts")
+        );
+        if let Some(reason) = original.disabled_reason.as_deref() {
+            assert!(
+                saved
+                    .disabled_reason
+                    .as_deref()
+                    .unwrap()
+                    .starts_with(reason)
+            );
+        }
+        assert_eq!(saved.rego_source, original.rego_source);
+        assert_eq!(saved.created_at, original.created_at);
+        assert_eq!(saved.name, original.name);
+        assert_eq!(saved.priority, original.priority);
+        assert_eq!(saved.applied_facets, original.applied_facets);
+    }
+    let actor = User::system_execution_actor();
+    assert!(
+        app.toggle_rule_set(&actor, &affected.id, true)
+            .await
+            .is_err()
+    );
+    let repaired = app
+        .update_rule_set(
+            &actor,
+            affected.id.clone(),
+            None,
+            None,
+            Some("score_entry[\"repaired\"] := 7".into()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!repaired.enabled);
+    assert!(repaired.disabled_reason.is_none());
+    assert!(
+        app.toggle_rule_set(&actor, &affected.id, true)
+            .await
+            .unwrap()
+            .enabled
+    );
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    assert!(
+        repo.get_rule_set(&affected.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert!(
+        !repo
+            .get_rule_set(&already_disabled.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+}
+
+#[tokio::test]
+async fn builtin_trash_bootstrap_failure_preserves_saved_rules_and_live_engine() {
+    let (app, repo, _) = tracked_app().await;
+    let before = repo.rules_snapshot().await;
+    repo.fail_pack_apply
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(app.bootstrap_builtin_trash_rule_pack().await.is_err());
+    assert_eq!(repo.list_rule_pack_installations().await.unwrap().len(), 1);
+    assert_eq!(repo.rules_snapshot().await.len(), before.len());
+    assert_eq!(
+        repo.rules_snapshot().await[0].rego_source,
+        before[0].rego_source
+    );
+    assert_eq!(tracked_score(&app), 200);
+}
+
+#[tokio::test]
+async fn builtin_trash_adopts_locale_scope_and_preserves_it_through_copy() {
+    let mut legacy = legacy_managed_rule(
+        "existing_german",
+        "trash-guides:locale:german",
+        "My German policy",
+        "package old\nimport rego.v1\nscore_entry[\"old\"] := 5",
+    );
+    legacy.applied_facets = vec![MediaFacet::Movie];
+    legacy.managed_tag_filter = Some(vec!["german-library".into()]);
+    legacy.priority = 37;
+    let (app, repo) = build_test_app_with_rule_repo(vec![], vec![legacy.clone()]);
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    let adopted = repo.get_rule_set(&legacy.id).await.unwrap().unwrap();
+    assert!(adopted.enabled);
+    assert_eq!(adopted.id, legacy.id);
+    assert_eq!(adopted.priority, legacy.priority);
+    assert_eq!(adopted.created_at, legacy.created_at);
+    assert_eq!(adopted.applied_facets, legacy.applied_facets);
+    assert_eq!(adopted.managed_tag_filter, legacy.managed_tag_filter);
+    assert_ne!(adopted.rego_source, legacy.rego_source);
+
+    let check_scope = |rule_id: &str| {
+        let engine = app.services.customization.user_rules.read().unwrap();
+        let mut evaluator = engine.evaluator();
+        for (tags, required, facet, expected) in [
+            (vec![], vec![], "movie", false),
+            (vec!["german-library".into()], vec![], "movie", true),
+            (vec![], vec!["deu".into()], "movie", true),
+            (vec!["locale:de".into()], vec![], "movie", true),
+            (vec!["german-library".into()], vec![], "anime", false),
+        ] {
+            let mut input = multi_audio_rule_input("german-profile", false, false);
+            input.context.tags = tags;
+            input.profile.required_audio_languages = required;
+            input.release.languages_audio.clear();
+            let result = evaluator.evaluate(&input, facet).unwrap();
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+            assert_eq!(
+                result
+                    .entries
+                    .iter()
+                    .any(|entry| entry.rule_set_id == rule_id),
+                expected
+            );
+        }
+    };
+    check_scope(&adopted.id);
+    let copied = app
+        .copy_tracked_rule_pack_rule(
+            &User::system_execution_actor(),
+            &adopted.id,
+            "Custom German".into(),
+            "My preferences".into(),
+            adopted.rego_source.clone(),
+            adopted.applied_facets.clone(),
+            38,
+        )
+        .await
+        .unwrap();
+    assert_eq!(copied.evaluation_phase, adopted.evaluation_phase);
+    assert_eq!(copied.managed_tag_filter, adopted.managed_tag_filter);
+    assert!(
+        !repo
+            .get_rule_set(&adopted.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    check_scope(&copied.id);
+    app.bootstrap_builtin_trash_rule_pack().await.unwrap();
+    assert!(
+        !repo
+            .get_rule_set(&adopted.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert!(
+        repo.get_rule_set(&copied.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+}
+
+#[tokio::test]
+async fn tracked_pack_custom_baseline_keeps_phase_and_exclusive_group() {
+    let (app, repo) = build_test_app_with_rule_repo(vec![], vec![]);
+    let actor = User::system_execution_actor();
+    let mut pack = tracked_fixture("1.0.0", &[("a", 200), ("b", 900)]);
+    for template in &mut pack.templates {
+        template.evaluation_phase = scryer_domain::RuleEvaluationPhase::Baseline;
+        template.exclusive_group = Some("alternative-baselines".into());
+    }
+    assert!(
+        app.install_verified_rule_pack(&actor, &pack, &["a".into(), "b".into()])
+            .await
+            .is_err()
+    );
+    assert!(repo.list_rule_sets().await.unwrap().is_empty());
+    let installed = app
+        .install_verified_rule_pack(&actor, &pack, &["a".into()])
+        .await
+        .unwrap();
+    let original_id = &installed
+        .members
+        .iter()
+        .find(|member| member.template_id == "a")
+        .unwrap()
+        .rule_set_id;
+    let custom = app
+        .copy_tracked_rule_pack_rule(
+            &actor,
+            original_id,
+            "Custom baseline".into(),
+            "Customized".into(),
+            "score_entry[\"bonus\"] := 300".into(),
+            vec![MediaFacet::Movie],
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        custom.evaluation_phase,
+        scryer_domain::RuleEvaluationPhase::Baseline
+    );
+    assert_eq!(
+        custom.exclusive_group.as_deref(),
+        Some("alternative-baselines")
+    );
+    assert_eq!(tracked_score(&app), 300);
+    assert!(
+        app.set_tracked_rule_pack_settings(
+            &actor,
+            &installed.pack_id,
+            &["b".into()],
+            &[],
+            false,
+            2,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(tracked_score(&app), 300);
+    assert_eq!(
+        repo.get_rule_pack_installation(&installed.pack_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        2
+    );
+    assert!(
+        app.update_rule_set(
+            &actor,
+            custom.id.clone(),
+            None,
+            None,
+            Some("score_entry[\"cycle\"] := input.builtin_score.total".into()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        repo.get_rule_set(&custom.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .rego_source,
+        custom.rego_source
+    );
+    app.toggle_rule_set(&actor, &custom.id, false)
+        .await
+        .unwrap();
+    app.set_tracked_rule_pack_settings(&actor, &installed.pack_id, &["b".into()], &[], false, 2)
+        .await
+        .unwrap();
+    assert_eq!(tracked_score(&app), 900);
 }

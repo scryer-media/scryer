@@ -279,7 +279,7 @@ function formatTooltip(ep: CalendarEpisodeItem): string {
   return lines.join("\n");
 }
 
-type CalendarHoverPreview = {
+export type CalendarHoverPreview = {
   episode: CalendarEpisodeItem;
   anchor: {
     top: number;
@@ -302,7 +302,7 @@ function formatAirDateLabel(airDate: string | null): string | null {
   return time ? `${dateLabel} at ${time}` : dateLabel;
 }
 
-function CalendarEventHoverCard({
+export function CalendarEventHoverCard({
   preview,
   onMouseEnter,
   onMouseLeave,
@@ -344,67 +344,69 @@ function CalendarEventHoverCard({
   const availabilityPill = episodeAvailabilityPill(episode.mediaAvailability, t);
   const airDate = formatAirDateLabel(episode.airDate);
 
-  return createPortal(
-    <aside
-      role="dialog"
-      aria-label={`Watch options for ${episode.titleName}`}
-      className={`fc-scryer-hover-card${isMovie ? " is-movie" : " is-episode"}`}
-      style={{ left, top, width }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      <div
-        className="fc-scryer-hover-card-image-wrap"
-        style={artworkFallbackStyle(episode.id || episode.titleId, fallbackTone)}
+  return (
+    createPortal(
+      <aside
+        role="dialog"
+        aria-label={`Watch options for ${episode.titleName}`}
+        className={`fc-scryer-hover-card${isMovie ? " is-movie" : " is-episode"}`}
+        style={{ left, top, width }}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
       >
-        {episode.imageUrl && failedImageUrl !== episode.imageUrl ? (
-          <img
-            src={episode.imageUrl}
-            alt=""
-            className="fc-scryer-hover-card-image"
-            onError={() => setFailedImageUrl(episode.imageUrl)}
-          />
-        ) : null}
-      </div>
-      <div className="fc-scryer-hover-card-copy">
-        <div className="fc-scryer-hover-card-badges">
-          <span className="fc-scryer-hover-card-meta-badge">
-            {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
-          </span>
-          {badge ? <span className="fc-scryer-hover-card-meta-badge">{badge}</span> : null}
-          {availabilityPill ? (
+        <div
+          className="fc-scryer-hover-card-image-wrap"
+          style={artworkFallbackStyle(episode.id || episode.titleId, fallbackTone)}
+        >
+          {episode.imageUrl && failedImageUrl !== episode.imageUrl ? (
+            <img
+              src={episode.imageUrl}
+              alt=""
+              className="fc-scryer-hover-card-image"
+              onError={() => setFailedImageUrl(episode.imageUrl)}
+            />
+          ) : null}
+        </div>
+        <div className="fc-scryer-hover-card-copy">
+          <div className="fc-scryer-hover-card-badges">
             <span className="fc-scryer-hover-card-meta-badge">
-              {availabilityPill.label}
+              {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
             </span>
+            {badge ? <span className="fc-scryer-hover-card-meta-badge">{badge}</span> : null}
+            {availabilityPill ? (
+              <span className="fc-scryer-hover-card-meta-badge">
+                {availabilityPill.label}
+              </span>
+            ) : null}
+            {!episode.monitored ? (
+              <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
+            ) : null}
+          </div>
+          <h3 className="fc-scryer-hover-card-title">{episode.titleName}</h3>
+          {!isMovie && episode.episodeTitle ? (
+            <p className="fc-scryer-hover-card-episode-title">{episode.episodeTitle}</p>
           ) : null}
-          {!episode.monitored ? (
-            <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
+          {episode.overview ? (
+            <p className="fc-scryer-hover-card-overview">{episode.overview}</p>
           ) : null}
+          <WatchInMediaServerMenu
+            links={episode.playbackLinks}
+            showLabel
+            className="mt-2"
+          />
+          <div className="fc-scryer-hover-card-footer">
+            {airDate ? (
+              <span>
+                <CalendarClock aria-hidden="true" />
+                {airDate}
+              </span>
+            ) : null}
+            <span>{episode.libraryName ?? episode.libraryId}</span>
+          </div>
         </div>
-        <h3 className="fc-scryer-hover-card-title">{episode.titleName}</h3>
-        {!isMovie && episode.episodeTitle ? (
-          <p className="fc-scryer-hover-card-episode-title">{episode.episodeTitle}</p>
-        ) : null}
-        {episode.overview ? (
-          <p className="fc-scryer-hover-card-overview">{episode.overview}</p>
-        ) : null}
-        <WatchInMediaServerMenu
-          links={episode.playbackLinks}
-          showLabel
-          className="mt-2"
-        />
-        <div className="fc-scryer-hover-card-footer">
-          {airDate ? (
-            <span>
-              <CalendarClock aria-hidden="true" />
-              {airDate}
-            </span>
-          ) : null}
-          <span>{episode.libraryName ?? episode.libraryId}</span>
-        </div>
-      </div>
-    </aside>,
-    document.body,
+      </aside>,
+      document.body,
+    )
   );
 }
 

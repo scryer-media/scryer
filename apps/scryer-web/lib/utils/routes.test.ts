@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canAccessApiExplorer,
+  canAccessSettingsSection,
   canAccessDashboard,
   canAccessRecycleBinPage,
   canAccessSystemSection,
   defaultAccessibleRoute,
 } from "./routes.ts";
+
+test("API navigation and direct access require both the opt-in and system permission", () => {
+  for (const enabled of [false, undefined]) {
+    assert.equal(canAccessApiExplorer(true, enabled), false);
+  }
+  assert.equal(canAccessApiExplorer(false, true), false);
+  assert.equal(canAccessApiExplorer(true, true), true);
+  assert.equal(canAccessSettingsSection("general", true, true, false, true), false);
+  assert.equal(canAccessSettingsSection("general", false, false, true, false), true);
+});
 
 /**
  * `defaultAccessibleRoute` is what `/` resolves to once the signed-in user is

@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import type { MaintenanceRulesSection } from "@/components/root/types";
@@ -31,6 +31,7 @@ import type {
   MaintenanceGateKey,
   MaintenanceInstanceGates,
   MaintenancePreviewResult,
+  MaintenanceTestSubject,
   MaintenancePreviewSource,
   MaintenanceRuleSetDetail,
   MaintenanceRuleSetDraft,
@@ -107,6 +108,8 @@ type PendingArming = {
 };
 
 type PendingExclusion = {
+  subjectKind: string;
+  subjectId: string;
   titleId: string;
   titleName: string;
   ruleSetId: string;
@@ -164,6 +167,7 @@ export function SettingsMaintenanceRulesContainer({
     null,
   );
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewRequest = useRef(0);
 
   const [gates, setGates] = useState<MaintenanceInstanceGates | null>(null);
   /// True once the gates query has been refused. Reading the gates needs
@@ -690,7 +694,8 @@ export function SettingsMaintenanceRulesContainer({
     }
   };
 
-  const runPreview = useCallback(async () => {
+  const runPreview = useCallback(async (subject?: MaintenanceTestSubject) => {
+    const request = ++previewRequest.current;
     setPreviewing(true);
     setPreviewError(null);
     try {
@@ -700,20 +705,24 @@ export function SettingsMaintenanceRulesContainer({
             ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
             draft: previewSource === "draft" ? ruleSetDraft : undefined,
             descriptors: actionDescriptors,
+            titleIds: subject ? [subject.titleId] : undefined,
+            subjectIds: subject ? [subject.subjectId] : undefined,
             libraryId: previewLibraryId,
             limit: previewLimit,
           }),
         })
         .toPromise();
+      if (request !== previewRequest.current) return;
       if (error) throw error;
       setPreviewResult(data.previewMaintenanceRule as MaintenancePreviewResult);
     } catch (error) {
+      if (request !== previewRequest.current) return;
       setPreviewResult(null);
       setPreviewError(
         error instanceof Error ? error.message : t("status.failedToLoad"),
       );
     } finally {
-      setPreviewing(false);
+      if (request === previewRequest.current) setPreviewing(false);
     }
   }, [
     actionDescriptors,
@@ -725,6 +734,15 @@ export function SettingsMaintenanceRulesContainer({
     ruleSetDraft,
     t,
   ]);
+
+  // Results and sample targets belong to the matcher and library that produced
+  // them. Discard late responses when the operator changes those inputs.
+  useEffect(() => {
+    previewRequest.current += 1;
+    setPreviewResult(null);
+    setPreviewError(null);
+    setPreviewing(false);
+  }, [runPreview]);
 
   // ── Instance gates ──────────────────────────────────────────────────
 
@@ -858,7 +876,7 @@ export function SettingsMaintenanceRulesContainer({
                 candidateCount: actionable.length,
                 sampleTitles: actionable
                   .slice(0, DESTRUCTIVE_ARMING_PREVIEW_TITLES)
-                  .map((candidate) => candidate.titleName),
+                  .map((candidate) => candidate.subjectKind === "title" ? candidate.titleName : `${candidate.titleName} · ${candidate.subjectLabel}`),
                 loading: false,
               }
             : prev,
@@ -1009,7 +1027,8 @@ export function SettingsMaintenanceRulesContainer({
   const excludeCandidate = useCallback((candidate: MaintenanceCandidate) => {
     setPendingExclusion({
       titleId: candidate.titleId,
-      titleName: candidate.titleName,
+      subjectKind: candidate.subjectKind, subjectId: candidate.subjectId,
+      titleName: candidate.subjectKind === "title" ? candidate.titleName : `${candidate.titleName} · ${candidate.subjectLabel}`,
       /// Defaults to the rule the candidate came from rather than to a global
       /// exclusion: excluding a title from every maintenance rule at once is a
       /// bigger decision than the row the operator clicked.
@@ -1026,6 +1045,7 @@ export function SettingsMaintenanceRulesContainer({
         .mutation(excludeMaintenanceSubjectMutation, {
           input: excludeMaintenanceSubjectInput({
             titleId: pendingExclusion.titleId,
+            subjectKind: pendingExclusion.subjectKind, subjectId: pendingExclusion.subjectId,
             ruleSetId: maintenanceFilterArgument(pendingExclusion.ruleSetId) ?? null,
             reason: pendingExclusion.reason,
           }),

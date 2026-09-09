@@ -120,6 +120,13 @@ export function canAccessDashboard(canManageSystemSettings: boolean): boolean {
   return canManageSystemSettings;
 }
 
+export function canAccessApiExplorer(
+  canManageSystemSettings: boolean,
+  enabled: boolean | undefined,
+): boolean {
+  return canManageSystemSettings && enabled === true;
+}
+
 export function defaultSettingsSection(
   canManageSystemSettings: boolean,
   canManageCatalogSettings: boolean,

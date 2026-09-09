@@ -49,10 +49,12 @@ export function TitleAutocompletePicker({
   const anchorRef = React.useRef<HTMLDivElement | null>(null);
   const searchRequestId = React.useRef(0);
   const hydrateRequestId = React.useRef(0);
+  const listboxId = React.useId();
 
   const [query, setQuery] = React.useState("");
   const [open, setOpen] = React.useState(false);
   const [results, setResults] = React.useState<TitleRecord[]>([]);
+  const [activeResultIndex, setActiveResultIndex] = React.useState(-1);
   const [loading, setLoading] = React.useState(false);
   const [searchError, setSearchError] = React.useState<string | null>(null);
   const [searchPerformed, setSearchPerformed] = React.useState(false);
@@ -79,6 +81,17 @@ export function TitleAutocompletePicker({
   React.useEffect(() => {
     refreshMenuWidth();
   }, [refreshMenuWidth, resolvedSelectedTitle, query]);
+
+  React.useEffect(() => {
+    setActiveResultIndex((current) => (current >= results.length ? -1 : current));
+  }, [results]);
+
+  React.useEffect(() => {
+    if (!open || activeResultIndex < 0) return;
+    document
+      .getElementById(`${listboxId}-option-${activeResultIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeResultIndex, listboxId, open]);
 
   React.useEffect(() => {
     if (!normalizedSelectedTitleId) {
@@ -194,6 +207,7 @@ export function TitleAutocompletePicker({
     setQuery("");
     setOpen(false);
     setResults([]);
+    setActiveResultIndex(-1);
     setSearchError(null);
     setSearchPerformed(false);
     setHydratedTitle(null);
@@ -206,6 +220,7 @@ export function TitleAutocompletePicker({
       setQuery("");
       setOpen(false);
       setResults([]);
+      setActiveResultIndex(-1);
       setSearchError(null);
       setSearchPerformed(false);
       setHydratedTitle(title);
@@ -242,7 +257,13 @@ export function TitleAutocompletePicker({
           </div>
         </div>
       ) : (
-        <Popover open={open} onOpenChange={setOpen}>
+        <Popover
+          open={open}
+          onOpenChange={(nextOpen) => {
+            setOpen(nextOpen);
+            if (!nextOpen) setActiveResultIndex(-1);
+          }}
+        >
           <PopoverAnchor asChild>
             <div ref={anchorRef} className="w-full">
               <Input
@@ -250,9 +271,36 @@ export function TitleAutocompletePicker({
                 onChange={(event) => {
                   const nextValue = event.target.value;
                   setQuery(nextValue);
+                  setResults([]);
+                  setActiveResultIndex(-1);
                   if (nextValue.trim().length < MIN_SEARCH_LENGTH) {
                     setOpen(false);
                   }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setOpen(false);
+                    setActiveResultIndex(-1);
+                    return;
+                  }
+                  if (event.key === "Enter") {
+                    const activeResult = results[activeResultIndex];
+                    if (open && activeResult) {
+                      event.preventDefault();
+                      handleSelect(activeResult);
+                    }
+                    return;
+                  }
+                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                  if (results.length === 0) return;
+                  event.preventDefault();
+                  setOpen(true);
+                  setActiveResultIndex((current) => {
+                    if (event.key === "ArrowDown") {
+                      return current < 0 ? 0 : (current + 1) % results.length;
+                    }
+                    return current <= 0 ? results.length - 1 : current - 1;
+                  });
                 }}
                 onFocus={() => {
                   if (query.trim().length >= MIN_SEARCH_LENGTH) {
@@ -262,6 +310,15 @@ export function TitleAutocompletePicker({
                 }}
                 placeholder={placeholder ?? t("queue.assignTitlePlaceholder")}
                 aria-label={ariaLabel}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={open}
+                aria-controls={open ? listboxId : undefined}
+                aria-activedescendant={
+                  activeResultIndex >= 0
+                    ? `${listboxId}-option-${activeResultIndex}`
+                    : undefined
+                }
                 disabled={disabled}
               />
             </div>
@@ -273,7 +330,7 @@ export function TitleAutocompletePicker({
             style={menuWidth ? { width: menuWidth } : undefined}
             onOpenAutoFocus={(event) => event.preventDefault()}
           >
-            <div className="max-h-80 overflow-y-auto p-2">
+            <div id={listboxId} role="listbox" className="max-h-80 overflow-y-auto p-2">
               {loading ? (
                 <div className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -290,7 +347,7 @@ export function TitleAutocompletePicker({
               ) : null}
               {!loading && !searchError && results.length > 0 ? (
                 <div className="space-y-1">
-                  {results.map((title) => {
+                  {results.map((title, index) => {
                     const facetLabel = sectionLabelForFacet(t, title.facet);
                     const posterUrl = selectPosterVariantUrl(
                       title.posterUrl,
@@ -299,9 +356,16 @@ export function TitleAutocompletePicker({
                     return (
                       <button
                         key={title.id}
+                        id={`${listboxId}-option-${index}`}
                         type="button"
+                        role="option"
+                        aria-selected={index === activeResultIndex}
                         onClick={() => handleSelect(title)}
-                        className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
+                        onMouseMove={() => setActiveResultIndex(index)}
+                        className={cn(
+                          "flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent",
+                          index === activeResultIndex && "bg-accent",
+                        )}
                       >
                         <TitlePosterSlot
                           src={posterUrl}

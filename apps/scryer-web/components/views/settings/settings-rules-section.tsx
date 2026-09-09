@@ -95,7 +95,10 @@ type SettingsRulesSectionProps = {
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
-  testScoring?: React.ReactNode;
+  testScoring?: (options: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => React.ReactNode;
   trackedRulePacks?: React.ReactNode;
   installTrackedRulePack: (packId: string, templateIds: string[]) => Promise<void> | void;
   installingRulePackId: string | null;
@@ -304,7 +307,8 @@ import rego.v1
 
 # Return a map of score codes to point deltas.
 # Positive values boost the release, negative values penalize it.
-# Use scryer.block_score() to hard-block a release.
+# scryer.block_score() contributes -10000; other rules can offset it.
+# Mandatory profile requirements still apply.
 
 score_entry["dual_audio_bonus"] := 500 if {
     input.release.is_dual_audio
@@ -1021,6 +1025,7 @@ export function SettingsRulesSection({
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
+  const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
     () => getRuleValidationDiagnostics(validationResult, ruleSetDraft.regoSource),
     [ruleSetDraft.regoSource, validationResult],
@@ -1076,6 +1081,11 @@ export function SettingsRulesSection({
                     <span id={selectorId("settings-rule-name", record.name)}>
                       {record.name}
                     </span>
+                    {record.disabledReason ? (
+                      <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
+                        {record.disabledReason}
+                      </p>
+                    ) : null}
                     {record.isManaged && record.managedKey ? (
                       <ManagedBadge managedKey={record.managedKey} />
                     ) : null}
@@ -1106,7 +1116,7 @@ export function SettingsRulesSection({
                         }
                         tone={record.enabled ? "disabled" : "enabled"}
                         onClick={() => void toggleRuleSetEnabled(record)}
-                        disabled={mutatingRuleSetId === record.id}
+                        disabled={mutatingRuleSetId === record.id || (!record.enabled && Boolean(record.disabledReason))}
                       >
                         <Power className="h-4 w-4" />
                       </IconButton>
@@ -1170,6 +1180,11 @@ export function SettingsRulesSection({
             </CardHeader>
             <CardContent>
               <form id="settings-rule-form" className="space-y-3" onSubmit={submitRuleSet}>
+                {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason ? (
+                  <p role="status" className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400">
+                    {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason}
+                  </p>
+                ) : null}
                 <div className="grid gap-3 md:grid-cols-3">
                   <label>
                     <Label className="mb-2 block">{t("label.name")}</Label>
@@ -1289,9 +1304,10 @@ export function SettingsRulesSection({
                 </div>
 
                 {editorMode !== "copy" ? (
-                  <label className="flex items-center gap-2">
+                  <label className="flex h-9 items-center gap-3">
                     <Checkbox
                       id="settings-rule-enabled"
+                      className="size-9 rounded-md data-[state=checked]:border-primary data-[state=checked]:bg-primary focus-visible:border-primary focus-visible:ring-primary/30"
                       checked={ruleSetDraft.enabled}
                       onCheckedChange={(value) =>
                         setRuleSetDraft((prev) => ({
@@ -1354,6 +1370,16 @@ export function SettingsRulesSection({
                       ? t("settings.ruleValidating")
                       : t("settings.ruleValidate")}
                   </Button>
+                  {testScoring ? (
+                    <Button
+                      id="settings-rule-test"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setIsTestScoringOpen((open) => !open)}
+                    >
+                      Test
+                    </Button>
+                  ) : null}
                   <Button
                     id="settings-rule-cancel"
                     type="button"
@@ -1364,7 +1390,14 @@ export function SettingsRulesSection({
                   </Button>
                 </div>
               </form>
-              {testScoring ? <div className="mt-3">{testScoring}</div> : null}
+              {testScoring ? (
+                <div className="mt-3">
+                  {testScoring({
+                    open: isTestScoringOpen,
+                    onOpenChange: setIsTestScoringOpen,
+                  })}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           {editorMode === "edit" ? (

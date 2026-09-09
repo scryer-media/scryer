@@ -572,6 +572,15 @@ fn decode_grab_result(
             )));
         }
     };
+    // Shipped Newznab-family plugins report unknown actions with an empty
+    // object. Treat only that legacy reply as Unsupported; nonempty malformed
+    // replies must still fail instead of triggering another download.
+    if payload
+        .as_object()
+        .is_some_and(|payload| payload.is_empty())
+    {
+        return Ok(None);
+    }
     let payload: IndexerGrabPayload = serde_json::from_value(payload).map_err(|error| {
         AppError::Repository(format!(
             "indexer download resolution returned an invalid grab payload: {error}"
@@ -655,11 +664,31 @@ fn decode_search_result(
             };
             Err(AppError::temporary_unavailable(message, retry_after))
         }
-        PluginResult::Err(error) => Err(AppError::Repository(format!(
-            "{context}: plugin error {:?}: {}",
-            error.code, error.public_message
-        ))),
+        PluginResult::Err(error) => Err(indexer_search_plugin_error(error, context)),
     }
+}
+
+/// Component plugins deliberately keep unexpected trap details out of their
+/// public error. An upstream's explicit API-key rejection is safe, actionable
+/// information, though, and the guest currently carries it only in that debug
+/// detail. Promote the category without relaying the untrusted detail itself.
+fn indexer_search_plugin_error(error: PluginError, context: &str) -> AppError {
+    let is_api_key_rejection = error.public_message == "indexer component failed"
+        && error.debug_message.as_deref().is_some_and(|message| {
+            let normalized = message.to_ascii_lowercase();
+            (normalized.contains("api key") || normalized.contains("apikey"))
+                && (normalized.contains("invalid")
+                    || normalized.contains("rejected")
+                    || normalized.contains("error"))
+        });
+    if is_api_key_rejection {
+        return AppError::Validation("The indexer rejected the API key.".to_string());
+    }
+
+    AppError::Repository(format!(
+        "{context}: plugin error {:?}: {}",
+        error.code, error.public_message
+    ))
 }
 
 fn host_incomplete_reason(reason: PluginIncompleteReason) -> HostIncompleteReason {
@@ -1766,6 +1795,33 @@ mod tests {
     }
 
     #[test]
+    fn grab_empty_legacy_reply_keeps_host_fetch_available() {
+        // Newznab, Torznab, and AnimeTosho return {} for unknown actions.
+        let resolved = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({}),
+        }))
+        .expect("a legacy unsupported grab must retain the host fetch path");
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn grab_nonempty_malformed_replies_do_not_fall_back() {
+        for payload in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!({"body": [100, 101]}),
+            serde_json::json!({"url": null}),
+            serde_json::json!({"error": "authentication failed"}),
+        ] {
+            assert!(
+                decode_grab_result(PluginResult::Ok(PluginActionResponse { payload })).is_err(),
+                "a malformed grab response must not trigger a second download"
+            );
+        }
+    }
+
+    #[test]
     fn grab_unsupported_keeps_router_fallback_available() {
         let resolved = decode_grab_result(PluginResult::Err(PluginError {
             code: PluginErrorCode::Unsupported,
@@ -1835,6 +1891,31 @@ mod tests {
                 retry_after: Some(std::time::Duration::from_secs(45)),
             }
         );
+    }
+
+    #[test]
+    fn component_api_key_rejection_is_actionable_without_exposing_debug_detail() {
+        let error = decode_search_result(
+            PluginResult::Err(PluginError {
+                code: PluginErrorCode::Temporary,
+                public_message: "indexer component failed".to_string(),
+                debug_message: Some(
+                    "Newznab API key error 100: Invalid API Key (key=secret)".to_string(),
+                ),
+                retry_after_seconds: None,
+                details: None,
+            }),
+            true,
+            "indexer search",
+        )
+        .err()
+        .expect("an API-key rejection must fail the search");
+
+        assert_eq!(
+            error.to_string(),
+            "validation: The indexer rejected the API key."
+        );
+        assert!(!error.to_string().contains("secret"));
     }
 
     #[test]

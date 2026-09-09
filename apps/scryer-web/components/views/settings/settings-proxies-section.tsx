@@ -9,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { InfoHelp } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,7 +54,6 @@ import {
   formatProxyProvider,
   groupProxiesByFamily,
   isProxyProviderType,
-  isTunnelProxyProvider,
   isWireguardProxyProvider,
   supportsProxyCredentials,
   supportsProxyHostKey,
@@ -92,6 +92,7 @@ export type SettingsProxiesSectionProps = {
    */
   importWireguardConfig: (text: string) => boolean;
   testProxy: (proxy: ProxyRecord) => Promise<void> | void;
+  testForm?: React.ReactNode;
   deleteProxy: (proxy: ProxyRecord) => Promise<void> | void;
   requestResetHostKey: (proxy: ProxyRecord) => void;
   copyTunnelPublicKey: (publicKey: string) => Promise<void> | void;
@@ -118,6 +119,13 @@ function ProxyActionButton({
 /// whole width without the two drifting apart.
 const PROXY_TABLE_COLUMN_COUNT = 7;
 
+function redactWireguardPrivateKey(value: string): string {
+  if (value.length <= 10) {
+    return value ? "••••••" : value;
+  }
+  return `${value.slice(0, 6)}••••••••${value.slice(-4)}`;
+}
+
 export function SettingsProxiesSection({
   proxyConfigs,
   proxyDraft,
@@ -134,6 +142,7 @@ export function SettingsProxiesSection({
   editProxy,
   importWireguardConfig,
   testProxy,
+  testForm,
   deleteProxy,
   requestResetHostKey,
   copyTunnelPublicKey,
@@ -143,12 +152,19 @@ export function SettingsProxiesSection({
   // The paste buffer is transient: it is what the operator dropped in, not part
   // of the proxy being edited, so it lives here and never reaches the draft.
   const [configText, setConfigText] = React.useState("");
+  const [isWireguardPrivateKeyFocused, setIsWireguardPrivateKeyFocused] =
+    React.useState(false);
+  const [isWireguardDetailsOpen, setIsWireguardDetailsOpen] =
+    React.useState(
+      () => editingProxyId !== null && isWireguardProxyProvider(proxyDraft.providerType),
+    );
   const configFileRef = React.useRef<HTMLInputElement>(null);
 
   const applyConfigText = React.useCallback(
     (text: string) => {
       if (importWireguardConfig(text)) {
         setConfigText("");
+        setIsWireguardDetailsOpen(true);
       }
     },
     [importWireguardConfig],
@@ -188,12 +204,13 @@ export function SettingsProxiesSection({
   const acceptsCredentials = supportsProxyCredentials(proxyDraft.providerType);
   const acceptsRemoteDns = supportsProxyRemoteDns(proxyDraft.providerType);
   const acceptsPrivateKey = supportsProxyPrivateKey(proxyDraft.providerType);
-  const isTunnelDraft = isTunnelProxyProvider(proxyDraft.providerType);
+  const isTunnelDraft = proxyDraft.providerType === "ssh_tunnel";
   // The tunnel family splits in two: an SSH tunnel has credentials, a key
   // passphrase and a pinned host key; WireGuard has none of those and six
   // fields of its own. The API refuses each half on the other, so the editor
   // shows exactly one of them.
   const isWireguardDraft = isWireguardProxyProvider(proxyDraft.providerType);
+  const showProxyDetails = !isWireguardDraft || isWireguardDetailsOpen;
   const acceptsWireguardFields = supportsProxyWireguardFields(
     proxyDraft.providerType,
   );
@@ -205,6 +222,12 @@ export function SettingsProxiesSection({
     supportsProxyPrivateKeyPassphrase(proxyDraft.providerType) &&
     !proxyDraft.clearPrivateKey &&
     (proxyDraft.privateKey.trim() !== "" || proxyDraft.hasStoredPrivateKey);
+
+  React.useEffect(() => {
+    if (editingProxyId !== null && isWireguardDraft) {
+      setIsWireguardDetailsOpen(true);
+    }
+  }, [editingProxyId, isWireguardDraft]);
 
   const editingProxy = React.useMemo(
     () =>
@@ -221,11 +244,12 @@ export function SettingsProxiesSection({
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <CardTitle className="flex items-center gap-2 text-base">
               {t("settings.proxies")}
+              <InfoHelp
+                ariaLabel={t("settings.proxies")}
+                text={t("settings.proxiesHelp")}
+              />
             </CardTitle>
           </div>
-          <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
-            {t("settings.proxiesHelp")}
-          </p>
           <div className="overflow-x-auto">
             <Table id="settings-indexer-proxies-table">
               <TableHeader>
@@ -273,11 +297,6 @@ export function SettingsProxiesSection({
                               {t("settings.proxyCredentialsStored")}
                             </span>
                           ) : null}
-                          {proxy.hasPrivateKey ? (
-                            <span className="ml-2 text-xs text-muted-foreground">
-                              {t("settings.proxyPrivateKeyStored")}
-                            </span>
-                          ) : null}
                           {proxy.hasPresharedKey ? (
                             <span className="ml-2 text-xs text-muted-foreground">
                               {t("settings.proxyPresharedKeyStored")}
@@ -312,7 +331,7 @@ export function SettingsProxiesSection({
                               tone="search"
                               onClick={() => void testProxy(proxy)}
                               disabled={
-                                testingProxyId === proxy.id ||
+                                testingProxyId !== null ||
                                 mutatingProxyId === proxy.id
                               }
                               label={t("settings.proxyTest")}
@@ -362,6 +381,7 @@ export function SettingsProxiesSection({
             </Table>
           </div>
         </div>
+        {testForm}
         {isProxyEditorOpen ? (
           <Card>
             <CardHeader>
@@ -377,69 +397,10 @@ export function SettingsProxiesSection({
                 className="flex flex-col gap-3"
                 onSubmit={submitProxy}
               >
-                {/* First, because a whole configuration file is what an
-                    operator is handed: filling the form from it beats
-                    transcribing eight fields by hand, and every field below
-                    still accepts the same lines pasted one at a time. */}
-                {isWireguardDraft ? (
-                  <div
-                    id="settings-indexer-proxy-import-config"
-                    className="rounded border border-border bg-card/60 p-3"
-                  >
-                    <div className="mb-1 text-sm font-medium">
-                      {t("settings.proxyImportConfig")}
-                    </div>
-                    <p className="mb-2 text-xs text-muted-foreground">
-                      {t("settings.proxyImportConfigHelp")}
-                    </p>
-                    <Textarea
-                      id="settings-indexer-proxy-import-config-text"
-                      className="min-h-24 font-mono text-xs"
-                      spellCheck={false}
-                      autoComplete="off"
-                      rows={5}
-                      value={configText}
-                      placeholder={
-                        "[Interface]\nPrivateKey = …\nAddress = 10.6.0.2/32\n\n[Peer]\nPublicKey = …\nEndpoint = vpn.example.com:51820"
-                      }
-                      onChange={(event) => setConfigText(event.target.value)}
-                    />
-                    <input
-                      id="settings-indexer-proxy-import-config-file"
-                      ref={configFileRef}
-                      type="file"
-                      accept=".conf,.txt,text/plain"
-                      className="hidden"
-                      onChange={(event) => {
-                        void readConfigFile(event);
-                      }}
-                    />
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        id="settings-indexer-proxy-import-config-apply"
-                        type="button"
-                        variant="outline"
-                        disabled={configText.trim() === ""}
-                        onClick={() => applyConfigText(configText)}
-                      >
-                        {t("settings.proxyImportConfigApply")}
-                      </Button>
-                      <Button
-                        id="settings-indexer-proxy-import-config-choose"
-                        type="button"
-                        variant="outline"
-                        onClick={() => configFileRef.current?.click()}
-                      >
-                        <Upload className="h-4 w-4" />
-                        {t("settings.proxyImportConfigFile")}
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
                 <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto]">
                   <label>
                     <Label
-                      className="mb-2 block"
+                      className="mb-2 h-5"
                       htmlFor="settings-indexer-proxy-provider-type"
                     >
                       {t("settings.provider")}
@@ -449,6 +410,7 @@ export function SettingsProxiesSection({
                       disabled={editingProxyId !== null}
                       onValueChange={(value) => {
                         if (!isProxyProviderType(value)) return;
+                        setIsWireguardDetailsOpen(value !== "wireguard");
                         changeProxyProvider(value);
                       }}
                     >
@@ -480,7 +442,7 @@ export function SettingsProxiesSection({
                     </Select>
                   </label>
                   <label>
-                    <Label className="mb-2 block" htmlFor="settings-indexer-proxy-name">
+                    <Label className="mb-2 h-5" htmlFor="settings-indexer-proxy-name">
                       {t("label.name")}
                     </Label>
                     <Input
@@ -497,10 +459,22 @@ export function SettingsProxiesSection({
                   </label>
                   <label>
                     <Label
-                      className="mb-2 block"
+                      className="mb-2 h-5 gap-1.5"
                       htmlFor="settings-indexer-proxy-base-url"
                     >
-                      {isTunnelDraft ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
+                      {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3"
+                        ? t("settings.proxyEndpoint")
+                        : t("settings.baseUrl")}
+                      {isTunnelDraft || isWireguardDraft ? (
+                        <InfoHelp
+                          ariaLabel={t("settings.proxyEndpoint")}
+                          text={
+                            isWireguardDraft
+                              ? t("settings.proxyEndpointHelpWireguard")
+                              : t("settings.proxyEndpointHelp")
+                          }
+                        />
+                      ) : null}
                     </Label>
                     <Input
                       id="settings-indexer-proxy-base-url"
@@ -515,8 +489,8 @@ export function SettingsProxiesSection({
                     />
                   </label>
                   <label>
-                    <Label className="mb-2 block" htmlFor="settings-indexer-proxy-timeout">
-                      {t("settings.proxyTimeout")}
+                    <Label className="mb-2 h-5" htmlFor="settings-indexer-proxy-timeout">
+                      {t("settings.proxyTimeout")} <span className="text-muted-foreground">(s)</span>
                     </Label>
                     <Input
                       id="settings-indexer-proxy-timeout"
@@ -533,29 +507,72 @@ export function SettingsProxiesSection({
                       }
                     />
                   </label>
-                  <label className="flex items-center gap-2 self-end pb-2">
-                    <Checkbox
-                      id="settings-indexer-proxy-enabled"
-                      checked={proxyDraft.isEnabled}
-                      onCheckedChange={(value) =>
-                        setProxyDraft((prev) => ({
-                          ...prev,
-                          isEnabled: value === true,
-                        }))
-                      }
-                    />
-                    <span>{t("label.enabled")}</span>
-                  </label>
                 </div>
-                {isTunnelDraft ? (
-                  <p
-                    id="settings-indexer-proxy-endpoint-help"
-                    className="text-xs text-muted-foreground"
+                {isWireguardDraft && !isWireguardDetailsOpen ? (
+                  <div
+                    id="settings-indexer-proxy-import-config"
+                    className="rounded border border-border bg-card/60 p-3"
                   >
-                    {isWireguardDraft
-                      ? t("settings.proxyEndpointHelpWireguard")
-                      : t("settings.proxyEndpointHelp")}
-                  </p>
+                    <div className="mb-1 flex items-center gap-1 text-sm font-medium">
+                      {t("settings.proxyImportConfig")}
+                      <InfoHelp
+                        ariaLabel={t("settings.proxyImportConfig")}
+                        text={t("settings.proxyImportConfigHelp")}
+                      />
+                    </div>
+                    <Textarea
+                      id="settings-indexer-proxy-import-config-text"
+                      className="min-h-24 font-mono text-xs"
+                      spellCheck={false}
+                      autoComplete="off"
+                      rows={5}
+                      value={configText}
+                      placeholder={
+                        "[Interface]\nPrivateKey = …\nAddress = 10.6.0.2/32\n\n[Peer]\nPublicKey = …\nEndpoint = vpn.example.com:51820"
+                      }
+                      onChange={(event) => setConfigText(event.target.value)}
+                    />
+                    <input
+                      id="settings-indexer-proxy-import-config-file"
+                      ref={configFileRef}
+                      type="file"
+                      accept=".conf,.txt,text/plain"
+                      className="hidden"
+                      onChange={(event) => {
+                        void readConfigFile(event);
+                      }}
+                    />
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        id="settings-indexer-proxy-import-config-apply"
+                        type="button"
+                        variant="outline"
+                        disabled={configText.trim() === ""}
+                        onClick={() => applyConfigText(configText)}
+                      >
+                        {configText.trim() === ""
+                          ? t("settings.proxyImportConfigApply")
+                          : t("setup.next")}
+                      </Button>
+                      <Button
+                        id="settings-indexer-proxy-import-config-choose"
+                        type="button"
+                        variant="outline"
+                        onClick={() => configFileRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {t("settings.proxyImportConfigFile")}
+                      </Button>
+                      <Button
+                        id="settings-indexer-proxy-import-config-manual"
+                        type="button"
+                        variant="outline"
+                        onClick={() => setIsWireguardDetailsOpen(true)}
+                      >
+                        Enter details manually
+                      </Button>
+                    </div>
+                  </div>
                 ) : null}
                 {acceptsCredentials || acceptsRemoteDns ? (
                   <div
@@ -570,6 +587,9 @@ export function SettingsProxiesSection({
                             htmlFor="settings-indexer-proxy-username"
                           >
                             {t("settings.proxyUsername")}
+                            {!isTunnelDraft ? (
+                              <span className="text-muted-foreground"> (optional)</span>
+                            ) : null}
                           </Label>
                           <Input
                             id="settings-indexer-proxy-username"
@@ -591,51 +611,59 @@ export function SettingsProxiesSection({
                             }
                           />
                         </label>
-                        <label>
-                          <Label
-                            className="mb-2 block"
-                            htmlFor="settings-indexer-proxy-password"
-                          >
-                            {t("settings.proxyPassword")}
-                          </Label>
-                          <Input
-                            id="settings-indexer-proxy-password"
-                            type="password"
-                            autoComplete="new-password"
-                            value={proxyDraft.password}
-                            disabled={
-                              proxyDraft.clearCredentials || proxyDraft.clearPassword
-                            }
-                            placeholder={
-                              proxyDraft.hasStoredCredentials
-                                ? t("settings.proxyCredentialUnchanged")
-                                : undefined
-                            }
-                            onChange={(event) =>
-                              setProxyDraft((prev) => ({
-                                ...prev,
-                                password: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
+                        {!isTunnelDraft ? (
+                          <label>
+                            <Label
+                              className="mb-2 block"
+                              htmlFor="settings-indexer-proxy-password"
+                            >
+                              {t("settings.proxyPassword")}
+                              <span className="text-muted-foreground"> (optional)</span>
+                            </Label>
+                            <Input
+                              id="settings-indexer-proxy-password"
+                              type="password"
+                              autoComplete="new-password"
+                              ignorePasswordManagers
+                              value={proxyDraft.password}
+                              disabled={proxyDraft.clearCredentials}
+                              placeholder={
+                                proxyDraft.hasStoredCredentials
+                                  ? t("settings.proxyCredentialUnchanged")
+                                  : undefined
+                              }
+                              onChange={(event) =>
+                                setProxyDraft((prev) => ({
+                                  ...prev,
+                                  password: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                        ) : null}
                       </>
                     ) : null}
                     <div className="flex flex-col justify-end gap-2 pb-2">
                       {acceptsRemoteDns ? (
-                        <label className="flex items-center gap-2">
-                          <Checkbox
-                            id="settings-indexer-proxy-remote-dns"
-                            checked={proxyDraft.remoteDns}
-                            onCheckedChange={(value) =>
-                              setProxyDraft((prev) => ({
-                                ...prev,
-                                remoteDns: value === true,
-                              }))
-                            }
+                        <div className="flex items-center gap-1">
+                          <label className="flex items-center gap-2">
+                            <Checkbox
+                              id="settings-indexer-proxy-remote-dns"
+                              checked={proxyDraft.remoteDns}
+                              onCheckedChange={(value) =>
+                                setProxyDraft((prev) => ({
+                                  ...prev,
+                                  remoteDns: value === true,
+                                }))
+                              }
+                            />
+                            <span>{t("settings.proxyRemoteDns")}</span>
+                          </label>
+                          <InfoHelp
+                            ariaLabel={t("settings.proxyRemoteDns")}
+                            text={t("settings.proxyRemoteDnsHelp")}
                           />
-                          <span>{t("settings.proxyRemoteDns")}</span>
-                        </label>
+                        </div>
                       ) : null}
                       {acceptsCredentials &&
                       !isTunnelDraft &&
@@ -656,37 +684,11 @@ export function SettingsProxiesSection({
                           <span>{t("settings.proxyClearCredentials")}</span>
                         </label>
                       ) : null}
-                      {isTunnelDraft && proxyDraft.hasStoredCredentials ? (
-                        <label className="flex items-center gap-2">
-                          <Checkbox
-                            id="settings-indexer-proxy-clear-password"
-                            checked={proxyDraft.clearPassword}
-                            onCheckedChange={(value) =>
-                              setProxyDraft((prev) => ({
-                                ...prev,
-                                clearPassword: value === true,
-                                password: "",
-                              }))
-                            }
-                          />
-                          <span>{t("settings.proxyClearPassword")}</span>
-                        </label>
-                      ) : null}
+
                     </div>
-                    <p className="text-xs text-muted-foreground md:col-span-3">
-                      {isTunnelDraft ? t("settings.proxyTunnelAuthHelp") : null}
-                      {isTunnelDraft && acceptsCredentials ? " " : null}
-                      {acceptsCredentials
-                        ? proxyDraft.hasStoredCredentials
-                          ? t("settings.proxyCredentialsStoredHelp")
-                          : t("settings.proxyCredentialsHelp")
-                        : null}
-                      {acceptsCredentials && acceptsRemoteDns ? " " : null}
-                      {acceptsRemoteDns ? t("settings.proxyRemoteDnsHelp") : null}
-                    </p>
                   </div>
                 ) : null}
-                {acceptsPrivateKey ? (
+                {showProxyDetails && acceptsPrivateKey ? (
                   <div
                     id="settings-indexer-proxy-tunnel-fields"
                     className="flex flex-col gap-3"
@@ -696,13 +698,18 @@ export function SettingsProxiesSection({
                         className="mb-2 block"
                         htmlFor="settings-indexer-proxy-private-key"
                       >
-                        {t("settings.proxyPrivateKey")}
+                        <span className="inline-flex items-center gap-1.5">
+                          {t("settings.proxyPrivateKey")}
+                          <InfoHelp
+                            ariaLabel={t("settings.proxyPrivateKey")}
+                            text={
+                              isWireguardDraft
+                                ? t("settings.proxyPrivateKeyHelpWireguard")
+                                : t("settings.proxyPrivateKeyHelp")
+                            }
+                          />
+                        </span>
                       </Label>
-                      {/* A WireGuard key is one 44-character base64 line, not
-                          a PEM block, so it gets a single-line field. Neither
-                          is ever read back, so neither is a password input:
-                          masking a value the operator is pasting in helps
-                          nobody. */}
                       {isWireguardDraft ? (
                         <Input
                           id="settings-indexer-proxy-private-key"
@@ -711,7 +718,13 @@ export function SettingsProxiesSection({
                           spellCheck={false}
                           autoComplete="off"
                           ignorePasswordManagers
-                          value={proxyDraft.privateKey}
+                          value={
+                            isWireguardPrivateKeyFocused
+                              ? proxyDraft.privateKey
+                              : redactWireguardPrivateKey(proxyDraft.privateKey)
+                          }
+                          onFocus={() => setIsWireguardPrivateKeyFocused(true)}
+                          onBlur={() => setIsWireguardPrivateKeyFocused(false)}
                           disabled={proxyDraft.clearPrivateKey}
                           required={
                             !proxyDraft.hasStoredPrivateKey ||
@@ -735,7 +748,13 @@ export function SettingsProxiesSection({
                           className="min-h-32 font-mono text-xs"
                           spellCheck={false}
                           autoComplete="off"
+                          data-1p-ignore="true"
+                          data-lpignore="true"
+                          data-bwignore="true"
+                          data-form-type="other"
+                          data-protonpass-ignore="true"
                           rows={8}
+                          required={!proxyDraft.hasStoredPrivateKey}
                           value={proxyDraft.privateKey}
                           disabled={proxyDraft.clearPrivateKey}
                           placeholder={
@@ -752,37 +771,7 @@ export function SettingsProxiesSection({
                         />
                       )}
                     </label>
-                    <p
-                      id="settings-indexer-proxy-private-key-help"
-                      className="text-xs text-muted-foreground"
-                    >
-                      {/* The backend's own sentence, so the help text and the
-                          save-time rejection cannot say different things. */}
-                      {isWireguardDraft
-                        ? t("settings.proxyPrivateKeyHelpWireguard")
-                        : t("settings.proxyPrivateKeyHelp")}
-                    </p>
-                    {/* A WireGuard tunnel cannot exist without its key, so
-                        "clear it" is a state the API refuses; the toggle is
-                        withheld the same way a tunnel's mandatory username
-                        is. To rotate the key, paste a new one. */}
-                    {proxyDraft.hasStoredPrivateKey && !isWireguardDraft ? (
-                      <label className="flex items-center gap-2">
-                        <Checkbox
-                          id="settings-indexer-proxy-clear-private-key"
-                          checked={proxyDraft.clearPrivateKey}
-                          onCheckedChange={(value) =>
-                            setProxyDraft((prev) => ({
-                              ...prev,
-                              clearPrivateKey: value === true,
-                              privateKey: "",
-                              privateKeyPassphrase: "",
-                            }))
-                          }
-                        />
-                        <span>{t("settings.proxyClearPrivateKey")}</span>
-                      </label>
-                    ) : null}
+                    {/* Every tunnel requires a key. Paste a replacement to rotate it. */}
                     {showPassphrase ? (
                       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                         <label>
@@ -791,11 +780,13 @@ export function SettingsProxiesSection({
                             htmlFor="settings-indexer-proxy-private-key-passphrase"
                           >
                             {t("settings.proxyPrivateKeyPassphrase")}
+                            <span className="text-muted-foreground"> (optional)</span>
                           </Label>
                           <Input
                             id="settings-indexer-proxy-private-key-passphrase"
                             type="password"
                             autoComplete="new-password"
+                            ignorePasswordManagers
                             value={proxyDraft.privateKeyPassphrase}
                             placeholder={
                               proxyDraft.hasStoredPrivateKey
@@ -810,9 +801,6 @@ export function SettingsProxiesSection({
                             }
                           />
                         </label>
-                        <p className="self-end pb-2 text-xs text-muted-foreground">
-                          {t("settings.proxyPrivateKeyPassphraseHelp")}
-                        </p>
                       </div>
                     ) : null}
                     {acceptsWireguardFields ? (
@@ -823,7 +811,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-peer-public-key"
                             >
-                              {t("settings.proxyPeerPublicKey")}
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyPeerPublicKey")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyPeerPublicKey")}
+                                  text={t("settings.proxyPeerPublicKeyHelp")}
+                                />
+                              </span>
                             </Label>
                             {/* A public key is public: it is read back in full
                                 and shown as typed, never masked. */}
@@ -844,9 +838,6 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyPeerPublicKeyHelp")}
-                            </p>
                           </label>
                           {/* A div rather than a wrapping label: the clear
                               toggle sits in this cell, and a label around both
@@ -856,7 +847,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-preshared-key"
                             >
-                              {t("settings.proxyPresharedKey")}
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyPresharedKey")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyPresharedKey")}
+                                  text={t("settings.proxyPresharedKeyHelp")}
+                                />
+                              </span>
                             </Label>
                             <Input
                               id="settings-indexer-proxy-preshared-key"
@@ -879,9 +876,6 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyPresharedKeyHelp")}
-                            </p>
                             {proxyDraft.hasStoredPresharedKey ? (
                               <label className="mt-2 flex items-center gap-2">
                                 <Checkbox
@@ -906,7 +900,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-addresses"
                             >
-                              {t("settings.proxyTunnelAddresses")}
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelAddresses")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelAddresses")}
+                                  text={t("settings.proxyTunnelAddressesHelp")}
+                                />
+                              </span>
                             </Label>
                             <Textarea
                               id="settings-indexer-proxy-tunnel-addresses"
@@ -923,16 +923,19 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyTunnelAddressesHelp")}
-                            </p>
                           </label>
                           <label>
                             <Label
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-dns-servers"
                             >
-                              {t("settings.proxyTunnelDnsServers")}
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelDnsServers")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelDnsServers")}
+                                  text={t("settings.proxyTunnelDnsServersHelp")}
+                                />
+                              </span>
                             </Label>
                             <Textarea
                               id="settings-indexer-proxy-tunnel-dns-servers"
@@ -948,9 +951,6 @@ export function SettingsProxiesSection({
                                 }))
                               }
                             />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.proxyTunnelDnsServersHelp")}
-                            </p>
                           </label>
                         </div>
                         <div className="grid gap-3 md:grid-cols-[10rem_10rem_minmax(0,1fr)]">
@@ -959,7 +959,17 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-mtu"
                             >
-                              {t("settings.proxyTunnelMtu")}
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelMtu")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelMtu")}
+                                  text={t("settings.proxyTunnelMtuHelp", {
+                                    min: WIREGUARD_MTU_MIN,
+                                    max: WIREGUARD_MTU_MAX,
+                                    default: WIREGUARD_MTU_DEFAULT,
+                                  })}
+                                />
+                              </span>
                             </Label>
                             {/* Blank is a real value here — it means "use the
                                 engine's default" — so these are text fields
@@ -983,7 +993,15 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-keepalive"
                             >
-                              {t("settings.proxyTunnelKeepalive")}
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelKeepalive")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelKeepalive")}
+                                  text={t("settings.proxyTunnelKeepaliveHelp", {
+                                    default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
+                                  })}
+                                />
+                              </span>
                             </Label>
                             <Input
                               id="settings-indexer-proxy-tunnel-keepalive"
@@ -1002,59 +1020,46 @@ export function SettingsProxiesSection({
                               }
                             />
                           </label>
-                          <div className="flex flex-col justify-end gap-1 pb-2 text-xs text-muted-foreground">
-                            <span>
-                              {t("settings.proxyTunnelMtuHelp", {
-                                min: WIREGUARD_MTU_MIN,
-                                max: WIREGUARD_MTU_MAX,
-                                default: WIREGUARD_MTU_DEFAULT,
-                              })}
-                            </span>
-                            <span>
-                              {t("settings.proxyTunnelKeepaliveHelp", {
-                                default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
-                              })}
-                            </span>
-                          </div>
-                        </div>
-                        {/* The one value the operator has to carry back to
-                            their server, so it is shown in full with a copy
-                            button rather than left to a select-and-drag. */}
-                        <div
-                          id="settings-indexer-proxy-tunnel-public-key"
-                          className="rounded border border-border bg-card/60 p-3"
-                        >
-                          <div className="mb-1 text-sm font-medium">
-                            {t("settings.proxyTunnelPublicKey")}
-                          </div>
-                          {editingProxy?.tunnelPublicKey ? (
-                            <>
-                              <div className="break-all font-mono text-xs">
-                                {editingProxy.tunnelPublicKey}
-                              </div>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                {t("settings.proxyTunnelPublicKeyHelp")}
-                              </p>
-                              <Button
+                          <div id="settings-indexer-proxy-tunnel-public-key">
+                            <div className="mb-2 flex items-center gap-1.5">
+                              <Label htmlFor="settings-indexer-proxy-tunnel-public-key-value">
+                                {t("settings.proxyTunnelPublicKey")}
+                              </Label>
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyTunnelPublicKey")}
+                                text={
+                                  editingProxy?.tunnelPublicKey
+                                    ? t("settings.proxyTunnelPublicKeyHelp")
+                                    : t("settings.proxyTunnelPublicKeyPending")
+                                }
+                              />
+                            </div>
+                            <div className="relative w-fit max-w-full">
+                              <Input
+                                id="settings-indexer-proxy-tunnel-public-key-value"
+                                className="w-auto max-w-full pr-10 font-mono text-xs"
+                                size={48}
+                                value={editingProxy?.tunnelPublicKey ?? ""}
+                                placeholder={t("settings.proxyTunnelPublicKeyPending")}
+                                readOnly
+                              />
+                              <IconButton
                                 id="settings-indexer-proxy-tunnel-public-key-copy"
                                 type="button"
-                                variant="outline"
-                                className="mt-2"
+                                label={t("settings.proxyTunnelPublicKeyCopy")}
+                                appearance="ghost"
+                                className="absolute top-1/2 right-1 h-8 w-8 -translate-y-1/2"
+                                disabled={!editingProxy?.tunnelPublicKey}
                                 onClick={() =>
                                   void copyTunnelPublicKey(
-                                    editingProxy.tunnelPublicKey ?? "",
+                                    editingProxy?.tunnelPublicKey ?? "",
                                   )
                                 }
                               >
                                 <Copy className="h-4 w-4" />
-                                {t("settings.proxyTunnelPublicKeyCopy")}
-                              </Button>
-                            </>
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              {t("settings.proxyTunnelPublicKeyPending")}
-                            </p>
-                          )}
+                              </IconButton>
+                            </div>
+                          </div>
                         </div>
                       </>
                     ) : null}
@@ -1110,30 +1115,49 @@ export function SettingsProxiesSection({
                     ) : null}
                   </div>
                 ) : null}
-                <div className="flex items-end gap-2">
-                  <Button
-                    id="settings-indexer-proxy-save"
-                    type="submit"
-                    disabled={mutatingProxyId !== null}
-                  >
-                    {mutatingProxyId
-                      ? t("label.saving")
-                      : editingProxyId
-                        ? t("settings.proxyUpdate")
-                        : t("settings.proxyCreate")}
-                  </Button>
-                  {editingProxyId ? (
+                {showProxyDetails ? (
+                  <div className="flex items-end gap-2">
                     <Button
-                      id="settings-indexer-proxy-cancel"
-                      type="button"
-                      variant="outline"
-                      onClick={resetProxyDraft}
+                      id="settings-indexer-proxy-save"
+                      type="submit"
+                      className="w-36"
                       disabled={mutatingProxyId !== null}
                     >
-                      {t("label.cancel")}
+                      {mutatingProxyId
+                        ? t("label.saving")
+                        : editingProxyId
+                          ? t("settings.proxyUpdate")
+                          : t("settings.proxyCreate")}
                     </Button>
-                  ) : null}
-                </div>
+                    {editingProxyId ? (
+                      <Button
+                        id="settings-indexer-proxy-cancel"
+                        type="button"
+                        variant="outline"
+                        className="w-36"
+                        onClick={resetProxyDraft}
+                        disabled={mutatingProxyId !== null}
+                      >
+                        {t("label.cancel")}
+                      </Button>
+                    ) : null}
+                    <label className="flex h-9 items-center gap-3">
+                      <Checkbox
+                        id="settings-indexer-proxy-enabled"
+                        className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                        checked={proxyDraft.isEnabled}
+                        disabled={mutatingProxyId !== null}
+                        onCheckedChange={(value) =>
+                          setProxyDraft((prev) => ({
+                            ...prev,
+                            isEnabled: value === true,
+                          }))
+                        }
+                      />
+                      <span>{t("label.enabled")}</span>
+                    </label>
+                  </div>
+                ) : null}
               </form>
             </CardContent>
           </Card>
@@ -1143,7 +1167,10 @@ export function SettingsProxiesSection({
               id="settings-indexer-proxy-create"
               icon={Plus}
               label={t("settings.proxyCreateNew")}
-              onClick={startCreateProxy}
+              onClick={() => {
+                setIsWireguardDetailsOpen(false);
+                startCreateProxy();
+              }}
               disabled={mutatingProxyId !== null}
             />
           </div>

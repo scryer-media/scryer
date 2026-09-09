@@ -621,52 +621,49 @@ export function SettingsDownloadClientsSection({
                   </span>
                 </label>
               </div>
-              <label className="md:col-span-3">
-                <Label className="mb-2 block">{t("settings.downloadClientUrlPreview")}</Label>
-                <Input value={urlPreview || "https://..."} readOnly disabled className="text-muted-foreground" />
-              </label>
-              <div
-                id="settings-download-client-proxy-field"
-                className="md:col-span-3 rounded-xl border border-border bg-card/60 p-3"
-              >
-                <ProxyAssignmentSelect
-                  selectId="settings-download-client-proxy-select"
-                  label={t("settings.proxyAssignment")}
-                  proxies={proxyConfigs}
-                  value={downloadClientDraft.proxyConfigId}
-                  helpText={t("settings.downloadClientProxyHelp")}
-                  onChange={(proxyConfigId) =>
-                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
-                      ...prev,
-                      proxyConfigId,
-                    }))
-                  }
-                />
-              </div>
-              <div className="md:col-span-3 rounded-xl border border-border bg-card/60 p-3">
-                <label className="flex items-center gap-3">
-                  <Checkbox
-                    checked={downloadClientDraft.isEnabled}
-                    onCheckedChange={(checked) =>
+              <div className="grid gap-3 md:col-span-3 md:grid-cols-2">
+                <label>
+                  <Label className="mb-2 block">
+                    {t("settings.downloadClientUrlPreview")}
+                  </Label>
+                  <Input
+                    value={urlPreview || "https://..."}
+                    readOnly
+                    disabled
+                    className="text-muted-foreground"
+                  />
+                </label>
+                <div id="settings-download-client-proxy-field">
+                  <ProxyAssignmentSelect
+                    selectId="settings-download-client-proxy-select"
+                    label={t("settings.proxyAssignment")}
+                    proxies={proxyConfigs}
+                    value={downloadClientDraft.proxyConfigId}
+                    onChange={(proxyConfigId) =>
                       setDownloadClientDraft((prev: DownloadClientDraft) => ({
                         ...prev,
-                        isEnabled: checked === true,
+                        proxyConfigId,
                       }))
                     }
                   />
-                  <span className="inline-flex items-center gap-2 text-sm font-medium">
-                    {t("settings.downloadClientEnabledLabel")}
-                    <InfoHelp
-                      ariaLabel={t("settings.downloadClientEnabledLabel")}
-                      text={t("settings.downloadClientEnabledInfo")}
-                    />
-                  </span>
-                </label>
+                </div>
               </div>
               {hasApiKeyField ? (
                 <div>
                   <Label className="mb-2 block" htmlFor="settings-download-client-api-key">
-                    {t("settings.apiKey")}
+                    <span className="inline-flex items-center gap-1">
+                      {t("settings.apiKey")}
+                      {normalizedClientType === "sabnzbd" ? (
+                        <InfoHelp
+                          ariaLabel={t("settings.apiKey")}
+                          text={[
+                            t("settings.downloadClientSabnzbdAuthHelp"),
+                            t("settings.downloadClientSabnzbdNzbdavHelp"),
+                            t("settings.downloadClientDecypharrFilesystemHelp"),
+                          ].join(" ")}
+                        />
+                      ) : null}
+                    </span>
                   </Label>
                   <Input
                     ref={apiKeyInputRef}
@@ -680,6 +677,7 @@ export function SettingsDownloadClientsSection({
                     }
                     placeholder={t("form.apiKeyInputPlaceholder")}
                     type="password"
+                    ignorePasswordManagers
                   />
                   {normalizedClientType === "weaver" ? (
                     <p className="mt-2 text-xs text-muted-foreground">
@@ -700,11 +698,6 @@ export function SettingsDownloadClientsSection({
                         <span>finish the Weaver URL above to generate the link.</span>
                       )}
                     </p>
-                  ) : normalizedClientType === "sabnzbd" ? (
-                    <div className="mt-2 space-y-2 text-xs text-muted-foreground">
-                      <p>{t("settings.downloadClientSabnzbdAuthHelp")}</p>
-                      <p>{t("settings.downloadClientSabnzbdNzbdavHelp")}</p>
-                    </div>
                   ) : null}
                 </div>
               ) : null}
@@ -743,6 +736,7 @@ export function SettingsDownloadClientsSection({
                       }
                       placeholder={t("form.passwordPlaceholder")}
                       type="password"
+                      ignorePasswordManagers
                     />
                   </div>
                   {normalizedClientType === "qbittorrent" ? (
@@ -792,7 +786,7 @@ export function SettingsDownloadClientsSection({
                   </div>
                 );
               })}
-              {normalizedClientType === "sabnzbd" || normalizedClientType === "qbittorrent" ? (
+              {normalizedClientType === "qbittorrent" ? (
                 <p className="md:col-span-3 text-xs text-muted-foreground">
                   {t("settings.downloadClientDecypharrFilesystemHelp")}
                 </p>
@@ -867,6 +861,27 @@ export function SettingsDownloadClientsSection({
               >
                 {t("label.cancel")}
               </Button>
+              <label className="flex h-9 items-center gap-3">
+                <Checkbox
+                  id="settings-download-client-enabled"
+                  className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                  checked={downloadClientDraft.isEnabled}
+                  disabled={mutatingDownloadClientId !== null}
+                  onCheckedChange={(checked) =>
+                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
+                      ...prev,
+                      isEnabled: checked === true,
+                    }))
+                  }
+                />
+                <span className="inline-flex items-center gap-2 text-sm font-medium">
+                  {t("settings.downloadClientEnabledLabel")}
+                  <InfoHelp
+                    ariaLabel={t("settings.downloadClientEnabledLabel")}
+                    text={t("settings.downloadClientEnabledInfo")}
+                  />
+                </span>
+              </label>
             </div>
               </form>
             </CardContent>

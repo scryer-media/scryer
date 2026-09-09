@@ -33,6 +33,41 @@ pub struct PolicyDeleteAuthorization {
     pub revision_number: i64,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PolicyMediaFileDeletePlan {
+    pub fingerprint: String,
+    paths: Vec<PolicyDeletePathProof>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct PolicyDeletePathProof {
+    path: PathBuf,
+    proof: String,
+}
+
+async fn policy_path_proof(path: &Path) -> AppResult<String> {
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        AppError::Repository(format!(
+            "cannot inspect deletion target {}: {error}",
+            path.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{}:{}", metadata.dev(), metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = format!("{:?}", metadata.created());
+    Ok(format!(
+        "{}:{:?}:{}:{}",
+        metadata.len(),
+        metadata.modified(),
+        metadata.file_type().is_symlink(),
+        identity
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeletePreview {
     pub fingerprint: String,
@@ -550,6 +585,76 @@ impl AppUseCase {
         self.execute_delete_context(
             context,
             preview_fingerprint,
+            DeleteConfirmationAuthority::Policy(authorization),
+        )
+        .await
+    }
+
+    /// Capture the existing per-file ownership manifest and replacement proofs
+    /// before the policy changes monitoring. Persist this plan before acting.
+    pub(crate) async fn prepare_policy_media_file_delete(
+        &self,
+        file_id: &str,
+    ) -> AppResult<PolicyMediaFileDeletePlan> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let manifest = self.build_delete_manifest(context.clone()).await?;
+        ensure_delete_context_roots_available(&context)?;
+        let mut paths = Vec::new();
+        for entry in &manifest.entries {
+            if entry.delete_kind == DeletePathKind::Directory {
+                return Err(AppError::Validation(
+                    "scoped policy deletion cannot remove directories".into(),
+                ));
+            }
+            paths.push(PolicyDeletePathProof {
+                path: entry.path.clone(),
+                proof: policy_path_proof(&entry.path).await?,
+            });
+        }
+        Ok(PolicyMediaFileDeletePlan {
+            fingerprint: manifest.fingerprint,
+            paths,
+        })
+    }
+
+    pub(crate) async fn execute_delete_media_file_by_policy(
+        &self,
+        file_id: &str,
+        plan: &PolicyMediaFileDeletePlan,
+        authorization: &PolicyDeleteAuthorization,
+    ) -> AppResult<()> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let manifest = self.build_delete_manifest(context.clone()).await?;
+        // A resumed attempt may have removed part of its manifest. Only a
+        // strict subset of the persisted ownership manifest is still authorized;
+        // newly discovered paths and replacement files require re-evaluation.
+        for entry in &manifest.entries {
+            let Some(expected) = plan
+                .paths
+                .iter()
+                .find(|expected| expected.path == entry.path)
+            else {
+                return Err(AppError::Validation(
+                    "maintenance deletion targets changed; re-evaluation required".into(),
+                ));
+            };
+            if entry.delete_kind == DeletePathKind::Directory
+                || policy_path_proof(&entry.path).await? != expected.proof
+            {
+                return Err(AppError::Validation(
+                    "maintenance deletion file changed; re-evaluation required".into(),
+                ));
+            }
+        }
+        if manifest.entries.len() == plan.paths.len() && manifest.fingerprint != plan.fingerprint {
+            return Err(AppError::Validation(
+                "maintenance deletion fingerprint changed".into(),
+            ));
+        }
+        // Rebuild and validate again through the shared confirmation owner.
+        self.execute_delete_context(
+            context,
+            &manifest.fingerprint,
             DeleteConfirmationAuthority::Policy(authorization),
         )
         .await

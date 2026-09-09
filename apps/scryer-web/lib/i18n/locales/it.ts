@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const it: LocaleDictionary = {
+  "scoring.mandatoryRejection": "Requisito obbligatorio non soddisfatto",
+  "scoring.finalScoreRejection": "Punteggio finale rifiutato",
+  "settings.refFnBlockScore": "Restituisce -10000 come penalità compensabile da altri punteggi",
+  "settings.arrImportBlockScoreHelp": "Il punteggio totale deve superare -9000 e raggiungere il minimo del profilo. I requisiti obbligatori restano validi.",
   "label.ready": "Pronto",
   "label.moreInfo": "Altre informazioni",
   "label.search": "Ricerca",
@@ -240,7 +244,7 @@ const it: LocaleDictionary = {
   "settings.proxyDisabledHelp": "Il proxy assegnato è disattivato.",
   "settings.proxyDisabledSuffix": "(disattivato)",
   "settings.proxyClearPassword": "Rimuovi la password salvata",
-  "settings.proxyTunnelAuthHelp": "Un tunnel richiede un nome utente e una password oppure una chiave privata.",
+  "settings.proxyTunnelAuthHelp": "SSH richiede un nome utente e una chiave privata Ed25519. L’autenticazione con password non è supportata.",
   "settings.proxyPrivateKey": "Chiave privata",
   "settings.proxyPrivateKeyHelp": "sono supportate solo chiavi private Ed25519; generane una con `ssh-keygen -t ed25519` e incolla qui la chiave privata OpenSSH",
   "settings.proxyPrivateKeyStored": "Chiave privata impostata",
@@ -254,7 +258,7 @@ const it: LocaleDictionary = {
   "settings.proxyHostKeyReset": "Reimposta la chiave host",
   "settings.proxyHostKeyResetDescription": "Dimentica la chiave host fissata. La connessione successiva si fiderà di quella offerta dal server e la fisserà: fallo solo se sai che la chiave del server è davvero cambiata.",
   "settings.proxyValidationTunnelUsername": "Un tunnel richiede un nome utente.",
-  "settings.proxyValidationTunnelAuth": "Un tunnel richiede una password o una chiave privata.",
+  "settings.proxyValidationTunnelAuth": "Un tunnel SSH richiede una chiave privata Ed25519.",
   "settings.downloadClientProxyHelp": "Si può assegnare qualsiasi tipo di proxy. Un solver non ha effetto su un client nativo, le cui richieste non partono da un plugin.",
   "status.proxyCreated": "Proxy creato.",
   "status.proxyUpdated": "Proxy aggiornato.",

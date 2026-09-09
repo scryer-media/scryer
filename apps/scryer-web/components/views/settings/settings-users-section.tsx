@@ -310,6 +310,7 @@ export function SettingsUsersSection({
                                 placeholder={t("form.newPasswordPlaceholder")}
                                 type="password"
                                 autoComplete="new-password"
+                                ignorePasswordManagers
                                 minLength={passwordMinLength ?? undefined}
                                 aria-label={t("settings.temporaryPassword")}
                                 aria-invalid={isPasswordTooShort(
@@ -487,6 +488,7 @@ export function SettingsUsersSection({
                     placeholder={t("form.passwordPlaceholder")}
                     type="password"
                     autoComplete="new-password"
+                    ignorePasswordManagers
                     required
                   />
                 </div>

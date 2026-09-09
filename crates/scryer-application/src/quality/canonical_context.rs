@@ -2,7 +2,7 @@
 //!
 //! [`crate::canonical_scoring::score_release`] is pure and synchronous so its
 //! invariants can be property-tested. Everything it needs that lives in the
-//! database — the quality profile, the resolved persona and weights, the
+//! database — the quality profile,
 //! required-language set, the library name, the active rule engine — is
 //! gathered here once and then handed to it by reference.
 //!
@@ -12,7 +12,6 @@
 
 use crate::canonical_scoring::ScoringContext;
 use crate::quality_profile::CoverageSizeBasis;
-use crate::scoring_weights::{ScoringPersona, ScoringWeights};
 use crate::{AppUseCase, QualityProfile};
 use scryer_domain::Title;
 
@@ -20,7 +19,6 @@ use scryer_domain::Title;
 /// [`ResolvedScoringContext::view`].
 pub(crate) struct ResolvedScoringContext {
     profile: QualityProfile,
-    weights: ScoringWeights,
     required_audio_languages: Vec<String>,
     category: String,
     title_id: String,
@@ -48,7 +46,6 @@ impl ResolvedScoringContext {
     ) -> ScoringContext<'_> {
         ScoringContext {
             profile: &self.profile,
-            weights: &self.weights,
             required_audio_languages: &self.required_audio_languages,
             category: &self.category,
             size_basis: size_basis.or_runtime(self.default_runtime_minutes),
@@ -124,12 +121,9 @@ pub(crate) struct ParkedReleaseFacts {
     /// The D4 runtime basis for what the release covers: total runtime, one
     /// member's, and how many members.
     pub size_basis: CoverageSizeBasis,
-    /// The release's **block-free** score ([`crate::canonical_scoring::ScoredRelease::total`]):
-    /// the number an incumbent's bar is built from, so a queued release the
-    /// profile now vetoes still compares on honest terms instead of carrying
-    /// `BLOCK_SCORE` into the ladder (I5). Whether the profile allows it at all
-    /// is `allowed`, and the lanes that must refuse a vetoed release read that
-    /// first.
+    /// The complete numeric score ([`crate::canonical_scoring::ScoredRelease::total`]),
+    /// including penalties. Mandatory requirements contribute zero points.
+    /// Lanes that require eligibility read `allowed` before comparing scores.
     pub score: i32,
     pub tier_index: Option<usize>,
     pub revision: i32,
@@ -187,9 +181,8 @@ pub(crate) fn score_parked_release_title(
 
     ParkedReleaseFacts {
         size_basis,
-        // Block-free, like an incumbent's bar: a queued release the profile
-        // now vetoes must not carry −10 000 into `queued_rejection`, where it
-        // would lose to every candidate and quietly switch the queue gate off.
+        // Like the incumbent bar, retain every numeric contribution and carry
+        // eligibility separately from the score.
         score: scored.total,
         tier_index,
         revision: scored.revision,
@@ -313,17 +306,13 @@ impl AppUseCase {
             .resolve_required_audio_languages_for_title(title)
             .await
             .unwrap_or_default();
-
-        let persona: ScoringPersona = self
+        let persona = self
             .resolve_scoring_persona(Some(title.library_id.as_str()), Some(category.as_str()))
             .await
             .unwrap_or_default();
-
-        let weights = crate::scoring_weights::build_weights_for_category(
-            &persona,
-            &profile.criteria.scoring_overrides,
-            Some(category.as_str()),
-        );
+        let mut profile = profile.clone();
+        profile.criteria.scoring_persona = persona;
+        profile.criteria.facet_persona_overrides.clear();
 
         let library_name = match self
             .services
@@ -356,8 +345,7 @@ impl AppUseCase {
         };
 
         ResolvedScoringContext {
-            profile: profile.clone(),
-            weights,
+            profile,
             required_audio_languages,
             category,
             title_id: title.id.clone(),

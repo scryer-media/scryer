@@ -387,6 +387,7 @@ export function DownloadClientRemotePathMappingsField({
                         onChange={(event) =>
                           updateRow(index, { localPath: event.target.value })
                         }
+                        onFocus={() => setBrowseRowIndex(index)}
                         required={required && rows.length === 1}
                         aria-invalid={hasLocalError}
                         className="pr-10 font-[var(--font-code)] text-sm"
@@ -411,7 +412,7 @@ export function DownloadClientRemotePathMappingsField({
                       id={removeButtonId}
                       label={t("label.remove")}
                       appearance="ghost"
-                      className="h-9 w-9 shrink-0"
+                      className="h-9 w-9 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
                       onClick={() => removeRow(index)}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -455,6 +456,7 @@ export function DownloadClientRemotePathMappingsField({
         selectionTypes={["folder"]}
         initialPath={browseInitialPath}
         title={label}
+        preventCloseAutoFocus
       />
     </div>
   );
