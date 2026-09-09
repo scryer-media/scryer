@@ -5,6 +5,8 @@ use serde_json::Value;
 
 #[path = "support/analysis_parity.rs"]
 mod analysis_parity;
+#[path = "support/sparse_mkv.rs"]
+mod sparse_mkv;
 
 fn media_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -97,6 +99,35 @@ fn sonarr_ffprobe_json(ffprobe: &Path, file: &Path) -> Value {
         ];
         let sampled = run_ffprobe_json_owned(ffprobe, file, &args);
         analysis["sampled_frames"] = sampled["frames"].clone();
+    }
+
+    if analysis["format"]["format_name"] == "avi" {
+        let packet_report = run_ffprobe_json(
+            ffprobe,
+            file,
+            &[
+                "-select_streams",
+                "v",
+                "-show_packets",
+                "-show_entries",
+                "packet=stream_index,pts,dts,duration,size",
+                "-read_intervals",
+                "%+#4097",
+                "-print_format",
+                "json",
+            ],
+        );
+        let packets = &packet_report["packets"];
+        if let Some(streams) = analysis["streams"].as_array_mut() {
+            for stream in streams {
+                if let Some(accounting) =
+                    analysis_parity::complete_video_packet_accounting(stream, packets)
+                {
+                    stream["reference_packet_accounting"] = accounting;
+                }
+            }
+        }
+        analysis["reference_video_packets"] = packets.clone();
     }
 
     analysis
@@ -376,18 +407,43 @@ fn compare_fixture_corpus_against_ffprobe() {
         {
             continue;
         }
-        seen.push(file_name);
+        seen.push(file_name.clone());
         let analysis = scryer_mediainfo::analyze_catalog_file(&path)
             .expect("canonical native analysis should succeed");
-        let ffprobe = sonarr_ffprobe_json(&ffprobe, &path);
+        let raw_reference = sonarr_ffprobe_json(&ffprobe, &path);
         let native_json = serde_json::to_value(&analysis).unwrap();
+        let (ffprobe, reference_assumptions, expectation_errors) =
+            if sparse_mkv::NAMES.contains(&file_name.as_str()) {
+                assert!(
+                    std::fs::metadata(&path).unwrap().len() <= 1024,
+                    "authored sparse fixture grew; audit required"
+                );
+                sparse_mkv::comparison_view(
+                    &file_name,
+                    &std::fs::read(&path).unwrap(),
+                    &raw_reference,
+                    &native_json,
+                )
+                .expect("sparse fixture must still match its independently authored byte structure")
+            } else {
+                (raw_reference.clone(), Vec::new(), Vec::new())
+            };
+        mismatches.extend(
+            expectation_errors
+                .into_iter()
+                .map(|error| format!("{file_name}: {error}")),
+        );
         mismatches.extend(
             analysis_parity::compare(&native_json, &ffprobe)
                 .into_iter()
                 .map(|difference| format!("{} {difference}", path.display())),
         );
         if report_path.is_some() {
-            records.push(serde_json::json!({"fixture": path.file_name().unwrap().to_string_lossy(), "native": native_json, "reference": ffprobe.clone()}));
+            records.push(
+                serde_json::json!({"fixture": file_name, "native": native_json,
+                "reference": raw_reference, "comparison_reference": ffprobe.clone(),
+                "reference_assumptions": reference_assumptions}),
+            );
         }
 
         let video = ffprobe_primary_stream(&ffprobe, "video");
@@ -791,6 +847,147 @@ fn compare_fixture_corpus_against_ffprobe() {
         "ffprobe parity mismatches:\n{}",
         mismatches.join("\n")
     );
+}
+
+#[test]
+fn sparse_mkv_authored_bytes_require_unknowns_and_explicit_variants_require_facts() {
+    for name in sparse_mkv::NAMES {
+        let sparse = sparse_mkv::authored_bytes(name, false).unwrap();
+        assert_eq!(
+            std::fs::read(media_dir().join(name)).unwrap(),
+            sparse,
+            "{name}: authored fixture audit"
+        );
+        let negative = scryer_mediainfo::analyze_catalog_file(&media_dir().join(name)).unwrap();
+        let negative = serde_json::to_value(negative).unwrap();
+        assert!(
+            sparse_mkv::unknown_fact_errors(&negative).is_empty(),
+            "{name}"
+        );
+        let explicit = scryer_mediainfo::analyze_source(
+            &mut std::io::Cursor::new(sparse_mkv::authored_bytes(name, true).unwrap()),
+            "mkv",
+            scryer_mediainfo::AnalyzeOptions::default(),
+        )
+        .unwrap();
+        for stream in &explicit.details.streams {
+            assert_eq!(stream.metadata.original_language.as_deref(), Some("eng"));
+            assert_eq!(
+                stream.metadata.language_provenance,
+                scryer_media_types::Provenance::Container
+            );
+        }
+        assert_eq!(explicit.video_frame_rate.as_deref(), Some("25"));
+        assert_eq!(
+            explicit.details.streams[0].metadata.declared_frame_rate,
+            scryer_media_types::Rational::new(25, 1)
+        );
+        assert_eq!(
+            explicit.details.streams[1]
+                .metadata
+                .channel_layout
+                .as_deref(),
+            Some("stereo")
+        );
+        assert_eq!(
+            explicit.details.streams[1].metadata.sample_rate,
+            Some(48_000)
+        );
+    }
+}
+
+#[test]
+fn sparse_mkv_reference_defaults_require_exact_authored_evidence() {
+    let name = sparse_mkv::NAMES[0];
+    let bytes = std::fs::read(media_dir().join(name)).unwrap();
+    let native = serde_json::to_value(
+        scryer_mediainfo::analyze_catalog_file(&media_dir().join(name)).unwrap(),
+    )
+    .unwrap();
+    let reference = serde_json::json!({"streams":[
+        {"codec_type":"video","tags":{"language":"eng"},"r_frame_rate":"1000/1"},
+        {"codec_type":"audio","tags":{"language":"eng"},"channel_layout":"stereo"},
+    ]});
+    let (comparison, assumptions, errors) =
+        sparse_mkv::comparison_view(name, &bytes, &reference, &native).unwrap();
+    assert!(errors.is_empty());
+    assert_eq!(assumptions.len(), 4);
+    assert!(comparison["streams"][0]["r_frame_rate"].is_null());
+    assert_eq!(reference["streams"][0]["r_frame_rate"], "1000/1");
+    let explicit = sparse_mkv::authored_bytes(name, true).unwrap();
+    assert!(sparse_mkv::comparison_view(name, &explicit, &reference, &native).is_err());
+    let (unrelated, assumptions, _) =
+        sparse_mkv::comparison_view("another.mkv", &bytes, &reference, &native).unwrap();
+    assert_eq!(unrelated, reference);
+    assert!(assumptions.is_empty());
+    let mut changed_reference = reference.clone();
+    changed_reference["streams"][0]["r_frame_rate"] = serde_json::json!("24/1");
+    assert!(
+        !sparse_mkv::comparison_view(name, &bytes, &changed_reference, &native)
+            .unwrap()
+            .2
+            .is_empty()
+    );
+    for (path, fabricated) in [
+        ("/video_frame_rate", serde_json::json!("1000.000")),
+        (
+            "/details/streams/0/metadata/original_language",
+            serde_json::json!("eng"),
+        ),
+        (
+            "/details/streams/1/metadata/channel_layout",
+            serde_json::json!("stereo"),
+        ),
+    ] {
+        let mut invalid = native.clone();
+        *invalid.pointer_mut(path).unwrap() = fabricated;
+        assert!(
+            !sparse_mkv::comparison_view(name, &bytes, &reference, &invalid)
+                .unwrap()
+                .2
+                .is_empty(),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "development reference requires FFprobe"]
+fn compare_explicit_sparse_mkv_variants_against_ffprobe() {
+    let ffprobe = ffprobe_bin().expect("FFprobe is required for this explicit comparison");
+    struct FixtureDirectory(PathBuf);
+    impl Drop for FixtureDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = FixtureDirectory(std::env::temp_dir().join(format!(
+        "scryer-explicit-mkv-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    std::fs::create_dir(&directory.0).unwrap();
+    for name in sparse_mkv::NAMES {
+        let path = directory.0.join(name);
+        std::fs::write(&path, sparse_mkv::authored_bytes(name, true).unwrap()).unwrap();
+        let native =
+            serde_json::to_value(scryer_mediainfo::analyze_catalog_file(&path).unwrap()).unwrap();
+        let reference = sonarr_ffprobe_json(&ffprobe, &path);
+        let differences = analysis_parity::compare(&native, &reference);
+        assert!(differences.is_empty(), "{name}: {differences:?}");
+        for path in [
+            "/details/streams/0/metadata/original_language",
+            "/details/streams/1/metadata/original_language",
+            "/details/streams/1/metadata/channel_layout",
+            "/details/streams/0/metadata/declared_frame_rate",
+        ] {
+            let mut missing = native.clone();
+            *missing.pointer_mut(path).unwrap() = Value::Null;
+            assert!(
+                !analysis_parity::compare(&missing, &reference).is_empty(),
+                "{name}: missing {path} must fail"
+            );
+        }
+    }
 }
 
 fn missing_native<T: std::fmt::Debug>(

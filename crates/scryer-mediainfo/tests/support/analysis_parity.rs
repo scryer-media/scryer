@@ -5,6 +5,12 @@ fn number(value: &Value) -> Option<f64> {
     value.as_f64().or_else(|| value.as_str()?.parse().ok())
 }
 pub fn reference_bitrate_bps(stream: &Value) -> Option<f64> {
+    if stream["reference_packet_accounting"]["complete"] == true
+        && let Some(bitrate) = number(&stream["reference_packet_accounting"]["bitrate_bps"])
+            .filter(|value| value.is_finite() && *value > 0.0)
+    {
+        return Some(bitrate);
+    }
     let bitrate = number(&stream["bit_rate"])?;
     // FFprobe 8.1.1 exposes MPEG-1's all-ones bitrate code as a rate. That
     // sequence value means unspecified/VBR; it is not a 104.8572 Mbps stream.
@@ -13,6 +19,51 @@ pub fn reference_bitrate_bps(stream: &Value) -> Option<f64> {
     }
     (bitrate.is_finite() && bitrate > 0.0).then_some(bitrate)
 }
+pub fn complete_video_packet_accounting(stream: &Value, packets: &Value) -> Option<Value> {
+    fn unsigned(value: &Value) -> Option<u64> {
+        value.as_u64().or_else(|| value.as_str()?.parse().ok())
+    }
+    fn signed(value: &Value) -> Option<i64> {
+        value.as_i64().or_else(|| value.as_str()?.parse().ok())
+    }
+    if stream["codec_type"] != "video" || stream["index"].is_null() {
+        return None;
+    }
+    let expected = unsigned(&stream["nb_frames"])?;
+    let packets = packets.as_array()?;
+    if !(1..=4096).contains(&expected) || packets.len() > 4096 {
+        return None;
+    }
+    let mut bytes = 0_u64;
+    let mut times = Vec::new();
+    for packet in packets
+        .iter()
+        .filter(|packet| packet["stream_index"] == stream["index"])
+    {
+        bytes = bytes.checked_add(unsigned(&packet["size"])?)?;
+        let start = signed(&packet["pts"]).or_else(|| signed(&packet["dts"]))?;
+        let duration = signed(&packet["duration"]).filter(|value| *value > 0)?;
+        times.push((start, start.checked_add(duration)?));
+    }
+    if times.len() as u64 != expected {
+        return None;
+    }
+    times.sort_unstable();
+    if times.windows(2).any(|pair| pair[0].1 != pair[1].0) {
+        return None;
+    }
+    let duration_ticks = times.last()?.1.checked_sub(times.first()?.0)?;
+    let duration_seconds = duration_ticks as f64 * rational(&stream["time_base"])?;
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 || bytes == 0 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "complete": true, "packets": expected, "bytes": bytes,
+        "duration_seconds": duration_seconds,
+        "bitrate_bps": bytes.checked_mul(8)? as f64 / duration_seconds,
+    }))
+}
+
 fn rational(value: &Value) -> Option<f64> {
     if let Some(text) = value.as_str() {
         let (n, d) = text.split_once('/').or_else(|| text.split_once(':'))?;
@@ -264,14 +315,15 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
                 );
             }
             if kind == "video" {
-                let reference_rate = rational(&stream["avg_frame_rate"])
-                    .filter(|rate| *rate > 0.0)
-                    .or_else(|| rational(&stream["r_frame_rate"]).filter(|rate| *rate > 0.0));
+                let declared =
+                    rational(&metadata["declared_frame_rate"]).filter(|rate| *rate > 0.0);
+                let average = rational(&stream["avg_frame_rate"]).filter(|rate| *rate > 0.0);
+                let nominal = rational(&stream["r_frame_rate"]).filter(|rate| *rate > 0.0);
+                let reference_rate = average.or(nominal);
                 near(
                     &mut differences,
                     &format!("{label}.rational_frame_rate"),
-                    rational(&metadata["observed_frame_rate"])
-                        .or_else(|| rational(&metadata["declared_frame_rate"])),
+                    declared.or_else(|| rational(&metadata["observed_frame_rate"])),
                     reference_rate,
                     0.05,
                 );
@@ -578,6 +630,76 @@ mod tests {
             compare(&native, &reference)
                 .iter()
                 .any(|error| error.contains("original_language"))
+        );
+    }
+
+    #[test]
+    fn reference_packet_accounting_requires_complete_contiguous_stream_timing() {
+        let mut stream = serde_json::json!({"index":0,"codec_type":"video","codec_name":"mjpeg","nb_frames":"2","time_base":"1/25","bit_rate":"800000"});
+        let packets = serde_json::json!([
+            {"stream_index":0,"pts":1,"duration":1,"size":"3000"},
+            {"stream_index":1,"pts":0,"duration":1,"size":"9000"},
+            {"stream_index":0,"pts":0,"duration":1,"size":"1000"}
+        ]);
+        let accounting = complete_video_packet_accounting(&stream, &packets).unwrap();
+        assert_eq!(accounting["bytes"], 4000);
+        assert_eq!(accounting["packets"], 2);
+        assert_eq!(accounting["duration_seconds"], 0.08);
+        assert_eq!(accounting["bitrate_bps"], 400000.0);
+        stream["reference_packet_accounting"] = accounting;
+        assert_eq!(reference_bitrate_bps(&stream), Some(400000.0));
+        assert_eq!(
+            stream["bit_rate"], "800000",
+            "retain the original reference declaration"
+        );
+        let reference = serde_json::json!({"streams":[stream.clone()]});
+        let native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"mjpeg","metadata":{}}]}});
+        assert!(
+            compare(&native, &reference)
+                .iter()
+                .any(|error| error.contains("bitrate_bps"))
+        );
+        assert!(
+            complete_video_packet_accounting(&stream, &serde_json::json!([packets[0].clone()]))
+                .is_none()
+        );
+        for field in ["duration", "size", "pts"] {
+            let mut incomplete = packets.clone();
+            incomplete[0][field] = Value::Null;
+            assert!(complete_video_packet_accounting(&stream, &incomplete).is_none());
+        }
+        for pts in [0, 2] {
+            let mut discontinuous = packets.clone();
+            discontinuous[0]["pts"] = pts.into();
+            assert!(complete_video_packet_accounting(&stream, &discontinuous).is_none());
+        }
+        stream["nb_frames"] = "4097".into();
+        assert!(complete_video_packet_accounting(&stream, &packets).is_none());
+    }
+
+    #[test]
+    fn nominal_frame_rate_comparison_keeps_bounded_observations_separate() {
+        let mut native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"vp9","metadata":{
+            "declared_frame_rate":{"numerator":120,"denominator":1},
+            "observed_frame_rate":{"numerator":2750,"denominator":23}
+        }}]}});
+        let mut reference = serde_json::json!({"streams":[{"codec_type":"video","codec_name":"vp9","r_frame_rate":"240/1","avg_frame_rate":"120/1"}]});
+        assert!(compare(&native, &reference).is_empty());
+        reference["streams"][0]["avg_frame_rate"] = "0/0".into();
+        reference["streams"][0]["r_frame_rate"] = "120/1".into();
+        assert!(compare(&native, &reference).is_empty());
+        native["details"]["streams"][0]["metadata"]["declared_frame_rate"] =
+            serde_json::json!({"numerator":60,"denominator":1});
+        assert!(
+            compare(&native, &reference)
+                .iter()
+                .any(|error| error.contains("rational_frame_rate"))
+        );
+        native["details"]["streams"][0]["metadata"] = Value::Null;
+        assert!(
+            compare(&native, &reference)
+                .iter()
+                .any(|error| error.contains("rational_frame_rate"))
         );
     }
 
