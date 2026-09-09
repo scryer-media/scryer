@@ -17,6 +17,7 @@
 pub mod decode;
 pub mod engine;
 pub mod observation;
+pub mod telemetry;
 pub(crate) mod wrapper;
 
 #[cfg(test)]

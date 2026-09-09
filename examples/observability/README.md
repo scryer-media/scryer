@@ -7,6 +7,7 @@ Ready-to-import monitoring for a Scryer instance:
 | `scryer-grafana-dashboard.json` | Grafana dashboard: overview stats, serving, acquisition, indexers, downloads, imports, jobs and health, plus collapsed rows for outbound rate limiting and catalog activity. |
 | `scryer-alerts.yml` | Eleven Prometheus alerting rules covering the failures that silently reduce what Scryer does: backed-off indexers, unreachable download clients, stale queue snapshots, overdue jobs, low disk, import rejection spikes. |
 | `prometheus.yml` | A minimal scrape configuration with the API-key authorization Scryer requires. |
+| [`ruleset-performance.md`](ruleset-performance.md) | Per-ruleset execution costs, engine build and batch timing, with PromQL examples. |
 
 The full metric reference, label semantics and upgrade notes live in
 [`scryer-docs/deployment/prometheus-metrics.md`](https://github.com/scryer-media/scryer-docs/blob/main/deployment/prometheus-metrics.md).

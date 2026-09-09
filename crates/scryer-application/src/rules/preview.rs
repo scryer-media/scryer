@@ -318,7 +318,9 @@ impl AppUseCase {
                 managed_key: None,
                 managed_tag_filter: draft_tags,
             });
-            let engine = AppUseCase::build_user_rules_engine(rule_sets, plugin_policies)?;
+            let engine = AppUseCase::build_user_rules_engine_for_purpose(
+                rule_sets, plugin_policies, super::metrics::Purpose::Preview,
+            )?;
             let raw_parsed = crate::release_parser::parse_release_metadata_for_target(
                 &compute_release_name,
                 &crate::release_parser::build_release_parse_context_for_title(

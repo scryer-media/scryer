@@ -46,6 +46,12 @@ const LATENCY_SECONDS_BUCKETS: &[f64] = &[
     1800.0,
 ];
 
+/// Scoring rules often finish below the generic latency ladder's first bucket.
+const RULE_SECONDS_BUCKETS: &[f64] = &[
+    0.000001, 0.000005, 0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
+    0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
+];
+
 /// Bucket ladder for import-lane permit occupancy (a small count, not a duration).
 const IMPORT_LANE_PERMIT_BUCKETS: &[f64] = &[0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
 
@@ -92,6 +98,11 @@ pub fn prometheus_builder() -> PrometheusBuilder {
             LATENCY_SECONDS_BUCKETS,
         )
         .expect("latency bucket ladder is non-empty")
+        .set_buckets_for_metric(
+            Matcher::Prefix("scryer_rule".to_string()),
+            RULE_SECONDS_BUCKETS,
+        )
+        .expect("rule bucket ladder is non-empty")
         .set_buckets_for_metric(
             Matcher::Full("scryer_import_lane_active_permits".to_string()),
             IMPORT_LANE_PERMIT_BUCKETS,
@@ -226,6 +237,7 @@ pub fn describe_metrics() {
     scryer_application::describe_domain_event_metrics();
     scryer_application::describe_freshness_and_health_metrics();
     scryer_application::describe_download_queue_metrics();
+    scryer_application::describe_rule_metrics();
     scryer_infrastructure_acquisition::describe_indexer_metrics();
     scryer_infrastructure_acquisition::describe_download_client_router_metrics();
     scryer_interface::describe_graphql_metrics();
@@ -391,6 +403,39 @@ mod tests {
     use super::*;
 
     use metrics::{histogram, with_local_recorder};
+
+    #[test]
+    fn rule_metrics_resolve_microsecond_evaluations_and_register_descriptions() {
+        let recorder = prometheus_builder().build_recorder();
+        let rendered = with_local_recorder(&recorder, || {
+            describe_metrics();
+            histogram!("scryer_rule_evaluation_seconds", "rule_set_id" => "test").record(0.000008);
+            histogram!("scryer_rules_stage_seconds", "stage" => "input_prepare").record(0.000008);
+            recorder.handle().render()
+        });
+        for name in [
+            "scryer_rule_evaluation_seconds",
+            "scryer_rules_stage_seconds",
+        ] {
+            assert!(rendered.contains(&format!("# HELP {name} ")));
+            assert!(
+                rendered
+                    .lines()
+                    .any(|line| line.starts_with(&format!("{name}_bucket{{"))
+                        && line.contains("le=\"0.000005\"")
+                        && line.ends_with(" 0")),
+                "{rendered}"
+            );
+            assert!(
+                rendered
+                    .lines()
+                    .any(|line| line.starts_with(&format!("{name}_bucket{{"))
+                        && line.contains("le=\"0.00001\"")
+                        && line.ends_with(" 1")),
+                "{rendered}"
+            );
+        }
+    }
 
     #[test]
     fn seconds_metrics_render_as_histogram_buckets() {

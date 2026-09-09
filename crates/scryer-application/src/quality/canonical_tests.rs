@@ -1493,6 +1493,68 @@ fn scoring_preview_preserves_canonical_scores_and_blocks() {
 }
 
 #[test]
+fn scoring_metrics_separate_live_preview_and_failed_rule_application() {
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    let recorder = DebuggingRecorder::new();
+    with_local_recorder(&recorder, || {
+        let profile = movie_profile();
+        let source = "score_entry[\"broken\"] := lower(input.release.year)";
+        let policy = scryer_rules::UserPolicy {
+            id: "broken".into(),
+            name: "Broken".into(),
+            rego_source: scryer_rules::rewrite_package_declaration(source, "broken"),
+            origin: scryer_rules::PolicyOrigin::User,
+            applied_facets: vec![],
+        };
+        for purpose in [
+            crate::rules::metrics::Purpose::Live,
+            crate::rules::metrics::Purpose::Preview,
+        ] {
+            let engine = crate::AppUseCase::build_user_rules_engine_for_purpose(
+                vec![],
+                vec![policy.clone()],
+                purpose,
+            )
+            .unwrap();
+            let mut context = ctx(&profile, &[]);
+            context.rules = Some(&engine);
+            if matches!(purpose, crate::rules::metrics::Purpose::Preview) {
+                assert_eq!(
+                    score_release_preview(&announced(8.0), &context)
+                        .rule_errors
+                        .len(),
+                    1
+                );
+            } else {
+                score_release(&announced(8.0), &context);
+            }
+        }
+    });
+    let series = recorder.snapshotter().snapshot().into_vec();
+    for purpose in ["live", "preview"] {
+        for (stage, outcome) in [
+            ("rules_apply", "error"),
+            ("scoring_release", "ok"),
+            ("evaluator_create", "ok"),
+        ] {
+            assert!(
+                series.iter().any(|(key, _, _, value)| key.key().name()
+                    == "scryer_rules_stage_seconds"
+                    && [("purpose", purpose), ("stage", stage), ("outcome", outcome)]
+                        .iter()
+                        .all(|(name, expected)| key
+                            .key()
+                            .labels()
+                            .any(|label| label.key() == *name && label.value() == *expected))
+                    && matches!(value, DebugValue::Histogram(values) if values.len() == 1)),
+                "missing {purpose} {stage} {outcome}"
+            );
+        }
+    }
+}
+
+#[test]
 fn scoring_preview_reports_rule_failures_without_retaining_normal_batch_diagnostics() {
     let engine = rule_engine(
         "broken_preview",

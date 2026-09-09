@@ -895,6 +895,13 @@ impl AppUseCase {
         prepared: &mut Option<PreparedReleaseScoringInputs>,
         preserve_duplicate_sources: bool,
     ) -> AppResult<Vec<IndexerSearchResult>> {
+        let mut timer = crate::rules::metrics::StageTimer::new(
+            "scan_batch",
+            crate::rules::metrics::Purpose::Live,
+        );
+        timer.outcome("error");
+        metrics::counter!("scryer_scoring_batch_candidates_total", "purpose" => "live")
+            .increment(raw_results.len() as u64);
         if prepared.is_none() {
             let blocklist = self.load_title_release_blocklist_signatures(title_id).await;
             let (has_usenet_client, has_torrent_client, client_preferred_source_kind) =
@@ -1269,6 +1276,7 @@ impl AppUseCase {
         });
         scored.truncate(200);
 
+        timer.outcome("ok");
         Ok(scored)
     }
 
