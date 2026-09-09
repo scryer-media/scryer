@@ -1141,10 +1141,10 @@ export function SettingsProxiesSection({
                         {t("label.cancel")}
                       </Button>
                     ) : null}
-                    <label className="flex items-center gap-3">
+                    <label className="flex h-9 items-center gap-3">
                       <Checkbox
                         id="settings-indexer-proxy-enabled"
-                        className="size-8 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                        className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
                         checked={proxyDraft.isEnabled}
                         disabled={mutatingProxyId !== null}
                         onCheckedChange={(value) =>
