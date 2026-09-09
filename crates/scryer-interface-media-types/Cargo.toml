@@ -7,5 +7,6 @@ edition.workspace = true
 async-graphql = { workspace = true }
 chrono = { workspace = true }
 scryer-application = { path = "../scryer-application" }
+scryer-media-types = { path = "../scryer-media-types" }
 scryer-domain = { path = "../scryer-domain" }
 serde_json = { workspace = true }

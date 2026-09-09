@@ -6243,6 +6243,7 @@ dependencies = [
  "rustls-webpki",
  "scryer-domain",
  "scryer-logging",
+ "scryer-media-types",
  "scryer-mediainfo",
  "scryer-outbound-http",
  "scryer-plugin-sdk",
@@ -6439,6 +6440,7 @@ dependencies = [
  "scryer-infrastructure-library-search",
  "scryer-infrastructure-sql",
  "scryer-infrastructure-workflow",
+ "scryer-media-types",
  "scryer-outbound-http",
  "scryer-plugin-sdk",
  "serde",
@@ -6674,6 +6676,7 @@ dependencies = [
  "chrono",
  "scryer-application",
  "scryer-domain",
+ "scryer-media-types",
  "serde_json",
 ]
 
@@ -6776,6 +6779,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "scryer-media-types"
+version = "0.20.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "scryer-mediainfo"
 version = "0.20.0"
 dependencies = [
@@ -6785,6 +6795,7 @@ dependencies = [
  "mp4parse",
  "ogg",
  "riff",
+ "scryer-media-types",
  "scuffle-h264",
  "scuffle-h265",
  "serde",
@@ -6893,6 +6904,7 @@ dependencies = [
  "blake3",
  "chrono",
  "regorus",
+ "scryer-media-types",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

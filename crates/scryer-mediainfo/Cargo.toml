@@ -4,6 +4,7 @@ version = "0.20.0"
 edition.workspace = true
 
 [dependencies]
+scryer-media-types = { path = "../scryer-media-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
