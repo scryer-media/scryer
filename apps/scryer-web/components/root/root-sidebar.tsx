@@ -114,6 +114,7 @@ type TopNavGroup = {
 
 type TopNavGroupItemDefinition =
   | { kind: "view"; id: ViewId }
+  | { kind: "apiExplorer"; icon: LucideIcon }
   | { kind: "requests"; icon: LucideIcon }
   | { kind: "logs"; id: LogsSection; labelKey: string; icon: LucideIcon }
   | { kind: "system"; id: SystemSection; labelKey: string; icon: LucideIcon }
@@ -143,6 +144,12 @@ function isSettingsNavEntryActive(
 
 type TopNavGroupItem =
   | (NavItem & { kind: "view" })
+  | {
+      kind: "apiExplorer";
+      id: "api-explorer";
+      label: string;
+      icon: LucideIcon;
+    }
   | {
       kind: "requests";
       id: "requests";
@@ -233,6 +240,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       },
       { kind: "settings", id: "security", icon: ShieldCheck },
       { kind: "view", id: "system" },
+      { kind: "apiExplorer", icon: Code2 },
       { kind: "system", id: "jobs", labelKey: "system.jobsTitle", icon: Timer },
       {
         kind: "system",
@@ -845,6 +853,19 @@ function RootSidebarContent({
             },
           ];
         }
+        if (definition.kind === "apiExplorer") {
+          if (!canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)) {
+            return [];
+          }
+          return [
+            {
+              kind: "apiExplorer",
+              id: "api-explorer",
+              label: "API",
+              icon: definition.icon,
+            },
+          ];
+        }
         if (definition.kind === "requests") {
           if (!canManageTitle && !canRequestMedia) {
             return [];
@@ -910,6 +931,7 @@ function RootSidebarContent({
         ]
       : groups;
   }, [
+    apiExplorerEnabled,
     canManageSystemSettings,
     canManageTitle,
     canRequestMedia,
@@ -1152,6 +1174,26 @@ function RootSidebarContent({
               <SidebarMenu id={groupContentId} className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon;
+                  if (item.kind === "apiExplorer") {
+                    return (
+                      <React.Fragment key="api-explorer">
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            id="root-sidebar-api-explorer"
+                            tooltip="API"
+                            isActive={view === "api-explorer"}
+                            className={TOP_NAV_BUTTON_CLASS}
+                            onClick={(event) => {
+                              handleNavigate(event, "api-explorer");
+                            }}
+                          >
+                            <Icon className="h-4 w-4" />
+                            {item.label}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      </React.Fragment>
+                    );
+                  }
                   if (item.kind === "requests") {
                     return (
                       <React.Fragment key="requests">
@@ -1615,21 +1657,6 @@ function RootSidebarContent({
           })}
         </SidebarContent>
         <SidebarFooter className="space-y-1.5 border-t border-[var(--scry-border3)] px-3.5 py-2.5">
-          {canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled) && (
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  id="root-sidebar-api-explorer"
-                  tooltip="API"
-                  isActive={view === "api-explorer"}
-                  onClick={(event) => handleNavigate(event, "api-explorer")}
-                >
-                  <Code2 />
-                  <span>API</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          )}
           <div
             className={cn(
               "grid grid-cols-2 gap-1.5 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center",
