@@ -91,7 +91,7 @@ impl MaintenanceTitleEpisodeInventory {
                 return Arc::clone(ranks);
             }
         }
-        let ranks = Arc::new(self.calculate_retention_ranks(evaluation_time.clone(), None));
+        let ranks = Arc::new(self.calculate_retention_ranks(evaluation_time, None));
         let mut cache = self
             .retention_ranks
             .lock()

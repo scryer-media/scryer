@@ -1,15 +1,13 @@
 //! Resumable policy deletion using the catalog's per-file deletion owner.
-use super::action_execution::{ActionResult, SafetyDecision, execution_reason};
-use super::facts::MaintenanceLibraryRef;
-use super::service::MaintenanceRuleSetDetail;
+use super::action_execution::{
+    ActionResult, MaintenanceExecutionContext, SafetyDecision, execution_reason,
+};
 use crate::library::user_delete::PolicyMediaFileDeletePlan;
 use crate::{AppError, AppResult, AppUseCase, PolicyDeleteAuthorization};
 use scryer_domain::{
     LifecycleActionRun, LifecycleCandidate, MaintenanceRuleSubjectKind as Scope, Title, User,
 };
-use scryer_rules::maintenance::{
-    MaintenanceFileDoc, MaintenanceInput, MaintenanceRulesEvaluator, Observation,
-};
+use scryer_rules::maintenance::{MaintenanceFileDoc, MaintenanceInput, Observation};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -102,15 +100,15 @@ impl ScopedDeletionCheckpoint {
     }
 
     pub(super) fn completed_retention_episode_ids(&self) -> BTreeSet<String> {
-        self.mutation_started
-            .then(|| {
-                self.files
-                    .iter()
-                    .filter(|file| file.completed)
-                    .flat_map(|file| file.retention_episode_ids.iter().cloned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        if self.mutation_started {
+            self.files
+                .iter()
+                .filter(|file| file.completed)
+                .flat_map(|file| file.retention_episode_ids.iter().cloned())
+                .collect()
+        } else {
+            BTreeSet::new()
+        }
     }
 
     fn file_matches_catalog(&self, file: &crate::types::TitleMediaFile) -> bool {
@@ -543,16 +541,17 @@ impl AppUseCase {
 
     pub(super) async fn execute_scoped_maintenance_deletion(
         &self,
-        candidate: &LifecycleCandidate,
-        title: &Title,
-        input: &MaintenanceInput,
-        run: &mut LifecycleActionRun,
-        storage_root_id: Option<&str>,
-        detail: &MaintenanceRuleSetDetail,
-        evaluator: &mut MaintenanceRulesEvaluator,
-        libraries: &HashMap<String, MaintenanceLibraryRef>,
-        tag_conflicts: &HashSet<String>,
+        context: &mut MaintenanceExecutionContext<'_>,
     ) -> AppResult<ActionResult> {
+        let candidate = context.candidate;
+        let title = context.title;
+        let input = context.input;
+        let run = &mut *context.run;
+        let storage_root_id = context.detail.revision.storage_root_id.as_deref();
+        let detail = context.detail;
+        let evaluator = &mut *context.evaluator;
+        let libraries = context.libraries;
+        let tag_conflicts = context.tag_conflicts;
         let storage_root_identity = if storage_root_id.is_some() {
             let Some(identity) = self
                 .maintenance_storage_root_identity(storage_root_id)
