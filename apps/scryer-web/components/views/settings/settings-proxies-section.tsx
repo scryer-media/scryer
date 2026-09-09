@@ -9,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { InfoHelp } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -220,11 +221,12 @@ export function SettingsProxiesSection({
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <CardTitle className="flex items-center gap-2 text-base">
               {t("settings.proxies")}
+              <InfoHelp
+                ariaLabel={t("settings.proxies")}
+                text={t("settings.proxiesHelp")}
+              />
             </CardTitle>
           </div>
-          <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
-            {t("settings.proxiesHelp")}
-          </p>
           <div className="overflow-x-auto">
             <Table id="settings-indexer-proxies-table">
               <TableHeader>
