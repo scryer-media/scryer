@@ -504,19 +504,6 @@ export function SettingsProxiesSection({
                       }
                     />
                   </label>
-                  <label className="flex items-center gap-2 self-end pb-2">
-                    <Checkbox
-                      id="settings-indexer-proxy-enabled"
-                      checked={proxyDraft.isEnabled}
-                      onCheckedChange={(value) =>
-                        setProxyDraft((prev) => ({
-                          ...prev,
-                          isEnabled: value === true,
-                        }))
-                      }
-                    />
-                    <span>{t("label.enabled")}</span>
-                  </label>
                 </div>
                 {isWireguardDraft && !isWireguardDetailsOpen ? (
                   <div
@@ -1126,6 +1113,21 @@ export function SettingsProxiesSection({
                 ) : null}
                 {showProxyDetails ? (
                   <div className="flex items-end gap-2">
+                    <label className="flex items-center gap-3">
+                      <Checkbox
+                        id="settings-indexer-proxy-enabled"
+                        className="size-8 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                        checked={proxyDraft.isEnabled}
+                        disabled={mutatingProxyId !== null}
+                        onCheckedChange={(value) =>
+                          setProxyDraft((prev) => ({
+                            ...prev,
+                            isEnabled: value === true,
+                          }))
+                        }
+                      />
+                      <span>{t("label.enabled")}</span>
+                    </label>
                     <Button
                       id="settings-indexer-proxy-save"
                       type="submit"
