@@ -301,6 +301,10 @@ pub(super) struct TrackingDownloadSubmissionRepo {
         Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
     pub(super) cleanup_checkpoints:
         Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
+    /// Every `finish_download_cleanup` call as (download, outcome, complete),
+    /// in order; a record only, it never feeds `claim_download_cleanup`.
+    pub(super) finished_cleanup:
+        Arc<Mutex<Vec<(scryer_domain::download_identity::DownloadId, String, bool)>>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
 }
@@ -761,6 +765,22 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         id: &scryer_domain::download_identity::DownloadId,
     ) -> AppResult<bool> {
         Ok(self.pending_cleanup.lock().await.contains(id))
+    }
+
+    async fn finish_download_cleanup(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        outcome: &str,
+        complete: bool,
+        _retry_seconds: i64,
+        _history_offset: usize,
+        _error: Option<&str>,
+    ) -> AppResult<()> {
+        self.finished_cleanup
+            .lock()
+            .await
+            .push((*id, outcome.to_string(), complete));
+        Ok(())
     }
 
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
@@ -1777,6 +1797,11 @@ impl StubSubmitError {
 pub(super) struct StubDownloadClient {
     pub(super) native_data_removal: bool,
     pub(super) observation_error: Arc<Mutex<Option<String>>>,
+    /// Scripted `observe_download` answers, consumed front to back before the
+    /// fixture's own listings are consulted; the offsets asked for are kept.
+    pub(super) observation_script:
+        Arc<Mutex<std::collections::VecDeque<crate::DownloadClientObservation>>>,
+    pub(super) observed_history_offsets: Arc<Mutex<Vec<usize>>>,
     pub(super) queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
@@ -1907,10 +1932,14 @@ impl DownloadClient for StubDownloadClient {
     async fn observe_download(
         &self,
         locator: &crate::ClientJobLocator,
-        _offset: usize,
+        offset: usize,
     ) -> AppResult<crate::DownloadClientObservation> {
         if let Some(error) = self.observation_error.lock().await.as_ref() {
             return Err(AppError::Repository(error.clone()));
+        }
+        if let Some(observation) = self.observation_script.lock().await.pop_front() {
+            self.observed_history_offsets.lock().await.push(offset);
+            return Ok(observation);
         }
         let authoritative = self.snapshot_authoritative_client_ids.lock().await;
         if !authoritative.is_empty()

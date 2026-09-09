@@ -723,17 +723,33 @@ async fn durable_entry_only_cleanup_recovers_absence_but_not_unknown_or_reused_i
             .is_none()
     );
     *client.observation_error.lock().await = None;
+    // A checkpoint minted for another job identity is never credited as this
+    // row's recovery: absence still settles the row (nothing can change on
+    // retry), but as an unverified payload, not a recovered removal.
     let mut wrong = record.clone();
     wrong.item_id = "different-job".into();
-    assert!(
-        crate::import::import::run_claimed_download_cleanup(&app, wrong, None)
-            .await
-            .is_none()
+    let unverified = crate::import::import::run_claimed_download_cleanup(&app, wrong, None)
+        .await
+        .unwrap();
+    assert_eq!(unverified.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    let last_finish =
+        |finished: &[(scryer_domain::download_identity::DownloadId, String, bool)]| {
+            finished
+                .last()
+                .map(|(_, outcome, complete)| (outcome.clone(), *complete))
+        };
+    assert_eq!(
+        last_finish(&repository.finished_cleanup.lock().await),
+        Some(("entry_absent_payload_unverified".to_string(), true))
     );
-    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
         .await
         .unwrap();
     assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    assert_eq!(
+        last_finish(&repository.finished_cleanup.lock().await),
+        Some(("entry_absent".to_string(), true))
+    );
     assert!(client.deleted_requests.lock().await.is_empty());
 }
 
@@ -986,7 +1002,7 @@ async fn durable_ignored_orphan_cleanup_removes_only_entry() {
 }
 
 #[tokio::test]
-async fn durable_cleanup_requires_a_payload_checkpoint_after_entry_absence() {
+async fn durable_cleanup_settles_an_absent_entry_without_a_payload_checkpoint() {
     let client = Arc::new(StubDownloadClient::default());
     let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
     let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
@@ -1001,16 +1017,11 @@ async fn durable_cleanup_requires_a_payload_checkpoint_after_entry_absence() {
         false,
     );
     let mut record = cleanup_record_for(&tracked);
-    assert!(
-        crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
-            .await
-            .is_none()
-    );
-    // Absence with nothing to verify cannot heal by retrying: after the retry
-    // budget the row settles as gone with the payload reported unverified.
-    let mut exhausted = record.clone();
-    exhausted.attempts = crate::import::import::HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL;
-    let settled = crate::import::import::run_claimed_download_cleanup(&app, exhausted, None)
+    // Absence is the adapter's authoritative answer and there is nothing left
+    // to verify: the row settles as gone on its first attempt with the payload
+    // reported unverified, rather than burning a retry budget (an upgrade
+    // backfills every historical download through here).
+    let settled = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
         .await
         .unwrap();
     assert_eq!(settled.2, TerminalDownloadCleanupOutcome::AlreadyGone);
@@ -1389,7 +1400,7 @@ async fn host_cleanup_gives_up_after_the_retry_budget_and_removes_the_entry() {
 }
 
 #[tokio::test]
-async fn durable_cleanup_abandons_unattributable_rows_after_the_retry_budget() {
+async fn durable_cleanup_abandons_unattributable_rows_at_once() {
     let client = Arc::new(StubDownloadClient::default());
     let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
     let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
@@ -1406,13 +1417,8 @@ async fn durable_cleanup_abandons_unattributable_rows_after_the_retry_budget() {
     let mut record = cleanup_record_for(&tracked);
     record.title_id = None;
     record.facet = None;
-    assert!(
-        crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
-            .await
-            .is_none(),
-        "the first attempts still retry"
-    );
-    record.attempts = crate::import::import::HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL;
+    // Missing attribution never heals by retrying (manual import reopens the
+    // row when it attributes it), so the row is abandoned on its first attempt.
     let settled = crate::import::import::run_claimed_download_cleanup(&app, record, None)
         .await
         .unwrap();

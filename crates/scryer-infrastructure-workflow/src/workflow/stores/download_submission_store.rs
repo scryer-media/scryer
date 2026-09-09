@@ -496,6 +496,18 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     &args,
                 )
                 .await?;
+                // A row abandoned for lacking attribution now has it: reopen it
+                // so the manual import's cleanup claim runs instead of finding
+                // a settled row. Leases are untouched (only settled rows match).
+                let now = Utc::now();
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE download_cleanup SET status = 'pending', outcome = NULL, last_error = NULL,
+                     attempts = 0, next_attempt_at = {}, updated_at = {}
+                     WHERE download_id = {} AND status = 'completed' AND outcome = 'cleanup_abandoned'",
+                    &[SqlArg::Timestamp(now), SqlArg::Timestamp(now), args[2].clone()],
+                )
+                .await?;
                 Ok(())
             })
         })
@@ -3044,6 +3056,53 @@ mod seed_goal_tests {
                 assert_eq!(recovered.client_id, "client-0");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn attribution_reopens_an_abandoned_cleanup_row() {
+        let store = store().await;
+        let id = DownloadId::new();
+        let mut orphan = submission(id, "job-1", " ");
+        orphan.facet.clear();
+        store
+            .record_submission_with_identity(orphan, submission_identity(id), None)
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                Some(&identity()),
+                "imported",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let DownloadCleanupClaim::Claimed(_) = store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("bound orphan must receive cleanup intent");
+        };
+        store
+            .finish_download_cleanup(&id, "cleanup_abandoned", true, 0, 0, Some("unattributed"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.claim_download_cleanup(&id).await.unwrap(),
+            DownloadCleanupClaim::Settled { .. }
+        ));
+        store
+            .set_download_cleanup_attribution(&id, "chosen-title", "movie")
+            .await
+            .unwrap();
+        let DownloadCleanupClaim::Claimed(reopened) =
+            store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("attribution must reopen an abandoned row");
+        };
+        assert_eq!(reopened.title_id.as_deref(), Some("chosen-title"));
+        assert_eq!(reopened.facet.as_deref(), Some("movie"));
+        assert_eq!(reopened.attempts, 1);
     }
 
     #[tokio::test]

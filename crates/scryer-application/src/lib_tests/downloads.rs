@@ -325,6 +325,127 @@ async fn push_snapshot_observation_is_recorded_by_the_registry_resolver() {
 }
 
 #[tokio::test]
+async fn authoritative_absence_follows_the_history_cursor_past_the_first_page() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone()])
+        .await;
+    let first_download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "removed-incomplete-1");
+    registry
+        .bind(source_identity.clone(), first_download_id)
+        .await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: first_download_id,
+            title_id: "title-removed-incomplete".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "removed-incomplete-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Removed.Incomplete.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("seed download submission");
+
+    let mut item =
+        queue_history_fixture_item("removed-incomplete-1", DownloadQueueState::Downloading, 1);
+    item.client_id = config.id.clone();
+    item.client_name = config.name.clone();
+    item.client_type = "nzbget".to_string();
+    item.download_id = Some(first_download_id.to_wire());
+    item.is_scryer_origin = true;
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, item).await;
+
+    // The adapter has no exact lookup and answers page by page; the job is
+    // only proven absent once the scan reaches the end of history.
+    download_client.observation_script.lock().await.extend([
+        crate::DownloadClientObservation::Unknown {
+            reason: "page 1 scanned".into(),
+            next_history_offset: 100,
+        },
+        crate::DownloadClientObservation::Unknown {
+            reason: "page 2 scanned".into(),
+            next_history_offset: 200,
+        },
+        crate::DownloadClientObservation::Absent,
+    ]);
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        vec![0, 100, 200],
+        "each round must resume from the adapter's cursor"
+    );
+    assert!(registry.ended.lock().await.contains(&first_download_id));
+
+    // A cursor that does not advance is not progress: the binding is kept.
+    let second_download_id = scryer_domain::download_identity::DownloadId::new();
+    let stalled_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "removed-incomplete-2");
+    registry
+        .bind(stalled_identity.clone(), second_download_id)
+        .await;
+    download_client
+        .observed_history_offsets
+        .lock()
+        .await
+        .clear();
+    download_client.observation_script.lock().await.extend([
+        crate::DownloadClientObservation::Unknown {
+            reason: "client unavailable".into(),
+            next_history_offset: 0,
+        },
+    ]);
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &stalled_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        vec![0]
+    );
+    assert!(!registry.ended.lock().await.contains(&second_download_id));
+}
+
+#[tokio::test]
 async fn authoritative_absence_fails_and_ends_an_incomplete_binding_before_reobservation() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());

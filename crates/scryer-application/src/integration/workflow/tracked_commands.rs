@@ -1357,6 +1357,10 @@ async fn reconcile_deleted_client_bindings(
     }
 }
 
+/// How many `Unknown`-with-cursor pages one absence check follows before
+/// giving the binding the benefit of the doubt until the next snapshot.
+const ABSENT_SOURCE_HISTORY_SCAN_ROUNDS: usize = 8;
+
 pub(crate) async fn reconcile_authoritatively_absent_source(
     app: &AppUseCase,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
@@ -1385,20 +1389,46 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
 
     // Recent activity windows are not complete history. Only the adapter's
     // exact/complete observation may turn a missing snapshot row into failure.
-    match app
-        .services
-        .integrations
-        .download_client
-        .observe_download(source_identity, 0)
-        .await
-    {
-        Ok(crate::DownloadClientObservation::Absent) => {}
-        Ok(_) => return,
-        Err(error) => {
-            tracing::warn!(download_id = %binding.download_id, error = %error,
-                "client state unknown; preserving download binding");
-            return;
+    // An adapter without an exact lookup (an older Weaver, a SAB-compatible
+    // backend that ignores `nzo_ids`) answers `Unknown` with the next history
+    // offset so a bounded scan can continue; follow that cursor here, or a job
+    // behind the first history page could never be proven absent and its
+    // binding would block replacement downloads forever.
+    let mut history_offset = 0usize;
+    let mut proven_absent = false;
+    for _ in 0..ABSENT_SOURCE_HISTORY_SCAN_ROUNDS {
+        match app
+            .services
+            .integrations
+            .download_client
+            .observe_download(source_identity, history_offset)
+            .await
+        {
+            Ok(crate::DownloadClientObservation::Absent) => {
+                proven_absent = true;
+                break;
+            }
+            Ok(crate::DownloadClientObservation::Present(_)) => return,
+            Ok(crate::DownloadClientObservation::Unknown { reason, next_history_offset }) => {
+                if next_history_offset > history_offset {
+                    history_offset = next_history_offset;
+                    continue;
+                }
+                tracing::debug!(download_id = %binding.download_id, reason, history_offset,
+                    "client state unknown; preserving download binding");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(download_id = %binding.download_id, error = %error,
+                    "client state unknown; preserving download binding");
+                return;
+            }
         }
+    }
+    if !proven_absent {
+        tracing::debug!(download_id = %binding.download_id, history_offset,
+            "history scan budget exhausted without proving absence; preserving download binding");
+        return;
     }
     match authoritatively_absent_download_disposition(app, tracker, source_identity, &binding).await
     {
@@ -3487,8 +3517,16 @@ async fn reconcile_terminal_tracked_downloads(
                 }
             }
         }).buffer_unordered(4);
+        // One line per tick that did work, instead of one per row: an upgrade
+        // backfills every historical terminal download through here.
+        let mut settled: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let mut pending = 0usize;
         while let Some(result) = work.next().await {
+            if result.is_none() {
+                pending += 1;
+            }
             if let Some((download_id, tracked, cleanup)) = result {
+                *settled.entry(format!("{:?}", cleanup.outcome)).or_default() += 1;
                 let (id, state) = if let Some(tracked) = tracked {
                     let id = tracked.id.clone();
                     let state = tracked.state;
@@ -3510,6 +3548,9 @@ async fn reconcile_terminal_tracked_downloads(
                 )
                 .await;
             }
+        }
+        if !settled.is_empty() || pending > 0 {
+            tracing::info!(settled = ?settled, pending, "durable download cleanup tick");
         }
         // A retained entry can be rediscovered after its intent completed.
         // Replay that result without rerunning policy or client mutations.
