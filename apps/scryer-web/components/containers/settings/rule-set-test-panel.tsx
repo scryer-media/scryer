@@ -451,6 +451,36 @@ export function RuleSetTestPanel({
                     : ""}
                 </p>
               </div>
+              {result.draftContribution ? (
+                <div className="border-l border-border pl-3 text-xs">
+                  <p className="font-medium">
+                    Current draft{" "}
+                    <span
+                      className={
+                        result.draftContribution.score &&
+                        result.draftContribution.score > 0
+                          ? "text-[var(--scry-success-text)]"
+                          : result.draftContribution.score &&
+                              result.draftContribution.score < 0
+                            ? "text-[var(--scry-danger-text)]"
+                            : undefined
+                      }
+                    >
+                      {formatSignedScore(result.draftContribution.score ?? 0)}
+                    </span>
+                  </p>
+                  <p className="text-muted-foreground">
+                    {result.draftContribution.message ||
+                      (result.draftContribution.enabled === false
+                        ? "Draft is disabled."
+                        : result.draftContribution.applies === false
+                          ? "Draft does not apply to this title facet."
+                          : result.draftContribution.matched
+                            ? "Draft matched."
+                            : "Draft did not match.")}
+                  </p>
+                </div>
+              ) : null}
             </div>
             {incomplete ? (
               <div className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
@@ -502,29 +532,7 @@ export function RuleSetTestPanel({
                     : `${result.parsed.sizeBytes} bytes`}
                 </dd>
               </dl>
-              <p className="mt-1 text-muted-foreground">
-                Listing metadata and file-probed facts are unavailable in this
-                preview.
-              </p>
             </div>
-            {result.draftContribution ? (
-              <div className="rounded bg-muted/50 px-2 py-2 text-xs">
-                <p className="font-medium">
-                  Current draft:{" "}
-                  {formatSignedScore(result.draftContribution.score ?? 0)}
-                </p>
-                <p>
-                  {result.draftContribution.message ||
-                    (result.draftContribution.enabled === false
-                      ? "Draft is disabled."
-                      : result.draftContribution.applies === false
-                        ? "Draft does not apply to this title facet."
-                        : result.draftContribution.matched
-                          ? "Draft matched."
-                          : "Draft did not match.")}
-                </p>
-              </div>
-            ) : null}
             {groupedRuleSets.map(([origin, entries]) => (
               <div key={origin} className="text-xs">
                 <p className="font-medium">{origin}</p>
