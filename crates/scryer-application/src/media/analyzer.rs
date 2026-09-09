@@ -6,6 +6,75 @@ use crate::{AppError, AppResult, MediaAnalysisOutcome, MediaAnalyzer, nice_threa
 
 pub struct NativeMediaAnalyzer;
 
+#[derive(Clone, PartialEq, Eq)]
+struct AnalysisKey {
+    path: PathBuf,
+    source: Option<super::discs::MediaSourceVersion>,
+    selection: scryer_media_types::DiscSelection,
+}
+
+struct AnalysisFlight {
+    key: AnalysisKey,
+    result: tokio::sync::watch::Sender<Option<Result<MediaAnalysisOutcome, String>>>,
+}
+
+#[derive(Default)]
+struct AnalysisFlights {
+    active: std::sync::Mutex<Vec<std::sync::Weak<AnalysisFlight>>>,
+}
+
+impl AnalysisFlights {
+    fn start(
+        &self,
+        key: AnalysisKey,
+        operation: impl FnOnce() -> AppResult<MediaAnalysisOutcome> + Send + 'static,
+    ) -> std::sync::Arc<AnalysisFlight> {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        active.retain(|entry| entry.strong_count() > 0);
+        if let Some(flight) = active
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .find(|flight| flight.key == key)
+        {
+            return flight;
+        }
+        let flight = std::sync::Arc::new(AnalysisFlight {
+            key,
+            result: tokio::sync::watch::channel(None).0,
+        });
+        active.push(std::sync::Arc::downgrade(&flight));
+        let running = flight.clone();
+        // The job owns the flight until the blocking read ends. Dropping the
+        // initiating request must not allow a second reader to start its work.
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(operation)
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result.map_err(|error| error.to_string()));
+            running.result.send_replace(Some(result));
+        });
+        flight
+    }
+}
+
+impl AnalysisFlight {
+    async fn outcome(&self) -> AppResult<MediaAnalysisOutcome> {
+        let mut result = self.result.subscribe();
+        loop {
+            if let Some(outcome) = result.borrow_and_update().clone() {
+                return outcome.map_err(AppError::Repository);
+            }
+            result
+                .changed()
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        }
+    }
+}
+
 #[async_trait]
 impl MediaAnalyzer for NativeMediaAnalyzer {
     async fn diagnose_file(
@@ -54,7 +123,15 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
         path: PathBuf,
         selection: scryer_media_types::DiscSelection,
     ) -> AppResult<MediaAnalysisOutcome> {
-        tokio::task::spawn_blocking(move || {
+        static FLIGHTS: std::sync::LazyLock<AnalysisFlights> =
+            std::sync::LazyLock::new(AnalysisFlights::default);
+        let source_path = path.clone();
+        let key = AnalysisKey {
+            path: path.clone(),
+            source: super::discs::MediaSourceVersion::read(&path).await.ok(),
+            selection: selection.clone(),
+        };
+        let flight = FLIGHTS.start(key.clone(), move || {
             nice_thread();
             #[cfg(not(feature = "runtime-media-analysis"))]
             let _ = selection;
@@ -121,15 +198,131 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
             Ok(MediaAnalysisOutcome::Invalid(
                 "native media analysis is not compiled into this target".to_string(),
             ))
-        })
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?
+        });
+        let outcome = flight.outcome().await?;
+        if key.source
+            != super::discs::MediaSourceVersion::read(&source_path)
+                .await
+                .ok()
+        {
+            return Err(AppError::Validation(
+                "media source changed during inspection".into(),
+            ));
+        }
+        Ok(outcome)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn matching_analysis_waiters_share_work_after_initiator_cancellation() {
+        let flights = AnalysisFlights::default();
+        let key = AnalysisKey {
+            path: PathBuf::from("same-media.iso"),
+            source: None,
+            selection: Default::default(),
+        };
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (resume, blocked) = std::sync::mpsc::channel();
+        let first = flights.start(key.clone(), move || {
+            let _ = started.send(());
+            blocked
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            Ok(MediaAnalysisOutcome::Invalid("shared result".into()))
+        });
+        let request = tokio::spawn(async move { first.outcome().await });
+        ready.await.unwrap();
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        let second = flights.start(key, || panic!("duplicate native reader"));
+        resume.send(()).unwrap();
+        assert!(
+            matches!(second.outcome().await.unwrap(), MediaAnalysisOutcome::Invalid(message) if message == "shared result")
+        );
+        drop(second);
+        assert!(
+            flights
+                .active
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|entry| entry.upgrade().is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn analysis_flights_separate_source_versions_and_disc_choices() {
+        let flights = AnalysisFlights::default();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("disc.iso");
+        std::fs::write(&path, b"original").unwrap();
+        let key = AnalysisKey {
+            path: path.clone(),
+            source: Some(
+                super::super::discs::MediaSourceVersion::read(&path)
+                    .await
+                    .unwrap(),
+            ),
+            selection: Default::default(),
+        };
+        let (resume, blocked) = std::sync::mpsc::channel();
+        let original = flights.start(key.clone(), move || {
+            blocked
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            Ok(MediaAnalysisOutcome::Invalid("original".into()))
+        });
+        let mut selected_key = key.clone();
+        selected_key.selection.title_id = Some("00002".into());
+        let selected = flights.start(selected_key, || {
+            Ok(MediaAnalysisOutcome::Invalid("different cut".into()))
+        });
+        assert!(
+            matches!(selected.outcome().await.unwrap(), MediaAnalysisOutcome::Invalid(message) if message == "different cut")
+        );
+        std::fs::write(&path, b"replacement source").unwrap();
+        let replaced_key = AnalysisKey {
+            source: Some(
+                super::super::discs::MediaSourceVersion::read(&path)
+                    .await
+                    .unwrap(),
+            ),
+            ..key
+        };
+        let replaced = flights.start(replaced_key, || {
+            Ok(MediaAnalysisOutcome::Invalid("new source".into()))
+        });
+        assert!(
+            matches!(replaced.outcome().await.unwrap(), MediaAnalysisOutcome::Invalid(message) if message == "new source")
+        );
+        resume.send(()).unwrap();
+        assert!(
+            matches!(original.outcome().await.unwrap(), MediaAnalysisOutcome::Invalid(message) if message == "original")
+        );
+    }
+
+    #[tokio::test]
+    async fn analysis_worker_panics_wake_waiters_and_allow_retry() {
+        let flights = AnalysisFlights::default();
+        let key = AnalysisKey {
+            path: PathBuf::from("broken-media.iso"),
+            source: None,
+            selection: Default::default(),
+        };
+        let failed = flights.start(key.clone(), || panic!("fixture reader failure"));
+        let follower = flights.start(key.clone(), || panic!("duplicate reader"));
+        assert!(failed.outcome().await.is_err());
+        assert!(follower.outcome().await.is_err());
+        drop((failed, follower));
+        let retry = flights.start(key, || Ok(MediaAnalysisOutcome::Invalid("retry".into())));
+        assert!(
+            matches!(retry.outcome().await.unwrap(), MediaAnalysisOutcome::Invalid(message) if message == "retry")
+        );
+    }
 
     #[tokio::test]
     async fn analyze_file_returns_minimal_valid_analysis_for_strm() {
