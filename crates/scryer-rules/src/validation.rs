@@ -13,7 +13,7 @@ use regorus::{
     unstable::{Expr, Literal, Module, Parser, Query, Rule, RuleBody, RuleHead, Source},
 };
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::OnceLock,
 };
 
@@ -380,6 +380,420 @@ fn parse_module(rego_source: &str, policy_path: &str) -> Result<Module, String> 
     let mut parser = Parser::new(&source).map_err(|e| e.to_string())?;
     parser.enable_rego_v1().map_err(|e| e.to_string())?;
     parser.parse().map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StaticReferenceComponent {
+    Field(String),
+    Dynamic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StaticReference {
+    components: Vec<StaticReferenceComponent>,
+}
+
+impl StaticReference {
+    fn field(&self, index: usize) -> Option<&str> {
+        match self.components.get(index)? {
+            StaticReferenceComponent::Field(field) => Some(field),
+            StaticReferenceComponent::Dynamic => None,
+        }
+    }
+
+    fn starts_with(&self, fields: &[&str]) -> bool {
+        fields
+            .iter()
+            .enumerate()
+            .all(|(index, field)| self.field(index) == Some(*field))
+    }
+}
+
+fn static_reference(expr: &Expr) -> Option<StaticReference> {
+    match expr {
+        Expr::Var { span, .. } => Some(StaticReference {
+            components: vec![StaticReferenceComponent::Field(span.text().to_string())],
+        }),
+        Expr::RefDot { refr, field, .. } => {
+            let mut reference = static_reference(refr)?;
+            reference.components.push(StaticReferenceComponent::Field(
+                field.1.as_string().ok()?.to_string(),
+            ));
+            Some(reference)
+        }
+        Expr::RefBrack { refr, index, .. } => {
+            let mut reference = static_reference(refr)?;
+            let component = match index.as_ref() {
+                Expr::String { value, .. } | Expr::RawString { value, .. } => {
+                    StaticReferenceComponent::Field(value.as_string().ok()?.to_string())
+                }
+                _ => StaticReferenceComponent::Dynamic,
+            };
+            reference.components.push(component);
+            Some(reference)
+        }
+        _ => None,
+    }
+}
+
+fn rule_reference_aliases(module: &Module, rule: &Rule) -> HashMap<String, StaticReference> {
+    let mut aliases = module
+        .imports
+        .iter()
+        .filter_map(|import| {
+            let reference = static_reference(&import.refr)?;
+            let alias = import
+                .r#as
+                .as_ref()
+                .map(|span| span.text().trim().to_string())
+                .or_else(|| {
+                    reference
+                        .field(reference.components.len().checked_sub(1)?)
+                        .map(str::to_string)
+                })?;
+            Some((alias, reference))
+        })
+        .collect::<HashMap<_, _>>();
+    // Rego variables are immutable within a rule. A direct assignment to a
+    // static reference is therefore a useful alias without looking at source
+    // text; unresolved or dynamic assignments are deliberately ignored.
+    visit_rule_expr_nodes(rule, |expr| {
+        let Expr::AssignExpr { lhs, rhs, .. } = expr else {
+            return;
+        };
+        let Expr::Var { span, .. } = lhs.as_ref() else {
+            return;
+        };
+        if let Some(reference) =
+            static_reference(rhs).or_else(|| object_get_reference(rhs, &aliases))
+        {
+            let reference = resolve_reference(reference, &aliases);
+            aliases.insert(span.text().to_string(), reference);
+        }
+    });
+    aliases
+}
+
+fn resolve_reference(
+    mut reference: StaticReference,
+    aliases: &HashMap<String, StaticReference>,
+) -> StaticReference {
+    let mut seen = HashSet::new();
+    while let Some(root) = reference.field(0).map(str::to_string) {
+        let Some(alias) = aliases.get(&root) else {
+            break;
+        };
+        if !seen.insert(root) {
+            break;
+        }
+        let mut components = alias.components.clone();
+        components.extend(reference.components.drain(1..));
+        reference.components = components;
+    }
+    reference
+}
+
+fn visit_expr_nodes(expr: &Expr, sink: &mut dyn FnMut(&Expr)) {
+    sink(expr);
+    match expr {
+        Expr::Array { items, .. } | Expr::Set { items, .. } => {
+            for item in items {
+                visit_expr_nodes(item, sink);
+            }
+        }
+        Expr::Object { fields, .. } => {
+            for (_, key, value) in fields {
+                visit_expr_nodes(key, sink);
+                visit_expr_nodes(value, sink);
+            }
+        }
+        Expr::ArrayCompr { term, query, .. } | Expr::SetCompr { term, query, .. } => {
+            visit_expr_nodes(term, sink);
+            visit_query_expr_nodes(query, sink);
+        }
+        Expr::ObjectCompr {
+            key, value, query, ..
+        } => {
+            visit_expr_nodes(key, sink);
+            visit_expr_nodes(value, sink);
+            visit_query_expr_nodes(query, sink);
+        }
+        Expr::Call { fcn, params, .. } => {
+            visit_expr_nodes(fcn, sink);
+            // A resolved object.get is one reference. Walking its base again
+            // would mistake a bounded field read for a whole-document read.
+            let skip = if object_get_reference(expr, &HashMap::new()).is_some() {
+                1
+            } else {
+                0
+            };
+            for param in params.iter().skip(skip) {
+                visit_expr_nodes(param, sink);
+            }
+        }
+        Expr::UnaryExpr { expr, .. } => visit_expr_nodes(expr, sink),
+        Expr::RefDot { refr, .. } => {
+            if static_reference(refr).is_none() {
+                visit_expr_nodes(refr, sink);
+            }
+        }
+        Expr::RefBrack { refr, index, .. } => {
+            if static_reference(refr).is_none() {
+                visit_expr_nodes(refr, sink);
+            }
+            visit_expr_nodes(index, sink);
+        }
+        Expr::BinExpr { lhs, rhs, .. }
+        | Expr::BoolExpr { lhs, rhs, .. }
+        | Expr::ArithExpr { lhs, rhs, .. }
+        | Expr::AssignExpr { lhs, rhs, .. }
+        | Expr::OrExpr { lhs, rhs, .. } => {
+            visit_expr_nodes(lhs, sink);
+            visit_expr_nodes(rhs, sink);
+        }
+        Expr::Membership {
+            key,
+            value,
+            collection,
+            ..
+        } => {
+            if let Some(key) = key {
+                visit_expr_nodes(key, sink);
+            }
+            visit_expr_nodes(value, sink);
+            visit_expr_nodes(collection, sink);
+        }
+        Expr::String { .. }
+        | Expr::RawString { .. }
+        | Expr::Number { .. }
+        | Expr::Bool { .. }
+        | Expr::Null { .. }
+        | Expr::Var { .. } => {}
+    }
+}
+
+fn visit_query_expr_nodes(query: &Query, sink: &mut dyn FnMut(&Expr)) {
+    for statement in &query.stmts {
+        match &statement.literal {
+            Literal::SomeVars { .. } => {}
+            Literal::SomeIn {
+                key,
+                value,
+                collection,
+                ..
+            } => {
+                if let Some(key) = key {
+                    visit_expr_nodes(key, sink);
+                }
+                visit_expr_nodes(value, sink);
+                visit_expr_nodes(collection, sink);
+            }
+            Literal::Expr { expr, .. } | Literal::NotExpr { expr, .. } => {
+                visit_expr_nodes(expr, sink)
+            }
+            Literal::Every { domain, query, .. } => {
+                visit_expr_nodes(domain, sink);
+                visit_query_expr_nodes(query, sink);
+            }
+        }
+        for with_mod in &statement.with_mods {
+            visit_expr_nodes(&with_mod.refr, sink);
+            visit_expr_nodes(&with_mod.r#as, sink);
+        }
+    }
+}
+
+fn visit_rule_expr_nodes(rule: &Rule, mut sink: impl FnMut(&Expr)) {
+    match rule {
+        Rule::Spec { head, bodies, .. } => {
+            match head {
+                RuleHead::Compr { refr, assign, .. } => {
+                    visit_expr_nodes(refr, &mut sink);
+                    if let Some(assign) = assign {
+                        visit_expr_nodes(&assign.value, &mut sink);
+                    }
+                }
+                RuleHead::Set { refr, key, .. } => {
+                    visit_expr_nodes(refr, &mut sink);
+                    if let Some(key) = key {
+                        visit_expr_nodes(key, &mut sink);
+                    }
+                }
+                RuleHead::Func {
+                    refr, args, assign, ..
+                } => {
+                    visit_expr_nodes(refr, &mut sink);
+                    for arg in args {
+                        visit_expr_nodes(arg, &mut sink);
+                    }
+                    if let Some(assign) = assign {
+                        visit_expr_nodes(&assign.value, &mut sink);
+                    }
+                }
+            }
+            for body in bodies {
+                if let Some(assign) = &body.assign {
+                    visit_expr_nodes(&assign.value, &mut sink);
+                }
+                visit_query_expr_nodes(&body.query, &mut sink);
+            }
+        }
+        Rule::Default {
+            refr, args, value, ..
+        } => {
+            visit_expr_nodes(refr, &mut sink);
+            for arg in args {
+                visit_expr_nodes(arg, &mut sink);
+            }
+            visit_expr_nodes(value, &mut sink);
+        }
+    }
+}
+
+fn visit_module_references(module: &Module, mut sink: impl FnMut(StaticReference)) {
+    for rule in &module.policy {
+        let aliases = rule_reference_aliases(module, rule);
+        visit_rule_expr_nodes(rule, |expr| {
+            if let Some(reference) = static_reference(expr)
+                .map(|reference| resolve_reference(reference, &aliases))
+                .or_else(|| object_get_reference(expr, &aliases))
+            {
+                sink(reference);
+            }
+        });
+    }
+}
+
+fn object_get_reference(
+    expr: &Expr,
+    aliases: &HashMap<String, StaticReference>,
+) -> Option<StaticReference> {
+    let Expr::Call { fcn, params, .. } = expr else {
+        return None;
+    };
+    let function = static_reference(fcn)?;
+    if !function.starts_with(&["object", "get"]) || params.len() < 2 {
+        return None;
+    }
+    let base =
+        static_reference(&params[0]).or_else(|| object_get_reference(&params[0], aliases))?;
+    let mut reference = resolve_reference(base, aliases);
+    if let Expr::Array { items, .. } = params[1].as_ref() {
+        for item in items {
+            reference.components.push(match item.as_ref() {
+                Expr::String { value, .. } | Expr::RawString { value, .. } => {
+                    StaticReferenceComponent::Field(value.as_string().ok()?.to_string())
+                }
+                _ => StaticReferenceComponent::Dynamic,
+            });
+        }
+        return Some(reference);
+    }
+    let key = match params[1].as_ref() {
+        Expr::String { value, .. } | Expr::RawString { value, .. } => value.as_string().ok()?,
+        _ => {
+            reference.components.push(StaticReferenceComponent::Dynamic);
+            return Some(reference);
+        }
+    };
+    reference
+        .components
+        .push(StaticReferenceComponent::Field(key.to_string()));
+    Some(reference)
+}
+
+/// Finds statically resolvable references to release-input fields removed from
+/// the current host contract. Dynamic object keys are intentionally ignored:
+/// a retained source is only classified when the AST proves the retired field.
+pub fn retired_release_input_fields(rego_source: &str) -> Result<Vec<String>, String> {
+    let module = parse_module(rego_source, "scryer.rules.retired_input")?;
+    let mut retired = BTreeSet::new();
+    for import in &module.imports {
+        if static_reference(&import.refr)
+            .is_some_and(|reference| reference.starts_with(&["input", "release", "guide_facts"]))
+        {
+            retired.insert("input.release.guide_facts".to_string());
+        }
+    }
+    visit_module_references(&module, |reference| {
+        if reference.starts_with(&["input", "release", "guide_facts"]) {
+            retired.insert("input.release.guide_facts".to_string());
+        }
+    });
+    Ok(retired.into_iter().collect())
+}
+
+/// Rejects baseline rules that depend on a score produced later, or on an
+/// additional user rule. Dynamic reads of either namespace are rejected because
+/// the dependency cannot be proven from the AST.
+pub fn validate_baseline_dependencies(
+    rego_source: &str,
+    additional_rule_ids: &[String],
+) -> Result<(), String> {
+    let module = parse_module(rego_source, "scryer.rules.baseline_dependencies")?;
+    let additional_rule_ids = additional_rule_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut errors = BTreeSet::new();
+    visit_module_references(&module, |reference| {
+        if reference.starts_with(&["input", "builtin_score"]) {
+            errors.insert("baseline rules cannot reference input.builtin_score".to_string());
+        }
+        if reference.starts_with(&["input"])
+            && matches!(
+                reference.components.get(1),
+                Some(StaticReferenceComponent::Dynamic) | None
+            )
+        {
+            errors.insert(
+                "baseline rules cannot dynamically read input because builtin_score dependency cannot be proven"
+                    .to_string(),
+            );
+        }
+        let namespace = ["data", "scryer", "rules", "user"];
+        if reference.field(0) == Some("data")
+            && (reference.components.len() < namespace.len()
+                || reference
+                    .components
+                    .iter()
+                    .take(namespace.len())
+                    .any(|component| matches!(component, StaticReferenceComponent::Dynamic)))
+            && reference
+                .components
+                .iter()
+                .take(namespace.len())
+                .enumerate()
+                .all(|(index, component)| {
+                    matches!(component, StaticReferenceComponent::Dynamic)
+                        || reference.field(index) == Some(namespace[index])
+                })
+        {
+            errors.insert("baseline rules cannot read the entire rule namespace".to_string());
+        }
+        if reference.starts_with(&["data", "scryer", "rules", "user"]) {
+            match reference.components.get(4) {
+                Some(StaticReferenceComponent::Field(id))
+                    if additional_rule_ids.contains(id.as_str()) =>
+                {
+                    errors.insert(format!(
+                        "baseline rules cannot depend on additional rule '{id}'"
+                    ));
+                }
+                Some(StaticReferenceComponent::Dynamic) | None => {
+                    errors.insert(
+                        "baseline rules cannot dynamically read data.scryer.rules.user because additional-rule dependency cannot be proven"
+                            .to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    });
+    match errors.into_iter().next() {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<String> {
@@ -1257,6 +1671,7 @@ fn synthetic_test_input() -> UserRuleInput {
     UserRuleInput {
         release: ReleaseDoc {
             raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265.DDP.5.1".to_string(),
+            normalized_tokens: vec![],
             quality: Some("2160P".to_string()),
             source: Some("WEB-DL".to_string()),
             video_codec: Some("H.265".to_string()),
@@ -1320,6 +1735,8 @@ fn synthetic_test_input() -> UserRuleInput {
             allow_upgrades: true,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
+            scoring_persona: "balanced".to_string(),
+            scoring_overrides: Default::default(),
         },
         context: ContextDoc {
             title_id: Some("tt0000000".to_string()),
@@ -1334,6 +1751,9 @@ fn synthetic_test_input() -> UserRuleInput {
             existing_score: None,
             search_mode: "auto".to_string(),
             runtime_minutes: Some(120),
+            coverage_total_runtime_minutes: Some(120),
+            coverage_member_runtime_minutes: Some(120),
+            coverage_member_count: Some(1),
             is_anime: false,
             is_filler: false,
         },
@@ -2765,5 +3185,145 @@ mod tests {
             "{:?}",
             maintenance_reading_a_request_fact.errors
         );
+    }
+
+    #[test]
+    fn retired_release_input_fields_uses_ast_references_and_static_aliases() {
+        let source = r#"
+package scryer.rules.user.retired
+import rego.v1
+import input.release as release
+
+score_entry["legacy"] := 1 if {
+  doc := input.release
+  doc.guide_facts
+  release["guide_facts"]
+  object.get(input.release, "guide_facts", [])
+}
+"#;
+        assert_eq!(
+            retired_release_input_fields(source).expect("source should parse"),
+            vec!["input.release.guide_facts"]
+        );
+        assert_eq!(
+            retired_release_input_fields(
+                "package retired\nimport rego.v1\nimport input.release.guide_facts as old\nscore_entry[\"x\"] := 1"
+            ).unwrap(),
+            vec!["input.release.guide_facts"]
+        );
+
+        let decoys = r#"
+package scryer.rules.user.decoys
+import rego.v1
+
+# input.release.guide_facts is retired.
+score_entry["guide_facts"] := 1 if { "input.release.guide_facts" == "input.release.guide_facts" }
+"#;
+        assert!(
+            retired_release_input_fields(decoys)
+                .expect("decoy source should parse")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn baseline_dependencies_reject_direct_alias_and_dynamic_later_reads() {
+        let additional = vec!["later".to_string()];
+        for source in [
+            r#"
+package scryer.rules.user.baseline
+import rego.v1
+score_entry["x"] := input.builtin_score if { true }
+"#,
+            r#"
+package scryer.rules.user.baseline
+import rego.v1
+import data.scryer.rules.user.later as later_rule
+score_entry["x"] := later_rule.score_entry["x"] if { true }
+"#,
+            r#"
+package scryer.rules.user.baseline
+import rego.v1
+score_entry["x"] := value if {
+  later_rule := data.scryer.rules.user.later
+  value := later_rule.score_entry["x"]
+}
+"#,
+            r#"
+package scryer.rules.user.baseline
+import rego.v1
+score_entry["x"] := 1 if {
+  key := "builtin_score"
+  input[key]
+}
+"#,
+            r#"
+package scryer.rules.user.baseline
+import rego.v1
+score_entry["x"] := 1 if {
+  key := "later"
+  data.scryer.rules.user[key]
+}
+"#,
+        ] {
+            assert!(
+                validate_baseline_dependencies(source, &additional).is_err(),
+                "source should reject: {source}"
+            );
+        }
+
+        let allowed = r#"
+package scryer.rules.user.baseline
+import rego.v1
+score_entry["x"] := 1 if { input.profile.name == "Cinema" }
+"#;
+        assert!(validate_baseline_dependencies(allowed, &additional).is_ok());
+    }
+
+    #[test]
+    fn baseline_dependencies_preserve_bounded_reads_and_reject_indirect_subtotals() {
+        let additional = vec!["later".to_string()];
+        for expression in [
+            "data.scryer.rules.user.earlier.value",
+            "object.get(input, [\"profile\", \"name\"], null)",
+            "object.get(input.profile, \"name\", null)",
+        ] {
+            let source = format!("package test\nimport rego.v1\nvalue := {expression}");
+            assert!(
+                validate_baseline_dependencies(&source, &additional).is_ok(),
+                "{source}"
+            );
+        }
+        for expression in [
+            "input",
+            "data",
+            "data.scryer",
+            "data[input.profile.name].rules.user.later.value",
+            "object.get(input, [\"builtin_score\", \"total\"], 0)",
+            "object.get(input.profile, input.builtin_score.total, 0)",
+        ] {
+            let source = format!("package test\nimport rego.v1\nvalue := {expression}");
+            assert!(
+                validate_baseline_dependencies(&source, &additional).is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_fields_resolve_scoped_aliases_and_nested_object_get() {
+        for body in [
+            "first if { doc := input.release; doc.guide_facts }\nsecond if { doc := input.profile; doc.name }",
+            "first if { doc := object.get(input, \"release\", {}); doc.guide_facts }",
+            "first := object.get(input, [\"release\", \"guide_facts\"], [])",
+            "first := object.get(object.get(input, \"release\", {}), \"guide_facts\", [])",
+        ] {
+            let source = format!("package test\nimport rego.v1\n{body}");
+            assert_eq!(
+                retired_release_input_fields(&source).unwrap(),
+                vec!["input.release.guide_facts"],
+                "{source}"
+            );
+        }
     }
 }

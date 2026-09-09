@@ -49,10 +49,8 @@
 
 use crate::quality_profile::{
     QualityProfileDecision, ScoringEntry, ScoringSource, apply_min_score_gate,
-    apply_size_scoring_for_category_with_remux_preference, evaluate_against_profile_for_category,
-    normalize_quality_tier,
+    evaluate_profile_requirements, normalize_quality_tier,
 };
-use crate::scoring_weights::ScoringWeights;
 use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
 
 /// Cap on how far analyzed evidence may move a score before the difference stops
@@ -118,7 +116,6 @@ impl ReleaseEvidence {
 /// Note the absence of any incumbent field. That absence is the point.
 pub(crate) struct ScoringContext<'a> {
     pub profile: &'a QualityProfile,
-    pub weights: &'a ScoringWeights,
     pub required_audio_languages: &'a [String],
     pub category: &'a str,
     /// What size scoring compares the reported bytes against: the coverage's
@@ -454,23 +451,8 @@ fn run_term_pipeline(
 
     // `has_existing_file` is hardcoded false: the profile's upgrade guard is an
     // admission concern and is applied there, against the real incumbent set.
-    let mut decision = evaluate_against_profile_for_category(
-        &resolved_profile,
-        parsed,
-        false,
-        ctx.weights,
-        Some(ctx.category),
-    );
-
-    apply_size_scoring_for_category_with_remux_preference(
-        &mut decision,
-        parsed,
-        size_bytes,
-        Some(ctx.category),
-        ctx.size_basis,
-        resolved_profile.criteria.prefer_remux,
-        ctx.weights,
-    );
+    let mut decision =
+        evaluate_profile_requirements(&resolved_profile, parsed, false, Some(ctx.category));
 
     // Deliberately absent: apply_age_scoring. Release age is listing metadata,
     // and a freshness bonus makes a same-size re-grab read as an upgrade —
@@ -533,6 +515,9 @@ fn append_rule_scores(
             // Rules see the scope's total runtime, which is what they always
             // saw; the member split is the size term's business alone.
             runtime_minutes: ctx.size_basis.total_runtime_minutes,
+            coverage_total_runtime_minutes: ctx.size_basis.total_runtime_minutes,
+            coverage_member_runtime_minutes: ctx.size_basis.member_runtime_minutes,
+            coverage_member_count: Some(ctx.size_basis.member_count),
             is_filler: ctx.is_filler,
         },
         file_doc,

@@ -1,6 +1,6 @@
 use super::*;
 use scryer_application::{RuleSetHistoryChange, RuleSetRepository};
-use scryer_domain::{RulePackInstallation, RulePackMember, RuleSet};
+use scryer_domain::{RuleEvaluationPhase, RulePackInstallation, RulePackMember, RuleSet};
 
 fn managed_rule(id: &str) -> RuleSet {
     let now = Utc::now();
@@ -11,6 +11,9 @@ fn managed_rule(id: &str) -> RuleSet {
         rego_source: "package scryer.rules\nallow if { true }".to_string(),
         enabled: true,
         priority: 0,
+        evaluation_phase: RuleEvaluationPhase::Additional,
+        exclusive_group: None,
+        disabled_reason: None,
         applied_facets: Vec::new(),
         created_at: now,
         updated_at: now,
@@ -39,11 +42,37 @@ fn installation(revision: i64) -> RulePackInstallation {
 }
 
 #[tokio::test]
+async fn legacy_rule_set_row_defaults_to_additional_evaluation_phase() {
+    let (services, db) = temp_services("scryer_rule_set_evaluation_default").await;
+    sqlx::query("INSERT INTO rule_sets (id, name, rego_source) VALUES (?, ?, ?)")
+        .bind("legacy-rule")
+        .bind("Legacy rule")
+        .bind("package scryer.rules.legacy\nallow if { true }")
+        .execute(services.pool())
+        .await
+        .expect("legacy-shaped rule row should insert");
+
+    let rule = crate::RuleSetStore::new(services.datastore())
+        .get_rule_set("legacy-rule")
+        .await
+        .expect("legacy rule read")
+        .expect("legacy rule exists");
+    assert_eq!(rule.evaluation_phase, RuleEvaluationPhase::Additional);
+    assert_eq!(rule.exclusive_group, None);
+    assert_eq!(rule.disabled_reason, None);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn tracked_rule_pack_apply_copy_and_uninstall_are_atomic_and_revision_guarded() {
     let (services, db) = temp_services("scryer_tracked_rule_packs").await;
     let store = crate::RuleSetStore::new(services.datastore());
     let installed = installation(1);
-    let source = managed_rule("managed-a");
+    let mut source = managed_rule("managed-a");
+    source.evaluation_phase = RuleEvaluationPhase::Additional;
+    source.exclusive_group = Some("source-preference".to_string());
+    source.disabled_reason = Some("superseded by a pack rule".to_string());
 
     assert!(
         store
@@ -56,6 +85,20 @@ async fn tracked_rule_pack_apply_copy_and_uninstall_are_atomic_and_revision_guar
             .apply_rule_pack_installation(&installed, None, std::slice::from_ref(&source), &[])
             .await
             .expect("duplicate install is a conflict")
+    );
+    let persisted = store
+        .get_rule_set("managed-a")
+        .await
+        .expect("read persisted rule")
+        .expect("managed rule exists");
+    assert_eq!(persisted.evaluation_phase, RuleEvaluationPhase::Additional);
+    assert_eq!(
+        persisted.exclusive_group.as_deref(),
+        Some("source-preference")
+    );
+    assert_eq!(
+        persisted.disabled_reason.as_deref(),
+        Some("superseded by a pack rule")
     );
 
     let mut invalid_update = installation(2);
@@ -107,13 +150,23 @@ async fn tracked_rule_pack_apply_copy_and_uninstall_are_atomic_and_revision_guar
             .expect("managed rule exists")
             .enabled
     );
-    assert!(
-        !store
-            .get_rule_set("custom-a")
-            .await
-            .expect("custom read")
-            .expect("custom rule exists")
-            .is_managed
+    let copied_persisted = store
+        .get_rule_set("custom-a")
+        .await
+        .expect("custom read")
+        .expect("custom rule exists");
+    assert!(!copied_persisted.is_managed);
+    assert_eq!(
+        copied_persisted.evaluation_phase,
+        RuleEvaluationPhase::Additional
+    );
+    assert_eq!(
+        copied_persisted.exclusive_group.as_deref(),
+        Some("source-preference")
+    );
+    assert_eq!(
+        copied_persisted.disabled_reason.as_deref(),
+        Some("superseded by a pack rule")
     );
 
     assert!(

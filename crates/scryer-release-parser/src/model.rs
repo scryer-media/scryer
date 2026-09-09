@@ -783,7 +783,11 @@ pub struct GuideFact {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ParsedReleaseMetadata {
     pub raw_title: String,
+    /// Compatibility storage for test-only legacy fixtures. Production parsing
+    /// leaves this empty; built-in Rego owns TRaSH fact detection.
     pub guide_facts: Vec<GuideFact>,
+    /// Lexer-normalized release tokens in source order.
+    pub normalized_tokens: Vec<String>,
     pub normalized_title: String,
     pub normalized_title_variants: Vec<String>,
     pub release_group: Option<String>,
@@ -840,6 +844,7 @@ impl ParsedReleaseMetadata {
         Self {
             raw_title: raw.to_string(),
             guide_facts: Vec::new(),
+            normalized_tokens: Vec::new(),
             normalized_title: String::new(),
             normalized_title_variants: Vec::new(),
             release_group: None,
@@ -1118,6 +1123,8 @@ pub struct MetadataEnrichment {
 pub struct ReleaseParseAnalysis {
     pub raw_input: String,
     pub sanitized_input: String,
+    /// Compatibility storage for test-only legacy fixtures. Production parsing
+    /// leaves this empty; built-in Rego owns TRaSH fact detection.
     pub guide_facts: Vec<GuideFact>,
     pub parse_hints: Vec<String>,
     pub tokens: Vec<Token>,

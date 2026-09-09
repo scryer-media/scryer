@@ -1636,15 +1636,10 @@ async fn bootstrap_application(
     {
         tracing::warn!(error = %e, "failed to migrate canonical audio/persona settings on startup");
     }
-    if let Err(e) = app_use_case
-        .reconcile_and_activate_managed_trash_rule_packs()
+    app_use_case
+        .bootstrap_builtin_trash_rule_pack()
         .await
-    {
-        tracing::warn!(
-            error = %e,
-            "failed to reconcile managed TRaSH rule packs; managed packs stay excluded from the active rules engine until the next successful reconciliation"
-        );
-    }
+        .map_err(|error| format!("cannot activate the scoring configuration: {error}"))?;
     if let Err(e) = app_use_case
         .migrate_legacy_opensubtitles_provider_config()
         .await

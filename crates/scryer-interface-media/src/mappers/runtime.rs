@@ -156,6 +156,9 @@ pub fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
         rego_source: scryer_rules::strip_editor_source(&rs.rego_source),
         enabled: rs.enabled,
         priority: rs.priority,
+        evaluation_phase: rs.evaluation_phase.as_storage_str().to_string(),
+        disabled_reason: rs.disabled_reason,
+        exclusive_group: rs.exclusive_group,
         applied_facets: rs
             .applied_facets
             .iter()

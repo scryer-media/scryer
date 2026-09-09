@@ -172,7 +172,7 @@ impl AppUseCase {
         // Take one consistent policy snapshot while mutations are excluded.
         // Compilation happens after this scope, so a slow/large preview never
         // holds the mutation lock or replaces the production engine.
-        let (rule_sets, plugin_policies) = {
+        let (rule_sets, plugin_policies, draft_phase, draft_exclusive_group, draft_tags) = {
             let _mutation = self.services.customization.rule_mutation_lock.lock().await;
             let edit_source = match request.edit_rule_set_id.as_deref() {
                 Some(id) => Some(self.require_preview_source_rule(id).await?),
@@ -202,6 +202,13 @@ impl AppUseCase {
                 .rule_sets
                 .list_enabled_rule_sets()
                 .await?;
+            let draft_source = edit_source.as_ref().or(copy_source.as_ref());
+            let draft_phase = draft_source
+                .map(|source| source.evaluation_phase)
+                .unwrap_or_default();
+            let draft_exclusive_group =
+                draft_source.and_then(|source| source.exclusive_group.clone());
+            let draft_tags = draft_source.and_then(|source| source.managed_tag_filter.clone());
             if let Some(source) = edit_source {
                 enabled.retain(|rule_set| rule_set.id != source.id);
             }
@@ -229,7 +236,13 @@ impl AppUseCase {
                 .available()
                 .map(|provider| provider.scoring_policies())
                 .unwrap_or_default();
-            (enabled, plugin_policies)
+            (
+                enabled,
+                plugin_policies,
+                draft_phase,
+                draft_exclusive_group,
+                draft_tags,
+            )
         };
 
         let profile = self.resolve_quality_profile_for_title(&title).await?;
@@ -259,6 +272,14 @@ impl AppUseCase {
                 &compute_draft.rego_source,
                 &compute_draft_id,
             );
+            let retired = scryer_rules::validation::retired_release_input_fields(&rewritten_source)
+                .map_err(|error| AppError::Validation(format!("rule validation error: {error}")))?;
+            if !retired.is_empty() {
+                return Err(AppError::Validation(format!(
+                    "Rule source uses retired fields: {}. Update the source before testing or enabling it.",
+                    retired.join(", ")
+                )));
+            }
             let validation =
                 scryer_rules::validation::validate_user_rule(&rewritten_source, &compute_draft_id)
                     .map_err(|error| {
@@ -279,12 +300,15 @@ impl AppUseCase {
                 rego_source: rewritten_source,
                 enabled: compute_draft.enabled,
                 priority: compute_draft.priority,
+                evaluation_phase: draft_phase,
+                exclusive_group: draft_exclusive_group,
+                disabled_reason: None,
                 applied_facets: compute_draft.applied_facets.clone(),
                 created_at: now,
                 updated_at: now,
                 is_managed: false,
                 managed_key: None,
-                managed_tag_filter: None,
+                managed_tag_filter: draft_tags,
             });
             let engine = AppUseCase::build_user_rules_engine(rule_sets, plugin_policies)?;
             let raw_parsed = crate::release_parser::parse_release_metadata_for_target(

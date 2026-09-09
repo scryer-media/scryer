@@ -23,6 +23,9 @@ pub(crate) struct RuleContextInfo<'a> {
     pub existing_score: Option<i32>,
     pub search_mode: &'a str,
     pub runtime_minutes: Option<i32>,
+    pub coverage_total_runtime_minutes: Option<i32>,
+    pub coverage_member_runtime_minutes: Option<i32>,
+    pub coverage_member_count: Option<i32>,
     pub is_filler: bool,
 }
 
@@ -62,6 +65,7 @@ pub(crate) fn build_rule_input(
     UserRuleInput {
         release: ReleaseDoc {
             raw_title: parsed.raw_title.clone(),
+            normalized_tokens: parsed.normalized_tokens.clone(),
             quality: parsed.quality.clone(),
             source: parsed.source.as_ref().map(ToString::to_string),
             video_codec: parsed.video_codec.as_ref().map(ToString::to_string),
@@ -109,11 +113,7 @@ pub(crate) fn build_rule_input(
                 .map(|value| (chrono::Utc::now() - value.with_timezone(&chrono::Utc)).num_days()),
             thumbs_up: release_runtime.thumbs_up,
             thumbs_down: release_runtime.thumbs_down,
-            guide_facts: parsed
-                .guide_facts
-                .iter()
-                .map(|fact| fact.code.clone())
-                .collect(),
+            guide_facts: Vec::new(),
             extra: release_runtime.extra.cloned().unwrap_or_default(),
         },
         profile: ProfileDoc {
@@ -166,6 +166,23 @@ pub(crate) fn build_rule_input(
             allow_upgrades: profile.criteria.allow_upgrades,
             prefer_dual_audio: profile.criteria.prefer_dual_audio,
             required_audio_languages: profile.criteria.required_audio_languages.clone(),
+            scoring_persona: match profile.criteria.resolve_persona(Some(category)) {
+                crate::ScoringPersona::Balanced => "balanced",
+                crate::ScoringPersona::Audiophile => "audiophile",
+                crate::ScoringPersona::Efficient => "efficient",
+                crate::ScoringPersona::Compatible => "compatible",
+            }
+            .to_string(),
+            scoring_overrides: ScoringOverridesDoc {
+                allow_x265_non4k: profile.criteria.scoring_overrides.allow_x265_non4k,
+                block_dv_without_fallback: profile
+                    .criteria
+                    .scoring_overrides
+                    .block_dv_without_fallback,
+                prefer_compact_encodes: profile.criteria.scoring_overrides.prefer_compact_encodes,
+                prefer_lossless_audio: profile.criteria.scoring_overrides.prefer_lossless_audio,
+                block_upscaled: profile.criteria.scoring_overrides.block_upscaled,
+            },
         },
         context: ContextDoc {
             title_id: context.title_id.map(str::to_owned),
@@ -193,6 +210,9 @@ pub(crate) fn build_rule_input(
             existing_score: context.existing_score,
             search_mode: context.search_mode.to_string(),
             runtime_minutes: context.runtime_minutes,
+            coverage_total_runtime_minutes: context.coverage_total_runtime_minutes,
+            coverage_member_runtime_minutes: context.coverage_member_runtime_minutes,
+            coverage_member_count: context.coverage_member_count,
             is_anime,
             is_filler: context.is_filler,
         },
@@ -410,6 +430,9 @@ mod tests {
                 existing_score: Some(900),
                 search_mode: "post_download",
                 runtime_minutes: Some(120),
+                coverage_total_runtime_minutes: Some(120),
+                coverage_member_runtime_minutes: Some(120),
+                coverage_member_count: Some(1),
                 is_filler: false,
             },
             Some(file_doc_from_analysis(
@@ -420,7 +443,13 @@ mod tests {
         let value = serde_json::to_value(input).unwrap();
         assert_eq!(value["context"]["search_mode"], "post_download");
         assert_eq!(value["context"]["existing_score"], 900);
+        assert_eq!(value["context"]["coverage_total_runtime_minutes"], 120);
+        assert_eq!(value["context"]["coverage_member_runtime_minutes"], 120);
+        assert_eq!(value["context"]["coverage_member_count"], 1);
         assert!(value["release"]["is_password_protected"].is_null());
+        assert_eq!(value["release"]["normalized_tokens"][0], "TEST");
+        assert_eq!(value["profile"]["scoring_persona"], "balanced");
+        assert!(value["profile"]["scoring_overrides"]["block_upscaled"].is_null());
         assert_eq!(value["file"]["num_chapters"], 0);
         assert_eq!(value["file"]["audio_profile"], "LC");
         assert_eq!(value["file"]["audio_streams"][0]["codec"], "aac");
@@ -453,6 +482,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -497,6 +529,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -540,6 +575,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -576,6 +614,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -617,6 +658,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -664,6 +708,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,

@@ -1,8 +1,9 @@
+#[cfg(test)]
 use crate::release_group_db::apply_release_group_scoring_with_context;
 use crate::release_parser::{AudioCodec, ParsedReleaseMetadata, ReleaseSource, VideoCodec};
-use crate::scoring_weights::{
-    ScoringOverrides, ScoringPersona, ScoringWeights, audio_weight_for_codec,
-};
+use crate::scoring_weights::{ScoringOverrides, ScoringPersona};
+#[cfg(test)]
+use crate::scoring_weights::{ScoringWeights, audio_weight_for_codec};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -843,6 +844,7 @@ pub fn quality_meets_or_exceeds_cutoff(
     }
 }
 
+#[cfg(test)]
 pub fn evaluate_against_profile(
     profile: &QualityProfile,
     release: &ParsedReleaseMetadata,
@@ -852,6 +854,103 @@ pub fn evaluate_against_profile(
     evaluate_against_profile_for_category(profile, release, has_existing_file, weights, None)
 }
 
+pub fn evaluate_profile_requirements(
+    profile: &QualityProfile,
+    release: &ParsedReleaseMetadata,
+    has_existing_file: bool,
+    _category_hint: Option<&str>,
+) -> QualityProfileDecision {
+    let mut decision = QualityProfileDecision::new();
+    let criteria = &profile.criteria;
+    decision.tier_index = quality_tier_index(criteria, release.quality.as_deref());
+    if !criteria.allow_upgrades && has_existing_file {
+        decision.reject_requirement("upgrade_blocked_by_profile");
+    }
+    match normalize_quality_tier(release.quality.as_deref()) {
+        Some(quality)
+            if !criteria.quality_tiers.is_empty()
+                && !criteria.quality_tiers.iter().any(|tier| tier == &quality) =>
+        {
+            decision.reject_requirement("quality_not_in_profile_tiers");
+        }
+        None if !criteria.allow_unknown_quality => {
+            decision.reject_requirement("quality_missing_and_profile_disallows_unknown");
+        }
+        _ => {}
+    }
+    match release.source {
+        Some(source) => {
+            let explicitly_allowed = !criteria.source_allowlist.is_empty()
+                && criteria.source_allowlist.contains(&source);
+            if matches!(
+                source,
+                ReleaseSource::Cam
+                    | ReleaseSource::Telesync
+                    | ReleaseSource::Telecine
+                    | ReleaseSource::DvdScr
+                    | ReleaseSource::Workprint
+            ) && !explicitly_allowed
+            {
+                decision.reject_requirement("source_low_quality_theatrical");
+            } else if criteria.source_blocklist.contains(&source) {
+                decision.reject_requirement("source_in_profile_blocklist");
+            } else if !criteria.source_allowlist.is_empty()
+                && !criteria.source_allowlist.contains(&source)
+            {
+                decision.reject_requirement("source_not_in_profile_allowlist");
+            }
+        }
+        None if !criteria.source_allowlist.is_empty() => {
+            decision.reject_requirement("source_missing_and_profile_requires_source");
+        }
+        None => {}
+    }
+    if let Some(codec) = release.video_codec.as_ref() {
+        if criteria.video_codec_blocklist.contains(codec) {
+            decision.reject_requirement("video_codec_in_profile_blocklist");
+        } else if !criteria.video_codec_allowlist.is_empty()
+            && !criteria.video_codec_allowlist.contains(codec)
+        {
+            decision.reject_requirement("video_codec_not_in_profile_allowlist");
+        }
+    }
+    let audio_codecs = normalized_audio_codecs(release);
+    if !audio_codecs.is_empty() {
+        if !criteria.audio_codec_blocklist.is_empty()
+            && audio_codecs
+                .iter()
+                .all(|codec| criteria.audio_codec_blocklist.contains(codec))
+        {
+            decision.reject_requirement("audio_codec_in_profile_blocklist");
+        } else if !criteria.audio_codec_allowlist.is_empty()
+            && !audio_codecs
+                .iter()
+                .any(|codec| criteria.audio_codec_allowlist.contains(codec))
+        {
+            decision.reject_requirement("audio_codec_not_in_profile_allowlist");
+        }
+    }
+    if release.is_dolby_vision && !criteria.dolby_vision_allowed {
+        decision.reject_requirement("dolby_vision_not_allowed");
+    }
+    if release.detected_hdr && !criteria.detected_hdr_allowed {
+        decision.reject_requirement("hdr_not_allowed");
+    }
+    if release.is_bd_disk && !criteria.allow_bd_disk {
+        decision.reject_requirement("bd_disk_not_allowed");
+    }
+    if !criteria.required_audio_languages.is_empty()
+        && !crate::required_audio_languages_match(
+            &criteria.required_audio_languages,
+            &release.languages_audio,
+        )
+    {
+        decision.reject_requirement("required_audio_language_missing");
+    }
+    decision
+}
+
+#[cfg(test)]
 pub fn evaluate_against_profile_for_category(
     profile: &QualityProfile,
     release: &ParsedReleaseMetadata,
@@ -1228,6 +1327,7 @@ pub fn apply_min_score_gate(profile: &QualityProfile, decision: &mut QualityProf
     }
 }
 
+#[cfg(test)]
 fn blocked_code_for_guide_fact(code: &str) -> Option<&'static str> {
     match code {
         "trash.blocked.anime_raws" => Some("trash_guides_anime_raws"),
@@ -1238,23 +1338,11 @@ fn blocked_code_for_guide_fact(code: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(test)]
 fn has_dv_hdr_fallback(release: &ParsedReleaseMetadata) -> bool {
     release.has_hdr_fallback || release.is_hdr10plus || release.is_hlg
 }
 
-/// Apply an age-based scoring adjustment to a release decision.
-///
-/// Fresh NZBs get a bonus while old ones get a penalty. The curve is graduated
-/// to match typical usenet retention (1000+ days):
-///   0–14 days    → +50  (fresh)
-///   15–90 days   → +25  (recent)
-///   91–365 days  →   0  (neutral)
-///   366–730 days → −25  (aging)
-///   731–1500 days → −50  (old)
-///   1500+ days   → −100 (very old)
-///
-/// `published_at` is the raw string from the indexer (typically RFC 2822 from RSS).
-/// If parsing fails or the value is `None`, no scoring entry is logged.
 /// Parse a published_at date string in RFC2822, RFC3339, or ISO8601 format.
 pub fn parse_published_at(raw: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc2822(raw)
@@ -1264,37 +1352,15 @@ pub fn parse_published_at(raw: &str) -> Option<DateTime<Utc>> {
         .ok()
 }
 
-pub fn apply_age_scoring(decision: &mut QualityProfileDecision, published_at: Option<&str>) {
-    let Some(raw) = published_at else {
-        return;
-    };
-
-    let Some(published) = parse_published_at(raw) else {
-        return;
-    };
-
-    let age_days = (Utc::now() - published).num_days();
-
-    let (code, delta) = match age_days {
-        d if d < 0 => return, // future date — skip
-        0..=14 => ("age_fresh", 50),
-        15..=90 => ("age_recent", 25),
-        91..=365 => return, // neutral — no entry
-        366..=730 => ("age_aging", -25),
-        731..=1500 => ("age_old", -50),
-        _ => ("age_very_old", -100),
-    };
-
-    decision.log(code, delta);
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum MediaSizeCategory {
     Movie,
     Series,
     Anime,
 }
 
+#[cfg(test)]
 fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCategory {
     let Some(raw) = category_hint else {
         return MediaSizeCategory::Movie;
@@ -1313,6 +1379,7 @@ fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCatego
 /// values produce expected GiB equivalent to the previous hardcoded table.
 /// 2160P values were intentionally recalibrated upward based on real remux and
 /// WEB-DL sizes (e.g. movie 2160P: old 22 GiB → new ~50 GiB at 120 min).
+#[cfg(test)]
 fn expected_bitrate_mbps(
     quality: Option<&str>,
     media_category: MediaSizeCategory,
@@ -1354,6 +1421,7 @@ fn expected_bitrate_mbps(
 ///
 /// Values match the canonical codec strings emitted by `parse_release_metadata`
 /// (`"H.264"`, `"H.265"`, `"AV1"`, `"VP9"`).
+#[cfg(test)]
 fn codec_efficiency_factor(codec: Option<&VideoCodec>) -> f64 {
     match codec {
         Some(VideoCodec::Av1) => 0.50,
@@ -1366,6 +1434,7 @@ fn codec_efficiency_factor(codec: Option<&VideoCodec>) -> f64 {
 
 /// Source-type multiplier applied to the expected bitrate.  Bluray encodes are
 /// larger than WEB-DL; remuxes larger still.
+#[cfg(test)]
 fn source_size_factor(
     source: Option<&ReleaseSource>,
     is_remux: bool,
@@ -1390,6 +1459,7 @@ fn source_size_factor(
 }
 
 /// Default runtime (minutes) assumed when TVDB metadata is unavailable.
+#[cfg(test)]
 fn default_runtime_minutes(media_category: MediaSizeCategory) -> f64 {
     match media_category {
         MediaSizeCategory::Movie => 120.0,
@@ -1399,6 +1469,7 @@ fn default_runtime_minutes(media_category: MediaSizeCategory) -> f64 {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 struct SizeRatioThresholds {
     implausible: f64,
     excessive: f64,
@@ -1460,8 +1531,10 @@ struct SizeRatioThresholds {
 /// The bottom curve anchor for episodic content, where Sonarr publishes a
 /// number to match. See [`SizeRatioThresholds::implausibly_small`] for the
 /// arithmetic behind it.
+#[cfg(test)]
 const EPISODIC_IMPLAUSIBLY_SMALL_RATIO: f64 = 0.04;
 
+#[cfg(test)]
 impl SizeRatioThresholds {
     fn with_upper_multiplier(mut self, multiplier: f64) -> Self {
         self.implausible *= multiplier;
@@ -1474,6 +1547,7 @@ impl SizeRatioThresholds {
     }
 }
 
+#[cfg(test)]
 fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThresholds {
     match media_category {
         MediaSizeCategory::Movie => SizeRatioThresholds {
@@ -1517,6 +1591,7 @@ fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThreshol
 
 /// One point on the size curve: a size ratio and the delta the curve takes there.
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 struct SizeAnchor {
     ratio: f64,
     delta: i32,
@@ -1528,6 +1603,7 @@ struct SizeAnchor {
 /// honest place to pin it is the band's centre. In log space (which is where
 /// size ratios live: 2× larger and 2× smaller are the same distance from
 /// expected) that centre is the geometric mean.
+#[cfg(test)]
 fn size_band_anchor(low: f64, high: f64, delta: i32) -> SizeAnchor {
     SizeAnchor {
         ratio: (low * high).sqrt(),
@@ -1538,6 +1614,7 @@ fn size_band_anchor(low: f64, high: f64, delta: i32) -> SizeAnchor {
 /// The nine preference bands as a continuous curve, ordered by ratio.
 ///
 /// Excludes both blocks: a veto is a verdict, not the end of a gradient.
+#[cfg(test)]
 fn size_curve(thresholds: &SizeRatioThresholds, weights: &ScoringWeights) -> [SizeAnchor; 9] {
     [
         size_band_anchor(
@@ -1591,6 +1668,7 @@ fn size_curve(thresholds: &SizeRatioThresholds, weights: &ScoringWeights) -> [Si
 /// grab/import disagreement this whole change set exists to remove; the fix is
 /// for the term to be continuous, so drift moves the number by a proportional
 /// amount instead of a cliff.
+#[cfg(test)]
 fn interpolate_size_delta(ratio: f64, curve: &[SizeAnchor; 9]) -> i32 {
     let position = ratio.max(f64::MIN_POSITIVE).ln();
 
@@ -1622,6 +1700,7 @@ fn interpolate_size_delta(ratio: f64, curve: &[SizeAnchor; 9]) -> i32 {
     last.delta
 }
 
+#[cfg(test)]
 fn size_ratio_thresholds_for_codec(
     media_category: MediaSizeCategory,
     codec: Option<&VideoCodec>,
@@ -1715,6 +1794,7 @@ impl CoverageSizeBasis {
 /// Logged, with a zero delta, when the reported size was read as one member's
 /// rather than the whole pack's. Carries no weight of its own; it is there so an
 /// explanation says which interpretation produced the band above it.
+#[cfg(test)]
 pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
 
 /// Apply category-aware size scoring using a bitrate-based model.
@@ -1732,6 +1812,7 @@ pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
 /// runtime can honestly claim. Aggregate callers build a
 /// [`CoverageSizeBasis`] from their coverage and go through
 /// [`apply_size_scoring_for_category_with_remux_preference`].
+#[cfg(test)]
 pub fn apply_size_scoring_for_category(
     decision: &mut QualityProfileDecision,
     release: &ParsedReleaseMetadata,
@@ -1751,6 +1832,7 @@ pub fn apply_size_scoring_for_category(
     );
 }
 
+#[cfg(test)]
 pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
     decision: &mut QualityProfileDecision,
     release: &ParsedReleaseMetadata,
@@ -1862,6 +1944,7 @@ pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
 }
 
 /// The band a size ratio falls in, as it appears in the scoring log.
+#[cfg(test)]
 fn size_band_code(ratio: f64, thresholds: &SizeRatioThresholds) -> &'static str {
     match ratio {
         r if r >= thresholds.excessive => "size_excessive_for_quality",

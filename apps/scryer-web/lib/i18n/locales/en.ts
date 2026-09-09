@@ -1906,6 +1906,7 @@ const en: LocaleDictionary = {
   "settings.refReleaseAudio": "Primary audio codec (e.g. DDP, AAC, TrueHD)",
   "settings.refReleaseAudioCodecs": "All detected audio codecs as an array",
   "settings.refReleaseGuideFacts": "Guide facts detected from the release metadata",
+  "settings.refReleaseNormalizedTokens": "Ordered, normalized tokens produced by the release parser",
   "settings.refReleaseAudioChannels":
     "Audio channel configuration (e.g. 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
@@ -1990,6 +1991,17 @@ const en: LocaleDictionary = {
   "settings.refProfilePreferDualAudio": "Profile prefers dual-audio releases",
   "settings.refProfileRequiredLangs":
     "Mandatory audio languages (ISO 639-3 codes)",
+  "settings.refProfileScoringPersona": "Resolved persona: balanced, audiophile, efficient, or compatible",
+  "settings.refProfileScoringOverrides": "Explicit profile choices; null leaves the persona default unchanged",
+  "settings.refSectionScoringOverrides": "— Scoring overrides",
+  "settings.refOverrideX265": "Allow non-4K HEVC; null inherits the persona default",
+  "settings.refOverrideDolbyVision": "Reject Dolby Vision without fallback; null inherits the persona default",
+  "settings.refOverrideCompact": "Prefer compact encodes; null inherits the persona default",
+  "settings.refOverrideLossless": "Prefer lossless audio; null inherits the persona default",
+  "settings.refOverrideUpscaled": "Penalize upscaled releases; null inherits the persona default",
+  "settings.refCtxCoverageTotalRuntime": "Combined runtime in minutes for the release's coverage, when known",
+  "settings.refCtxCoverageMemberRuntime": "One covered member's runtime in minutes, when known",
+  "settings.refCtxCoverageMemberCount": "Number of covered members, when known",
 
   "settings.refSectionContext": "— Title and search context",
   "settings.refCtxTitleId":

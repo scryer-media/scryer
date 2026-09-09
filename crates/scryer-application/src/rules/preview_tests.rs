@@ -31,6 +31,15 @@ fn request(title_id: String, source: &str) -> RuleSetTestRequest {
 
 fn preview_app() -> (AppUseCase, User, Arc<TestRuleSetRepo>) {
     let (app, user) = bootstrap();
+    let rules = Arc::new(TestRuleSetRepo::new(
+        super::builtin_trash::baseline_rule_sets(),
+    ));
+    let app = app.with_test_overrides(|services| services.with_rule_sets(rules.clone()));
+    (app, user, rules)
+}
+
+fn preview_app_without_policies() -> (AppUseCase, User, Arc<TestRuleSetRepo>) {
+    let (app, user) = bootstrap();
     let rules = Arc::new(TestRuleSetRepo::new(vec![]));
     let app = app.with_test_overrides(|services| services.with_rule_sets(rules.clone()));
     (app, user, rules)
@@ -342,7 +351,7 @@ async fn recoverable_scores_preview_includes_penalties_and_other_rules() {
 
 #[tokio::test]
 async fn preview_tracked_copy_excludes_source_without_changing_membership() {
-    let (app, user, repo) = preview_app();
+    let (app, user, repo) = preview_app_without_policies();
     let title = movie(&app, &user).await;
     let saved = app
         .create_rule_set(
@@ -477,7 +486,7 @@ async fn preview_preserves_cross_rule_references_and_active_engine() {
 
 #[tokio::test]
 async fn preview_surfaces_runtime_errors_and_rejects_invalid_drafts() {
-    let (app, user, repo) = preview_app();
+    let (app, user, repo) = preview_app_without_policies();
     let title = movie(&app, &user).await;
     let source = "score_entry[\"broken\"] := lower(input.release.year) if { contains(input.release.raw_title, \"Preview.Movie\") }";
     let result = app

@@ -246,9 +246,9 @@ enum InteractiveReleaseSearchSubject {
         /// Search facet and id-search facet; `None` for a raw text query.
         facet: Option<String>,
         newznab_categories: Option<Vec<String>>,
-        /// Facet default profile, its weights and the facet name. `None` for
+        /// Facet default profile and the facet name. `None` for
         /// the raw kind, and when the profile could not be resolved.
-        judge: Option<(QualityProfile, ScoringWeights, String)>,
+        judge: Option<(QualityProfile, String)>,
     },
 }
 
@@ -952,7 +952,7 @@ impl AppUseCase {
         query: &str,
         facet: &Option<String>,
         newznab_categories: &Option<Vec<String>>,
-        judge: &Option<(QualityProfile, ScoringWeights, String)>,
+        judge: &Option<(QualityProfile, String)>,
         routing_base: &HashMap<String, IndexerRoutingEntry>,
         indexer_id: &str,
         cancel_token: CancellationToken,
@@ -1010,10 +1010,9 @@ impl AppUseCase {
         let results = tokio::task::spawn_blocking(move || {
             // Reuse one evaluator for this response and keep synchronous rule
             // evaluation off the async worker handling requests/cancellation.
-            let context = judge.as_ref().map(|(profile, weights, category)| {
+            let context = judge.as_ref().map(|(profile, category)| {
                 crate::canonical_scoring::ScoringContext {
                     profile,
-                    weights,
                     required_audio_languages: &profile.criteria.required_audio_languages,
                     category,
                     size_basis: Default::default(),
@@ -1072,16 +1071,16 @@ impl AppUseCase {
         Ok((results, failure_reason))
     }
 
-    /// The facet's default quality profile and its weights — everything a
+    /// The facet's default quality profile — everything a
     /// context-free rejection can be based on (D6). Best effort: an
     /// unresolvable profile means the pane shows releases without profile
     /// rejections, never a failed search.
     async fn resolve_query_subject_judge(
         &self,
         facet: MediaFacet,
-    ) -> Option<(QualityProfile, ScoringWeights, String)> {
+    ) -> Option<(QualityProfile, String)> {
         let category = facet.as_str().to_string();
-        let profile = match self
+        let mut profile = match self
             .resolve_quality_profile(QualityProfileLookup {
                 title_tags: &[],
                 library_id: None,
@@ -1101,16 +1100,12 @@ impl AppUseCase {
                 return None;
             }
         };
-        let persona = self
+        profile.criteria.scoring_persona = self
             .resolve_scoring_persona(None, Some(category.as_str()))
             .await
             .unwrap_or_default();
-        let weights = crate::build_weights_for_category(
-            &persona,
-            &profile.criteria.scoring_overrides,
-            Some(category.as_str()),
-        );
-        Some((profile, weights, category))
+        profile.criteria.facet_persona_overrides.clear();
+        Some((profile, category))
     }
 
     /// Mint a candidate token for one release of an existing search (D4).

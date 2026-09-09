@@ -19,6 +19,12 @@ pub struct RuleSetPayload {
     pub enabled: bool,
     /// Evaluation priority.
     pub priority: i32,
+    /// Baseline rules establish the subtotal read by additional rules.
+    pub evaluation_phase: String,
+    /// Why a retained rule was disabled during a context migration.
+    pub disabled_reason: Option<String>,
+    /// Other rules with this group cannot be enabled simultaneously.
+    pub exclusive_group: Option<String>,
     /// Media facets to which the rule set applies.
     pub applied_facets: Vec<String>,
     /// Whether the rule set is managed by a trusted pack.

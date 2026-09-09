@@ -1,3 +1,5 @@
+use scryer_domain::RuleEvaluationPhase;
+
 /// A single rule template within a community rule pack.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RulePackTemplate {
@@ -5,9 +7,16 @@ pub struct RulePackTemplate {
     pub title: String,
     pub description: String,
     pub category: String,
+    #[serde(alias = "regoSource")]
     pub rego_source: String,
-    #[serde(default)]
+    #[serde(default, alias = "appliedFacets")]
     pub applied_facets: Vec<String>,
+    #[serde(default, alias = "evaluationPhase")]
+    pub evaluation_phase: RuleEvaluationPhase,
+    #[serde(default = "default_rule_enabled", alias = "defaultEnabled")]
+    pub default_enabled: bool,
+    #[serde(default, alias = "exclusiveGroup")]
+    pub exclusive_group: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 struct RulePackRule {
@@ -19,7 +28,41 @@ struct RulePackRule {
     rego_source: String,
     #[serde(default, alias = "appliedFacets")]
     applied_facets: Vec<String>,
+    #[serde(default, alias = "evaluationPhase")]
+    evaluation_phase: RuleEvaluationPhase,
+    #[serde(default = "default_rule_enabled", alias = "defaultEnabled")]
+    default_enabled: bool,
+    #[serde(default, alias = "exclusiveGroup")]
+    exclusive_group: Option<String>,
 }
+
+fn default_rule_enabled() -> bool {
+    false
+}
+
+#[cfg(test)]
+mod manifest_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_manifest_rule_defaults_to_additional_and_disabled() {
+        let rule: RulePackRule = serde_json::from_str(
+            r#"{
+                "id": "legacy",
+                "title": "Legacy",
+                "description": "Legacy manifest entry",
+                "category": "test",
+                "regoSource": "package scryer.rules.legacy"
+            }"#,
+        )
+        .expect("legacy manifest rule should deserialize");
+
+        assert_eq!(rule.evaluation_phase, RuleEvaluationPhase::Additional);
+        assert!(!rule.default_enabled);
+        assert_eq!(rule.exclusive_group, None);
+    }
+}
+
 fn normalized_constraint(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|constraint| !constraint.is_empty())

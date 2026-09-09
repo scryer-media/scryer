@@ -32,3 +32,6 @@ pub use release::*;
 pub(crate) use release::{
     score_entry_wrapper_policy_path, score_entry_wrapper_rule_path, score_entry_wrapper_source,
 };
+
+#[cfg(test)]
+mod trash_pack_validation;

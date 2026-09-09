@@ -26,16 +26,15 @@ fn movie_profile() -> QualityProfile {
 
 fn ctx<'a>(
     profile: &'a QualityProfile,
-    weights: &'a crate::scoring_weights::ScoringWeights,
+    _weights: &'a crate::scoring_weights::ScoringWeights,
     tags: &'a [String],
 ) -> ScoringContext<'a> {
     ScoringContext {
         profile,
-        weights,
         required_audio_languages: &[],
         category: "movie",
         size_basis: CoverageSizeBasis::default(),
-        rules: None,
+        rules: Some(crate::rules::builtin_trash::baseline_engine()),
         title_id: None,
         library_name: None,
         original_language: None,
@@ -603,17 +602,16 @@ fn series_profile() -> QualityProfile {
 
 fn episode_ctx<'a>(
     profile: &'a QualityProfile,
-    weights: &'a crate::scoring_weights::ScoringWeights,
+    _weights: &'a crate::scoring_weights::ScoringWeights,
     tags: &'a [String],
     size_basis: CoverageSizeBasis,
 ) -> ScoringContext<'a> {
     ScoringContext {
         profile,
-        weights,
         required_audio_languages: &[],
         category: "series",
         size_basis,
-        rules: None,
+        rules: Some(crate::rules::builtin_trash::baseline_engine()),
         title_id: None,
         library_name: None,
         original_language: None,
@@ -1324,7 +1322,20 @@ fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
         origin: scryer_rules::PolicyOrigin::User,
         applied_facets: vec!["movie".to_string()],
     };
-    scryer_rules::UserRulesEngine::build(&[policy]).expect("rule fixture should compile")
+    rule_engine_with_builtin_baseline(vec![policy])
+}
+
+fn rule_engine_with_builtin_baseline(
+    policies: Vec<scryer_rules::UserPolicy>,
+) -> scryer_rules::UserRulesEngine {
+    let mut all_policies = crate::rules::builtin_trash::baseline_policies();
+    let baseline_ids = all_policies
+        .iter()
+        .map(|policy| policy.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    all_policies.extend(policies);
+    scryer_rules::UserRulesEngine::build_with_baseline_rules(&all_policies, &baseline_ids)
+        .expect("bundled baseline and rule fixture should compile")
 }
 
 #[test]
@@ -1405,7 +1416,7 @@ fn recoverable_scores_survive_analysis_and_incumbent_rederivation() {
                 applied_facets: vec!["movie".into()],
             },
         ];
-        let engine = scryer_rules::UserRulesEngine::build(&policies).unwrap();
+        let engine = rule_engine_with_builtin_baseline(policies.to_vec());
         let mut context = ctx(&profile, &weights, &[]);
         let baseline = score_release(&evidence, &context);
         context.rules = Some(&engine);

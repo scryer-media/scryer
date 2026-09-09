@@ -2,7 +2,7 @@
 //!
 //! [`crate::canonical_scoring::score_release`] is pure and synchronous so its
 //! invariants can be property-tested. Everything it needs that lives in the
-//! database — the quality profile, the resolved persona and weights, the
+//! database — the quality profile,
 //! required-language set, the library name, the active rule engine — is
 //! gathered here once and then handed to it by reference.
 //!
@@ -12,7 +12,6 @@
 
 use crate::canonical_scoring::ScoringContext;
 use crate::quality_profile::CoverageSizeBasis;
-use crate::scoring_weights::{ScoringPersona, ScoringWeights};
 use crate::{AppUseCase, QualityProfile};
 use scryer_domain::Title;
 
@@ -20,7 +19,6 @@ use scryer_domain::Title;
 /// [`ResolvedScoringContext::view`].
 pub(crate) struct ResolvedScoringContext {
     profile: QualityProfile,
-    weights: ScoringWeights,
     required_audio_languages: Vec<String>,
     category: String,
     title_id: String,
@@ -48,7 +46,6 @@ impl ResolvedScoringContext {
     ) -> ScoringContext<'_> {
         ScoringContext {
             profile: &self.profile,
-            weights: &self.weights,
             required_audio_languages: &self.required_audio_languages,
             category: &self.category,
             size_basis: size_basis.or_runtime(self.default_runtime_minutes),
@@ -309,17 +306,13 @@ impl AppUseCase {
             .resolve_required_audio_languages_for_title(title)
             .await
             .unwrap_or_default();
-
-        let persona: ScoringPersona = self
+        let persona = self
             .resolve_scoring_persona(Some(title.library_id.as_str()), Some(category.as_str()))
             .await
             .unwrap_or_default();
-
-        let weights = crate::scoring_weights::build_weights_for_category(
-            &persona,
-            &profile.criteria.scoring_overrides,
-            Some(category.as_str()),
-        );
+        let mut profile = profile.clone();
+        profile.criteria.scoring_persona = persona;
+        profile.criteria.facet_persona_overrides.clear();
 
         let library_name = match self
             .services
@@ -352,8 +345,7 @@ impl AppUseCase {
         };
 
         ResolvedScoringContext {
-            profile: profile.clone(),
-            weights,
+            profile,
             required_audio_languages,
             category,
             title_id: title.id.clone(),

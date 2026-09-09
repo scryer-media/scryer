@@ -1,9 +1,23 @@
-use std::collections::HashMap;
 use std::sync::LazyLock;
 
+#[cfg(test)]
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+#[cfg(test)]
 use crate::scoring_weights::ScoringWeights;
 
+/// A release-group spelling accepted solely to remove a leading group tag from
+/// a title-identity anchor. This is lexical parsing data, never a reputation
+/// score or source/facet policy.
+#[derive(Debug, Clone, Copy)]
+pub struct KnownReleaseGroupRule {
+    pub matcher: &'static str,
+    pub match_kind: GroupMatchKind,
+}
+
 /// Reputation tier for a release group.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupTier {
     /// Top-tier groups (e.g. TRaSH Tier 01 WEB, Tier 01 Remux)
@@ -18,6 +32,7 @@ pub enum GroupTier {
 
 /// What source context a group is known for.
 /// A group might be Gold for WEB but unknown for BluRay.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceContext {
     Web,
@@ -29,6 +44,7 @@ pub enum SourceContext {
     Any,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleFacet {
     Movie,
@@ -36,6 +52,7 @@ pub enum RuleFacet {
     Anime,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct GroupEntry {
     #[allow(dead_code)]
@@ -52,67 +69,41 @@ pub enum GroupMatchKind {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 pub struct GroupRule {
     pub matcher: &'static str,
     pub match_kind: GroupMatchKind,
     pub entry: GroupEntry,
 }
 
-/// One upstream `trash_scores` entry, joined to the fact code its custom format
-/// produces. A code appears once per (app, score set) the upstream data scores
-/// it under, so callers pick the set their locale pack declares.
-#[derive(Debug, Clone, Copy)]
-pub struct TrashFactScore {
-    pub code: &'static str,
-    pub app: &'static str,
-    pub score_set: &'static str,
-    pub score: i64,
-}
-
-/// One `LanguageSpecification` value, distilled to something the rule input can
-/// answer directly.
-///
-/// `Named` is the canonical audio-language code
-/// `normalize_detected_audio_language_code` produces, so it compares against
-/// `input.release.languages_audio` with no further translation. `Original` is
-/// upstream's relative id `-2`: the title's own original language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrashLanguage {
-    Named(&'static str),
-    Original,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TrashLanguageCondition {
-    pub language: TrashLanguage,
-    pub negate: bool,
-    /// Upstream's `required` flag, which drives `SpecificationMatchesGroup`:
-    /// no required specification may fail, and at least one must match.
-    pub required: bool,
-}
-
-/// One upstream language custom format, distilled to its language conditions.
-///
-/// Language formats are policy rather than detection — they need
-/// the title's original language, which the parser never sees — so they are
-/// evaluated by the managed locale packs against the rule input instead of
-/// being emitted as parser facts. Scores join through [`TrashFactScore`] under
-/// the same `code`.
-#[derive(Debug, Clone, Copy)]
-pub struct TrashLanguageRule {
-    pub code: &'static str,
-    pub app: &'static str,
-    pub stem: &'static str,
-    pub conditions: &'static [TrashLanguageCondition],
-}
-
 include!("trash_guides_release_groups.generated.rs");
 
+struct KnownReleaseGroupIndex {
+    exact: HashSet<String>,
+    prefixes: Vec<&'static KnownReleaseGroupRule>,
+}
+
+static KNOWN_RELEASE_GROUP_INDEX: LazyLock<KnownReleaseGroupIndex> = LazyLock::new(|| {
+    let mut exact = HashSet::new();
+    let mut prefixes = Vec::new();
+    for rule in KNOWN_RELEASE_GROUP_RULES {
+        match rule.match_kind {
+            GroupMatchKind::Exact => {
+                exact.insert(rule.matcher.to_ascii_uppercase());
+            }
+            GroupMatchKind::Prefix => prefixes.push(rule),
+        }
+    }
+    KnownReleaseGroupIndex { exact, prefixes }
+});
+
+#[cfg(test)]
 struct GroupRuleIndex {
     exact: HashMap<String, Vec<usize>>,
     prefixes: Vec<usize>,
 }
 
+#[cfg(test)]
 static GROUP_RULE_INDEX: LazyLock<GroupRuleIndex> = LazyLock::new(|| {
     let mut exact = HashMap::<String, Vec<usize>>::new();
     let mut prefixes = Vec::new();
@@ -134,6 +125,7 @@ static GROUP_RULE_INDEX: LazyLock<GroupRuleIndex> = LazyLock::new(|| {
 /// 1. Try exact match on (name, source_context) derived from the release
 /// 2. Fall back to (name, Any) for groups that are tier-rated regardless of source
 /// 3. No match → None (caller applies `group_unknown_penalty`)
+#[cfg(test)]
 pub fn lookup_group(
     name: &str,
     source: Option<&str>,
@@ -160,6 +152,7 @@ pub fn lookup_group(
     None
 }
 
+#[cfg(test)]
 fn indexed_group_rule(
     candidate: &str,
     facet: RuleFacet,
@@ -185,6 +178,7 @@ fn indexed_group_rule(
     }
 }
 
+#[cfg(test)]
 fn candidate_facets(category_hint: Option<&str>) -> &'static [RuleFacet] {
     match category_hint
         .map(str::trim)
@@ -199,6 +193,7 @@ fn candidate_facets(category_hint: Option<&str>) -> &'static [RuleFacet] {
 }
 
 /// Map a parsed source string + remux flag to our SourceContext.
+#[cfg(test)]
 fn source_to_context(
     source: Option<&str>,
     quality: Option<&str>,
@@ -230,6 +225,7 @@ fn source_to_context(
     }
 }
 
+#[cfg(test)]
 fn group_rule_matches(rule: &GroupRule, candidate: &str) -> bool {
     match rule.match_kind {
         GroupMatchKind::Exact => rule.matcher.eq_ignore_ascii_case(candidate),
@@ -239,13 +235,36 @@ fn group_rule_matches(rule: &GroupRule, candidate: &str) -> bool {
     }
 }
 
+fn known_release_group_matches(rule: &KnownReleaseGroupRule, candidate: &str) -> bool {
+    match rule.match_kind {
+        GroupMatchKind::Exact => rule.matcher.eq_ignore_ascii_case(candidate),
+        GroupMatchKind::Prefix => candidate
+            .get(..rule.matcher.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(rule.matcher)),
+    }
+}
+
+/// Returns whether a candidate is an ordinary lexical release-group prefix
+/// accepted by title anchoring. It does not expose scoring reputation.
 pub(crate) fn is_known_release_group(candidate: &str) -> bool {
     let candidate_upper = candidate.to_ascii_uppercase();
-    GROUP_RULE_INDEX.exact.contains_key(&candidate_upper)
-        || GROUP_RULE_INDEX
+    KNOWN_RELEASE_GROUP_INDEX.exact.contains(&candidate_upper)
+        || KNOWN_RELEASE_GROUP_INDEX
             .prefixes
             .iter()
-            .any(|index| group_rule_matches(&GROUP_RULES[*index], candidate))
+            .any(|rule| known_release_group_matches(rule, candidate))
+}
+
+#[cfg(test)]
+mod lexical_tests {
+    use super::is_known_release_group;
+
+    #[test]
+    fn lexical_prefix_index_accepts_known_groups_without_reputation_context() {
+        assert!(is_known_release_group("Erai-raws"));
+        assert!(is_known_release_group("erai-raws"));
+        assert!(!is_known_release_group("Totally Unknown Grp"));
+    }
 }
 
 /// Apply release group scoring to a decision.
@@ -262,6 +281,7 @@ pub fn apply_release_group_scoring(
     apply_release_group_scoring_with_context(weights, group, source, None, is_remux, None)
 }
 
+#[cfg(test)]
 pub fn apply_release_group_scoring_with_context(
     weights: &ScoringWeights,
     group: Option<&str>,
