@@ -6272,6 +6272,17 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         "matrix_avi_001.avi",
         "matrix_avi_009.avi",
         "matrix_avi_013.avi",
+        "matrix_avi_005.avi",
+        "matrix_mkv_015.mkv",
+        "matrix_ts_016.m2ts",
+        "matrix_ts_005.ts",
+        "wmv_wmv1_aac_surround.wmv",
+        "wmv_wmv1_wmav1.wmv",
+        "wmv_wmv2_video_only.wmv",
+        "flv_flv1_pcm_s16le.flv",
+        "flv_flv1_pcm_u8.flv",
+        "flv_flv1_speex.flv",
+        "flv_h264_mp3.flv",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../scryer-mediainfo/tests/media")
