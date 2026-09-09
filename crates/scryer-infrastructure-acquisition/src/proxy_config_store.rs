@@ -712,78 +712,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn key_only_migration_removes_ssh_passwords_and_preserves_configuration() {
-        let (store, pool) = proxy_store().await;
-        for (id, provider, key) in [
-            ("password-only", ProxyProviderType::SshTunnel, None),
-            (
-                "empty-key",
-                ProxyProviderType::SshTunnel,
-                Some(String::new()),
-            ),
-            (
-                "key-and-password",
-                ProxyProviderType::SshTunnel,
-                Some("key-material".to_string()),
-            ),
-            ("http", ProxyProviderType::Http, None),
-        ] {
-            let mut config = tunnel_config();
-            config.id = id.to_string();
-            config.provider_type = provider;
-            config.private_key_encrypted = key;
-            config.password_encrypted = Some("saved-password".to_string());
-            config.host_key_fingerprint = Some("SHA256:pinned".to_string());
-            config.last_health_status = Some(ProxyHealthStatus::Healthy);
-            store.create(config).await.expect("insert legacy config");
-        }
+    async fn first_class_proxy_migration_preserves_solver_assignments_and_adds_ssh_key_fields() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE indexers (id TEXT PRIMARY KEY);
+             CREATE TABLE download_clients (id TEXT PRIMARY KEY);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::raw_sql(include_str!(
-            "../../scryer/src/db/migrations/0227_ssh_key_only.sql"
+            "../../scryer/src/db/migrations/0141_indexer_proxy_configs.sql"
         ))
         .execute(&pool)
         .await
-        .expect("migrate SSH credentials");
-
-        for id in ["password-only", "empty-key", "key-and-password", "http"] {
-            // Legacy malformed rows remain editable; runtime routing validates them.
-            let config = store.get_for_edit(id).await.unwrap().unwrap();
-            assert!(config.is_enabled, "assignments must stay fail-closed");
-            assert_eq!(
-                config.host_key_fingerprint.as_deref(),
-                Some("SHA256:pinned")
-            );
-            assert_eq!(config.username_encrypted.as_deref(), Some("operator"));
-            if id == "http" {
-                assert_eq!(config.password_encrypted.as_deref(), Some("saved-password"));
-            } else {
-                assert!(config.password_encrypted.is_none());
-            }
-            if id == "password-only" || id == "empty-key" {
-                assert_eq!(
-                    config.last_health_status,
-                    Some(ProxyHealthStatus::Unhealthy)
-                );
-                assert!(
-                    config
-                        .last_error_message
-                        .unwrap()
-                        .contains("require an Ed25519 private key")
-                );
-                assert!(config.last_error_at.is_some());
-            } else {
-                assert_eq!(config.last_health_status, Some(ProxyHealthStatus::Healthy));
-            }
-            if id == "key-and-password" {
-                assert_eq!(
-                    config.private_key_encrypted.as_deref(),
-                    Some("key-material")
-                );
-                assert_eq!(
-                    config.private_key_passphrase_encrypted.as_deref(),
-                    Some("phrase")
-                );
-            }
-        }
+        .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO indexer_proxy_configs
+                (id, name, provider_type, protocol, base_url, last_health_status)
+             VALUES ('solver', 'Solver', 'flaresolverr', 'flaresolverr',
+                'http://solver.test:8191', 'healthy');
+             INSERT INTO indexers (id, indexer_proxy_config_id) VALUES ('indexer', 'solver');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../scryer/src/db/migrations/0218_first_class_proxies.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("introduce first-class proxies");
+        let assignment: String =
+            sqlx::query_scalar("SELECT proxy_config_id FROM indexers WHERE id = 'indexer'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(assignment, "solver");
+        let health: String =
+            sqlx::query_scalar("SELECT last_health_status FROM proxy_configs WHERE id = 'solver'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(health, "healthy");
+        sqlx::raw_sql(
+            "INSERT INTO proxy_configs
+                (id, name, provider_type, base_url, username_encrypted,
+                 private_key_encrypted, private_key_passphrase_encrypted)
+             VALUES ('ssh', 'SSH', 'ssh_tunnel', 'ssh://host.test:22',
+                 'encrypted-user', 'encrypted-key', 'encrypted-passphrase');
+             INSERT INTO download_clients (id, proxy_config_id) VALUES ('client', 'ssh');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let key: String =
+            sqlx::query_scalar("SELECT private_key_encrypted FROM proxy_configs WHERE id = 'ssh'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let password: Option<String> =
+            sqlx::query_scalar("SELECT password_encrypted FROM proxy_configs WHERE id = 'ssh'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(key, "encrypted-key");
+        assert!(password.is_none());
     }
 
     #[tokio::test]

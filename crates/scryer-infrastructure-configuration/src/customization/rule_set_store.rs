@@ -648,7 +648,7 @@ mod tests {
         include_str!("../../../scryer/src/db/migrations/0224_tracked_rule_packs.sql"),
     ];
     const METADATA_MIGRATION: &str =
-        include_str!("../../../scryer/src/db/migrations/0228_rule_set_evaluation_metadata.sql");
+        include_str!("../../../scryer/src/db/migrations/0227_rule_set_evaluation_metadata.sql");
 
     async fn apply_migration(pool: &SqlitePool, migration: &'static str) {
         for statement in migration
@@ -792,7 +792,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_0228_defaults_old_rows_and_rejects_unknown_phases() {
+    async fn sqlite_0227_defaults_old_rows_and_rejects_unknown_phases() {
         let (store, pool) = store(false).await;
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -815,7 +815,7 @@ mod tests {
         .bind(Option::<String>::None)
         .execute(&pool)
         .await
-        .expect("pre-0229 row should insert");
+        .expect("pre-metadata row should insert");
 
         apply_migration(&pool, METADATA_MIGRATION).await;
         let old = store

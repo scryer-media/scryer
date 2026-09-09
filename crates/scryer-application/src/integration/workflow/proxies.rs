@@ -1071,24 +1071,16 @@ fn validate_ssh_tunnel_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
             "SSH tunnels do not accept passwords; use an Ed25519 private key".into(),
         ));
     }
-    if fields.private_key.is_none() {
+    let Some(private_key) = fields.private_key else {
         return Err(AppError::Validation(
-            "SSH tunnels require an Ed25519 private key; password authentication is no longer supported".into(),
+            "SSH tunnels require an Ed25519 private key".into(),
         ));
-    }
-    if fields.private_key_passphrase.is_some() && fields.private_key.is_none() {
-        return Err(AppError::Validation(
-            "a private key passphrase requires a private key".into(),
-        ));
-    }
-    if let Some(private_key) = fields.private_key {
-        validate_private_key_pem(private_key)?;
-        // Then parse it the way the engine will, so a non-Ed25519 key, an
-        // unreadable paste or a wrong passphrase is refused at save time rather
-        // than on the first connect.
-        scryer_tunnel::validate_private_key(private_key, fields.private_key_passphrase)
-            .map_err(|error| AppError::Validation(error.to_string()))?;
-    }
+    };
+    validate_private_key_pem(private_key)?;
+    // Parse with the engine so an unsupported key, unreadable paste or wrong
+    // passphrase is refused at save time.
+    scryer_tunnel::validate_private_key(private_key, fields.private_key_passphrase)
+        .map_err(|error| AppError::Validation(error.to_string()))?;
     Ok(())
 }
 

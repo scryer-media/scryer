@@ -34,9 +34,9 @@ tiers and numeric weights are test-only migration oracles.
 - All 70 affected media-analysis import, editor-preview, and tracked-pack
   lifecycle tests passed with `--features runtime-media-analysis`;
   run `506ec798-dabb-4b7f-bf90-c63253844896`.
-- Production compilation exposed a reserved-but-absent migration slot. The
-  new SQLite/Postgres metadata migration now occupies the contiguous 0228
-  slot after this release's 0227; store fixtures reference the same file.
+- The SQLite/Postgres metadata migration occupies slot 0227 after removal
+  of the pre-release SSH password cleanup migration; store fixtures reference
+  the same file.
 - `cargo check -p scryer --locked` passed without warnings after supplying the
   worktree's ignored built-in plugin artifacts from the existing local checkout.
   No generated trust roots or plugin binaries were added to version control.
@@ -49,8 +49,12 @@ tiers and numeric weights are test-only migration oracles.
   `f6a0bbf4-e77d-49e1-9420-0823d775099c`.
 - 221 parser tests and 77 preview tests passed. Two SQLite persistence tests
   cover legacy defaults, unknown phases, metadata, source, and history.
-  Both passed again against the finalized 0228 migration; run
+  Both passed against this migration before its numbering adjustment; run
   `b2c2a82e-52c5-4300-a041-6101382b1168`.
+- After renumbering the metadata migration to 0227, both persistence tests
+  passed again alongside SSH validation, proxy storage, and historical SQLite
+  upgrade coverage: 46 focused tests passed; run
+  `84e6c2dd-c884-4ea6-b58d-257ec09fc4a3`. PostgreSQL execution was not tested.
 - All 196 ordinary rules-crate tests passed (four explicit resource/pack
   harnesses excluded); run `6bb92f50-6a54-4944-b034-3fc5eb4369d8`.
 - A copied baseline retains its phase/exclusive group, prevents conflicting

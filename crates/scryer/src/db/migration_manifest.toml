@@ -2091,34 +2091,17 @@ scope = "all"
 
 [[migration]]
 version = 227
-description = "SSH tunnels require private key authentication"
-checksum_algo = "blake3"
-
-[[migration.steps]]
-kind = "sql"
-file = "migrations/0227_ssh_key_only.sql"
-engine = "sqlite"
-scope = "all"
-
-[[migration.steps]]
-kind = "sql"
-file = "postgres/migrations/0227_ssh_key_only.sql"
-engine = "postgres"
-scope = "all"
-
-[[migration]]
-version = 228
 description = "rule set evaluation metadata"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0228_rule_set_evaluation_metadata.sql"
+file = "migrations/0227_rule_set_evaluation_metadata.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0228_rule_set_evaluation_metadata.sql"
+file = "postgres/migrations/0227_rule_set_evaluation_metadata.sql"
 engine = "postgres"
 scope = "all"

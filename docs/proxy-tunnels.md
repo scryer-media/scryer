@@ -49,12 +49,12 @@ WireGuard retains the shared crate's 64 KiB TCP buffers for Scryer's API and
 artifact workload. Weaver's larger download buffers are not enabled globally.
 The tag supplies the shared SSH, SOCKS bridge, and WireGuard performance fixes.
 
-## SSH migration
+## SSH authentication
 
-SSH remains Ed25519 key-only, including support for encrypted keys and their
-passphrases. Migration 0227 removes legacy SSH passwords. Profiles missing a
-key remain assigned and fail closed until repaired. Host-key trust uses an
-atomic revision-checked database write; failed or cancelled writes retain the
+SSH uses an Ed25519 private key, including support for encrypted keys and their
+passphrases. A username and private key are required to save a profile.
+Host-key trust uses an atomic revision-checked database write; failed or
+cancelled writes retain the
 original pending decision. Only an explicit trust reset permits a new key.
 
 ## Local regression coverage
@@ -64,4 +64,5 @@ ordinary CONNECT encoding, remote destination names, async and blocking
 consumers, shared QUIC sessions, and profile revision replacement. SSH-backed
 artifact fixtures assert that repeated requests reuse a single channel and
 that edits and expiry replace the pool. Storage and editor tests cover
-encrypted HTTP/3 credentials, SSH migration, and provider-specific controls.
+encrypted HTTP/3 credentials, SSH key authentication, and provider-specific
+controls.

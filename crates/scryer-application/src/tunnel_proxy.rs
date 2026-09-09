@@ -73,9 +73,11 @@ pub fn tunnel_spec(config: &ProxyConfig) -> Result<TunnelSpec, String> {
         host,
         port,
         username: username.to_string(),
-        private_key_pem: config.private_key_encrypted.clone()
+        private_key_pem: config
+            .private_key_encrypted
+            .clone()
             .filter(|key| !key.trim().is_empty())
-            .ok_or_else(|| "SSH tunnels require an Ed25519 private key; password authentication is no longer supported".to_string())?,
+            .ok_or_else(|| "SSH tunnels require an Ed25519 private key".to_string())?,
         private_key_passphrase: config.private_key_passphrase_encrypted.clone(),
         pinned_host_key: config.host_key_fingerprint.clone(),
         request_timeout: crate::transport_proxy::transport_proxy_request_timeout(config),
@@ -841,11 +843,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn legacy_password_only_tunnels_fail_closed_before_starting_a_front() {
+    fn ssh_tunnels_require_a_nonempty_private_key_before_starting_a_front() {
         let mut config = tunnel_config();
-        config.id = "legacy-keyless-regression".to_string();
+        config.id = "missing-ssh-key-regression".to_string();
         config.private_key_encrypted = None;
-        config.password_encrypted = Some("legacy-password".to_string());
         assert!(
             tunnel_spec(&config)
                 .unwrap_err()
