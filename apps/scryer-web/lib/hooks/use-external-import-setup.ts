@@ -508,13 +508,6 @@ export function useExternalImportSetup({ client }: UseExternalImportSetupArgs) {
   // ── Preview (root folders, clients, indexers) ──────────────────────────────
   const [preview, setPreview] = useState<ExternalImportPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  // Preview loads overlap (arr warmup polling, Prowlarr warmup start and
-  // completion all refresh it within milliseconds). Responses can land out of
-  // order, and a stale one — e.g. issued before the Prowlarr session existed,
-  // so it still reports the Prowlarr indexer as needing an API key — must not
-  // overwrite a newer one, or the Sources step stays disabled with nothing
-  // left to refresh it. Only the most recently issued request may apply.
-  const previewRequestSeqRef = useRef(0);
   const [prowlarrWarmupProgress, setProwlarrWarmupProgress] =
     useState<ExternalImportMonitorWarmupProgress | null>(null);
   const prowlarrWarmupReady = isProwlarrDiscoveryReady(
@@ -537,7 +530,6 @@ export function useExternalImportSetup({ client }: UseExternalImportSetupArgs) {
       setPreview(null);
       return;
     }
-    const requestSeq = ++previewRequestSeqRef.current;
     setPreviewing(true);
     setPreviewError(null);
     const { data, error } = await client
@@ -548,7 +540,6 @@ export function useExternalImportSetup({ client }: UseExternalImportSetupArgs) {
         },
       })
       .toPromise();
-    if (requestSeq !== previewRequestSeqRef.current) return;
     setPreviewing(false);
     if (error || !data?.previewExternalImport) {
       const message = gqlError(error) || "Failed to load preview";
