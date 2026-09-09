@@ -1265,6 +1265,13 @@ async fn post_download_score_uses_rescored_quality_and_records_negative_audit() 
         Vec::new(),
         Arc::new(ManualImportCleanupDownloadClient::default()),
     );
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
     let title = test_title(MediaFacet::Movie);
     let profile = crate::QualityProfile::parse(
         r#"{

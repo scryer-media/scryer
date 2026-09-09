@@ -1872,7 +1872,8 @@ mod tests {
             true,
             "indexer search",
         )
-        .expect_err("an API-key rejection must fail the search");
+        .err()
+        .expect("an API-key rejection must fail the search");
 
         assert_eq!(
             error.to_string(),

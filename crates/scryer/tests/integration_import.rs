@@ -2,7 +2,7 @@
 
 mod common;
 
-#[path = "import_persistence_tests.rs"]
+#[path = "import/persistence_tests.rs"]
 mod persistence_tests;
 
 use std::path::{Path, PathBuf};

@@ -71,7 +71,11 @@ impl AppUseCase {
             return Ok(());
         }
 
-        let (prior, enabled, priorities) = adopted_legacy_locale_members(&existing, &pack)?;
+        let AdoptedLocaleMembers {
+            members: prior,
+            enabled_template_ids: enabled,
+            priorities,
+        } = adopted_legacy_locale_members(&existing, &pack)?;
         let installation = new_installation(&pack);
         let (installation, mut changed) =
             prepare_pack_rules(&pack, installation, &prior, &enabled, &priorities)?;
@@ -646,10 +650,16 @@ fn new_installation(pack: &VerifiedRulePack) -> RulePackInstallation {
     }
 }
 
+struct AdoptedLocaleMembers {
+    members: Vec<RulePackMember>,
+    enabled_template_ids: Vec<String>,
+    priorities: Vec<(String, i32)>,
+}
+
 fn adopted_legacy_locale_members(
     existing: &[RuleSet],
     pack: &VerifiedRulePack,
-) -> AppResult<(Vec<RulePackMember>, Vec<String>, Vec<(String, i32)>)> {
+) -> AppResult<AdoptedLocaleMembers> {
     let template_ids = pack
         .templates
         .iter()
@@ -683,7 +693,11 @@ fn adopted_legacy_locale_members(
             removed: false,
         });
     }
-    Ok((members, enabled, priorities))
+    Ok(AdoptedLocaleMembers {
+        members,
+        enabled_template_ids: enabled,
+        priorities,
+    })
 }
 
 fn legacy_locale_template_id(managed_key: Option<&str>) -> Option<&'static str> {
@@ -940,9 +954,12 @@ mod builtin_trash_tests {
             managed_tag_filter: Some(vec!["locale:german".to_string()]),
         };
         let pack = super::super::builtin_trash::verified_pack().expect("bundled pack parses");
-        let (members, enabled, priorities) =
-            adopted_legacy_locale_members(std::slice::from_ref(&legacy), &pack)
-                .expect("legacy locale adopts");
+        let AdoptedLocaleMembers {
+            members,
+            enabled_template_ids: enabled,
+            priorities,
+        } = adopted_legacy_locale_members(std::slice::from_ref(&legacy), &pack)
+            .expect("legacy locale adopts");
 
         assert_eq!(members[0].template_id, "trash-guides-german");
         assert_eq!(members[0].rule_set_id, legacy.id);
