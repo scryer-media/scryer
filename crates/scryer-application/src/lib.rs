@@ -199,6 +199,7 @@ pub use plugins::plugins::RUNTIME_PLUGIN_LOAD_CONCURRENCY;
 pub use plugins::plugins::decode_persisted_plugin_wasm_payload;
 pub use plugins::plugins::load_runtime_plugin_from_persisted_installation_payload;
 pub use quality::release_dedup;
+pub use rules::metrics::describe_rule_metrics;
 pub use services::{
     ActiveImportStream, ActiveImportStreamHandle, ActiveImportStreamPhase, ActiveImportStreamSync,
     DownloadClientCategoryAdmissionSnapshot, DownloadClientCategorySnapshotStore,

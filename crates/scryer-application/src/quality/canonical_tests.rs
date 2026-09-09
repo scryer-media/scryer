@@ -1655,6 +1655,125 @@ fn scoring_preview_preserves_canonical_scores_and_blocks() {
 }
 
 #[test]
+fn scoring_metrics_count_a_mapped_disc_once_including_episode_scoped_calls() {
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use scryer_media_types::{
+        DiscEpisodeMapping, DiscMetadata, DiscSelection, DiscTitle, ProbeReport, ProbeStatus,
+    };
+    let recorder = DebuggingRecorder::new();
+    with_local_recorder(&recorder, || {
+        let profile = movie_profile();
+        let context = ctx(&profile, &[]).without_rules();
+        let mut facts = analyzed(8.0, Some("h264"));
+        facts.analysis.details.disc = Some(DiscMetadata {
+            titles: ["one", "two"]
+                .map(|id| DiscTitle {
+                    id: id.into(),
+                    duration_seconds: Some(1800.0),
+                    report: ProbeReport {
+                        status: ProbeStatus::Complete,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .to_vec(),
+            selection: DiscSelection {
+                episode_mappings: ["one", "two"]
+                    .map(|id| DiscEpisodeMapping {
+                        disc_title_id: id.into(),
+                        episode_ids: vec![id.into()],
+                    })
+                    .to_vec(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let evidence = announced(8.0).with_analysis(facts);
+        let scored = score_release(&evidence, &context);
+        let row = media_row_as_import_would_write(&evidence, &scored);
+        score_media_file_for_episodes(&row, &["one".into()], &context);
+    });
+    let series = recorder.snapshotter().snapshot().into_vec();
+    let (_, _, _, value) = series
+        .iter()
+        .find(|(key, _, _, _)| {
+            key.key().name() == "scryer_rules_stage_seconds"
+                && key
+                    .key()
+                    .labels()
+                    .any(|label| label.key() == "stage" && label.value() == "scoring_release")
+        })
+        .unwrap();
+    assert!(
+        matches!(value, DebugValue::Histogram(values) if values.len() == 2),
+        "one observation per whole-disc or episode-scoped call: {value:?}"
+    );
+}
+
+#[test]
+fn scoring_metrics_separate_live_preview_and_failed_rule_application() {
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    let recorder = DebuggingRecorder::new();
+    with_local_recorder(&recorder, || {
+        let profile = movie_profile();
+        let source = "score_entry[\"broken\"] := lower(input.release.year)";
+        let policy = scryer_rules::UserPolicy {
+            id: "broken".into(),
+            name: "Broken".into(),
+            rego_source: scryer_rules::rewrite_package_declaration(source, "broken"),
+            origin: scryer_rules::PolicyOrigin::User,
+            applied_facets: vec![],
+        };
+        for purpose in [
+            crate::rules::metrics::Purpose::Live,
+            crate::rules::metrics::Purpose::Preview,
+        ] {
+            let engine = crate::AppUseCase::build_user_rules_engine_for_purpose(
+                vec![],
+                vec![policy.clone()],
+                purpose,
+            )
+            .unwrap();
+            let mut context = ctx(&profile, &[]);
+            context.rules = Some(&engine);
+            if matches!(purpose, crate::rules::metrics::Purpose::Preview) {
+                assert_eq!(
+                    score_release_preview(&announced(8.0), &context)
+                        .rule_errors
+                        .len(),
+                    1
+                );
+            } else {
+                score_release(&announced(8.0), &context);
+            }
+        }
+    });
+    let series = recorder.snapshotter().snapshot().into_vec();
+    for purpose in ["live", "preview"] {
+        for (stage, outcome) in [
+            ("rules_apply", "error"),
+            ("scoring_release", "ok"),
+            ("evaluator_create", "ok"),
+        ] {
+            assert!(
+                series.iter().any(|(key, _, _, value)| key.key().name()
+                    == "scryer_rules_stage_seconds"
+                    && [("purpose", purpose), ("stage", stage), ("outcome", outcome)]
+                        .iter()
+                        .all(|(name, expected)| key
+                            .key()
+                            .labels()
+                            .any(|label| label.key() == *name && label.value() == *expected))
+                    && matches!(value, DebugValue::Histogram(values) if values.len() == 1)),
+                "missing {purpose} {stage} {outcome}"
+            );
+        }
+    }
+}
+
+#[test]
 fn scoring_preview_reports_rule_failures_without_retaining_normal_batch_diagnostics() {
     let engine = rule_engine(
         "broken_preview",

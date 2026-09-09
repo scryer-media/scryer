@@ -334,10 +334,15 @@ impl AppUseCase {
         };
 
         let rules = if include_rules {
-            self.services
-                .customization
-                .user_rules
-                .read()
+            use crate::rules::metrics::{Purpose, StageTimer};
+            let mut wait = StageTimer::new("snapshot_wait", Purpose::Live);
+            let guard = self.services.customization.user_rules.read();
+            if guard.is_err() {
+                wait.outcome("error");
+            }
+            drop(wait);
+            let _clone = StageTimer::new("snapshot_clone", Purpose::Live);
+            guard
                 .map(|guard| guard.clone())
                 .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty())
         } else {

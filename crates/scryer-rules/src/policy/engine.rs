@@ -17,6 +17,7 @@ use tracing::warn;
 use super::PolicyFamily;
 use super::PolicyRecord;
 use super::observation::{held_reason_codes, unobservable_facts};
+use super::telemetry::{PolicyObserver, PolicyTimer};
 use crate::RulesError;
 use crate::runtime::{self, RuntimeLimits};
 
@@ -67,6 +68,7 @@ impl<D, E> Default for EvalOutcome<D, E> {
 /// Built once per rule-set revision and shared; evaluators are cheap clones
 /// created per evaluation run.
 pub struct PolicyEngine<F: PolicyFamily> {
+    pub(crate) observer: Option<Arc<dyn PolicyObserver>>,
     pub(crate) template: Arc<Engine>,
     pub(crate) rules: Vec<RuleHandle<F::RuleExtra>>,
     pub(crate) limits: RuntimeLimits,
@@ -76,6 +78,7 @@ pub struct PolicyEngine<F: PolicyFamily> {
 impl<F: PolicyFamily> Clone for PolicyEngine<F> {
     fn clone(&self) -> Self {
         Self {
+            observer: self.observer.clone(),
             template: Arc::clone(&self.template),
             rules: self.rules.clone(),
             limits: self.limits,
@@ -96,10 +99,26 @@ impl<F: PolicyFamily> PolicyEngine<F> {
         policies: &[F::Policy],
         limits: RuntimeLimits,
     ) -> Result<Self, RulesError> {
+        Self::build_with_limits_and_observer(policies, limits, None)
+    }
+
+    pub fn build_with_limits_and_observer(
+        policies: &[F::Policy],
+        limits: RuntimeLimits,
+        observer: Option<Arc<dyn PolicyObserver>>,
+    ) -> Result<Self, RulesError> {
         let mut engine = runtime::configured_engine(&limits);
         let mut rules = Vec::with_capacity(policies.len());
 
         for policy in policies {
+            let timer = PolicyTimer::new(
+                &observer,
+                F::NAME,
+                "policy_load",
+                "none",
+                policy.id(),
+                "none",
+            );
             F::prepare_policy(policy)?;
 
             let policy_path = F::user_policy_path(policy.id());
@@ -131,9 +150,11 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 referenced_facts,
                 extra: F::rule_extra(policy),
             });
+            timer.finish("ok");
         }
 
         Ok(Self {
+            observer,
             template: Arc::new(engine),
             rules,
             limits,
@@ -145,6 +166,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     pub fn empty() -> Self {
         let limits = F::limits();
         Self {
+            observer: None,
             template: Arc::new(runtime::configured_engine(&limits)),
             rules: Vec::new(),
             limits,
@@ -174,17 +196,38 @@ impl<F: PolicyFamily> PolicyEngine<F> {
 
     /// Create an evaluator for a single evaluation run.
     pub fn evaluator(&self) -> PolicyEvaluator<F> {
-        PolicyEvaluator {
+        let timer = PolicyTimer::new(
+            &self.observer,
+            F::NAME,
+            "evaluator_create",
+            "none",
+            "",
+            "none",
+        );
+        let evaluator = PolicyEvaluator {
+            observer: self.observer.clone(),
+            observed_rules: vec![
+                false;
+                if self.observer.is_some() {
+                    self.rules.len()
+                } else {
+                    0
+                }
+            ],
             engine: (*self.template).clone(),
             rules: self.rules.clone(),
             limits: self.limits,
             family: PhantomData,
-        }
+        };
+        timer.finish("ok");
+        evaluator
     }
 }
 
 /// Evaluates every loaded policy against one input document at a time.
 pub struct PolicyEvaluator<F: PolicyFamily> {
+    pub(crate) observer: Option<Arc<dyn PolicyObserver>>,
+    observed_rules: Vec<bool>,
     pub(crate) engine: Engine,
     pub(crate) rules: Vec<RuleHandle<F::RuleExtra>>,
     pub(crate) limits: RuntimeLimits,
@@ -217,7 +260,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input: &F::Input,
         ctx: &F::EvalContext,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
-        self.evaluate_policies_where(input, ctx, |_| true)
+        self.evaluate_policies_where(input, ctx, "all", |_| true)
     }
 
     /// Evaluate a selected phase using the same prepared runtime and error
@@ -226,6 +269,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         &mut self,
         input: &F::Input,
         ctx: &F::EvalContext,
+        phase: &'static str,
         selected: impl Fn(&F::RuleExtra) -> bool,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
@@ -234,6 +278,8 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
             return Ok(outcome);
         }
 
+        let input_timer =
+            PolicyTimer::new(&self.observer, F::NAME, "input_prepare", phase, "", "none");
         let document = if F::BOUND_INPUT {
             runtime::bounded_input_document(input, &self.limits)?
         } else {
@@ -245,9 +291,27 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
             BTreeMap::new()
         };
         self.engine.set_input(document.into());
+        input_timer.finish("ok");
 
-        for rule in &self.rules {
-            if !selected(&rule.extra) || !F::applies(&rule.extra, ctx) {
+        for (index, rule) in self.rules.iter().enumerate() {
+            if !selected(&rule.extra) {
+                continue;
+            }
+            let temperature = if self.observed_rules.get(index).copied().unwrap_or(false) {
+                "warm"
+            } else {
+                "first"
+            };
+            let timer = PolicyTimer::new(
+                &self.observer,
+                F::NAME,
+                "rule_evaluate",
+                phase,
+                &rule.id,
+                temperature,
+            );
+            if !F::applies(&rule.extra, ctx) {
+                timer.finish("skipped");
                 continue;
             }
 
@@ -260,11 +324,21 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                         policy_content_hash: rule.content_hash.clone(),
                         decision: F::held_decision(held_by),
                     });
+                    timer.finish("held");
                     continue;
                 }
             }
 
-            match self.engine.eval_rule(F::wrapper_rule_path(&rule.id)) {
+            if let Some(seen) = self.observed_rules.get_mut(index) {
+                *seen = true;
+            }
+            let errors_before = outcome.errors.len();
+            let result = self.engine.eval_rule(F::wrapper_rule_path(&rule.id));
+            let no_match = result.as_ref().is_ok_and(|value| {
+                *value == regorus::Value::Undefined
+                    || value.as_object().is_ok_and(|object| object.is_empty())
+            });
+            match result {
                 Ok(value) => match F::decode(&value, &rule.id, &rule.name, &rule.extra) {
                     Ok(decision) => match F::post_decode(&decision, &rule.extra) {
                         Ok(()) => outcome.records.push(EvalRecord {
@@ -303,6 +377,13 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                     outcome.errors.push(F::eval_error(rule, e.to_string()));
                 }
             }
+            timer.finish(if outcome.errors.len() != errors_before {
+                "error"
+            } else if no_match {
+                "no_match"
+            } else {
+                "ok"
+            });
         }
 
         Ok(outcome)

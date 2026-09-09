@@ -332,6 +332,14 @@ fn score_disc_scope_with_rules(
     rules: &mut RuleEvaluationBatch,
     episode_ids: Option<&[String]>,
 ) -> ScoredRelease {
+    let _timer = crate::rules::metrics::StageTimer::new(
+        "scoring_release",
+        if rules.collect_diagnostics {
+            crate::rules::metrics::Purpose::Preview
+        } else {
+            crate::rules::metrics::Purpose::Live
+        },
+    );
     let Some(analyzed) = &evidence.analyzed else {
         return score_single_release_with_rules(evidence, ctx, rules);
     };
@@ -655,6 +663,14 @@ fn append_rule_scores(
     let Some(evaluator) = rules.evaluator.as_mut() else {
         return;
     };
+    let mut timer = crate::rules::metrics::StageTimer::new(
+        "rules_apply",
+        if rules.collect_diagnostics {
+            crate::rules::metrics::Purpose::Preview
+        } else {
+            crate::rules::metrics::Purpose::Live
+        },
+    );
 
     let input = crate::user_rule_input::build_rule_input(
         parsed,
@@ -695,6 +711,9 @@ fn append_rule_scores(
 
     match evaluator.evaluate(&input, ctx.category) {
         Ok(result) => {
+            if !result.errors.is_empty() {
+                timer.outcome("error");
+            }
             for entry in result.entries {
                 let source = match entry.origin {
                     scryer_rules::PolicyOrigin::User => ScoringSource::UserRule {
@@ -732,6 +751,7 @@ fn append_rule_scores(
             }
         }
         Err(error) => {
+            timer.outcome("error");
             if rules.collect_diagnostics {
                 rules.engine_error = Some(error.to_string());
             }

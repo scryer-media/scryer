@@ -522,6 +522,16 @@ impl UserRulesEngine {
         baseline_ids: &std::collections::HashSet<String>,
         tag_filters: &std::collections::HashMap<String, Vec<String>>,
     ) -> Result<Self, RulesError> {
+        Self::build_observed(policies, baseline_ids, tag_filters, None)
+    }
+
+    /// Build with an optional host timing sink; scoring semantics are unchanged.
+    pub fn build_observed(
+        policies: &[UserPolicy],
+        baseline_ids: &std::collections::HashSet<String>,
+        tag_filters: &std::collections::HashMap<String, Vec<String>>,
+        observer: Option<std::sync::Arc<dyn crate::policy::telemetry::PolicyObserver>>,
+    ) -> Result<Self, RulesError> {
         if baseline_ids
             .iter()
             .any(|id| !policies.iter().any(|policy| &policy.id == id))
@@ -569,7 +579,8 @@ impl UserRulesEngine {
                 policy
             })
             .collect::<Vec<_>>();
-        let mut engine = Self::build(&configured)?;
+        let mut engine =
+            Self::build_with_limits_and_observer(&configured, ReleaseFamily::limits(), observer)?;
         for rule in &mut engine.rules {
             rule.extra.baseline = baseline_ids.contains(&rule.id);
             rule.extra.tag_filter = tag_filters.get(&rule.id).cloned().unwrap_or_default();
@@ -635,7 +646,9 @@ impl UserRulesEvaluator {
             let mut phased_input = input.clone();
             phased_input.builtin_score.total = 0;
             let mut baseline =
-                self.evaluate_policies_where(&phased_input, facet, |extra| extra.baseline)?;
+                self.evaluate_policies_where(&phased_input, facet, "baseline", |extra| {
+                    extra.baseline
+                })?;
             let subtotal = baseline
                 .records
                 .iter()
@@ -652,12 +665,14 @@ impl UserRulesEvaluator {
                     .map(|entry| entry.code.clone()),
             );
             let additional =
-                self.evaluate_policies_where(&phased_input, facet, |extra| !extra.baseline)?;
+                self.evaluate_policies_where(&phased_input, facet, "additional", |extra| {
+                    !extra.baseline
+                })?;
             baseline.records.extend(additional.records);
             baseline.errors.extend(additional.errors);
             baseline
         } else {
-            self.evaluate_policies(input, facet)?
+            self.evaluate_policies_where(input, facet, "additional", |_| true)?
         };
         Ok(EvalResult {
             entries: outcome
@@ -775,6 +790,175 @@ fn validate_managed_entries(entries: &[UserRuleEntry]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct TimingSink(std::sync::Mutex<Vec<(String, String, String, String, String)>>);
+
+    impl crate::policy::telemetry::PolicyObserver for TimingSink {
+        fn observe(&self, event: crate::policy::telemetry::PolicyObservation<'_>) {
+            assert_eq!(event.family, "release");
+            self.0.lock().unwrap().push((
+                event.stage.into(),
+                event.rule_id.into(),
+                event.phase.into(),
+                event.temperature.into(),
+                event.outcome.into(),
+            ));
+        }
+    }
+
+    #[test]
+    fn telemetry_tracks_phases_no_matches_skips_and_evaluator_reuse_without_changing_scores() {
+        let policy = |id: &str, source: &str, facets: Vec<String>| UserPolicy {
+            id: id.into(),
+            name: id.into(),
+            rego_source: rewrite_package_declaration(source, id),
+            origin: PolicyOrigin::User,
+            applied_facets: facets,
+        };
+        let policies = vec![
+            policy("base", "score_entry[\"base\"] := 40", vec![]),
+            policy(
+                "later",
+                "score_entry[\"later\"] := input.builtin_score.total",
+                vec![],
+            ),
+            policy("miss", "score_entry[\"miss\"] := 1 if { false }", vec![]),
+            policy("anime", "score_entry[\"anime\"] := 2", vec!["anime".into()]),
+        ];
+        let baseline = std::collections::HashSet::from(["base".into()]);
+        let sink = std::sync::Arc::new(TimingSink::default());
+        let engine = UserRulesEngine::build_observed(
+            &policies,
+            &baseline,
+            &Default::default(),
+            Some(sink.clone()),
+        )
+        .unwrap();
+        let expected = UserRulesEngine::build_with_baseline_rules(&policies, &baseline)
+            .unwrap()
+            .evaluator()
+            .evaluate(&test_input(), "movie")
+            .unwrap();
+        let mut evaluator = engine.evaluator();
+        for _ in 0..2 {
+            let result = evaluator.evaluate(&test_input(), "movie").unwrap();
+            assert_eq!(
+                result
+                    .entries
+                    .iter()
+                    .map(|entry| (&entry.code, entry.delta))
+                    .collect::<Vec<_>>(),
+                expected
+                    .entries
+                    .iter()
+                    .map(|entry| (&entry.code, entry.delta))
+                    .collect::<Vec<_>>()
+            );
+            assert!(result.errors.is_empty());
+        }
+        evaluator.evaluate(&test_input(), "anime").unwrap();
+        engine.evaluator().evaluate(&test_input(), "movie").unwrap();
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.iter().filter(|e| e.0 == "policy_load").count(), 4);
+        let evals: Vec<_> = events.iter().filter(|e| e.0 == "rule_evaluate").collect();
+        assert_eq!(
+            evals.len(),
+            16,
+            "phase selection must not count a rule twice"
+        );
+        assert!(
+            evals
+                .iter()
+                .filter(|e| e.1 == "base")
+                .all(|e| e.2 == "baseline")
+        );
+        assert!(
+            evals
+                .iter()
+                .filter(|e| e.1 != "base")
+                .all(|e| e.2 == "additional")
+        );
+        assert_eq!(
+            evals
+                .iter()
+                .filter(|e| e.1 == "miss" && e.4 == "no_match")
+                .count(),
+            4
+        );
+        let anime: Vec<_> = evals
+            .iter()
+            .filter(|e| e.1 == "anime")
+            .map(|e| (e.3.as_str(), e.4.as_str()))
+            .collect();
+        assert_eq!(
+            anime,
+            [
+                ("first", "skipped"),
+                ("first", "skipped"),
+                ("first", "ok"),
+                ("first", "skipped")
+            ]
+        );
+        let base: Vec<_> = evals
+            .iter()
+            .filter(|e| e.1 == "base")
+            .map(|e| e.3.as_str())
+            .collect();
+        assert_eq!(base, ["first", "warm", "warm", "first"]);
+    }
+
+    #[test]
+    fn telemetry_records_failed_loads_and_runtime_errors() {
+        let sink = std::sync::Arc::new(TimingSink::default());
+        let mut policy = UserPolicy {
+            id: "bad".into(),
+            name: "Bad".into(),
+            rego_source: "this is not rego".into(),
+            origin: PolicyOrigin::User,
+            applied_facets: vec![],
+        };
+        assert!(
+            UserRulesEngine::build_observed(
+                std::slice::from_ref(&policy),
+                &Default::default(),
+                &Default::default(),
+                Some(sink.clone())
+            )
+            .is_err()
+        );
+        assert!(
+            sink.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.0 == "policy_load" && e.4 == "error")
+        );
+        policy.rego_source =
+            rewrite_package_declaration("score_entry[\"bad\"] := lower(input.release.year)", "bad");
+        let engine = UserRulesEngine::build_observed(
+            &[policy],
+            &Default::default(),
+            &Default::default(),
+            Some(sink.clone()),
+        )
+        .unwrap();
+        assert!(
+            !engine
+                .evaluator()
+                .evaluate(&test_input(), "movie")
+                .unwrap()
+                .errors
+                .is_empty()
+        );
+        assert!(
+            sink.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.0 == "rule_evaluate" && e.4 == "error")
+        );
+    }
 
     #[test]
     fn empty_engine_produces_no_entries() {

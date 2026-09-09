@@ -601,8 +601,33 @@ impl AppUseCase {
     /// CPU work so previews can call it from `spawn_blocking` after releasing
     /// the rule mutation lock.
     pub(crate) fn build_user_rules_engine(
+        rule_sets: Vec<RuleSet>,
+        plugin_policies: Vec<scryer_rules::UserPolicy>,
+    ) -> AppResult<scryer_rules::UserRulesEngine> {
+        Self::build_user_rules_engine_for_purpose(
+            rule_sets,
+            plugin_policies,
+            super::metrics::Purpose::Live,
+        )
+    }
+
+    pub(crate) fn build_user_rules_engine_for_purpose(
+        rule_sets: Vec<RuleSet>,
+        plugin_policies: Vec<scryer_rules::UserPolicy>,
+        purpose: super::metrics::Purpose,
+    ) -> AppResult<scryer_rules::UserRulesEngine> {
+        let mut timer = super::metrics::StageTimer::new("engine_build", purpose);
+        let result = Self::build_observed_user_rules_engine(rule_sets, plugin_policies, purpose);
+        if result.is_err() {
+            timer.outcome("error");
+        }
+        result
+    }
+
+    fn build_observed_user_rules_engine(
         mut rule_sets: Vec<RuleSet>,
         plugin_policies: Vec<scryer_rules::UserPolicy>,
+        purpose: super::metrics::Purpose,
     ) -> AppResult<scryer_rules::UserRulesEngine> {
         let mut exclusive_groups = std::collections::BTreeMap::<String, Vec<String>>::new();
         for rule_set in rule_sets.iter().filter(|rule_set| rule_set.enabled) {
@@ -682,10 +707,11 @@ impl AppUseCase {
             }
         }
 
-        let engine = scryer_rules::UserRulesEngine::build_with_baseline_rules_and_tag_filters(
+        let engine = scryer_rules::UserRulesEngine::build_observed(
             &policies,
             &baseline_ids,
             &tag_filters,
+            Some(std::sync::Arc::new(super::metrics::RulesObserver(purpose))),
         )
         .map_err(|e| AppError::Validation(format!("failed to build rules engine: {e}")))?;
 

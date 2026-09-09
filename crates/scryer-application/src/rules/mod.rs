@@ -1,6 +1,7 @@
 pub(crate) use crate::*;
 
 pub(crate) mod builtin_trash;
+pub(crate) mod metrics;
 pub mod preview;
 #[cfg(test)]
 mod preview_tests;
