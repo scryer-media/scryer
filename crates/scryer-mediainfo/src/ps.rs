@@ -15,6 +15,7 @@ const STREAM_BYTES: usize = 64 * 1024;
 
 #[derive(Default)]
 struct PesStream {
+    discovery_order: usize,
     first_pts: Option<u64>,
     last_pts: Option<u64>,
     payload: Vec<u8>,
@@ -41,6 +42,8 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
         ..Default::default()
     };
     let mut caption_services = Vec::new();
+    let mut streams = streams.into_iter().collect::<Vec<_>>();
+    streams.sort_by_key(|(_, stream)| stream.discovery_order);
     for (id, pes) in streams {
         let Some((kind, codec)) = classify(id) else {
             continue;
@@ -206,7 +209,11 @@ fn scan_pes(bytes: &[u8], streams: &mut BTreeMap<u16, PesStream>, collect: bool)
                 u16::from(stream_id)
             };
             if classify(id).is_some() {
-                let stream = streams.entry(id).or_default();
+                let discovery_order = streams.len();
+                let stream = streams.entry(id).or_insert_with(|| PesStream {
+                    discovery_order,
+                    ..Default::default()
+                });
                 if let Some(timestamp) = timestamp {
                     if collect {
                         stream.first_pts.get_or_insert(timestamp);
@@ -235,6 +242,47 @@ mod tests {
         assert!(streams.is_empty());
         assert!(pts(&[0; 5]).is_none());
     }
+    #[test]
+    fn catalog_selection_preserves_program_stream_discovery_order() {
+        fn packet(id: u8, data: &[u8]) -> Vec<u8> {
+            let mut bytes = vec![0, 0, 1, id];
+            bytes.extend(((3 + data.len()) as u16).to_be_bytes());
+            bytes.extend([0x80, 0, 0]);
+            bytes.extend(data);
+            bytes
+        }
+        let sd = [0, 0, 1, 0xb3, 0x2d, 0x01, 0xe0, 0x13, 0, 0, 0x60, 0];
+        let hd = [0, 0, 1, 0xb3, 0x50, 0x02, 0xd0, 0x13, 0, 0, 0x60, 0];
+        let bytes = [
+            packet(0xc4, &[]),
+            packet(0xe7, &sd),
+            packet(0xc0, &[]),
+            packet(0xe1, &hd),
+            packet(0xe7, &sd),
+        ]
+        .concat();
+        let analysis = crate::analyze_source(
+            &mut std::io::Cursor::new(bytes),
+            "mpg",
+            crate::AnalyzeOptions {
+                profile: crate::AnalysisProfile::DefaultRich,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            analysis
+                .details
+                .streams
+                .iter()
+                .map(|stream| stream.metadata.id.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("00c4"), Some("00e7"), Some("00c0"), Some("00e1")]
+        );
+        assert_eq!(analysis.details.selected_video_id.as_deref(), Some("00e7"));
+        assert_eq!(analysis.video_width, Some(720));
+        assert_eq!(analysis.video_height, Some(480));
+    }
+
     #[test]
     fn dvd_private_stream_types_are_distinct() {
         assert_eq!(classify(0xbd80), Some((TrackKind::Audio, "ac3")));
