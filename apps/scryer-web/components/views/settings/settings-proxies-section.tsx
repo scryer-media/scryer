@@ -1031,10 +1031,11 @@ export function SettingsProxiesSection({
                                 }
                               />
                             </div>
-                            <div className="relative">
+                            <div className="relative w-fit max-w-full">
                               <Input
                                 id="settings-indexer-proxy-tunnel-public-key-value"
-                                className="pr-10 font-mono text-xs"
+                                className="w-auto max-w-full pr-10 font-mono text-xs"
+                                size={48}
                                 value={editingProxy?.tunnelPublicKey ?? ""}
                                 placeholder={t("settings.proxyTunnelPublicKeyPending")}
                                 readOnly
