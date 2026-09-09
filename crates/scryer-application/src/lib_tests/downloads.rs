@@ -445,6 +445,121 @@ async fn authoritative_absence_follows_the_history_cursor_past_the_first_page() 
     assert!(!registry.ended.lock().await.contains(&second_download_id));
 }
 
+// History deeper than one pass's scan budget is walked to its end across
+// passes: the cursor where the budget ran out is where the next pass resumes,
+// instead of re-reading the same first pages forever and never proving absence.
+#[tokio::test]
+async fn authoritative_absence_resumes_its_history_scan_on_the_next_pass() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone()])
+        .await;
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "deep-history-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-deep-history".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "deep-history-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Deep.History.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("seed download submission");
+    let mut item = queue_history_fixture_item("deep-history-1", DownloadQueueState::Downloading, 1);
+    item.client_id = config.id.clone();
+    item.client_name = config.name.clone();
+    item.client_type = "nzbget".to_string();
+    item.download_id = Some(download_id.to_wire());
+    item.is_scryer_origin = true;
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, item).await;
+
+    // Nine pages before the end of history: one more than a pass may read.
+    download_client
+        .observation_script
+        .lock()
+        .await
+        .extend(
+            (1..=9).map(|page| crate::DownloadClientObservation::Unknown {
+                reason: format!("page {page} scanned"),
+                next_history_offset: page * 100,
+            }),
+        );
+    download_client
+        .observation_script
+        .lock()
+        .await
+        .push_back(crate::DownloadClientObservation::Absent);
+
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        (0..8).map(|page| page * 100).collect::<Vec<_>>(),
+        "the first pass reads its full budget from the start of history"
+    );
+    assert!(
+        !registry.ended.lock().await.contains(&download_id),
+        "an unfinished scan keeps the binding"
+    );
+
+    download_client
+        .observed_history_offsets
+        .lock()
+        .await
+        .clear();
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        vec![800, 900],
+        "the next pass resumes where the budget ran out"
+    );
+    assert!(registry.ended.lock().await.contains(&download_id));
+}
+
 #[tokio::test]
 async fn authoritative_absence_fails_and_ends_an_incomplete_binding_before_reobservation() {
     let download_client = Arc::new(StubDownloadClient::default());

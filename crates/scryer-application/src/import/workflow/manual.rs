@@ -371,7 +371,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
     )
     .await;
 }
-async fn maybe_remove_completed_manual_import_download(
+pub(crate) async fn maybe_remove_completed_manual_import_download(
     app: &AppUseCase,
     completed: Option<&CompletedDownload>,
     title_id: Option<&str>,
@@ -392,29 +392,41 @@ async fn maybe_remove_completed_manual_import_download(
         return;
     };
 
-    if app
+    let locator = crate::ClientJobLocator::new(
+        Some(&completed.client_id),
+        &completed.client_type,
+        &completed.download_client_item_id,
+    );
+    // A job Scryer neither submitted nor observed before the operator
+    // imported it has no durable binding to hang a cleanup row on. The
+    // import itself was verified, so it still gets the direct cleanup below
+    // instead of being left in the client.
+    let durable_binding = if app
         .services
         .workflow
         .download_submissions
         .supports_durable_download_cleanup()
     {
-        let locator = crate::ClientJobLocator::new(
-            Some(&completed.client_id),
-            &completed.client_type,
-            &completed.download_client_item_id,
-        );
+        match app
+            .services
+            .workflow
+            .download_registry
+            .find_active_binding_by_locator(&locator)
+            .await
+        {
+            Ok(binding) => binding,
+            Err(error) => {
+                tracing::warn!(client_id = %completed.client_id,
+                    item_id = %completed.download_client_item_id, error = %error,
+                    "verified manual import cleanup remains unresolved");
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(binding) = durable_binding {
         let result = async {
-            let binding = app
-                .services
-                .workflow
-                .download_registry
-                .find_active_binding_by_locator(&locator)
-                .await?
-                .ok_or_else(|| {
-                    AppError::Validation(
-                        "verified manual import has no durable client binding".into(),
-                    )
-                })?;
             if let Some(title_id) = title_id.filter(|id| !id.trim().is_empty()) {
                 app.services
                     .workflow

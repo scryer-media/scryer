@@ -307,6 +307,9 @@ pub(super) struct TrackingDownloadSubmissionRepo {
         Arc<Mutex<Vec<(scryer_domain::download_identity::DownloadId, String, bool)>>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
+    /// Answer `supports_durable_download_cleanup` with `true`, so a caller
+    /// that branches on durable support takes the binding-backed path.
+    pub(super) durable_cleanup: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Default, Clone)]
@@ -736,6 +739,11 @@ pub(super) fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    fn supports_durable_download_cleanup(&self) -> bool {
+        self.durable_cleanup
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     async fn claim_download_cleanup(
         &self,
         id: &scryer_domain::download_identity::DownloadId,

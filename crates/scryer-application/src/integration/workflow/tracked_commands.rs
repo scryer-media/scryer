@@ -1361,6 +1361,46 @@ async fn reconcile_deleted_client_bindings(
 /// giving the binding the benefit of the doubt until the next snapshot.
 const ABSENT_SOURCE_HISTORY_SCAN_ROUNDS: usize = 8;
 
+/// Where the bounded absence scan left off per job, so the next reconcile
+/// pass resumes instead of re-reading the same first pages. History longer
+/// than one pass's budget is then still walked to its end over successive
+/// passes; a job proven present or absent, or a cursor that stops advancing,
+/// clears its entry.
+static ABSENT_SOURCE_HISTORY_CURSORS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, usize>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn absent_source_cursor_key(locator: &crate::ClientJobLocator) -> String {
+    format!(
+        "{}|{}|{}",
+        locator.client_id.as_deref().unwrap_or(""),
+        locator.client_type,
+        locator.item_id
+    )
+}
+
+fn load_absent_source_cursor(locator: &crate::ClientJobLocator) -> usize {
+    ABSENT_SOURCE_HISTORY_CURSORS
+        .lock()
+        .map(|cursors| cursors.get(&absent_source_cursor_key(locator)).copied())
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
+fn store_absent_source_cursor(locator: &crate::ClientJobLocator, offset: Option<usize>) {
+    if let Ok(mut cursors) = ABSENT_SOURCE_HISTORY_CURSORS.lock() {
+        match offset {
+            Some(offset) if offset > 0 => {
+                cursors.insert(absent_source_cursor_key(locator), offset);
+            }
+            _ => {
+                cursors.remove(&absent_source_cursor_key(locator));
+            }
+        }
+    }
+}
+
 pub(crate) async fn reconcile_authoritatively_absent_source(
     app: &AppUseCase,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
@@ -1394,7 +1434,7 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
     // offset so a bounded scan can continue; follow that cursor here, or a job
     // behind the first history page could never be proven absent and its
     // binding would block replacement downloads forever.
-    let mut history_offset = 0usize;
+    let mut history_offset = load_absent_source_cursor(source_identity);
     let mut proven_absent = false;
     for _ in 0..ABSENT_SOURCE_HISTORY_SCAN_ROUNDS {
         match app
@@ -1408,12 +1448,18 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
                 proven_absent = true;
                 break;
             }
-            Ok(crate::DownloadClientObservation::Present(_)) => return,
+            Ok(crate::DownloadClientObservation::Present(_)) => {
+                store_absent_source_cursor(source_identity, None);
+                return;
+            }
             Ok(crate::DownloadClientObservation::Unknown { reason, next_history_offset }) => {
                 if next_history_offset > history_offset {
                     history_offset = next_history_offset;
                     continue;
                 }
+                // No progress: the client is unreadable, or history shrank
+                // beneath a resumed cursor. Start over next pass.
+                store_absent_source_cursor(source_identity, None);
                 tracing::debug!(download_id = %binding.download_id, reason, history_offset,
                     "client state unknown; preserving download binding");
                 return;
@@ -1426,10 +1472,15 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
         }
     }
     if !proven_absent {
+        // Resume from here next pass rather than re-reading the same prefix,
+        // so a history longer than one pass's budget is still walked to its
+        // end.
+        store_absent_source_cursor(source_identity, Some(history_offset));
         tracing::debug!(download_id = %binding.download_id, history_offset,
-            "history scan budget exhausted without proving absence; preserving download binding");
+            "history scan budget exhausted without proving absence; preserving download binding until the next pass resumes the scan");
         return;
     }
+    store_absent_source_cursor(source_identity, None);
     match authoritatively_absent_download_disposition(app, tracker, source_identity, &binding).await
     {
         AuthoritativelyAbsentDownloadDisposition::Preserve => return,

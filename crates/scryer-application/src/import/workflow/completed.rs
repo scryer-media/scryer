@@ -795,8 +795,12 @@ pub(crate) async fn run_claimed_download_cleanup(
                         && checkpoint.get("client_type").and_then(|v| v.as_str()) == Some(record.client_type.as_str())
                         && checkpoint.get("item_id").and_then(|v| v.as_str()) == Some(record.item_id.as_str())
                 });
+                // Intent is checkpointed before the request; only a request
+                // that was actually sent (marker written after the client
+                // answered) lets absence count as a completed native deletion.
                 let native_requested = checkpoint_matches && checkpoint.as_ref().is_some_and(|checkpoint|
-                    checkpoint.get("native_remove_requested").and_then(|v| v.as_bool()) == Some(true));
+                    checkpoint.get("native_remove_requested").and_then(|v| v.as_bool()) == Some(true)
+                        && checkpoint.get(NATIVE_REMOVE_ATTEMPTED_KEY).and_then(|v| v.as_bool()) == Some(true));
                 let entry_only_requested = checkpoint_matches
                     && matches!(state, TrackedDownloadState::Failed | TrackedDownloadState::Ignored)
                     && checkpoint.as_ref().is_some_and(|checkpoint|
@@ -903,7 +907,8 @@ pub(crate) async fn run_claimed_download_cleanup(
             || (token != Some(record.download_id)
                 && !(active.as_ref().is_some_and(|binding| binding.download_id == record.download_id)
                     && (torrent_hash_matches == Some(true)
-                        || record.source_title.as_deref().is_some_and(|name| name == item.title_name))))
+                        || record.source_title.as_deref().is_some_and(|name|
+                            cleanup_job_names_match(name, &item.title_name)))))
         {
             return Err(AppError::Validation("cleanup locator is reused or identity is ambiguous".into()));
         }
@@ -1006,6 +1011,36 @@ pub(crate) async fn run_claimed_download_cleanup(
 /// unreadable, or it carries no title/facet to route a removal policy by.
 /// Manual import re-attributes such a row and reopens it (see the store's
 /// attribution update), so abandoning it at once loses nothing.
+/// Whether a client's job name still names the submitted release. Clients
+/// rewrite the display name they hand back (SABnzbd's replace-spaces and
+/// replace-dots options, sorters, user renames) while the job stays the same,
+/// so compare word runs: case-folded, with spaces, dots, underscores and
+/// dashes as interchangeable separators and a trailing `.nzb`/`.par2` ignored.
+pub(crate) fn cleanup_job_names_match(source_title: &str, job_name: &str) -> bool {
+    fn words(value: &str) -> Vec<String> {
+        let trimmed = value.trim();
+        let trimmed = ["nzb", "par2"]
+            .iter()
+            .find_map(|extension| {
+                let suffix = format!(".{extension}");
+                trimmed
+                    .len()
+                    .checked_sub(suffix.len())
+                    .filter(|&at| trimmed.is_char_boundary(at))
+                    .filter(|&at| trimmed[at..].eq_ignore_ascii_case(&suffix))
+                    .map(|at| &trimmed[..at])
+            })
+            .unwrap_or(trimmed);
+        trimmed
+            .split(|c: char| c.is_whitespace() || matches!(c, '.' | '_' | '-'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    }
+    let source = words(source_title);
+    !source.is_empty() && source == words(job_name)
+}
+
 pub(crate) const CLEANUP_UNATTRIBUTED: &str = "cleanup has no valid routing attribution";
 pub(crate) const CLEANUP_INVALID_STATE: &str = "invalid durable cleanup state";
 
