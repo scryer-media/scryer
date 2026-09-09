@@ -295,11 +295,6 @@ export function SettingsProxiesSection({
                               {t("settings.proxyCredentialsStored")}
                             </span>
                           ) : null}
-                          {proxy.hasPrivateKey ? (
-                            <span className="ml-2 text-xs text-muted-foreground">
-                              {t("settings.proxyPrivateKeyStored")}
-                            </span>
-                          ) : null}
                           {proxy.hasPresharedKey ? (
                             <span className="ml-2 text-xs text-muted-foreground">
                               {t("settings.proxyPresharedKeyStored")}
