@@ -14345,7 +14345,11 @@ type MutationRoot {
 		"""
 		Proxy configuration identity to test.
 		"""
-		id: ID!
+		id: ID!,
+		"""
+		HTTP(S) URL to fetch through this proxy or solver. Omit for the existing health check.
+		"""
+		url: String
 	): ProxyTestResultPayload!
 	"""
 	Forget the pinned tunnel host key so the next connection trusts the server again.
@@ -18073,6 +18077,14 @@ type ProxyTestResultPayload {
 	Test duration in milliseconds, or null when unavailable.
 	"""
 	durationMs: Int
+	"""
+	Public outbound IP reported by the destination, or null when unrecognized.
+	"""
+	observedIp: String
+	"""
+	Destination HTTP status, or null when no destination response was received.
+	"""
+	httpStatus: Int
 }
 
 """

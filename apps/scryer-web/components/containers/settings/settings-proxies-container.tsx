@@ -1,5 +1,9 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import {
+  ProxyTestForm,
+  type ProxyUrlTestResult,
+} from "@/components/views/settings/proxy-test-form";
 import { SettingsProxiesSection } from "@/components/views/settings/settings-proxies-section";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -41,6 +45,7 @@ export function SettingsProxiesContainer() {
   const [isProxyEditorOpen, setIsProxyEditorOpen] = useState(false);
   const [mutatingProxyId, setMutatingProxyId] = useState<string | null>(null);
   const [testingProxyId, setTestingProxyId] = useState<string | null>(null);
+  const [pendingTestProxy, setPendingTestProxy] = useState<ProxyRecord | null>(null);
   const [resettingHostKeyProxyId, setResettingHostKeyProxyId] =
     useState<string | null>(null);
   const [pendingDeleteProxy, setPendingDeleteProxy] = useState<ProxyRecord | null>(
@@ -371,28 +376,22 @@ export function SettingsProxiesContainer() {
   );
 
   const testProxy = useCallback(
-    async (proxy: ProxyRecord) => {
+    async (proxy: ProxyRecord, url: string): Promise<ProxyUrlTestResult> => {
       setTestingProxyId(proxy.id);
       try {
         const { data, error } = await client
-          .mutation(testProxyConfigMutation, { id: proxy.id })
+          .mutation(testProxyConfigMutation, { id: proxy.id, url })
           .toPromise();
         if (error) throw error;
         const result = data?.testProxyConfig;
-        setGlobalStatus(
-          result?.message ||
-            (result?.ok ? t("status.proxyTestPassed") : t("status.proxyTestFailed")),
-        );
+        if (!result) throw new Error(t("status.proxyTestFailed"));
         await refreshProxyConfigs();
-      } catch (error) {
-        setGlobalStatus(
-          error instanceof Error ? error.message : t("status.proxyTestFailed"),
-        );
+        return result;
       } finally {
         setTestingProxyId(null);
       }
     },
-    [client, refreshProxyConfigs, setGlobalStatus, t],
+    [client, refreshProxyConfigs, t],
   );
 
   const deleteProxy = useCallback((proxy: ProxyRecord) => {
@@ -500,7 +499,15 @@ export function SettingsProxiesContainer() {
         changeProxyProvider={changeProxyProvider}
         editProxy={editProxy}
         importWireguardConfig={importWireguardConfig}
-        testProxy={testProxy}
+        testProxy={setPendingTestProxy}
+        testForm={pendingTestProxy && (
+          <ProxyTestForm
+            key={pendingTestProxy.id}
+            proxy={pendingTestProxy}
+            onTest={testProxy}
+            onClose={() => setPendingTestProxy(null)}
+          />
+        )}
         deleteProxy={deleteProxy}
         requestResetHostKey={setPendingHostKeyResetProxy}
         copyTunnelPublicKey={copyTunnelPublicKey}

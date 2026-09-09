@@ -526,6 +526,10 @@ pub struct ProxyTestResultPayload {
     pub message: Option<String>,
     /// Test duration in milliseconds, or null when unavailable.
     pub duration_ms: Option<i32>,
+    /// Public outbound IP reported by the destination, or null when unrecognized.
+    pub observed_ip: Option<String>,
+    /// Destination HTTP status, or null when no destination response was received.
+    pub http_status: Option<i32>,
 }
 
 #[derive(SimpleObject, Clone)]

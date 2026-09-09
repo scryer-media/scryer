@@ -712,6 +712,8 @@ pub fn from_proxy_test_result(result: ProxyTestResult) -> ProxyTestResultPayload
         ok: result.ok,
         status: result.status.as_str().to_string(),
         message: result.message,
+        observed_ip: result.observed_ip,
+        http_status: result.http_status.map(i32::from),
         duration_ms: result
             .duration_ms
             .map(|value| value.min(i32::MAX as u64) as i32),

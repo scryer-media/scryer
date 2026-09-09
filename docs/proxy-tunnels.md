@@ -24,10 +24,15 @@ selector. Destination names travel in CONNECT authority and resolve at the
 proxy. The host resolves only the proxy endpoint. An unavailable or rejected
 proxy fails the request; it does not fall back to direct networking.
 
-The profile test uses an assigned indexer's destination to exercise CONNECT.
-Without an assigned indexer, the test asks for one rather than reporting that
-a locally bound bridge proves remote connectivity. Download clients retain
-their own connection test.
+Each saved profile's Test action opens a form below the proxy table, defaulting to
+`https://api64.ipify.org?format=json`. Enable the profile, then test to fetch
+the URL through its saved route and display its public exit IP, destination
+HTTP status, and elapsed time. No assigned indexer is needed. A custom page
+that does not return an IP reports its HTTP status without changing the
+profile's saved health. Solvers fetch the URL themselves and report their
+own exit IP; this does not verify challenge solving or other Scryer traffic.
+API callers that omit the test URL retain the existing health-check behavior.
+Download clients retain their own connection test.
 
 ## Connection reuse and resource limits
 

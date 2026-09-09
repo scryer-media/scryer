@@ -487,12 +487,14 @@ export const deleteProxyConfigMutation = `mutation DeleteProxyConfig($id: ID!) {
 }
 }`;
 
-export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!) {
-  testProxyConfig(id: $id) {
+export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!, $url: String) {
+  testProxyConfig(id: $id, url: $url) {
     ok
     status
     message
     durationMs
+    observedIp
+    httpStatus
   }
 }`;
 
