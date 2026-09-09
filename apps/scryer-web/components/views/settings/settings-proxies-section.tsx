@@ -672,11 +672,6 @@ export function SettingsProxiesSection({
                       ) : null}
 
                     </div>
-                    {isTunnelDraft ? (
-                      <p className="text-xs text-muted-foreground md:col-span-3">
-                        {t("settings.proxyTunnelAuthHelp")}
-                      </p>
-                    ) : null}
                   </div>
                 ) : null}
                 {acceptsPrivateKey ? (
@@ -690,6 +685,14 @@ export function SettingsProxiesSection({
                         htmlFor="settings-indexer-proxy-private-key"
                       >
                         {t("settings.proxyPrivateKey")}
+                        <InfoHelp
+                          ariaLabel={t("settings.proxyPrivateKey")}
+                          text={
+                            isWireguardDraft
+                              ? t("settings.proxyPrivateKeyHelpWireguard")
+                              : t("settings.proxyPrivateKeyHelp")
+                          }
+                        />
                       </Label>
                       {/* A WireGuard key is one 44-character base64 line, not
                           a PEM block, so it gets a single-line field. Neither
@@ -751,16 +754,6 @@ export function SettingsProxiesSection({
                         />
                       )}
                     </label>
-                    <p
-                      id="settings-indexer-proxy-private-key-help"
-                      className="text-xs text-muted-foreground"
-                    >
-                      {/* The backend's own sentence, so the help text and the
-                          save-time rejection cannot say different things. */}
-                      {isWireguardDraft
-                        ? t("settings.proxyPrivateKeyHelpWireguard")
-                        : t("settings.proxyPrivateKeyHelp")}
-                    </p>
                     {/* Every tunnel requires a key. Paste a replacement to rotate it. */}
                     {showPassphrase ? (
                       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -770,6 +763,7 @@ export function SettingsProxiesSection({
                             htmlFor="settings-indexer-proxy-private-key-passphrase"
                           >
                             {t("settings.proxyPrivateKeyPassphrase")}
+                            <span className="text-muted-foreground"> (optional)</span>
                           </Label>
                           <Input
                             id="settings-indexer-proxy-private-key-passphrase"
@@ -790,9 +784,6 @@ export function SettingsProxiesSection({
                             }
                           />
                         </label>
-                        <p className="self-end pb-2 text-xs text-muted-foreground">
-                          {t("settings.proxyPrivateKeyPassphraseHelp")}
-                        </p>
                       </div>
                     ) : null}
                     {acceptsWireguardFields ? (
