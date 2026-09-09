@@ -1483,6 +1483,11 @@ export const beginManualImportSelectionMutation = `mutation BeginManualImportSel
         videoWidth
         videoHeight
         durationSeconds
+        report { status warnings { code message } }
+        disc {
+          discType selectedTitleId automaticSelection
+          titles { id durationSeconds angleCount report { status } }
+        }
       }
       quality
       parsedSeason

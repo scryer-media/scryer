@@ -2,8 +2,12 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { ChevronDown } from "lucide-react";
+import { MediaAnalysisDetailsPopover } from "./media-analysis-details";
 
 export type AudioStreamDetail = {
+  metadata?: Pick<import("@/lib/types/media-analysis").MediaStreamMetadata, "channelLayout" | "disposition" | "programId">;
+  profile?: string | null;
+  name?: string | null;
   codec: string | null;
   channels: number | null;
   language: string | null;
@@ -19,6 +23,9 @@ export type SubtitleStreamDetail = {
 };
 
 export type MediaInfoFile = {
+  id?: string;
+  analysis?: import("@/lib/types/media-analysis").MediaAnalysisDetails;
+  analysisAttempt?: import("@/lib/types/media-analysis").MediaAnalysisAttempt | null;
   scanStatus: string;
   videoCodec: string | null;
   videoWidth: number | null;
@@ -86,12 +93,9 @@ function resolveAudioCodec(codec: string | null): string | null {
   return codec.toUpperCase();
 }
 
-function resolveAudioChannels(channels: number | null): string | null {
+function resolveAudioChannels(channels: number | null, layout?: string | null): string | null {
+  if (layout) return layout;
   if (channels == null) return null;
-  if (channels === 8) return "7.1";
-  if (channels === 6) return "5.1";
-  if (channels === 2) return "2.0";
-  if (channels === 1) return "1.0";
   return `${channels}ch`;
 }
 
@@ -123,7 +127,8 @@ function formatSingleAudioTrack(stream: AudioStreamDetail): string {
   const parts = [
     formatLanguage(stream.language),
     resolveAudioCodec(stream.codec),
-    resolveAudioChannels(stream.channels),
+    stream.profile,
+    resolveAudioChannels(stream.channels, stream.metadata?.channelLayout),
   ].filter((value): value is string => Boolean(value && value !== "?"));
   return parts.length > 0 ? parts.join(" ") : "Audio";
 }
@@ -161,10 +166,21 @@ function Badge({
   );
 }
 
+function AudioRoles({ stream }: { stream: AudioStreamDetail }) {
+  const t = useTranslate();
+  const metadata = stream.metadata;
+  return <>
+    {metadata?.disposition.commentary ? <span>{t("mediaFile.commentary")}</span> : null}
+    {metadata?.disposition.visualImpaired ? <span>{t("mediaFile.audioDescription")}</span> : null}
+    {metadata?.disposition.hearingImpaired ? <span>{t("mediaFile.hearingImpaired")}</span> : null}
+    {metadata?.programId != null ? <span>{t("mediaFile.program", { id: metadata.programId })}</span> : null}
+  </>;
+}
+
 function AudioTracksPopover({ streams }: { streams: AudioStreamDetail[] }) {
   const t = useTranslate();
   if (streams.length === 1) {
-    return <Badge tone="info">{formatSingleAudioTrack(streams[0])}</Badge>;
+    return <Badge tone="info">{formatSingleAudioTrack(streams[0])}<AudioRoles stream={streams[0]} /></Badge>;
   }
   return (
     <Popover>
@@ -180,10 +196,12 @@ function AudioTracksPopover({ streams }: { streams: AudioStreamDetail[] }) {
       <PopoverContent className="w-auto max-w-xs p-2" align="start">
         <div className="max-h-60 space-y-1 overflow-y-auto">
           {streams.map((stream, i) => (
-            <div key={i} className="flex items-center gap-2 rounded px-2 py-1 text-xs even:bg-muted/50">
+            <div key={i} className="flex flex-wrap items-center gap-2 rounded px-2 py-1 text-xs even:bg-muted/50">
               <span className="min-w-[5rem] font-medium">{formatLanguage(stream.language)}</span>
-              <span className="text-muted-foreground">{resolveAudioCodec(stream.codec) ?? "?"}</span>
-              <span className="text-muted-foreground">{resolveAudioChannels(stream.channels) ?? "?"}</span>
+              <span className="text-muted-foreground">{resolveAudioCodec(stream.codec) ?? "?"} {stream.profile}</span>
+              <span className="text-muted-foreground">{resolveAudioChannels(stream.channels, stream.metadata?.channelLayout) ?? "?"}</span>
+              <AudioRoles stream={stream} />
+              {stream.name ? <span className="text-muted-foreground">{stream.name}</span> : null}
               {stream.bitrateKbps ? (
                 <span className="text-muted-foreground/60">{stream.bitrateKbps} kbps</span>
               ) : null}
@@ -286,12 +304,19 @@ export function MediaInfoBadges({
   const hasContainer = containerFormat != null;
   const hasVideo = !!(resolution || videoCodec || file.videoHdrFormat);
   const hasRelease = !!(sourceType || file.edition);
-  const hasAudioStreams = file.audioStreams.length > 0;
+  const audioStreams: AudioStreamDetail[] = file.analysis?.streams.length
+    ? file.analysis.streams.filter((stream) => stream.kind === "AUDIO").map((stream) => ({
+      codec: stream.codec, channels: stream.channels, language: stream.language,
+      profile: stream.metadata.profile, name: stream.name, metadata: stream.metadata,
+      bitrateKbps: stream.metadata.bitrateBps == null ? null : Number(stream.metadata.bitrateBps) / 1000,
+    }))
+    : file.audioStreams;
+  const hasAudioStreams = audioStreams.length > 0;
   const hasSubtitles = file.subtitleStreams.length > 0 || file.subtitleLanguages.length > 0;
   const isPendingScan = file.scanStatus === "imported";
   const isScanFailed = file.scanStatus === "scan_failed";
 
-  if (!hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed) return null;
+  if (!file.analysis && !hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1">
@@ -301,7 +326,7 @@ export function MediaInfoBadges({
       {file.videoHdrFormat ? <Badge tone="info">{file.videoHdrFormat}</Badge> : null}
       {sourceType ? <Badge tone="info">{sourceType}</Badge> : null}
       {file.edition ? <Badge tone="info">{file.edition}</Badge> : null}
-      {hasAudioStreams ? <AudioTracksPopover streams={file.audioStreams} /> : null}
+      {hasAudioStreams ? <AudioTracksPopover streams={audioStreams} /> : null}
       {hasSubtitles ? (
         <SubtitleTracksPopover
           streams={file.subtitleStreams.length > 0
@@ -316,6 +341,7 @@ export function MediaInfoBadges({
         />
       ) : null}
       {isPendingScan ? <Badge tone="warning">{t("mediaFile.pendingScan")}</Badge> : null}
+      {file.analysis ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
       {isScanFailed ? <Badge tone="negative">{t("mediaFile.scanFailed")}</Badge> : null}
     </div>
   );

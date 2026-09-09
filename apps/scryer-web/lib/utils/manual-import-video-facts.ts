@@ -1,3 +1,20 @@
+export type ManualDiscSelection = {
+  titleId: string | null;
+  episodeMappings: { discTitleId: string; episodeId: string }[];
+};
+
+export type ManualDiscInventory = {
+  discType: string;
+  selectedTitleId: string | null;
+  automaticSelection: boolean;
+  titles: {
+    id: string;
+    durationSeconds: number | null;
+    angleCount: number;
+    report: { status: string };
+  }[];
+};
+
 export type ManualImportVideoFacts = {
   containerFormat: string | null;
   videoCodec: string | null;
@@ -5,6 +22,8 @@ export type ManualImportVideoFacts = {
   videoWidth: number | null;
   videoHeight: number | null;
   durationSeconds: number | null;
+  disc?: ManualDiscInventory | null;
+  report?: { status: string; warnings: { code: string; message: string }[] };
 };
 
 function formatCodec(value: string): string {
