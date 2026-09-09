@@ -6911,6 +6911,10 @@ General service settings, including effective image-cache limits and trusted cer
 """
 type GeneralSettingsPayload {
 	"""
+	Whether administrators may use the API explorer.
+	"""
+	apiExplorerEnabled: Boolean!
+	"""
 	Whether surfaces that are still being finished are shown on this instance.
 	"""
 	experimentalFeaturesEnabled: Boolean!
@@ -8058,6 +8062,10 @@ type IndexerSearchResultPayload {
 Instance-wide feature switches readable by any signed-in user.
 """
 type InstanceFeaturesPayload {
+	"""
+	Whether the API explorer is enabled and the current user may access it.
+	"""
+	apiExplorerEnabled: Boolean!
 	"""
 	Whether surfaces that are still being finished are shown on this instance.
 	"""
@@ -21410,6 +21418,18 @@ type RuleSetPayload {
 	"""
 	priority: Int!
 	"""
+	Baseline rules establish the subtotal read by additional rules.
+	"""
+	evaluationPhase: String!
+	"""
+	Why a retained rule was disabled during a context migration.
+	"""
+	disabledReason: String
+	"""
+	Other rules with this group cannot be enabled simultaneously.
+	"""
+	exclusiveGroup: String
+	"""
 	Media facets to which the rule set applies.
 	"""
 	appliedFacets: [String!]!
@@ -21479,7 +21499,7 @@ type RuleSetTestDraftContributionPayload {
 	"""
 	matched: Boolean!
 	"""
-	Whether the draft emitted a blocking signal.
+	Compatibility field, always false: drafts emit recoverable numeric contributions.
 	"""
 	blocked: Boolean!
 	"""
@@ -21527,11 +21547,11 @@ input RuleSetTestDraftInput {
 }
 
 """
-One score or block entry emitted by a rule set in a scoring preview.
+One numeric contribution or explicit rejection in a scoring preview.
 """
 type RuleSetTestEntryPayload {
 	"""
-	Stable score or block code.
+	Stable explanation code; the code does not determine rejection type.
 	"""
 	code: String!
 	"""
@@ -21539,9 +21559,13 @@ type RuleSetTestEntryPayload {
 	"""
 	delta: Int!
 	"""
-	Whether the entry is a blocking signal.
+	Whether this is an explicit rejection, as identified by kind.
 	"""
 	blocked: Boolean!
+	"""
+	score_contribution, mandatory_rejection, or final_score_rejection.
+	"""
+	kind: String!
 }
 
 """
@@ -21637,7 +21661,7 @@ type RuleSetTestRuleSetPayload {
 	"""
 	matched: Boolean!
 	"""
-	Whether this rule set emitted a blocking signal.
+	Whether this group contains an explicit rejection. Numeric penalties are recoverable.
 	"""
 	blocked: Boolean!
 	"""
@@ -21645,7 +21669,7 @@ type RuleSetTestRuleSetPayload {
 	"""
 	isDraft: Boolean!
 	"""
-	Individual matched score and block entries emitted by this rule set.
+	Individual numeric contributions and explicit rejection reasons.
 	"""
 	entries: [RuleSetTestEntryPayload!]!
 	"""
@@ -21784,6 +21808,10 @@ type ScoringEntryPayload {
 	Signed score delta contributed by the rule.
 	"""
 	delta: Int!
+	"""
+	score_contribution, mandatory_rejection, or final_score_rejection.
+	"""
+	kind: String!
 	"""
 	Source of the scoring rule.
 	"""
@@ -23352,11 +23380,11 @@ type TestRuleSetPayload {
 	"""
 	score: Int!
 	"""
-	Whether the preview passes normal quality and minimum-score gates.
+	Whether mandatory requirements and both final score gates pass.
 	"""
 	allowed: Boolean!
 	"""
-	Whether any policy emitted a blocking signal.
+	Whether the completed decision is rejected by a requirement or score gate.
 	"""
 	blocked: Boolean!
 	"""
@@ -25622,6 +25650,10 @@ input UpdateDownloadClientRoutingInput {
 General retention, cache, and plugin trust settings.
 """
 input UpdateGeneralSettingsInput {
+	"""
+	Whether administrators may use the API explorer. Omission preserves the saved setting.
+	"""
+	apiExplorerEnabled: Boolean
 	"""
 	Whether surfaces that are still being finished are shown on this instance. Omission preserves the saved setting.
 	"""
