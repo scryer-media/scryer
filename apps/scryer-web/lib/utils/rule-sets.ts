@@ -1,10 +1,11 @@
 import type { RuleSetDraft, RuleSetRecord } from "@/lib/types/rule-sets";
+import { formatRegoCopy } from "./format-rego-copy.ts";
 
 export function copyRuleSetDraft(record: RuleSetRecord): RuleSetDraft {
   return {
     name: `Copy of ${record.name}`,
     description: record.description,
-    regoSource: record.regoSource,
+    regoSource: formatRegoCopy(record.regoSource),
     enabled: record.enabled,
     priority: record.priority,
     appliedFacets: [...record.appliedFacets],

@@ -50,6 +50,15 @@ test("create input round-trips enabled and omits managed metadata", () => {
   assert.equal(Object.hasOwn(input, "managedKey"), false);
 });
 
+test("community copies format only the draft and preserve source until explicitly saved", () => {
+  const record = { ...managedRule, regoSource: 'score_entry["bonus"] := 200 if { input.release.is_remux; true }' };
+  const original = structuredClone(record);
+  const draft = copyRuleSetDraft(record);
+  assert.equal(draft.regoSource, 'score_entry["bonus"] := 200 if {\n  input.release.is_remux\n  true\n}');
+  assert.deepEqual(record, original);
+  assert.equal(createRuleSetInput(draft).regoSource, draft.regoSource);
+});
+
 test("managed rules remain guarded from user-owned edit and delete actions", () => {
   assert.equal(isUserOwnedRuleSet(managedRule), false);
   assert.equal(isUserOwnedRuleSet({ ...managedRule, isManaged: false }), true);
