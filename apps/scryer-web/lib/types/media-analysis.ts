@@ -16,6 +16,7 @@ export type MediaAnalysisAttempt = {
   attemptedAt: string;
   succeeded: boolean;
   report: MediaProbeReport;
+  disc?: MediaDiscMetadata | null;
 };
 
 export type MediaStructuralDiagnostics = {
@@ -221,6 +222,147 @@ export type MediaAnalysisDetails = {
   report: MediaProbeReport;
 };
 
+export const MEDIA_DISC_FIELDS = `
+  discType
+  filesystem
+  volumeLabel
+  titles {
+    id
+    aliases
+    durationSeconds
+    angleCount
+    segments {
+      path
+      inSeconds
+      outSeconds
+      angle
+      sequenceId
+    }
+    chapters {
+      id
+      title
+      startSeconds
+      endSeconds
+    }
+    streams {
+      kind
+      codec
+      width
+      height
+      channels
+      language
+      name
+      metadata {
+        id
+        programId
+        originalLanguage
+        languageProvenance
+        disposition {
+          default
+          forced
+          original
+          commentary
+          hearingImpaired
+          visualImpaired
+          attachedPicture
+          stillImage
+        }
+        durationSeconds
+        bitrateBps
+        bitrateProvenance
+        estimatedBitrateBps
+        sampleRate
+        sampleFormat
+        sampleBitDepth
+        channelLayout
+        pixelFormat
+        profile
+        level
+        bitDepth
+        fieldOrder
+        sampleAspectRatio {
+          numerator
+          denominator
+        }
+        displayAspectRatio {
+          numerator
+          denominator
+        }
+        rotationDegrees
+        declaredFrameRate {
+          numerator
+          denominator
+        }
+        observedFrameRate {
+          numerator
+          denominator
+        }
+        variableFrameRate
+        color {
+          primaries
+          transfer
+          matrix
+          fullRange
+          provenance
+          masteringDisplay {
+            redX
+            redY
+            greenX
+            greenY
+            blueX
+            blueY
+            whiteX
+            whiteY
+            minLuminance
+            maxLuminance
+          }
+          contentLight {
+            maxCll
+            maxFall
+          }
+        }
+        hdr {
+          dolbyVision
+          hdr10plus
+          hdr10
+          hlg
+          pq
+          dovi {
+            profile
+            level
+            baseLayerCompatibilityId
+            rpuPresent
+            enhancementLayerPresent
+            baseLayerPresent
+          }
+        }
+      }
+    }
+    report {
+      status
+      bytesRead
+      seeks
+      elapsedMs
+      budgetExhausted
+      warnings {
+        code
+        message
+        streamId
+        offset
+      }
+    }
+  }
+  selectedTitleId
+  automaticSelection
+  selection {
+    titleId
+    episodeMappings {
+      discTitleId
+      episodeIds
+    }
+  }
+`;
+
 export const MEDIA_ANALYSIS_FIELDS = `
   revision
   durationSeconds
@@ -346,146 +488,7 @@ export const MEDIA_ANALYSIS_FIELDS = `
     serviceNumber
     language
   }
-  disc {
-    discType
-    filesystem
-    volumeLabel
-    titles {
-      id
-      aliases
-      durationSeconds
-      angleCount
-      segments {
-        path
-        inSeconds
-        outSeconds
-        angle
-        sequenceId
-      }
-      chapters {
-        id
-        title
-        startSeconds
-        endSeconds
-      }
-      streams {
-        kind
-        codec
-        width
-        height
-        channels
-        language
-        name
-        metadata {
-          id
-          programId
-          originalLanguage
-          languageProvenance
-          disposition {
-            default
-            forced
-            original
-            commentary
-            hearingImpaired
-            visualImpaired
-            attachedPicture
-            stillImage
-          }
-          durationSeconds
-          bitrateBps
-          bitrateProvenance
-          estimatedBitrateBps
-          sampleRate
-          sampleFormat
-          sampleBitDepth
-          channelLayout
-          pixelFormat
-          profile
-          level
-          bitDepth
-          fieldOrder
-          sampleAspectRatio {
-            numerator
-            denominator
-          }
-          displayAspectRatio {
-            numerator
-            denominator
-          }
-          rotationDegrees
-          declaredFrameRate {
-            numerator
-            denominator
-          }
-          observedFrameRate {
-            numerator
-            denominator
-          }
-          variableFrameRate
-          color {
-            primaries
-            transfer
-            matrix
-            fullRange
-            provenance
-            masteringDisplay {
-              redX
-              redY
-              greenX
-              greenY
-              blueX
-              blueY
-              whiteX
-              whiteY
-              minLuminance
-              maxLuminance
-            }
-            contentLight {
-              maxCll
-              maxFall
-            }
-          }
-          hdr {
-            dolbyVision
-            hdr10plus
-            hdr10
-            hlg
-            pq
-            dovi {
-              profile
-              level
-              baseLayerCompatibilityId
-              rpuPresent
-              enhancementLayerPresent
-              baseLayerPresent
-            }
-          }
-        }
-      }
-      report {
-        status
-        bytesRead
-        seeks
-        elapsedMs
-        budgetExhausted
-        warnings {
-          code
-          message
-          streamId
-          offset
-        }
-      }
-    }
-    selectedTitleId
-    automaticSelection
-    selection {
-      titleId
-      episodeMappings {
-        discTitleId
-        episodeIds
-      }
-    }
-  }
+  disc { ${MEDIA_DISC_FIELDS} }
   report {
     status
     bytesRead

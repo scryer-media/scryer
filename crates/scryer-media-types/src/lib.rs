@@ -50,6 +50,8 @@ pub struct AnalysisAttempt {
     pub attempted_at: String,
     pub succeeded: bool,
     pub report: ProbeReport,
+    /// Inventory observed by this attempt; it does not replace the saved selection.
+    pub disc: Option<DiscMetadata>,
 }
 
 /// Physical source ranges read by diagnostics; overlapping reads are merged.

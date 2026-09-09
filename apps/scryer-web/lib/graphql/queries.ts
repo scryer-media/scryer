@@ -1,4 +1,4 @@
-import { MEDIA_ANALYSIS_FIELDS } from "@/lib/types/media-analysis";
+import { MEDIA_ANALYSIS_FIELDS, MEDIA_DISC_FIELDS } from "@/lib/types/media-analysis";
 
 export const DISCOVERY_ITEM_FIELDS = `
     id
@@ -377,6 +377,7 @@ export const TITLE_MEDIA_FILE_FIELDS = `
       analysisAttempt {
         revision attemptedAt succeeded
         report { status bytesRead seeks elapsedMs budgetExhausted warnings { code message streamId offset } }
+        disc { ${MEDIA_DISC_FIELDS} }
       }
       id
       titleId

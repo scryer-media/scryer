@@ -1210,25 +1210,23 @@ impl MediaFileRepository for MediaFileStore {
         // A failed attempt to choose a different title must not invalidate the
         // saved choice. A reprobe of that saved choice can suspend availability
         // while retaining its metadata and association roles for review.
-        let selection_review =
-            expected
-                .analysis_details
-                .disc
-                .as_ref()
-                .zip(analysis.details.disc.as_ref())
-                .is_some_and(|(saved, inspected)| {
-                    analysis.details.report.warnings.iter().any(|warning| {
-                        match warning.code.as_str() {
-                            "disc_selection_review" => saved.selection == inspected.selection,
-                            // A title change still inspects the saved episode mappings.
-                            "disc_episode_mapping_review" => {
-                                saved.selection.episode_mappings
-                                    == inspected.selection.episode_mappings
-                            }
-                            _ => false,
+        let selection_review = expected
+            .analysis_details
+            .disc
+            .as_ref()
+            .zip(analysis.details.disc.as_ref())
+            .is_some_and(|(saved, inspected)| {
+                analysis.details.report.warnings.iter().any(|warning| {
+                    match warning.code.as_str() {
+                        "disc_selection_review" => saved.selection == inspected.selection,
+                        // A title change still inspects the saved episode mappings.
+                        "disc_episode_mapping_review" => {
+                            saved.selection.episode_mappings == inspected.selection.episode_mappings
                         }
-                    })
-                });
+                        _ => false,
+                    }
+                })
+            });
         let json = serde_json::to_string(analysis)
             .map_err(|error| AppError::Repository(error.to_string()))?;
         let status = serde_json::to_value(analysis.details.report.status)
@@ -2143,6 +2141,10 @@ fn media_analysis_attempt_from_row(
         attempted_at,
         succeeded,
         report,
+        disc: document
+            .as_ref()
+            .and_then(|document| document.get("details")?.get("disc"))
+            .and_then(|disc| serde_json::from_value(disc.clone()).ok()),
     }))
 }
 
@@ -2657,6 +2659,16 @@ mod tests {
             .unwrap()
             .selection
             .episode_mappings = saved_mappings;
+        review
+            .details
+            .disc
+            .as_mut()
+            .unwrap()
+            .titles
+            .push(scryer_media_types::DiscTitle {
+                id: "00077".into(),
+                ..Default::default()
+            });
         assert!(
             files
                 .record_media_analysis_attempt(&saved, &review)
@@ -2666,6 +2678,14 @@ mod tests {
         let held = files.get_media_file_by_id(&id).await.unwrap().unwrap();
         assert_eq!(held.scan_status, "review_required");
         assert_eq!(held.analysis_details, saved.analysis_details);
+        assert_eq!(
+            held.analysis_attempt.as_ref().unwrap().disc,
+            review.details.disc
+        );
+        assert_ne!(
+            held.analysis_attempt.as_ref().unwrap().disc,
+            held.analysis_details.disc
+        );
         let availability = files
             .list_episode_media_availability(std::slice::from_ref(&title.id))
             .await

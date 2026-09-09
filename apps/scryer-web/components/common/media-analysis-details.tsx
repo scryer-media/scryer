@@ -5,6 +5,8 @@ import { DiscEpisodeMapping } from "./disc-episode-mapping";
 import { MediaStructuralDiagnostics } from "./media-structural-diagnostics";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
+import { useTranslate } from "@/lib/context/translate-context";
+import { discReviewInventory } from "@/lib/utils/disc-review";
 
 function rate(value: number | string | null | undefined) {
   return value == null ? "Unknown" : `${(Number(value) / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} kbps`;
@@ -49,12 +51,13 @@ function Stream({ stream }: { stream: MediaStreamDetail }) {
 }
 
 export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt: storedAttempt, videoBitrateKbps, fileId }: { analysis: MediaAnalysisDetails; attempt?: MediaAnalysisAttempt | null; videoBitrateKbps: number | null; fileId?: string }) {
+  const t = useTranslate();
   const [analysis, setAnalysis] = useState(storedAnalysis);
   const [attempt, setAttempt] = useState(storedAttempt);
   useEffect(() => { setAnalysis(storedAnalysis); }, [storedAnalysis]);
   useEffect(() => { setAttempt(storedAttempt); }, [storedAttempt]);
   const onSelectionChanged = (next: MediaAnalysisDetails) => { setAnalysis(next); setAttempt(null); };
-  const disc = analysis.disc;
+  const disc = discReviewInventory(analysis.disc, attempt);
   const selectedVideo = analysis.streams.find((stream) => stream.kind === "VIDEO"
     && stream.metadata.id === analysis.selectedVideoId
     && (analysis.selectedProgramId == null || stream.metadata.programId === analysis.selectedProgramId));
@@ -75,9 +78,10 @@ export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt:
       {analysis.report.warnings.map((warning, index) => <p key={`${warning.code}-${index}`} className="my-1 text-amber-500">{warning.message}</p>)}
       {disc ? <div className="my-3 space-y-1">
         <p className="font-medium">{disc.discType.toUpperCase()} · {disc.filesystem} {disc.volumeLabel ?? ""}</p>
-        <p>{disc.automaticSelection ? "Automatic longest-title selection" : "Saved title selection"}: {disc.selectedTitleId ?? "Requires review"}</p>
-        {fileId ? <DiscTitleSelection fileId={fileId} analysis={analysis} onChanged={onSelectionChanged} requiresReview={attempt != null && !attempt.succeeded} /> : null}
-        {fileId ? <DiscEpisodeMapping key={fileId} fileId={fileId} analysis={analysis} onChanged={onSelectionChanged} /> : null}
+        {disc !== analysis.disc ? <p className="text-amber-500">{t("mediaFile.discReviewInventory")}</p> : null}
+        <p>{analysis.disc?.automaticSelection ? "Automatic longest-title selection" : "Saved title selection"}: {analysis.disc?.selectedTitleId ?? "Requires review"}</p>
+        {fileId ? <DiscTitleSelection fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} requiresReview={attempt != null && !attempt.succeeded} /> : null}
+        {fileId ? <DiscEpisodeMapping key={fileId} fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} /> : null}
         {disc.titles.map((title) => <div key={title.id} className="border-t py-1">
           <p>Title {title.id} · {time(title.durationSeconds)} · {title.angleCount} angle(s) · {title.report.status.toLowerCase()}{title.aliases.length ? ` · aliases ${title.aliases.join(", ")}` : ""}</p>
           {title.report.warnings.map((warning, index) => <p key={index} className="text-amber-500">{warning.message}</p>)}

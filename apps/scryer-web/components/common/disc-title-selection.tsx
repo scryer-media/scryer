@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { TITLE_MEDIA_FILE_FIELDS } from "@/lib/graphql/queries";
-import type { MediaAnalysisDetails } from "@/lib/types/media-analysis";
+import type { MediaAnalysisDetails, MediaDiscMetadata } from "@/lib/types/media-analysis";
+import { discTitleIdentity } from "@/lib/utils/disc-review";
 import type { TitleMediaFileRecord as TitleMediaFile } from "@/lib/types/titles";
 
 const selectDiscTitleMutation = `
@@ -13,21 +14,22 @@ const selectDiscTitleMutation = `
   }
 `;
 
-export function DiscTitleSelection({ fileId, analysis, onChanged, requiresReview = false }: {
+export function DiscTitleSelection({ fileId, analysis, onChanged, requiresReview = false, inventory = analysis.disc }: {
   fileId: string;
   analysis: MediaAnalysisDetails;
   onChanged: (analysis: MediaAnalysisDetails) => void;
   requiresReview?: boolean;
+  inventory?: MediaDiscMetadata | null;
 }) {
   const client = useClient();
   const t = useTranslate();
   const savedIdentity = analysis.disc?.selection.titleId ?? "";
-  const savedTitle = analysis.disc?.titles.find((title) => title.id === savedIdentity || title.aliases.includes(savedIdentity))?.id ?? savedIdentity;
+  const savedTitle = discTitleIdentity(savedIdentity, inventory);
   const [selected, setSelected] = useState(savedTitle);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setSelected(savedTitle); }, [savedTitle]);
-  if (!analysis.disc) return null;
+  if (!inventory) return null;
 
   async function save() {
     setSaving(true);
@@ -54,9 +56,9 @@ export function DiscTitleSelection({ fileId, analysis, onChanged, requiresReview
       <select className="rounded border bg-background p-2" value={selected} disabled={saving}
         onChange={(event) => setSelected(event.target.value)}>
         <option value="">{t("mediaFile.discAutomatic")}</option>
-        {savedTitle && !analysis.disc.titles.some((title) => title.id === savedTitle || title.aliases.includes(savedTitle))
+        {savedTitle && !inventory.titles.some((title) => title.id === savedTitle || title.aliases.includes(savedTitle))
           ? <option value={savedTitle} disabled>{savedTitle}</option> : null}
-        {analysis.disc.titles.map((title) => <option key={title.id} value={title.id}>
+        {inventory.titles.map((title) => <option key={title.id} value={title.id}>
           {title.id} · {title.durationSeconds == null ? "?" : `${(title.durationSeconds / 60).toFixed(1)} min`} · {title.report.status.toLowerCase()}
         </option>)}
       </select>

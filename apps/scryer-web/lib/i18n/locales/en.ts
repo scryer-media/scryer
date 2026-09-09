@@ -2485,6 +2485,7 @@ const en: LocaleDictionary = {
   "mediaFile.pendingScan": "Pending Scan",
   "mediaFile.scanFailed": "Scan Failed",
   "mediaFile.reviewRequired": "Review required",
+  "mediaFile.discReviewInventory": "Titles from the latest inspection. Saved selection and episode mappings remain in place until you save a validated choice.",
   "mediaFile.score": "Score {{score}}",
   "mediaFile.primary": "Primary",
   "mediaFile.additional": "Additional",

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { TITLE_MEDIA_FILE_FIELDS } from "@/lib/graphql/queries";
-import type { MediaAnalysisDetails } from "@/lib/types/media-analysis";
+import type { MediaAnalysisDetails, MediaDiscMetadata } from "@/lib/types/media-analysis";
+import { discEpisodeSelections } from "@/lib/utils/disc-review";
 import type { TitleMediaFileRecord } from "@/lib/types/titles";
 
 type Target = { episodeId: string; label: string; durationSeconds: number | string | null };
@@ -13,23 +14,17 @@ const mappingMutation = `mutation MapDiscEpisodes($fileId: ID!, $mappings: [Medi
   mapMediaFileDiscEpisodes(fileId: $fileId, mappings: $mappings) { ${TITLE_MEDIA_FILE_FIELDS} }
 }`;
 
-function savedMappings(analysis: MediaAnalysisDetails) {
-  return Object.fromEntries((analysis.disc?.selection.episodeMappings ?? []).map((mapping) => [
-    analysis.disc?.titles.find((title) => title.id === mapping.discTitleId || title.aliases.includes(mapping.discTitleId))?.id ?? mapping.discTitleId,
-    mapping.episodeIds[0] ?? "",
-  ]));
-}
-
-export function DiscEpisodeMapping({ fileId, analysis, onChanged }: {
+export function DiscEpisodeMapping({ fileId, analysis, onChanged, inventory = analysis.disc }: {
   fileId: string; analysis: MediaAnalysisDetails; onChanged: (analysis: MediaAnalysisDetails) => void;
+  inventory?: MediaDiscMetadata | null;
 }) {
   const client = useClient();
   const t = useTranslate();
   const [targets, setTargets] = useState<Target[] | null>(null);
-  const [mappings, setMappings] = useState<Record<string, string>>(() => savedMappings(analysis));
+  const [mappings, setMappings] = useState<Record<string, string>>(() => discEpisodeSelections(analysis.disc, inventory));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setMappings(savedMappings(analysis)); }, [analysis]);
+  useEffect(() => { setMappings(discEpisodeSelections(analysis.disc, inventory)); }, [analysis.disc, inventory]);
   async function load() {
     setBusy(true); setError(null);
     try {
@@ -53,7 +48,7 @@ export function DiscEpisodeMapping({ fileId, analysis, onChanged }: {
     } catch (error) { setError(error instanceof Error ? error.message : t("mediaFile.discMappingFailed")); }
     finally { setBusy(false); }
   }
-  const titleIds = [...new Set([...(analysis.disc?.titles.map((title) => title.id) ?? []), ...Object.keys(mappings)])];
+  const titleIds = [...new Set([...(inventory?.titles.map((title) => title.id) ?? []), ...Object.keys(mappings)])];
   return <div className="my-2 space-y-2">
     {targets == null ? <button type="button" disabled={busy} className="rounded border px-2 py-1 disabled:opacity-50"
       onClick={() => { void load(); }}>{t(busy ? "mediaFile.discMappingLoading" : "mediaFile.discEpisodeMapping")}</button>
@@ -61,7 +56,7 @@ export function DiscEpisodeMapping({ fileId, analysis, onChanged }: {
       : <>
         <p className="text-muted-foreground">{t("mediaFile.discMappingScope")}</p>
         {titleIds.map((id) => {
-          const title = analysis.disc?.titles.find((item) => item.id === id);
+          const title = inventory?.titles.find((item) => item.id === id);
           const selected = mappings[id] ?? "";
           return <label key={id} className="flex items-center gap-2">
             <span>{id} · {title?.durationSeconds == null ? "?" : `${(title.durationSeconds / 60).toFixed(1)} min`}</span>

@@ -108,6 +108,7 @@ pub struct MediaAnalysisAttemptPayload {
     pub attempted_at: String,
     pub succeeded: bool,
     pub report: MediaProbeReportPayload,
+    pub disc: Option<MediaDiscMetadataPayload>,
 }
 impl From<scryer_media_types::AnalysisAttempt> for MediaAnalysisAttemptPayload {
     fn from(value: scryer_media_types::AnalysisAttempt) -> Self {
@@ -116,16 +117,34 @@ impl From<scryer_media_types::AnalysisAttempt> for MediaAnalysisAttemptPayload {
             attempted_at: value.attempted_at,
             succeeded: value.succeeded,
             report: value.report.into(),
+            disc: value.disc.map(Into::into),
         }
     }
 }
 
 #[test]
 fn analysis_attempt_projection_keeps_failure_separate_and_exposes_typed_fields() {
+    let legacy: scryer_media_types::AnalysisAttempt = serde_json::from_value(serde_json::json!({
+        "revision": 1, "attempted_at": "2026-09-08T00:00:00Z", "succeeded": false,
+        "report": { "status": "incomplete" }
+    }))
+    .unwrap();
+    assert!(legacy.disc.is_none());
+    assert_eq!(
+        legacy.report.status,
+        scryer_media_types::ProbeStatus::Incomplete
+    );
     let attempt = scryer_media_types::AnalysisAttempt {
         revision: 3,
         attempted_at: "2026-09-08T12:00:00Z".into(),
         succeeded: false,
+        disc: Some(scryer_media_types::DiscMetadata {
+            titles: vec![scryer_media_types::DiscTitle {
+                id: "00077".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
         report: scryer_media_types::ProbeReport {
             status: scryer_media_types::ProbeStatus::Encrypted,
             warnings: vec![scryer_media_types::ProbeWarning {
@@ -141,6 +160,7 @@ fn analysis_attempt_projection_keeps_failure_separate_and_exposes_typed_fields()
     assert!(!payload.succeeded);
     assert_eq!(payload.report.status, MediaProbeStatusValue::Encrypted);
     assert_eq!(payload.report.warnings[0].code, "encrypted_payload");
+    assert_eq!(payload.disc.as_ref().unwrap().titles[0].id, "00077");
     let schema = async_graphql::Schema::build(
         payload,
         async_graphql::EmptyMutation,
@@ -152,6 +172,7 @@ fn analysis_attempt_projection_keeps_failure_separate_and_exposes_typed_fields()
         "attemptedAt: String!",
         "succeeded: Boolean!",
         "report: MediaProbeReportPayload!",
+        "disc: MediaDiscMetadataPayload",
         "status: MediaProbeStatusValue!",
         "warnings: [MediaProbeWarningPayload!]!",
     ] {
