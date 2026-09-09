@@ -76,7 +76,10 @@ impl ImportedFileRejection {
             RUNTIME_OUT_OF_BAND_CODE
                 | DISC_REVIEW_REQUIRED_CODE
                 | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
-        )
+        ) || self
+            .blocking_rule_codes
+            .iter()
+            .any(|code| code == SOURCE_CHANGED_AFTER_PROBE_CODE)
     }
 }
 
@@ -592,28 +595,21 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         }));
     }
 
-    let probe_path = path.to_path_buf();
-    let selection = disc_selection.cloned();
-    let probe = tokio::task::spawn_blocking(move || {
-        crate::nice_thread();
-        let started = std::time::Instant::now();
-        let result = if scryer_domain::is_disc_image(&probe_path) {
-            scryer_mediainfo::analyze_disc_file(&probe_path, selection.unwrap_or_default())
-        } else {
-            scryer_mediainfo::analyze_catalog_file(&probe_path)
-        };
-        crate::media::metrics::record_probe(
-            crate::media::metrics::ProbeOperation::Import,
-            started.elapsed(),
-            result
-                .as_ref()
-                .ok()
-                .map(|analysis| &analysis.details.report),
-        );
-        result
-    })
+    let probe = match crate::media::analyzer::probe_native_catalog(
+        path.to_path_buf(),
+        disc_selection.cloned().unwrap_or_default(),
+        crate::media::metrics::ProbeOperation::Import,
+    )
     .await
-    .unwrap_or_else(|error| Err(scryer_mediainfo::MediaInfoError::Io(error.to_string())));
+    {
+        Ok(probe) => probe,
+        Err(error @ crate::AppError::Validation(_)) => {
+            return ImportedFileGateDecision::Rejected(import_source_changed_rejection(
+                path, error,
+            ));
+        }
+        Err(error) => Err(error.to_string()),
+    };
     let mut analysis = match probe {
         Ok(analysis) => analysis,
         Err(error) => {

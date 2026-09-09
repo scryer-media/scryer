@@ -6298,6 +6298,138 @@ async fn unknown_program_video_codec_is_held_for_review_across_production_paths(
 
 #[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
+async fn catalog_scan_and_final_import_join_the_same_native_probe() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let size = std::fs::metadata(&path).unwrap().len() as i64;
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    let (release, references) =
+        crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let (catalog, imported, ()) = tokio::join!(
+        analyzer.analyze_file(path.clone()),
+        crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            size,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        ),
+        async {
+            // One held handle, one worker, and both production waiters.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while references() < 4 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("both production paths must join the held native probe");
+            release.send(()).unwrap();
+        },
+    );
+    let crate::MediaAnalysisOutcome::Valid(catalog) = catalog.unwrap() else {
+        panic!("catalog fixture must be valid");
+    };
+    let crate::post_download_gate::ImportedFileGateDecision::Accepted(imported) = imported else {
+        panic!("import fixture must be accepted");
+    };
+    assert_eq!(
+        serde_json::to_value(catalog).unwrap(),
+        serde_json::to_value(imported.analysis.unwrap()).unwrap()
+    );
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("changing.mkv");
+    let original = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+    )
+    .unwrap();
+    std::fs::write(&path, &original).unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    let (release, references) =
+        crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let (catalog, imported, ()) = tokio::join!(
+        analyzer.analyze_file(path.clone()),
+        crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            original.len() as i64,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        ),
+        async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while references() < 4 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("both production paths must join before changing the source");
+            let mut replacement = original.clone();
+            replacement.extend_from_slice(&[0; 16]);
+            std::fs::write(&path, replacement).unwrap();
+            release.send(()).unwrap();
+        },
+    );
+    assert!(
+        matches!(catalog, Err(AppError::Validation(message)) if message.contains("source changed"))
+    );
+    let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = imported else {
+        panic!("a changed source must not become an accepted metadata failure");
+    };
+    assert!(rejection.requires_review());
+    for origin in [
+        crate::import::decide::ImportOrigin::Automatic,
+        crate::import::decide::ImportOrigin::OperatorQueued,
+    ] {
+        assert_eq!(
+            crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+            crate::import::decide::RejectionDisposition::Hold,
+        );
+    }
+    assert!(
+        rejection
+            .blocking_rule_codes
+            .iter()
+            .any(|code| code == "source_changed_after_probe")
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().len(),
+        original.len() as u64 + 16
+    );
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
 async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract() {
     let fixture = fail_closed_pack_fixture().await;
     let profile = fixture
@@ -6312,6 +6444,11 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         "av1_sequence_pq.mp4",
         "av1_sequence_pq.mkv",
         "hevc_sequence_pq.mp4",
+        "hevc_hdr10plus.mp4",
+        "dv_profile5.mkv",
+        "dv_profile7.mkv",
+        "dv_profile8.mkv",
+        "hevc_hdr10plus.mkv",
         "hevc_sequence_pq.mkv",
         "chapters_nero.mp4",
         "chapters_quicktime.mp4",

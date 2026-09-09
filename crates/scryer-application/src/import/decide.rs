@@ -458,10 +458,9 @@ pub(crate) fn disposition_for(
 /// What a refusal raised *before* the decision — by `prepare_import_candidate`'s
 /// probe gate — costs the release.
 ///
-/// The probe gate predates the verdict model and refuses for three reasons.
-/// Bytes that are not what was claimed (a corrupt or unreadable container, a
-/// source that changed under the import) mean the release lied: `Blocklist`.
-/// The runtime band is held by the callers before they reach here. A
+/// Source changes, inconclusive media/disc inspection, and runtime-band
+/// rejections require review and preserve the source. Other refusals follow
+/// the import origin's disposition. A
 /// user/system **rule** BLOCK at the gate is the same event `classify_truth`
 /// would classify as [`crate::canonical_scoring::TruthVerdict::Vetoed`] had
 /// the gate not fired first — operator policy on the file, not a

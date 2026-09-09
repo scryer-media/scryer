@@ -2,10 +2,13 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::{AppError, AppResult, MediaAnalysisOutcome, MediaAnalyzer, nice_thread};
+#[cfg(feature = "runtime-media-analysis")]
+use crate::nice_thread;
+use crate::{AppError, AppResult, MediaAnalysisOutcome, MediaAnalyzer};
 
 pub struct NativeMediaAnalyzer;
 
+#[cfg(any(feature = "runtime-media-analysis", test))]
 #[derive(Clone, PartialEq, Eq)]
 struct AnalysisKey {
     path: PathBuf,
@@ -13,22 +16,33 @@ struct AnalysisKey {
     selection: scryer_media_types::DiscSelection,
 }
 
-struct AnalysisFlight {
+#[cfg(any(feature = "runtime-media-analysis", test))]
+struct AnalysisFlight<T> {
     key: AnalysisKey,
-    result: tokio::sync::watch::Sender<Option<Result<MediaAnalysisOutcome, String>>>,
+    result: tokio::sync::watch::Sender<Option<Result<T, String>>>,
 }
 
-#[derive(Default)]
-struct AnalysisFlights {
-    active: std::sync::Mutex<Vec<std::sync::Weak<AnalysisFlight>>>,
+#[cfg(any(feature = "runtime-media-analysis", test))]
+struct AnalysisFlights<T> {
+    active: std::sync::Mutex<Vec<std::sync::Weak<AnalysisFlight<T>>>>,
 }
 
-impl AnalysisFlights {
+#[cfg(any(feature = "runtime-media-analysis", test))]
+impl<T> Default for AnalysisFlights<T> {
+    fn default() -> Self {
+        Self {
+            active: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[cfg(any(feature = "runtime-media-analysis", test))]
+impl<T: Clone + Send + Sync + 'static> AnalysisFlights<T> {
     fn start(
         &self,
         key: AnalysisKey,
-        operation: impl FnOnce() -> AppResult<MediaAnalysisOutcome> + Send + 'static,
-    ) -> std::sync::Arc<AnalysisFlight> {
+        operation: impl FnOnce() -> AppResult<T> + Send + 'static,
+    ) -> std::sync::Arc<AnalysisFlight<T>> {
         let mut active = self
             .active
             .lock()
@@ -60,8 +74,9 @@ impl AnalysisFlights {
     }
 }
 
-impl AnalysisFlight {
-    async fn outcome(&self) -> AppResult<MediaAnalysisOutcome> {
+#[cfg(any(feature = "runtime-media-analysis", test))]
+impl<T: Clone> AnalysisFlight<T> {
+    async fn outcome(&self) -> AppResult<T> {
         let mut result = self.result.subscribe();
         loop {
             if let Some(outcome) = result.borrow_and_update().clone() {
@@ -73,6 +88,73 @@ impl AnalysisFlight {
                 .map_err(|error| AppError::Repository(error.to_string()))?;
         }
     }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+static NATIVE_PROBE_FLIGHTS: std::sync::LazyLock<
+    AnalysisFlights<Result<scryer_mediainfo::MediaAnalysis, String>>,
+> = std::sync::LazyLock::new(AnalysisFlights::default);
+
+/// Share the physical probe across catalog scans and final import validation.
+#[cfg(feature = "runtime-media-analysis")]
+pub(crate) async fn probe_native_catalog(
+    path: PathBuf,
+    selection: scryer_media_types::DiscSelection,
+    operation: crate::media::metrics::ProbeOperation,
+) -> AppResult<Result<scryer_mediainfo::MediaAnalysis, String>> {
+    let source_path = path.clone();
+    let key = AnalysisKey {
+        path: path.clone(),
+        source: super::discs::MediaSourceVersion::read(&path).await.ok(),
+        selection: selection.clone(),
+    };
+    let flight = NATIVE_PROBE_FLIGHTS.start(key.clone(), move || {
+        nice_thread();
+        let started = std::time::Instant::now();
+        let result = if scryer_domain::is_disc_image(&path) {
+            scryer_mediainfo::analyze_disc_file(&path, selection)
+        } else {
+            scryer_mediainfo::analyze_catalog_file(&path)
+        };
+        crate::media::metrics::record_probe(
+            operation,
+            started.elapsed(),
+            result
+                .as_ref()
+                .ok()
+                .map(|analysis| &analysis.details.report),
+        );
+        Ok(result.map_err(|error| error.to_string()))
+    });
+    let outcome = flight.outcome().await?;
+    if key.source
+        != super::discs::MediaSourceVersion::read(&source_path)
+            .await
+            .ok()
+    {
+        return Err(AppError::Validation(
+            "media source changed during inspection".into(),
+        ));
+    }
+    Ok(outcome)
+}
+
+#[cfg(all(test, feature = "runtime-media-analysis"))]
+pub(crate) async fn hold_native_probe_for_test(
+    path: PathBuf,
+) -> (std::sync::mpsc::Sender<()>, impl Fn() -> usize) {
+    let key = AnalysisKey {
+        source: super::discs::MediaSourceVersion::read(&path).await.ok(),
+        path: path.clone(),
+        selection: Default::default(),
+    };
+    let (release, held) = std::sync::mpsc::channel();
+    let flight = NATIVE_PROBE_FLIGHTS.start(key, move || {
+        held.recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        Ok(scryer_mediainfo::analyze_catalog_file(&path).map_err(|error| error.to_string()))
+    });
+    (release, move || std::sync::Arc::strong_count(&flight))
 }
 
 #[async_trait]
@@ -123,94 +205,60 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
         path: PathBuf,
         selection: scryer_media_types::DiscSelection,
     ) -> AppResult<MediaAnalysisOutcome> {
-        static FLIGHTS: std::sync::LazyLock<AnalysisFlights> =
-            std::sync::LazyLock::new(AnalysisFlights::default);
-        let source_path = path.clone();
-        let key = AnalysisKey {
-            path: path.clone(),
-            source: super::discs::MediaSourceVersion::read(&path).await.ok(),
-            selection: selection.clone(),
-        };
-        let flight = FLIGHTS.start(key.clone(), move || {
-            nice_thread();
-            #[cfg(not(feature = "runtime-media-analysis"))]
-            let _ = selection;
-            if path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("strm"))
-            {
-                return Ok(MediaAnalysisOutcome::Valid(Box::new(
-                    crate::post_download_gate::build_stream_pointer_media_file_analysis(),
-                )));
-            }
-
-            #[cfg(feature = "runtime-media-analysis")]
-            let result = {
-                let started = std::time::Instant::now();
-                let result = if scryer_domain::is_disc_image(&path) {
-                    scryer_mediainfo::analyze_disc_file(&path, selection)
-                } else {
-                    scryer_mediainfo::analyze_catalog_file(&path)
-                };
-                crate::media::metrics::record_probe(
-                    crate::media::metrics::ProbeOperation::Catalog,
-                    started.elapsed(),
-                    result
-                        .as_ref()
-                        .ok()
-                        .map(|analysis| &analysis.details.report),
-                );
-                result
-            };
-            #[cfg(feature = "runtime-media-analysis")]
-            match result {
-                Ok(analysis)
-                    if scryer_mediainfo::is_valid_video(&analysis)
-                        && (analysis.container_format.as_deref() != Some("iso")
-                            || analysis.details.report.status
-                                == scryer_media_types::ProbeStatus::Complete) =>
-                {
-                    Ok(MediaAnalysisOutcome::Valid(Box::new(
-                        crate::post_download_gate::build_media_file_analysis(&analysis),
-                    )))
-                }
-                Ok(analysis)
-                    if analysis.container_format.as_deref() == Some("iso")
-                        || analysis.video_codec.is_some()
-                        || analysis.details.selected_video_id.is_some()
-                        || analysis.details.report.budget_exhausted
-                        || matches!(
-                            analysis.details.report.status,
-                            scryer_media_types::ProbeStatus::Unsupported
-                                | scryer_media_types::ProbeStatus::Encrypted
-                        ) =>
-                {
-                    Ok(MediaAnalysisOutcome::Inconclusive(Box::new(
-                        crate::post_download_gate::build_media_file_analysis(&analysis),
-                    )))
-                }
-                Ok(_) => Ok(MediaAnalysisOutcome::Invalid(
-                    "file is not a valid video".to_string(),
-                )),
-                Err(error) => Ok(MediaAnalysisOutcome::Invalid(error.to_string())),
-            }
-            #[cfg(not(feature = "runtime-media-analysis"))]
-            Ok(MediaAnalysisOutcome::Invalid(
-                "native media analysis is not compiled into this target".to_string(),
-            ))
-        });
-        let outcome = flight.outcome().await?;
-        if key.source
-            != super::discs::MediaSourceVersion::read(&source_path)
-                .await
-                .ok()
+        #[cfg(not(feature = "runtime-media-analysis"))]
+        let _ = selection;
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("strm"))
         {
-            return Err(AppError::Validation(
-                "media source changed during inspection".into(),
-            ));
+            return Ok(MediaAnalysisOutcome::Valid(Box::new(
+                crate::post_download_gate::build_stream_pointer_media_file_analysis(),
+            )));
         }
-        Ok(outcome)
+        #[cfg(feature = "runtime-media-analysis")]
+        let result = probe_native_catalog(
+            path,
+            selection,
+            crate::media::metrics::ProbeOperation::Catalog,
+        )
+        .await?;
+        #[cfg(feature = "runtime-media-analysis")]
+        match result {
+            Ok(analysis)
+                if scryer_mediainfo::is_valid_video(&analysis)
+                    && (analysis.container_format.as_deref() != Some("iso")
+                        || analysis.details.report.status
+                            == scryer_media_types::ProbeStatus::Complete) =>
+            {
+                Ok(MediaAnalysisOutcome::Valid(Box::new(
+                    crate::post_download_gate::build_media_file_analysis(&analysis),
+                )))
+            }
+            Ok(analysis)
+                if analysis.container_format.as_deref() == Some("iso")
+                    || analysis.video_codec.is_some()
+                    || analysis.details.selected_video_id.is_some()
+                    || analysis.details.report.budget_exhausted
+                    || matches!(
+                        analysis.details.report.status,
+                        scryer_media_types::ProbeStatus::Unsupported
+                            | scryer_media_types::ProbeStatus::Encrypted
+                    ) =>
+            {
+                Ok(MediaAnalysisOutcome::Inconclusive(Box::new(
+                    crate::post_download_gate::build_media_file_analysis(&analysis),
+                )))
+            }
+            Ok(_) => Ok(MediaAnalysisOutcome::Invalid(
+                "file is not a valid video".to_string(),
+            )),
+            Err(error) => Ok(MediaAnalysisOutcome::Invalid(error.to_string())),
+        }
+        #[cfg(not(feature = "runtime-media-analysis"))]
+        Ok(MediaAnalysisOutcome::Invalid(
+            "native media analysis is not compiled into this target".to_string(),
+        ))
     }
 }
 
