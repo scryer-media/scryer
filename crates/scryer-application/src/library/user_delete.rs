@@ -39,6 +39,36 @@ pub(crate) struct PolicyMediaFileDeletePlan {
     paths: Vec<PolicyDeletePathProof>,
 }
 
+impl PolicyMediaFileDeletePlan {
+    /// The policy executor owns these paths. Storage-pressure callers use this
+    /// narrow view to prove that every owned sidecar remains on their selected
+    /// root before authorizing the shared delete path.
+    pub(crate) fn path_strings(&self) -> Option<Vec<String>> {
+        self.paths
+            .iter()
+            .map(|entry| entry.path.to_str().map(str::to_string))
+            .collect()
+    }
+
+    /// A crash can occur after the shared policy deleter unlinks every path
+    /// and before the media-file catalog cleanup or checkpoint write. This is
+    /// only used to finish that exact journal entry; any unreadable path stays
+    /// unknown rather than being mistaken for a completed deletion.
+    pub(crate) async fn paths_are_all_absent(&self) -> AppResult<Option<bool>> {
+        if self.paths.is_empty() {
+            return Ok(None);
+        }
+        for entry in &self.paths {
+            match tokio::fs::symlink_metadata(&entry.path).await {
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Ok(_) => return Ok(Some(false)),
+                Err(_) => return Ok(None),
+            }
+        }
+        Ok(Some(true))
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct PolicyDeletePathProof {
     path: PathBuf,

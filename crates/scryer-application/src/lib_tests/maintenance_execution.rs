@@ -45,14 +45,16 @@ impl MediaServerPlaybackProbe for FixedPlaybackProbe {
     }
 }
 
-struct ExecutionFixture {
-    app: AppUseCase,
-    user: User,
-    rules: Arc<InMemoryMaintenanceRuleRepo>,
-    evaluation: Arc<InMemoryMaintenanceEvaluationRepo>,
+pub(super) struct ExecutionFixture {
+    pub(super) app: AppUseCase,
+    pub(super) user: User,
+    pub(super) rules: Arc<InMemoryMaintenanceRuleRepo>,
+    pub(super) evaluation: Arc<InMemoryMaintenanceEvaluationRepo>,
+    #[allow(dead_code)] // sibling acceptance modules selectively need this seam
+    pub(super) media_files: Arc<MockMediaFileRepo>,
 }
 
-fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
+pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
     let (app, user) = bootstrap();
     let rules = Arc::new(InMemoryMaintenanceRuleRepo::default());
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
@@ -61,7 +63,7 @@ fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
         let services = services
             .with_maintenance_rule_set_store(rules.clone())
             .with_maintenance_evaluation_store(evaluation.clone())
-            .with_media_files(media_files);
+            .with_media_files(media_files.clone());
         match playback {
             Some(status) => {
                 services.with_media_server_playback_probe(Arc::new(FixedPlaybackProbe { status }))
@@ -74,6 +76,7 @@ fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
         user,
         rules,
         evaluation,
+        media_files,
     }
 }
 
@@ -83,7 +86,7 @@ const MONITORED_MATCHER: &str = "match if {\n\
 
 const ALWAYS_MATCHER: &str = "match := true\n";
 
-fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
+pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Unmonitor stale".to_string(),
@@ -91,6 +94,7 @@ fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
         grace_days: 0,
+        storage_root_id: None,
         library_ids: Vec::new(),
         evaluation_mode: None,
     }
@@ -104,12 +108,18 @@ fn delete_draft() -> MaintenanceRuleDraft {
         rego_source: ALWAYS_MATCHER.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
         grace_days: 0,
+        storage_root_id: None,
         library_ids: Vec::new(),
         evaluation_mode: None,
     }
 }
 
-async fn seed_title(app: &AppUseCase, user: &User, name: &str, monitored: bool) -> Title {
+pub(super) async fn seed_title(
+    app: &AppUseCase,
+    user: &User,
+    name: &str,
+    monitored: bool,
+) -> Title {
     app.add_title(
         user,
         NewTitle {
@@ -213,6 +223,7 @@ async fn replacing_the_matcher_disarms_the_rule() {
                 rego_source: ALWAYS_MATCHER.to_string(),
                 action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
                 grace_days: 0,
+                storage_root_id: None,
             },
         )
         .await
@@ -1261,7 +1272,7 @@ fn execution_app_with_operations(
         services
             .with_maintenance_rule_set_store(rules.clone())
             .with_maintenance_evaluation_store(evaluation.clone())
-            .with_media_files(media_files)
+            .with_media_files(media_files.clone())
             .with_location_operation_repository(operations)
     });
     ExecutionFixture {
@@ -1269,6 +1280,7 @@ fn execution_app_with_operations(
         user,
         rules,
         evaluation,
+        media_files,
     }
 }
 

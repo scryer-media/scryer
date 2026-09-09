@@ -957,9 +957,10 @@ impl AppUseCase {
             .await
     }
 
-    /// Delete one media file's disk paths (per `disk_deletion`), catalog row,
-    /// dependents, and any movie collection that pointed at it. The caller is
-    /// responsible for the `ManageTitles` permission check.
+    /// Delete one media file's disk paths (per `disk_deletion`) and catalog
+    /// row. Policy maintenance retains parent records; other deletions also
+    /// remove any matching movie collection. The caller is responsible for
+    /// the `ManageTitles` permission check.
     pub(crate) async fn delete_media_file_authorized(
         &self,
         actor: &User,
@@ -968,7 +969,11 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let owned_file_id = media_file.id.clone();
         let file_id = owned_file_id.as_str();
-        let delete_from_disk = !matches!(disk_deletion, MediaFileDiskDeletion::Keep);
+        let delete_from_disk = !matches!(&disk_deletion, MediaFileDiskDeletion::Keep);
+        let preserve_parent_records = matches!(
+            &disk_deletion,
+            MediaFileDiskDeletion::DeleteByPolicy { .. }
+        );
         // Removing a file (or its disk copy) under an in-flight move would
         // invalidate the plan the operation is executing (FR-084). The bulk
         // deletion job routes through here too.
@@ -977,24 +982,27 @@ impl AppUseCase {
             &media_file.title_id,
         )
         .await?;
-        let matching_movie_collection_ids = self
-            .services
-            .catalog
-            .shows
-            .list_collections_for_title(&media_file.title_id)
-            .await?
-            .into_iter()
-            .filter(|collection| {
-                collection.ordered_path.as_deref() == Some(media_file.file_path.as_str())
-            })
-            .filter_map(|collection| {
-                if collection.collection_type == scryer_domain::CollectionType::Movie {
-                    Some(collection.id)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+        let matching_movie_collection_ids = if preserve_parent_records {
+            Vec::new()
+        } else {
+            self.services
+                .catalog
+                .shows
+                .list_collections_for_title(&media_file.title_id)
+                .await?
+                .into_iter()
+                .filter(|collection| {
+                    collection.ordered_path.as_deref() == Some(media_file.file_path.as_str())
+                })
+                .filter_map(|collection| {
+                    if collection.collection_type == scryer_domain::CollectionType::Movie {
+                        Some(collection.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
 
         match disk_deletion {
             MediaFileDiskDeletion::Keep => {}

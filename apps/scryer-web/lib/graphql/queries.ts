@@ -3523,6 +3523,7 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
     description
     enabled
     evaluationMode
+    destructiveRearmRequired
     libraryIds
     subjectKind
     currentRevisionNumber
@@ -3542,6 +3543,7 @@ const maintenanceRuleRevisionFieldSelection = `
     revisionNumber
     regoSource
     graceDays
+    storageRootId
     matcherContentHash
     createdBy
     createdAt`;
@@ -3591,6 +3593,7 @@ export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescrip
     allowedRepeatModes
     requiresTargetQualityProfile
     requiresTags
+    supportsStorageScope
   }
 }`;
 
@@ -3603,8 +3606,10 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     id
     ruleSetId
     ruleName
-    fileCount
-    totalSizeBytes
+      fileCount
+      totalSizeBytes
+      storageRootFileCount
+      storageRootTotalSizeBytes
     revisionNumber
     subjectKind
     subjectId

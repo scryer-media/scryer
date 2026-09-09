@@ -43,6 +43,9 @@ export type MaintenanceRuleSetRecord = {
   /// How far this rule's effects are armed, independently of its mode. A rule
   /// can evaluate in `OBSERVE` while still armed to `NONE`.
   effectArming: MaintenanceEffectArming;
+  /// An existing destructive title rule must be reviewed after its newly
+  /// available show facts changed what it can select.
+  destructiveRearmRequired: boolean;
   libraryIds: string[];
   /// Immutable granularity, separate from an action's supported subjects.
   subjectKind: MaintenanceRuleScope;
@@ -63,6 +66,8 @@ export type MaintenanceRuleRevision = {
   regoSource: string;
   revisionNumber: number;
   graceDays: number;
+  /// Configured root for storage facts and root-filtered file deletion.
+  storageRootId: string | null;
   matcherContentHash: string;
   createdBy: string | null;
   createdAt: string;
@@ -95,6 +100,9 @@ export type MaintenanceActionDescriptor = {
   /// True for the tag actions, which need at least one registry-defined label
   /// before the rule can be saved.
   requiresTags: boolean;
+  /// The server permits this action when a configured storage root scopes the
+  /// rule. This remains API-owned so the editor cannot drift from execution.
+  supportsStorageScope: boolean;
 };
 
 export type MaintenanceRuleSetDraft = {
@@ -109,6 +117,8 @@ export type MaintenanceRuleSetDraft = {
   /// input builder drops them for kinds that take none.
   tags: string[];
   graceDays: number;
+  /// Empty when storage capacity and root-filtered deletion do not apply.
+  storageRootId: string;
   libraryIds: string[];
 };
 
@@ -126,6 +136,10 @@ export type MaintenancePreviewTitle = {
   subjectLabel: string;
   fileCount: number;
   totalSizeBytes: number;
+  /// File summary restricted to the configured storage root. Null means the
+  /// root could not be resolved for this preview subject.
+  storageRootFileCount: number | null;
+  storageRootTotalSizeBytes: number | null;
   subjectKind: string;
   subjectId: string;
   titleId: string;

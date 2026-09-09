@@ -5263,6 +5263,10 @@ const ru: LocaleDictionary = {
     "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
     "settings.maintenanceTemplateNoProfileDescription":
       "Тайтлы, которым не назначен профиль качества. Не выполняет никаких действий: этот шаблон нужен, чтобы собрать список и посмотреть на него, прежде чем решать, что с ним делать.",
+    "settings.maintenanceTemplateNewestEpisodesTitle": "Оставить 3 новейших загруженных эпизода",
+    "settings.maintenanceTemplateNewestEpisodesDescription": "Caution: this episode-scoped template unmonitors and deletes downloaded episodes ranked older than the newest three by air date. Specials, future episodes, missing files, and unresolved dates receive no rank, so they do not match. Protected episodes still occupy the newest-three slots.",
+    "settings.maintenanceTemplateNewestSeasonsTitle": "Оставить 2 новейших загруженных сезона",
+    "settings.maintenanceTemplateNewestSeasonsDescription": "Caution: this season-scoped template unmonitors and deletes files from seasons ranked older than the newest two by each season's newest eligible downloaded episode. Specials, future episodes, missing files, and unresolved dates receive no rank; protected seasons still occupy slots.",
 
   // ── Правила запросов ────────────────────────────────────────────────
   "settings.requestRules": "Правила запросов",

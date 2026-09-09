@@ -166,6 +166,11 @@ pub struct MaintenanceFactsDoc {
     pub episode_count: Observation<i64>,
     pub episode_file_count: Observation<i64>,
     pub monitored_episode_count: Observation<i64>,
+    /// One-based retention positions within the parent show. Rank 1 is newest
+    /// by air date; unavailable/ineligible coverage is unknown rather than
+    /// absent so `not input.facts.<rank>` cannot authorize deletion.
+    pub episode_position_by_air_date: Observation<i64>,
+    pub season_position_by_air_date: Observation<i64>,
     pub active_downloads: Observation<bool>,
     /// Media-server watch signals (RFC 137 section 7.3). Every one of these is
     /// unknown unless a signal-sync provider is connected *and* every enabled
@@ -198,6 +203,13 @@ pub struct MaintenanceFactsDoc {
     /// at all. A rule reading it on a movie therefore sees a missing key rather
     /// than being held.
     pub series_movies: Observation<Vec<MaintenanceSeriesMovieDoc>>,
+    /// Storage capacity is exposed only after the host applies a selected
+    /// configured root. Without that root these remain absent; a storage-aware
+    /// rule must be validated with an explicit root selection before it runs.
+    pub storage_root_id: Observation<String>,
+    pub storage_available_bytes: Observation<i64>,
+    pub storage_total_bytes: Observation<i64>,
+    pub storage_available_percent: Observation<f64>,
 }
 
 /// Facts that name, or are computed from, identifiable people.
@@ -571,6 +583,8 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             episode_count: Observation::known(0),
             episode_file_count: Observation::known(0),
             monitored_episode_count: Observation::known(0),
+            episode_position_by_air_date: Observation::known(1),
+            season_position_by_air_date: Observation::known(1),
             active_downloads: Observation::known(false),
             watched_by_user_ids: Observation::known(vec!["user-1".to_string()]),
             last_watched_at: Observation::known("2024-03-01T00:00:00Z".to_string()),
@@ -586,6 +600,10 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             active_retention_claims: Observation::known(0),
             // A movie subject: series movies do not apply to it at all.
             series_movies: Observation::absent(),
+            storage_root_id: Observation::absent(),
+            storage_available_bytes: Observation::absent(),
+            storage_total_bytes: Observation::absent(),
+            storage_available_percent: Observation::absent(),
         },
     }
 }
@@ -736,6 +754,76 @@ mod tests {
             result.records[0].decision.reason_codes,
             vec!["not_yet_collected".to_string()]
         );
+    }
+
+    #[test]
+    fn a_negated_unavailable_retention_rank_is_held_not_matched() {
+        let mut input = synthetic_maintenance_input();
+        input.facts.episode_position_by_air_date =
+            Observation::unknown("retention_rank_unavailable");
+
+        let result = evaluate_against(
+            &[policy(
+                "not_ranked_episode",
+                "match if {\n  not input.facts.episode_position_by_air_date\n}\n",
+            )],
+            input,
+        );
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.records[0].decision.outcome,
+            MaintenanceOutcome::Unknown,
+            "a missing rank must never become a destructive retention match"
+        );
+        assert_eq!(
+            result.records[0].decision.reason_codes,
+            vec!["retention_rank_unavailable".to_string()]
+        );
+    }
+
+    #[test]
+    fn retention_examples_keep_the_newest_downloaded_episodes_and_seasons() {
+        // These are the editor's scope-specific examples: rank one is newest,
+        // so a policy deletes only positions after the retained window.
+        const KEEP_NEWEST_TWO_DOWNLOADED_EPISODES: &str =
+            "match if {\n  input.facts.episode_position_by_air_date > 2\n}\n";
+        const KEEP_NEWEST_ONE_DOWNLOADED_SEASON: &str =
+            "match if {\n  input.facts.season_position_by_air_date > 1\n}\n";
+
+        let mut episode_input = synthetic_maintenance_input();
+        episode_input.subject.kind = MaintenanceSubjectKind::Episode;
+        episode_input.subject.episode_id = Some("episode-3".to_string());
+        episode_input.facts.episode_position_by_air_date = Observation::known(3);
+        let episode_result = evaluate_against(
+            &[policy(
+                "keep_newest_two_downloaded_episodes",
+                KEEP_NEWEST_TWO_DOWNLOADED_EPISODES,
+            )],
+            episode_input,
+        );
+
+        let mut season_input = synthetic_maintenance_input();
+        season_input.subject.kind = MaintenanceSubjectKind::Season;
+        season_input.subject.collection_id = Some("season-2".to_string());
+        season_input.subject.season_number = Some(2);
+        season_input.facts.season_position_by_air_date = Observation::known(2);
+        let season_result = evaluate_against(
+            &[policy(
+                "keep_newest_one_downloaded_season",
+                KEEP_NEWEST_ONE_DOWNLOADED_SEASON,
+            )],
+            season_input,
+        );
+
+        for result in [&episode_result, &season_result] {
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+            assert_eq!(
+                result.records[0].decision.outcome,
+                MaintenanceOutcome::Match,
+                "ranked subjects after the retained window must match their example"
+            );
+        }
     }
 
     /// Absence is an answer. `added_by_user_id` is absent for a scan-created

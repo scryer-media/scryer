@@ -24,6 +24,7 @@ use super::{
     _0011_long_tail_reconverge_default as migration_0011,
     _0012_legacy_newznab_wrappers_01822 as migration_0012,
     _0013_indexer_request_accounting as migration_0013,
+    _0016_maintenance_show_fact_rearm as migration_0016,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +127,12 @@ const MIGRATIONS: &[MigrationSpec] = &[
         id: super::_0015_proxy_compatibility_020::ID,
         description: "validate proxy configurations and retained provider assignments",
         phase: MigrationPhase::Compatibility,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: migration_0016::ID,
+        description: "require destructive maintenance-rule review after show facts become executable",
+        phase: MigrationPhase::Early,
         legacy_state_key: None,
     },
 ];
@@ -271,6 +278,11 @@ impl ApplicationMigrator {
                 "0013_indexer_request_accounting" => {
                     let started = Instant::now();
                     migration_0013::migrate(&self.ledger.datastore).await?;
+                    self.record_success(spec, started).await?;
+                }
+                migration_0016::ID => {
+                    let started = Instant::now();
+                    migration_0016::migrate(&self.ledger.datastore).await?;
                     self.record_success(spec, started).await?;
                 }
                 _ => unreachable!("early migration registry and dispatcher must agree"),

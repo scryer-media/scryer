@@ -44,6 +44,7 @@ import {
 } from "@/lib/utils/maintenance-rule-sets";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { parseMaintenanceFileResults } from "@/lib/utils/maintenance-file-results";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
 
@@ -880,25 +881,56 @@ export function MaintenanceExclusionsPanel({
 function MaintenanceFileResults({ detail }: { detail: string }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  let deadline: string | null = null;
-  let totalSize: number | null = null;
-  let files: { file_id: string; file_path?: string; completed: boolean; error: string | null }[] = [];
-  try {
-    const value: unknown = JSON.parse(detail);
-    if (value && typeof value === "object" && "files" in value && Array.isArray(value.files)) {
-      files = value.files.filter((file) => typeof file?.file_id === "string" && typeof file?.completed === "boolean");
-      if ("grace_deadline" in value && typeof value.grace_deadline === "string") deadline = value.grace_deadline;
-      if ("total_size_bytes" in value && typeof value.total_size_bytes === "number") totalSize = value.total_size_bytes;
-    }
-  } catch { return null; }
-  if (files.length === 0) return null;
-  return <details className="whitespace-normal text-foreground">
-    <summary className="cursor-pointer text-sm">{t("settings.maintenanceFileResults")} ({files.length})</summary>
-    {totalSize != null && <p className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: files.length, size: formatBytes(totalSize) })}</p>}
-    {deadline && <p className="text-xs text-muted-foreground">{t("settings.maintenancePreviewDue", { time: formatUiDateTime(deadline, dateTimeFormat) })}</p>}
-    <Table><TableBody>{files.map((file) => <TableRow key={file.file_id} data-ui="settings-table-row">
-      <TableCell className="break-all text-xs">{file.file_path ?? file.file_id}</TableCell>
-      <TableCell className="text-xs">{file.error ?? (file.completed ? t("settings.maintenanceFileDeleted") : t("settings.maintenanceFilePending"))}</TableCell>
-    </TableRow>)}</TableBody></Table>
-  </details>;
+  const results = parseMaintenanceFileResults(detail);
+  if (!results) return null;
+  return (
+    <details className="whitespace-normal text-foreground">
+      <summary className="cursor-pointer text-sm">
+        {t("settings.maintenanceFileResults")} ({results.files.length})
+      </summary>
+      {results.storageRootId ? (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.maintenanceRuleStorageRoot")}: <code>{results.storageRootId}</code>
+        </p>
+      ) : null}
+      {results.totalSizeBytes != null ? (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.maintenanceFileSummary", {
+            count: results.files.length,
+            size: formatBytes(results.totalSizeBytes),
+          })}
+        </p>
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        {t("settings.maintenanceFileProgress", {
+          completed: results.completedFileCount,
+          remaining: results.remainingFileCount,
+        })}
+      </p>
+      {results.graceDeadline ? (
+        <p className="text-xs text-muted-foreground">
+          {t("settings.maintenancePreviewDue", {
+            time: formatUiDateTime(results.graceDeadline, dateTimeFormat),
+          })}
+        </p>
+      ) : null}
+      <Table>
+        <TableBody>
+          {results.files.map((file) => (
+            <TableRow key={file.fileId} data-ui="settings-table-row">
+              <TableCell className="break-all text-xs">
+                {file.filePath ?? file.fileId}
+              </TableCell>
+              <TableCell className="text-xs">
+                {file.error ??
+                  (file.completed
+                    ? t("settings.maintenanceFileDeleted")
+                    : t("settings.maintenanceFilePending"))}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </details>
+  );
 }

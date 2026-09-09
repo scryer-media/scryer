@@ -24,6 +24,7 @@
 //! preserves membership and holds action") expressed as code.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use scryer_domain::{
@@ -42,9 +43,11 @@ use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
     MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness,
-    build_subject_input, unknown_reason,
+    build_subject_input_with_completed_retention_episodes, unknown_reason,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
+use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
+use crate::maintenance_rules::subjects::MaintenanceTitleEpisodeInventory;
 use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
 use crate::ports::MaintenanceCandidateQuery;
 use crate::settings::keys::{
@@ -58,6 +61,16 @@ use crate::{AppError, AppResult, AppUseCase};
 /// background job, not a latency path, so the chunk exists to bound peak memory
 /// and query size rather than to go fast.
 pub const MAINTENANCE_EVALUATION_TITLE_CHUNK: usize = 200;
+
+/// Per-pass read-through state. Inventories are capped to a title page so a
+/// long evaluation cannot retain its entire catalog, while repeated rules can
+/// reuse a consistent first-page snapshot. Capacity observations are keyed by
+/// root and intentionally live only for this scheduled/manual evaluation pass.
+#[derive(Default)]
+struct MaintenanceEvaluationBatchCache {
+    inventories: HashMap<String, Arc<MaintenanceTitleEpisodeInventory>>,
+    storage_facts: MaintenanceStorageFactCache,
+}
 
 /// The candidate states the evaluator is allowed to move a row out of.
 ///
@@ -740,6 +753,7 @@ impl AppUseCase {
             .list_rule_sets()
             .await?;
         let libraries = self.maintenance_library_refs().await?;
+        let mut batch_cache = MaintenanceEvaluationBatchCache::default();
 
         for rule_set in rule_sets {
             if only_rule_set_id.is_some_and(|id| id != rule_set.id) {
@@ -755,7 +769,12 @@ impl AppUseCase {
             }
 
             match self
-                .evaluate_one_maintenance_rule(&rule_set, evaluation_time, &libraries)
+                .evaluate_one_maintenance_rule(
+                    &rule_set,
+                    evaluation_time,
+                    &libraries,
+                    &mut batch_cache,
+                )
                 .await
             {
                 Ok(counts) => {
@@ -791,6 +810,7 @@ impl AppUseCase {
         rule_set: &MaintenanceRuleSet,
         evaluation_time: DateTime<Utc>,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
+        batch_cache: &mut MaintenanceEvaluationBatchCache,
     ) -> AppResult<RuleCounts> {
         let detail = self
             .load_maintenance_rule_detail(rule_set.clone())
@@ -827,7 +847,7 @@ impl AppUseCase {
             .await?;
 
         let outcome = self
-            .reconcile_maintenance_rule(&detail, evaluation_time, libraries)
+            .reconcile_maintenance_rule(&detail, evaluation_time, libraries, batch_cache)
             .await;
 
         let finished_at = Utc::now();
@@ -877,6 +897,7 @@ impl AppUseCase {
         detail: &MaintenanceRuleSetDetail,
         evaluation_time: DateTime<Utc>,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
+        batch_cache: &mut MaintenanceEvaluationBatchCache,
     ) -> AppResult<RuleCounts> {
         let rule_set = &detail.rule_set;
         let engine = MaintenanceRulesEngine::build(&[MaintenancePolicy {
@@ -971,10 +992,89 @@ impl AppUseCase {
                         .map(Vec::as_slice),
                     store_readable: claims_by_title.is_some(),
                 };
-                for subject in self
-                    .maintenance_subjects_for_title(rule_set.subject_kind, title, files)
-                    .await?
-                {
+                let subjects = if title.facet == scryer_domain::MediaFacet::Movie {
+                    self.maintenance_subjects_for_title(rule_set.subject_kind, title, files)
+                        .await?
+                } else {
+                    let inventory = if let Some(inventory) = batch_cache.inventories.get(&title.id)
+                    {
+                        inventory.clone()
+                    } else {
+                        let inventory =
+                            self.maintenance_load_title_episode_inventory(title).await?;
+                        if batch_cache.inventories.len() < MAINTENANCE_EVALUATION_TITLE_CHUNK {
+                            batch_cache
+                                .inventories
+                                .insert(title.id.clone(), inventory.clone());
+                        }
+                        inventory
+                    };
+                    self.maintenance_subjects_from_episode_inventory(
+                        rule_set.subject_kind,
+                        title,
+                        files,
+                        &inventory,
+                    )?
+                };
+                for subject in subjects {
+                    if detail.revision.storage_root_id.is_some() {
+                        let root_files =
+                            if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title {
+                                match self.maintenance_title_deletion_files(title).await {
+                                    Ok(owned_files) => {
+                                        self.maintenance_root_file_summary(
+                                            &owned_files,
+                                            detail.revision.storage_root_id.as_deref(),
+                                        )
+                                        .await?
+                                    }
+                                    Err(_) => MaintenanceRootFileSummary::default(),
+                                }
+                            } else if subject.ambiguous_files {
+                                MaintenanceRootFileSummary::default()
+                            } else {
+                                self.maintenance_root_file_summary(
+                                    &subject.files,
+                                    detail.revision.storage_root_id.as_deref(),
+                                )
+                                .await?
+                            };
+                        match root_files.file_count {
+                            Some(count) if count > 0 => {}
+                            Some(_) => continue,
+                            None => {
+                                // Keep an already-live candidate in scope and
+                                // hold it. A root/path probe failure is not a
+                                // confirmed loss of root ownership and must
+                                // not reset a grace clock by cancelling it.
+                                in_scope.insert(subject.id.clone());
+                                if let Some(candidate) = self
+                                    .services
+                                    .customization
+                                    .maintenance_evaluation
+                                    .get_active_subject_candidate(
+                                        &rule_set.id,
+                                        subject.kind.as_storage_str(),
+                                        &subject.id,
+                                    )
+                                    .await?
+                                {
+                                    self.services
+                                        .customization
+                                        .maintenance_evaluation
+                                        .hold_candidate(
+                                            &candidate.id,
+                                            evaluation_time,
+                                            evaluation_time,
+                                        )
+                                        .await?;
+                                    counts.unknown += 1;
+                                    counts.held += 1;
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     in_scope.insert(subject.id.clone());
                     if let Err(error) = self
                         .reconcile_maintenance_title(
@@ -992,6 +1092,7 @@ impl AppUseCase {
                             libraries,
                             &excluded,
                             evaluation_time,
+                            &mut batch_cache.storage_facts,
                             &mut counts,
                         )
                         .await
@@ -1090,6 +1191,7 @@ impl AppUseCase {
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         excluded: &[MaintenanceRuleExclusion],
         evaluation_time: DateTime<Utc>,
+        storage_facts: &mut MaintenanceStorageFactCache,
         counts: &mut RuleCounts,
     ) -> AppResult<()> {
         let rule_set_id = detail.rule_set.id.as_str();
@@ -1169,7 +1271,23 @@ impl AppUseCase {
                 id: title.library_id.clone(),
                 name: String::new(),
             });
-        let mut input = build_subject_input(
+        let deletion_checkpoint = if let Some(candidate) = active.as_ref()
+            && matches!(
+                candidate.action_kind.as_str(),
+                "unmonitor_scope_delete_files" | "unmonitor_title_delete_all_files"
+            ) {
+            self.maintenance_deletion_checkpoint(
+                candidate,
+                detail.revision.storage_root_id.as_deref(),
+            )
+            .await?
+        } else {
+            None
+        };
+        let completed_retention_episode_ids = deletion_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.completed_retention_episode_ids());
+        let mut input = build_subject_input_with_completed_retention_episodes(
             evaluation_time,
             title,
             &library,
@@ -1178,12 +1296,38 @@ impl AppUseCase {
             watch,
             claims,
             series_movies,
+            completed_retention_episode_ids.as_ref(),
         );
-        if let Some(candidate) = active.as_ref()
-            && candidate.action_kind == "unmonitor_scope_delete_files"
-            && let Some(checkpoint) = self.maintenance_deletion_checkpoint(candidate).await?
+        // An evaluation pass samples each configured root once. A deletion
+        // checkpoint may restore the action's own monitoring/file facts below,
+        // but it must never restore or overwrite the root capacity snapshot.
+        self.populate_maintenance_storage_facts_from_cache(
+            &mut input,
+            detail.revision.storage_root_id.as_deref(),
+            storage_facts,
+        )
+        .await?;
+        if let Some(checkpoint) = deletion_checkpoint.as_ref() {
+            checkpoint.restore_baseline_if_started(&mut input);
+        }
+        // Selecting a root makes this a storage-scoped rule even when the
+        // Rego happens not to compare capacity directly. A missing or stale
+        // root must hold existing membership and must not start a grace clock
+        // for a new candidate that could not safely produce a manifest.
+        if detail.revision.storage_root_id.is_some()
+            && !matches!(
+                input.facts.storage_available_bytes,
+                scryer_rules::maintenance::Observation::Known { .. }
+            )
         {
-            checkpoint.baseline.restore(&mut input);
+            counts.unknown += 1;
+            if let Some(candidate) = active {
+                candidates
+                    .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
+                    .await?;
+                counts.held += 1;
+            }
+            return Ok(());
         }
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;

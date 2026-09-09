@@ -79,6 +79,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         let pointer_args = vec![
             SqlArg::I64(revision.revision_number),
             SqlArg::Text(MaintenanceEffectArming::None.as_storage_str().to_string()),
+            SqlArg::Bool(false),
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(revision.rule_set_id.clone()),
         ];
@@ -95,7 +96,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE maintenance_rule_sets
-                            SET current_revision_number = {}, effect_arming = {}, updated_at = {}
+                            SET current_revision_number = {}, effect_arming = {}, destructive_rearm_required = {}, updated_at = {}
                           WHERE id = {}",
                         &pointer_args,
                     )
@@ -239,40 +240,50 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         arming: MaintenanceEffectArming,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
+        let clears_compatibility_rearm = arming == MaintenanceEffectArming::Destructive;
+        let sql = if clears_compatibility_rearm {
+            "UPDATE maintenance_rule_sets
+                SET effect_arming = {}, destructive_rearm_required = {}, updated_at = {}
+              WHERE id = {}"
+        } else {
+            "UPDATE maintenance_rule_sets
+                SET effect_arming = {}, updated_at = {}
+              WHERE id = {}"
+        };
+        let mut args = vec![SqlArg::Text(arming.as_storage_str().to_string())];
+        if clears_compatibility_rearm {
+            args.push(SqlArg::Bool(false));
+        }
+        args.push(SqlArg::Timestamp(updated_at));
+        args.push(SqlArg::Text(id.to_string()));
         execute_write(
             &self.datastore,
             "update_maintenance_rule_set_arming",
-            "UPDATE maintenance_rule_sets
-                SET effect_arming = {}, updated_at = {}
-              WHERE id = {}",
-            vec![
-                SqlArg::Text(arming.as_storage_str().to_string()),
-                SqlArg::Timestamp(updated_at),
-                SqlArg::Text(id.to_string()),
-            ],
+            sql,
+            args,
         )
         .await
     }
 }
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
-const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming,
+const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
     subject_kind, current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
     FROM maintenance_rule_sets
     LEFT JOIN maintenance_rule_set_libraries scope ON scope.rule_set_id = maintenance_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, action_spec,
-    grace_days, matcher_content_hash, created_by, created_at";
+    grace_days, storage_root_id, matcher_content_hash, created_by, created_at";
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO maintenance_rule_sets
-        (id, name, description, enabled, evaluation_mode, effect_arming, subject_kind,
+        (id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required, subject_kind,
          current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO maintenance_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
-         grace_days, matcher_content_hash, created_by, created_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})";
+         grace_days, storage_root_id, matcher_content_hash, created_by, created_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 async fn execute_write(
     datastore: &StoreDatastore,
@@ -298,6 +309,7 @@ fn rule_set_args(rule_set: &MaintenanceRuleSet) -> Vec<SqlArg> {
         SqlArg::Bool(rule_set.enabled),
         SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
         SqlArg::Text(rule_set.effect_arming.as_storage_str().to_string()),
+        SqlArg::Bool(rule_set.destructive_rearm_required),
         SqlArg::Text(rule_set.subject_kind.as_storage_str().to_string()),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Timestamp(rule_set.created_at),
@@ -313,6 +325,7 @@ fn revision_args(revision: &MaintenanceRuleRevision) -> Vec<SqlArg> {
         SqlArg::Text(revision.rego_source.clone()),
         SqlArg::Text(revision.action_spec_json.clone()),
         SqlArg::I64(revision.grace_days),
+        SqlArg::OptText(revision.storage_root_id.clone()),
         SqlArg::Text(revision.matcher_content_hash.clone()),
         SqlArg::OptText(revision.created_by.clone()),
         SqlArg::Timestamp(revision.created_at),
@@ -334,6 +347,7 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<MaintenanceRuleSet> {
         // none, so this build never acts under an arming it cannot interpret.
         effect_arming: MaintenanceEffectArming::parse_storage(&row.text("effect_arming")?)
             .unwrap_or_default(),
+        destructive_rearm_required: row.bool("destructive_rearm_required")?,
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         subject_kind: MaintenanceRuleSubjectKind::parse_storage(&row.text("subject_kind")?)
             .unwrap_or_default(),
@@ -351,6 +365,7 @@ fn row_to_revision(row: &SqlRow) -> AppResult<MaintenanceRuleRevision> {
         rego_source: row.text("rego_source")?,
         action_spec_json: row.text("action_spec")?,
         grace_days: row.i64("grace_days")?,
+        storage_root_id: row.opt_text("storage_root_id")?,
         matcher_content_hash: row.text("matcher_content_hash")?,
         created_by: row.opt_text("created_by")?,
         created_at: timestamp_or_now(row, "created_at")?,

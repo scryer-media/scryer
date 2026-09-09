@@ -12,6 +12,7 @@ pub(crate) mod _0012_legacy_newznab_wrappers_01822;
 pub(crate) mod _0013_indexer_request_accounting;
 pub(crate) mod _0014_plugin_components_020;
 pub(crate) mod _0015_proxy_compatibility_020;
+pub(crate) mod _0016_maintenance_show_fact_rearm;
 pub(crate) mod compatibility_journal;
 pub(crate) mod runner;
 pub(crate) mod versioning;

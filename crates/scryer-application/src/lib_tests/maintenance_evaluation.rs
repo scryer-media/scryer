@@ -16,9 +16,9 @@ use crate::maintenance_rules::{
 };
 use crate::ports::MaintenanceCandidateQuery;
 use scryer_domain::{
-    LifecycleActionRun, LifecycleCandidate, MaintenanceCandidateState, MaintenanceEvaluationMode,
-    MaintenanceEvaluationRun, MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion,
-    MaintenanceRuleRevision,
+    LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate, MaintenanceCandidateState,
+    MaintenanceEvaluationMode, MaintenanceEvaluationRun, MaintenanceEvaluationRunStatus,
+    MaintenanceRuleExclusion, MaintenanceRuleRevision,
 };
 
 /// Matches every monitored title.
@@ -422,9 +422,68 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
         Ok(())
     }
 
+    async fn finish_held_action_run_and_release_attempt(
+        &self,
+        run: &LifecycleActionRun,
+        expected_attempt: i64,
+    ) -> AppResult<bool> {
+        if expected_attempt <= 0
+            || run.attempt != expected_attempt
+            || run.status != LifecycleActionRunStatus::Held
+            || run.finished_at.is_none()
+            || run.idempotency_key != format!("hold:{}", run.id)
+        {
+            return Err(AppError::Validation(
+                "invalid synthetic maintenance held-attempt release".to_string(),
+            ));
+        }
+        if !run
+            .hold_reason
+            .as_deref()
+            .is_some_and(|reason| !reason.is_empty())
+        {
+            return Err(AppError::Validation(
+                "synthetic maintenance held-attempt release lacks a reason".to_string(),
+            ));
+        }
+        let mut candidates = self.candidates.lock().await;
+        let Some(candidate) = candidates.iter_mut().find(|candidate| {
+            candidate.id == run.candidate_id
+                && candidate.match_generation == run.match_generation
+                && candidate.action_kind == run.action_kind
+                && candidate.action_attempts == expected_attempt
+                && candidate.state == MaintenanceCandidateState::Executing
+        }) else {
+            return Ok(false);
+        };
+        let mut action_runs = self.action_runs.lock().await;
+        let Some(stored) = action_runs.iter_mut().find(|stored| {
+            stored.id == run.id
+                && stored.candidate_id == run.candidate_id
+                && stored.match_generation == run.match_generation
+                && stored.action_kind == run.action_kind
+                && stored.attempt == expected_attempt
+                && stored.status == LifecycleActionRunStatus::Running
+        }) else {
+            return Err(AppError::Repository(
+                "synthetic maintenance held action run was not running".to_string(),
+            ));
+        };
+        *stored = run.clone();
+        candidate.action_attempts = expected_attempt - 1;
+        candidate.state = MaintenanceCandidateState::Blocked;
+        candidate.state_reason = run.hold_reason.clone().unwrap_or_default();
+        candidate.last_evaluated_at = run.finished_at.expect("checked above");
+        candidate.held_since = candidate.held_since.or(run.finished_at);
+        candidate.updated_at = run.finished_at.expect("checked above");
+        Ok(true)
+    }
+
     async fn latest_scoped_deletion_action_run(
         &self,
         candidate_id: &str,
+        match_generation: i64,
+        action_kind: &str,
     ) -> AppResult<Option<LifecycleActionRun>> {
         Ok(self
             .action_runs
@@ -433,7 +492,8 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
             .iter()
             .filter(|run| {
                 run.candidate_id == candidate_id
-                    && run.action_kind == "unmonitor_scope_delete_files"
+                    && run.match_generation == match_generation
+                    && run.action_kind == action_kind
                     && run.detail.contains("\"scoped_deletion\":")
             })
             .max_by(|a, b| (a.started_at, &a.id).cmp(&(b.started_at, &b.id)))
@@ -585,6 +645,7 @@ fn draft(rego_source: &str, grace_days: i64) -> MaintenanceRuleDraft {
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
         grace_days,
+        storage_root_id: None,
         library_ids: Vec::new(),
         evaluation_mode: None,
     }
@@ -976,6 +1037,7 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
                 rego_source: MONITORED_MATCHER.to_string(),
                 action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
                 grace_days: 30,
+                storage_root_id: None,
             },
         )
         .await
@@ -1422,6 +1484,7 @@ async fn swap_matcher_in_place(
             action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#
                 .to_string(),
             grace_days: reference.grace_days,
+            storage_root_id: None,
             matcher_content_hash: reference.matcher_content_hash.clone(),
             created_by: None,
             created_at: Utc::now(),

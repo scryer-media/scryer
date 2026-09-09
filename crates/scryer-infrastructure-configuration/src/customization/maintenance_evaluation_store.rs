@@ -561,16 +561,117 @@ impl LifecycleActionRunRepository for MaintenanceEvaluationStore {
         .await
     }
 
+    async fn finish_held_action_run_and_release_attempt(
+        &self,
+        run: &LifecycleActionRun,
+        expected_attempt: i64,
+    ) -> AppResult<bool> {
+        if expected_attempt <= 0
+            || run.attempt != expected_attempt
+            || run.status != LifecycleActionRunStatus::Held
+            || run.finished_at.is_none()
+            || run.idempotency_key != format!("hold:{}", run.id)
+        {
+            return Err(AppError::Validation(
+                "invalid maintenance held-attempt release".to_string(),
+            ));
+        }
+        let hold_reason = run
+            .hold_reason
+            .as_deref()
+            .filter(|reason| !reason.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("maintenance held-attempt release lacks a reason".to_string())
+            })?;
+        let finished_at = run.finished_at.expect("checked above");
+        let candidate_sql = "UPDATE lifecycle_candidates
+                SET action_attempts = {}, state = {}, state_reason = {},
+                    last_evaluated_at = {}, held_since = COALESCE(held_since, {}), updated_at = {}
+              WHERE id = {} AND match_generation = {} AND action_kind = {}
+                AND action_attempts = {} AND state = {}";
+        let candidate_args = vec![
+            SqlArg::I64(expected_attempt - 1),
+            SqlArg::Text(
+                MaintenanceCandidateState::Blocked
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::Text(hold_reason.to_string()),
+            SqlArg::Timestamp(finished_at),
+            SqlArg::Timestamp(finished_at),
+            SqlArg::Timestamp(finished_at),
+            SqlArg::Text(run.candidate_id.clone()),
+            SqlArg::I64(run.match_generation),
+            SqlArg::Text(run.action_kind.clone()),
+            SqlArg::I64(expected_attempt),
+            SqlArg::Text(
+                MaintenanceCandidateState::Executing
+                    .as_storage_str()
+                    .to_string(),
+            ),
+        ];
+        let action_sql = "UPDATE lifecycle_action_runs
+                SET idempotency_key = {}, status = {}, hold_reason = {}, error = {},
+                    detail = {}, finished_at = {}
+              WHERE id = {} AND candidate_id = {} AND match_generation = {}
+                AND action_kind = {} AND attempt = {} AND status = {}";
+        let action_args = vec![
+            SqlArg::Text(run.idempotency_key.clone()),
+            SqlArg::Text(run.status.as_storage_str().to_string()),
+            SqlArg::OptText(run.hold_reason.clone()),
+            SqlArg::OptText(run.error.clone()),
+            SqlArg::Text(run.detail.clone()),
+            SqlArg::OptTimestamp(run.finished_at),
+            SqlArg::Text(run.id.clone()),
+            SqlArg::Text(run.candidate_id.clone()),
+            SqlArg::I64(run.match_generation),
+            SqlArg::Text(run.action_kind.clone()),
+            SqlArg::I64(expected_attempt),
+            SqlArg::Text(
+                LifecycleActionRunStatus::Running
+                    .as_storage_str()
+                    .to_string(),
+            ),
+        ];
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "finish_held_lifecycle_action_run_and_release_attempt",
+            move |tx| {
+                let candidate_args = candidate_args.clone();
+                let action_args = action_args.clone();
+                Box::pin(async move {
+                    let affected =
+                        SqlRuntime::execute(SqlExec::Tx(tx), candidate_sql, &candidate_args)
+                            .await?;
+                    if affected != 1 {
+                        return Ok(false);
+                    }
+                    let action_affected =
+                        SqlRuntime::execute(SqlExec::Tx(tx), action_sql, &action_args).await?;
+                    if action_affected != 1 {
+                        return Err(AppError::Repository(
+                            "maintenance held action run was not running".to_string(),
+                        ));
+                    }
+                    Ok(true)
+                })
+            },
+        )
+        .await
+    }
+
     async fn latest_scoped_deletion_action_run(
         &self,
         candidate_id: &str,
+        match_generation: i64,
+        action_kind: &str,
     ) -> AppResult<Option<LifecycleActionRun>> {
         // Checkpoint details are serialized by the application. Filter before
         // limiting so an arbitrary number of later hold rows cannot hide them.
         let sql = format!(
             "SELECT {ACTION_RUN_COLUMNS}
                FROM lifecycle_action_runs
-              WHERE candidate_id = {{}} AND action_kind = {{}} AND detail LIKE {{}} ESCAPE '!'
+              WHERE candidate_id = {{}} AND match_generation = {{}} AND action_kind = {{}} AND detail LIKE {{}} ESCAPE '!'
               ORDER BY started_at DESC, id DESC LIMIT 1"
         );
         SqlRuntime::fetch_optional(
@@ -578,7 +679,8 @@ impl LifecycleActionRunRepository for MaintenanceEvaluationStore {
             &sql,
             &[
                 SqlArg::Text(candidate_id.to_string()),
-                SqlArg::Text("unmonitor_scope_delete_files".to_string()),
+                SqlArg::I64(match_generation),
+                SqlArg::Text(action_kind.to_string()),
                 SqlArg::Text("%\"scoped!_deletion\":%".to_string()),
             ],
         )

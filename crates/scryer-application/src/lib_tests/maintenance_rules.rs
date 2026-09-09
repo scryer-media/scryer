@@ -153,6 +153,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         // permissive double here would hide an arming that survived a matcher
         // swap.
         rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
+        rule_set.destructive_rearm_required = false;
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
         Ok(())
@@ -255,6 +256,9 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .find(|rule_set| rule_set.id == id)
             .ok_or_else(|| AppError::NotFound(id.to_string()))?;
         rule_set.effect_arming = arming;
+        if arming == scryer_domain::MaintenanceEffectArming::Destructive {
+            rule_set.destructive_rearm_required = false;
+        }
         rule_set.updated_at = updated_at;
         Ok(())
     }
@@ -360,6 +364,7 @@ fn draft(rego_source: &str) -> MaintenanceRuleDraft {
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
         grace_days: 7,
+        storage_root_id: None,
         library_ids: Vec::new(),
         evaluation_mode: None,
     }
@@ -474,6 +479,7 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
                 rego_source: NEVER_MATCHER.to_string(),
                 action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
                 grace_days: 30,
+                storage_root_id: None,
             },
         )
         .await
@@ -501,6 +507,62 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
             .len(),
         2
     );
+}
+
+#[tokio::test]
+async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_it() {
+    let MaintenanceFixture {
+        app, user, rules, ..
+    } = maintenance_app();
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create rule set");
+    let movie_root_id = scryer_domain::root_folder_id_for_path("/data/movies");
+    let mut stored = rules
+        .get_revision(&created.rule_set.id, 1)
+        .await
+        .unwrap()
+        .expect("revision 1");
+    stored.storage_root_id = Some(movie_root_id.clone());
+    rules.replace_revision_in_place(stored).await;
+
+    let preserved = app
+        .update_maintenance_rule_matcher(
+            &user,
+            &created.rule_set.id,
+            MaintenanceMatcherDraft {
+                rego_source: NEVER_MATCHER.to_string(),
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                ),
+                grace_days: 7,
+                storage_root_id: None,
+            },
+        )
+        .await
+        .expect("legacy update preserves the selected root");
+    assert_eq!(
+        preserved.revision.storage_root_id.as_deref(),
+        Some(movie_root_id.as_str())
+    );
+
+    let cleared = app
+        .update_maintenance_rule_matcher(
+            &user,
+            &created.rule_set.id,
+            MaintenanceMatcherDraft {
+                rego_source: NEVER_MATCHER.to_string(),
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                ),
+                grace_days: 7,
+                storage_root_id: Some(None),
+            },
+        )
+        .await
+        .expect("explicit null clears the selected root");
+    assert_eq!(cleared.revision.storage_root_id, None);
 }
 
 #[tokio::test]
@@ -863,6 +925,7 @@ async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time()
                     MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
                 ),
                 grace_days: 7,
+                storage_root_id: None,
             },
         )
         .await
@@ -934,6 +997,7 @@ async fn the_grace_period_is_bounded_at_ten_years() {
                     MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
+                storage_root_id: None,
             },
         )
         .await
@@ -1005,6 +1069,7 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(vec![]),
             },
@@ -1068,6 +1133,48 @@ async fn preview_separates_match_from_no_match() {
     assert!(preview.titles.iter().all(|result| result.error.is_none()));
 }
 
+#[tokio::test]
+async fn preview_holds_when_selected_root_membership_cannot_be_proved() {
+    let MaintenanceFixture {
+        app,
+        user,
+        media_files,
+        ..
+    } = maintenance_app();
+    let title = seed_title(&app, &user, "Root coverage unknown", true).await;
+    // The catalog deliberately knows this path while the filesystem does not,
+    // so a configured root cannot prove physical ownership.
+    seed_media_file(&media_files, &title.id, 1).await;
+
+    let preview = app
+        .preview_maintenance_rule(
+            &user,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
+                    rego_source: MONITORED_MATCHER.to_string(),
+                    action_spec: MaintenanceActionSpec::new(
+                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
+                    grace_days: 0,
+                    storage_root_id: Some(scryer_domain::root_folder_id_for_path("/data/movies")),
+                },
+                selection: MaintenancePreviewSelection::Titles(vec![title.id]),
+            },
+        )
+        .await
+        .expect("preview returns an unknown result rather than matching");
+
+    assert_eq!(preview.titles.len(), 1);
+    assert_eq!(preview.titles[0].outcome, Some(MaintenanceOutcome::Unknown));
+    assert_eq!(
+        preview.titles[0].reason_codes,
+        vec!["storage_root_membership_unavailable".to_string()]
+    );
+    assert_eq!(preview.titles[0].storage_root_file_count, None);
+}
+
 /// The fail-closed property the RFC turns on: a rule that needs a fact Scryer
 /// does not collect holds instead of matching — and it holds without the author
 /// having written a single guard, which is the whole point of the host deriving
@@ -1089,6 +1196,7 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(vec![title.id.clone()]),
             },
@@ -1127,6 +1235,7 @@ async fn an_inline_preview_persists_nothing() {
                     MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
+                storage_root_id: None,
             },
             selection: MaintenancePreviewSelection::Titles(vec![title.id]),
         },
@@ -1156,6 +1265,7 @@ async fn preview_refuses_a_selection_above_the_cap() {
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(title_ids),
             },
@@ -1231,6 +1341,7 @@ async fn file_facts_distinguish_having_files_from_having_none() {
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(vec![
                     with_file.id.clone(),
@@ -1275,6 +1386,7 @@ async fn episode_counts_are_absent_for_movies() {
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(vec![movie.id]),
             },
@@ -1358,6 +1470,7 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
                         MaintenanceActionKind::UnmonitorScopeKeepFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(vec![
                     series.id.clone(),

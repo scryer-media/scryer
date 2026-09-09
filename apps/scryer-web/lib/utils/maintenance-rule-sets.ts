@@ -54,6 +54,7 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     targetQualityProfileId: "",
     tags: [],
     graceDays: 0,
+    storageRootId: "",
     libraryIds: [],
   };
 }
@@ -70,6 +71,7 @@ export function maintenanceRuleDraftFromDetail(
     targetQualityProfileId: detail.actionSpec.targetQualityProfileId ?? "",
     tags: [...(detail.actionSpec.tags ?? [])],
     graceDays: detail.revision.graceDays,
+    storageRootId: detail.revision.storageRootId ?? "",
     libraryIds: [...detail.ruleSet.libraryIds],
   };
 }
@@ -126,6 +128,7 @@ export function createMaintenanceRuleSetInput(
     regoSource: draft.regoSource,
     action: maintenanceActionInput(draft, descriptors),
     graceDays: draft.graceDays,
+    storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
   };
 }
@@ -140,6 +143,9 @@ export function updateMaintenanceRuleMatcherInput(
     regoSource: draft.regoSource,
     action: maintenanceActionInput(draft, descriptors),
     graceDays: draft.graceDays,
+    // Always send the explicit editor value. Old clients omit this field and
+    // preserve a root they cannot render; this client may intentionally clear it.
+    storageRootId: draft.storageRootId || null,
   };
 }
 
@@ -160,6 +166,20 @@ export function scopedActionDescriptors(
   descriptors: MaintenanceActionDescriptor[], scope: MaintenanceRuleScope,
 ): MaintenanceActionDescriptor[] {
   return descriptors.filter((descriptor) => descriptor.supportedRuleScopes?.includes(scope));
+}
+
+/// The server advertises which actions retain their safety guarantees when a
+/// selected root filters file coverage. Keep this filter data-driven so a new
+/// server action appears correctly without a second client-side allowlist.
+export function storageScopedActionDescriptors(
+  descriptors: MaintenanceActionDescriptor[],
+  scope: MaintenanceRuleScope,
+  storageRootId: string,
+): MaintenanceActionDescriptor[] {
+  const scoped = scopedActionDescriptors(descriptors, scope);
+  return storageRootId
+    ? scoped.filter((descriptor) => descriptor.supportsStorageScope)
+    : scoped;
 }
 
 export function titleScopedActionDescriptors(descriptors: MaintenanceActionDescriptor[]) {
@@ -228,6 +248,7 @@ export function maintenancePreviewInput({
           regoSource: draft.regoSource,
           action: maintenanceActionInput(draft, descriptors),
           graceDays: draft.graceDays,
+          storageRootId: draft.storageRootId || undefined,
         }
       : {};
   const subjects =
