@@ -55,6 +55,11 @@ export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt:
   useEffect(() => { setAttempt(storedAttempt); }, [storedAttempt]);
   const onSelectionChanged = (next: MediaAnalysisDetails) => { setAnalysis(next); setAttempt(null); };
   const disc = analysis.disc;
+  const selectedVideo = analysis.streams.find((stream) => stream.kind === "VIDEO"
+    && stream.metadata.id === analysis.selectedVideoId
+    && (analysis.selectedProgramId == null || stream.metadata.programId === analysis.selectedProgramId));
+  const videoBitrate = analysis.revision > 0 ? selectedVideo?.metadata.bitrateBps
+    : videoBitrateKbps == null ? null : videoBitrateKbps * 1000;
   return <Popover>
     <PopoverTrigger asChild><button type="button" aria-label="Media analysis details"><Badge>Details{attempt && !attempt.succeeded ? " · review" : analysis.report.status === "INCOMPLETE" ? " · incomplete" : ""}</Badge></button></PopoverTrigger>
     <PopoverContent align="start" className="max-h-[70vh] w-[min(36rem,90vw)] overflow-y-auto text-xs">
@@ -65,13 +70,13 @@ export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt:
         {attempt.report.budgetExhausted ? <p>The inspection budget was exhausted.</p> : null}
         {attempt.report.warnings.map((warning, index) => <p key={`${warning.code}-${index}`}>{warning.message}</p>)}
       </div> : null}
-      <p className="my-2 text-muted-foreground">Duration {time(analysis.durationSeconds)} · Overall {rate(analysis.overallBitrateBps)} · Video {rate(videoBitrateKbps == null ? null : videoBitrateKbps * 1000)}</p>
+      <p className="my-2 text-muted-foreground">Duration {time(analysis.durationSeconds)} · Overall {rate(analysis.overallBitrateBps)} · Video {rate(videoBitrate)}</p>
       {analysis.report.budgetExhausted ? <p>Inspection stopped at its read budget.</p> : null}
       {analysis.report.warnings.map((warning, index) => <p key={`${warning.code}-${index}`} className="my-1 text-amber-500">{warning.message}</p>)}
       {disc ? <div className="my-3 space-y-1">
         <p className="font-medium">{disc.discType.toUpperCase()} · {disc.filesystem} {disc.volumeLabel ?? ""}</p>
         <p>{disc.automaticSelection ? "Automatic longest-title selection" : "Saved title selection"}: {disc.selectedTitleId ?? "Requires review"}</p>
-        {fileId ? <DiscTitleSelection fileId={fileId} analysis={analysis} onChanged={onSelectionChanged} /> : null}
+        {fileId ? <DiscTitleSelection fileId={fileId} analysis={analysis} onChanged={onSelectionChanged} requiresReview={attempt != null && !attempt.succeeded} /> : null}
         {fileId ? <DiscEpisodeMapping key={fileId} fileId={fileId} analysis={analysis} onChanged={onSelectionChanged} /> : null}
         {disc.titles.map((title) => <div key={title.id} className="border-t py-1">
           <p>Title {title.id} · {time(title.durationSeconds)} · {title.angleCount} angle(s) · {title.report.status.toLowerCase()}{title.aliases.length ? ` · aliases ${title.aliases.join(", ")}` : ""}</p>

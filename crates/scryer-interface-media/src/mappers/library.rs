@@ -821,6 +821,9 @@ pub fn from_episode_media_availability(
             EpisodeMediaAvailabilityStateValue::PendingScan
         }
         EpisodeMediaAvailabilityState::ScanFailed => EpisodeMediaAvailabilityStateValue::ScanFailed,
+        EpisodeMediaAvailabilityState::ReviewRequired => {
+            EpisodeMediaAvailabilityStateValue::ReviewRequired
+        }
         EpisodeMediaAvailabilityState::Missing => EpisodeMediaAvailabilityStateValue::Missing,
         EpisodeMediaAvailabilityState::Unmonitored => {
             EpisodeMediaAvailabilityStateValue::Unmonitored

@@ -226,6 +226,8 @@ pub enum EpisodeMediaAvailabilityStateValue {
     PendingScan,
     /// The latest media scan failed.
     ScanFailed,
+    /// A saved disc selection or episode mapping requires review.
+    ReviewRequired,
     /// No media file currently satisfies the episode requirements.
     Missing,
     /// The episode is not monitored and is excluded from acquisition.

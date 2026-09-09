@@ -2484,6 +2484,7 @@ const en: LocaleDictionary = {
     "{{count}} files could not be previewed and may fail to delete.",
   "mediaFile.pendingScan": "Pending Scan",
   "mediaFile.scanFailed": "Scan Failed",
+  "mediaFile.reviewRequired": "Review required",
   "mediaFile.score": "Score {{score}}",
   "mediaFile.primary": "Primary",
   "mediaFile.additional": "Additional",

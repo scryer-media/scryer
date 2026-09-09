@@ -596,7 +596,7 @@ impl MediaFileRepository for MediaFileStore {
                   FROM media_files
                  WHERE media_files.title_id IN ({placeholders})
                    AND {}
-                   AND media_files.role = 'primary'
+                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
                    AND {normalized_quality} IS NOT NULL
              ) ranked
              WHERE quality_row = 1
@@ -651,7 +651,7 @@ impl MediaFileRepository for MediaFileStore {
                  WHERE media_files.title_id IN ({placeholders})
                    AND titles.facet = 'movie'
                    AND {}
-                   AND media_files.role = 'primary'
+                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
              ) ranked
              WHERE media_row = 1",
             live_media_file_predicate(dialect, "media_files")
@@ -711,7 +711,7 @@ impl MediaFileRepository for MediaFileStore {
                   LEFT JOIN episodes e ON e.id = fem.episode_id
                  WHERE media_files.title_id IN ({placeholders})
                    AND {}
-                   AND media_files.role = 'primary'
+                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
                    AND {normalized_quality} IS NOT NULL
                    AND (fem.episode_id IS NULL OR {})
              ) ranked
@@ -750,7 +750,10 @@ impl MediaFileRepository for MediaFileStore {
         title_id: Option<&str>,
     ) -> AppResult<MissingScopeCandidates> {
         let dialect = dialect_for_datastore(&self.datastore);
-        let live_file = live_media_file_predicate(dialect, "mf");
+        let live_file = format!(
+            "{} AND mf.scan_status <> 'review_required'",
+            live_media_file_predicate(dialect, "mf")
+        );
         let title_filter = if title_id.is_some() {
             "AND t.id = {}"
         } else {
@@ -906,7 +909,7 @@ impl MediaFileRepository for MediaFileStore {
              FROM episodes e
              INNER JOIN collections c ON c.id = e.collection_id
              LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary'
+             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
              WHERE e.title_id IN ({placeholders})
                AND c.collection_type <> 'specials'
                AND c.collection_index <> '0'
@@ -960,7 +963,8 @@ impl MediaFileRepository for MediaFileStore {
                        mf.resolution,
                        ROW_NUMBER() OVER (
                            PARTITION BY fem.episode_id
-                           ORDER BY CASE WHEN fem.role = 'primary' THEN 0 ELSE 1 END,
+                           ORDER BY CASE WHEN mf.scan_status = 'review_required' THEN 1 ELSE 0 END,
+                                    CASE WHEN fem.role = 'primary' THEN 0 ELSE 1 END,
                                     CASE WHEN fem.role = 'primary' THEN 0 ELSE mf.size_bytes END DESC,
                                     mf.created_at DESC,
                                     mf.id DESC
@@ -996,6 +1000,7 @@ impl MediaFileRepository for MediaFileStore {
                 let state = match scan_status.as_deref() {
                     Some("imported") => EpisodeMediaAvailabilityState::PendingScan,
                     Some("scan_failed") => EpisodeMediaAvailabilityState::ScanFailed,
+                    Some("review_required") => EpisodeMediaAvailabilityState::ReviewRequired,
                     Some(_) => EpisodeMediaAvailabilityState::Available,
                     None if row.bool("monitored")? => EpisodeMediaAvailabilityState::Missing,
                     None => EpisodeMediaAvailabilityState::Unmonitored,
@@ -1046,7 +1051,7 @@ impl MediaFileRepository for MediaFileStore {
                     COUNT(DISTINCT CASE WHEN {countable} AND mf.id IS NOT NULL THEN e.id END) AS owned_episodes
              FROM episodes e
              LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary'
+             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
              WHERE e.title_id IN ({placeholders})
                AND e.collection_id IS NOT NULL
              GROUP BY e.collection_id",
@@ -1202,6 +1207,28 @@ impl MediaFileRepository for MediaFileStore {
         expected: &TitleMediaFile,
         analysis: &MediaFileAnalysis,
     ) -> AppResult<bool> {
+        // A failed attempt to choose a different title must not invalidate the
+        // saved choice. A reprobe of that saved choice can suspend availability
+        // while retaining its metadata and association roles for review.
+        let selection_review =
+            expected
+                .analysis_details
+                .disc
+                .as_ref()
+                .zip(analysis.details.disc.as_ref())
+                .is_some_and(|(saved, inspected)| {
+                    analysis.details.report.warnings.iter().any(|warning| {
+                        match warning.code.as_str() {
+                            "disc_selection_review" => saved.selection == inspected.selection,
+                            // A title change still inspects the saved episode mappings.
+                            "disc_episode_mapping_review" => {
+                                saved.selection.episode_mappings
+                                    == inspected.selection.episode_mappings
+                            }
+                            _ => false,
+                        }
+                    })
+                });
         let json = serde_json::to_string(analysis)
             .map_err(|error| AppError::Repository(error.to_string()))?;
         let status = serde_json::to_value(analysis.details.report.status)
@@ -1209,13 +1236,15 @@ impl MediaFileRepository for MediaFileStore {
         let sql = "UPDATE media_files SET analysis_attempt_revision = {},
                 analysis_attempted_at = {}, analysis_attempt_source =
                     CAST(size_bytes AS TEXT) || ':' || COALESCE(source_signature_scheme, '') || ':' || COALESCE(source_signature_value, ''),
-                analysis_attempt_status = {}, analysis_attempt_json = {}
+                analysis_attempt_status = {}, analysis_attempt_json = {},
+                scan_status = CASE WHEN {} = 1 THEN 'review_required' ELSE scan_status END
              WHERE id = {}";
         let args = vec![
             SqlArg::I64(i64::from(analysis.details.revision)),
             SqlArg::Text(chrono::Utc::now().to_rfc3339()),
             SqlArg::Text(status.as_str().unwrap_or("unknown").to_string()),
             SqlArg::Text(json),
+            SqlArg::I64(i64::from(selection_review)),
             SqlArg::Text(expected.id.clone()),
         ];
         let dialect = dialect_for_datastore(&self.datastore);
@@ -2560,6 +2589,118 @@ mod tests {
 
         let saved = files.get_media_file_by_id(&id).await.unwrap().unwrap();
         let mut invalid = analysis.clone();
+        let mut review = analysis.clone();
+        review.details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        review
+            .details
+            .report
+            .warnings
+            .push(scryer_media_types::ProbeWarning {
+                code: "disc_selection_review".into(),
+                message: "A saved playback title no longer exists".into(),
+                ..Default::default()
+            });
+        review.details.disc.as_mut().unwrap().selection.title_id = Some("99999".into());
+        assert!(
+            files
+                .record_media_analysis_attempt(&saved, &review)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            files
+                .get_media_file_by_id(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .scan_status,
+            "scanned",
+            "a rejected replacement selection must not invalidate the saved selection"
+        );
+        review.details.report.warnings[0].code = "disc_episode_mapping_review".into();
+        let saved_mappings = review
+            .details
+            .disc
+            .as_ref()
+            .unwrap()
+            .selection
+            .episode_mappings
+            .clone();
+        review
+            .details
+            .disc
+            .as_mut()
+            .unwrap()
+            .selection
+            .episode_mappings[0]
+            .episode_ids = vec!["foreign-episode".into()];
+        assert!(
+            files
+                .record_media_analysis_attempt(&saved, &review)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            files
+                .get_media_file_by_id(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .scan_status,
+            "scanned",
+            "a rejected replacement mapping must not invalidate saved episode coverage"
+        );
+        review
+            .details
+            .disc
+            .as_mut()
+            .unwrap()
+            .selection
+            .episode_mappings = saved_mappings;
+        assert!(
+            files
+                .record_media_analysis_attempt(&saved, &review)
+                .await
+                .unwrap()
+        );
+        let held = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(held.scan_status, "review_required");
+        assert_eq!(held.analysis_details, saved.analysis_details);
+        let availability = files
+            .list_episode_media_availability(std::slice::from_ref(&title.id))
+            .await
+            .unwrap();
+        assert_eq!(availability.len(), 2);
+        assert!(availability.iter().all(|episode| episode.state
+            == EpisodeMediaAvailabilityState::ReviewRequired
+            && episode.primary_quality_label.is_none()));
+        let associations = files
+            .list_live_media_files_for_episode_ids(
+                &title.id,
+                &["episode-1".into(), "episode-2".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            associations[0].episode_ids.len(),
+            2,
+            "preserve saved association roles for review"
+        );
+        assert!(
+            files
+                .update_media_file_analysis_if_unchanged(&held, analysis.clone())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            files
+                .get_media_file_by_id(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .scan_status,
+            "scanned"
+        );
         invalid
             .details
             .disc

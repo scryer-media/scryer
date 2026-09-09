@@ -482,9 +482,12 @@ impl AppUseCase {
 
                 let subject = AdmissionSubject::new(
                     AdmissionScope::Episodes(episode_ids),
-                    incumbents.iter().map(|incumbent| {
-                        to_incumbent(&incumbent.media_file, primary_span(incumbent))
-                    }),
+                    incumbents
+                        .iter()
+                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .map(|incumbent| {
+                            to_incumbent(&incumbent.media_file, primary_span(incumbent))
+                        }),
                 );
                 if is_pack_grab {
                     subject.per_member().with_unaired_members(unaired_members)
@@ -511,6 +514,7 @@ impl AppUseCase {
                                 .iter()
                                 .any(|link_id| link_id == series_movie_link_id)
                         })
+                        .filter(|file| file.scan_status != "review_required")
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -531,6 +535,7 @@ impl AppUseCase {
                         .filter(|file| {
                             file.episode_id.is_none() && file.series_movie_link_ids.is_empty()
                         })
+                        .filter(|file| file.scan_status != "review_required")
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -579,9 +584,12 @@ impl AppUseCase {
 
                 AdmissionSubject::new(
                     AdmissionScope::Episodes(episode_ids),
-                    incumbents.iter().map(|incumbent| {
-                        to_incumbent(&incumbent.media_file, primary_span(incumbent))
-                    }),
+                    incumbents
+                        .iter()
+                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .map(|incumbent| {
+                            to_incumbent(&incumbent.media_file, primary_span(incumbent))
+                        }),
                 )
                 .per_member()
                 .with_unaired_members(unaired_members)

@@ -315,8 +315,9 @@ export function MediaInfoBadges({
   const hasSubtitles = file.subtitleStreams.length > 0 || file.subtitleLanguages.length > 0;
   const isPendingScan = file.scanStatus === "imported";
   const isScanFailed = file.scanStatus === "scan_failed";
+  const requiresReview = file.scanStatus === "review_required";
 
-  if (!file.analysis && !hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed) return null;
+  if (!file.analysis && !hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed && !requiresReview) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1">
@@ -343,6 +344,7 @@ export function MediaInfoBadges({
       {isPendingScan ? <Badge tone="warning">{t("mediaFile.pendingScan")}</Badge> : null}
       {file.analysis ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
       {isScanFailed ? <Badge tone="negative">{t("mediaFile.scanFailed")}</Badge> : null}
+      {requiresReview ? <Badge tone="warning">{t("mediaFile.reviewRequired")}</Badge> : null}
     </div>
   );
 }

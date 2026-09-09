@@ -3298,6 +3298,7 @@ pub enum EpisodeMediaAvailabilityState {
     Available,
     PendingScan,
     ScanFailed,
+    ReviewRequired,
     Missing,
     Unmonitored,
 }

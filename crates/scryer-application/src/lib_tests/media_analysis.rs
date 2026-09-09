@@ -93,6 +93,60 @@ async fn selection_fixture(
 }
 
 #[tokio::test]
+async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
+    let analyzer = Arc::new(SelectionAnalyzer {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        started: Arc::new(tokio::sync::Notify::new()),
+        resume: None,
+    });
+    let (app, _admin, files, id, _dir) = selection_fixture(analyzer).await;
+    let file = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&file.title_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let profile = app.resolve_quality_profile_for_title(&title).await.unwrap();
+    let context = app
+        .resolve_canonical_scoring_context(&title, &profile)
+        .await;
+    for (status, count) in [("scanned", 1), ("review_required", 0), ("scanned", 1)] {
+        files
+            .store
+            .lock()
+            .await
+            .iter_mut()
+            .find(|row| row.id == id)
+            .unwrap()
+            .scan_status = status.into();
+        let subject = app
+            .admission_subject_for_scope(
+                &title,
+                &crate::SubmissionScope::Title,
+                &context,
+                None,
+                crate::quality::canonical_context::SubjectIntent::Import,
+            )
+            .await;
+        assert_eq!(subject.incumbents().len(), count, "{status}");
+        if status == "review_required" {
+            let bars = app
+                .landed_bars_for_scopes(&[crate::acquisition_workflow::LandedBarScope {
+                    title_id: title.id.clone(),
+                    episode_id: None,
+                    collection_id: None,
+                    series_movie_link_id: None,
+                }])
+                .await;
+            assert_eq!(bars, vec![None]);
+        }
+    }
+}
+
+#[tokio::test]
 async fn disc_episode_mapping_validates_each_authored_runtime_and_episode_owner() {
     let analyzer = Arc::new(SelectionAnalyzer {
         seen: Arc::new(Mutex::new(Vec::new())),
@@ -197,6 +251,84 @@ async fn disc_episode_mapping_validates_each_authored_runtime_and_episode_owner(
     assert_eq!(
         reprobed.details.disc.unwrap().selection.episode_mappings,
         vec![mapping("00002", "mapped-episode")]
+    );
+    let mut alias_disc = saved.analysis_details.disc.clone().unwrap();
+    alias_disc
+        .titles
+        .iter_mut()
+        .find(|item| item.id == "00002")
+        .unwrap()
+        .aliases
+        .push("00099".into());
+    alias_disc.selection.episode_mappings = vec![
+        mapping("00099", "mapped-episode"),
+        mapping("00003", "missing-episode"),
+    ];
+    let pending_selection = alias_disc.selection.clone();
+    assert!(
+        app.validate_disc_episode_mappings(&series, &mut alias_disc)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        alias_disc.selection, pending_selection,
+        "failed validation must not partially canonicalize the saved choice"
+    );
+    app.services
+        .catalog
+        .shows
+        .update_episode(
+            "mapped-episode",
+            EpisodeUpdate {
+                duration_seconds: Some(7200),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let before = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    let error = app
+        .select_media_file_disc_title(&admin, &id, Some("00001".into()))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("implausible"), "{error}");
+    let attempts = files.analysis_attempts.lock().await;
+    let (_, attempt) = attempts
+        .last()
+        .expect("failed mapping validation is recorded");
+    assert_eq!(
+        attempt.details.report.status,
+        scryer_media_types::ProbeStatus::Incomplete
+    );
+    assert!(
+        attempt
+            .details
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "disc_episode_mapping_review")
+    );
+    assert_eq!(
+        attempt
+            .details
+            .disc
+            .as_ref()
+            .unwrap()
+            .selection
+            .episode_mappings,
+        before
+            .analysis_details
+            .disc
+            .as_ref()
+            .unwrap()
+            .selection
+            .episode_mappings
+    );
+    drop(attempts);
+    let after = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(
+        after.analysis_details, before.analysis_details,
+        "changing the selected title must not publish stale episode runtime facts"
     );
 }
 

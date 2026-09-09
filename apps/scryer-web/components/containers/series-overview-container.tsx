@@ -260,7 +260,7 @@ export type CollectionEpisode = {
   monitored: boolean;
   playbackLinks?: import("@/components/common/watch-in-media-server-menu").MediaServerPlaybackLink[];
   mediaAvailability: {
-    state: "AVAILABLE" | "PENDING_SCAN" | "SCAN_FAILED" | "MISSING" | "UNMONITORED";
+    state: "AVAILABLE" | "PENDING_SCAN" | "SCAN_FAILED" | "REVIEW_REQUIRED" | "MISSING" | "UNMONITORED";
     primaryQualityLabel: string | null;
   };
   createdAt: string;

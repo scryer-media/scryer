@@ -45,7 +45,7 @@ export function DiscEpisodeMapping({ fileId, analysis, onChanged }: {
     try {
       const result = await client.mutation<{ mapMediaFileDiscEpisodes: TitleMediaFileRecord }>(mappingMutation, {
         fileId, mappings: Object.entries(mappings).filter(([, episodeId]) => episodeId).map(([discTitleId, episodeId]) => ({ discTitleId, episodeId })),
-      }).toPromise();
+      }, { additionalTypenames: ["TitlePayload", "EpisodePayload", "CollectionPayload", "EpisodeMediaAvailabilityPayload"] }).toPromise();
       if (result.error) throw result.error;
       const next = result.data?.mapMediaFileDiscEpisodes.analysis;
       if (!next) throw new Error(t("mediaFile.discMappingFailed"));

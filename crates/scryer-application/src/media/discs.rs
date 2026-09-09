@@ -151,7 +151,8 @@ impl AppUseCase {
         }
         let mut episode_ids = std::collections::HashSet::new();
         let mut title_ids = std::collections::HashSet::new();
-        for mapping in &mut disc.selection.episode_mappings {
+        let mut canonical_titles = Vec::with_capacity(disc.selection.episode_mappings.len());
+        for mapping in &disc.selection.episode_mappings {
             let [episode_id] = mapping.episode_ids.as_slice() else {
                 return Err(AppError::Validation("map each complete disc title to one episode; combined episodes require separate authored playback titles".into()));
             };
@@ -222,7 +223,56 @@ impl AppUseCase {
                     authored.id
                 )));
             }
-            mapping.disc_title_id = authored.id.clone();
+            canonical_titles.push(authored.id.clone());
+        }
+        // Failed validation must retain the original saved selection so the
+        // failed-attempt guard can identify the associations requiring review.
+        for (mapping, canonical) in disc
+            .selection
+            .episode_mappings
+            .iter_mut()
+            .zip(canonical_titles)
+        {
+            mapping.disc_title_id = canonical;
+        }
+        Ok(())
+    }
+
+    async fn validate_disc_selection_update(
+        &self,
+        title: &scryer_domain::Title,
+        expected: &TitleMediaFile,
+        path: &std::path::Path,
+        source: &MediaSourceVersion,
+        analysis: &mut crate::MediaFileAnalysis,
+    ) -> AppResult<()> {
+        let disc =
+            analysis.details.disc.as_mut().ok_or_else(|| {
+                AppError::Validation("image has no recognized disc titles".into())
+            })?;
+        let validation = self.validate_disc_episode_mappings(title, disc).await;
+        if *source != MediaSourceVersion::read(path).await? {
+            return Err(AppError::Validation(
+                "media source changed during inspection".into(),
+            ));
+        }
+        if let Err(error) = validation {
+            analysis.details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+            analysis
+                .details
+                .report
+                .warnings
+                .push(scryer_media_types::ProbeWarning {
+                    code: "disc_episode_mapping_review".into(),
+                    message: error.to_string(),
+                    ..Default::default()
+                });
+            self.services
+                .library
+                .media_files
+                .record_media_analysis_attempt(expected, analysis)
+                .await?;
+            return Err(error);
         }
         Ok(())
     }
@@ -290,16 +340,8 @@ impl AppUseCase {
             }
             MediaAnalysisOutcome::Invalid(error) => return Err(AppError::Validation(error)),
         };
-        let disc =
-            analysis.details.disc.as_mut().ok_or_else(|| {
-                AppError::Validation("image has no recognized disc titles".into())
-            })?;
-        self.validate_disc_episode_mappings(&title, disc).await?;
-        if source != MediaSourceVersion::read(&path).await? {
-            return Err(AppError::Validation(
-                "media source changed during inspection".into(),
-            ));
-        }
+        self.validate_disc_selection_update(&title, &expected, &path, &source, &mut analysis)
+            .await?;
         if !files
             .update_media_file_analysis_if_unchanged(&expected, *analysis)
             .await?
@@ -326,7 +368,8 @@ impl AppUseCase {
             .get_media_file_by_id(file_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
-        self.get_title_for_management(actor, &expected.title_id)
+        let title = self
+            .get_title_for_management(actor, &expected.title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", expected.title_id)))?;
         let path = crate::stored_paths::stored_path_to_path_buf(&expected.file_path);
@@ -361,7 +404,7 @@ impl AppUseCase {
                 "media source changed during inspection".into(),
             ));
         }
-        let analysis = match outcome {
+        let mut analysis = match outcome {
             MediaAnalysisOutcome::Valid(analysis) => analysis,
             MediaAnalysisOutcome::Inconclusive(analysis) => {
                 files
@@ -381,6 +424,8 @@ impl AppUseCase {
                 "the requested disc title does not exist".into(),
             ));
         }
+        self.validate_disc_selection_update(&title, &expected, &path, &source, &mut analysis)
+            .await?;
         if !files
             .update_media_file_analysis_if_unchanged(&expected, *analysis)
             .await?

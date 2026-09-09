@@ -13,10 +13,11 @@ const selectDiscTitleMutation = `
   }
 `;
 
-export function DiscTitleSelection({ fileId, analysis, onChanged }: {
+export function DiscTitleSelection({ fileId, analysis, onChanged, requiresReview = false }: {
   fileId: string;
   analysis: MediaAnalysisDetails;
   onChanged: (analysis: MediaAnalysisDetails) => void;
+  requiresReview?: boolean;
 }) {
   const client = useClient();
   const t = useTranslate();
@@ -34,6 +35,7 @@ export function DiscTitleSelection({ fileId, analysis, onChanged }: {
     try {
       const result = await client.mutation<{ selectMediaFileDiscTitle: TitleMediaFile }>(
         selectDiscTitleMutation, { fileId, discTitleId: selected || null },
+        { additionalTypenames: ["TitlePayload", "EpisodePayload", "CollectionPayload", "EpisodeMediaAvailabilityPayload"] },
       ).toPromise();
       if (result.error) throw result.error;
       const next = result.data?.selectMediaFileDiscTitle.analysis;
@@ -60,7 +62,7 @@ export function DiscTitleSelection({ fileId, analysis, onChanged }: {
       </select>
     </label>
     <button type="button" className="rounded border px-2 py-1 disabled:opacity-50"
-      disabled={saving || selected === savedTitle} onClick={() => { void save(); }}>
+      disabled={saving || (selected === savedTitle && !requiresReview)} onClick={() => { void save(); }}>
       {t(saving ? "mediaFile.discSaving" : "mediaFile.discSave")}
     </button>
     {error ? <p role="alert" className="text-destructive">{error}</p> : null}
