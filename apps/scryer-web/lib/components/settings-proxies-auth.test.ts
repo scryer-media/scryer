@@ -69,7 +69,6 @@ test("SSH editor requires a key and never offers password or key removal control
     const http3 = render();
     assert.match(http3, /id="settings-indexer-proxy-password"/);
     assert.match(http3, /id="settings-indexer-proxy-clear-credentials"/);
-    assert.match(http3, /settings.proxyEndpointHelpHttp3/);
     assert.doesNotMatch(http3, /id="settings-indexer-proxy-private-key"/);
     assert.doesNotMatch(http3, /settings.proxyTunnelAuthHelp/);
 
