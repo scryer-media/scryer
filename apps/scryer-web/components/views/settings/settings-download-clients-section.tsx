@@ -621,27 +621,32 @@ export function SettingsDownloadClientsSection({
                   </span>
                 </label>
               </div>
-              <label className="md:col-span-3">
-                <Label className="mb-2 block">{t("settings.downloadClientUrlPreview")}</Label>
-                <Input value={urlPreview || "https://..."} readOnly disabled className="text-muted-foreground" />
-              </label>
-              <div
-                id="settings-download-client-proxy-field"
-                className="md:col-span-3 rounded-xl border border-border bg-card/60 p-3"
-              >
-                <ProxyAssignmentSelect
-                  selectId="settings-download-client-proxy-select"
-                  label={t("settings.proxyAssignment")}
-                  proxies={proxyConfigs}
-                  value={downloadClientDraft.proxyConfigId}
-                  helpText={t("settings.downloadClientProxyHelp")}
-                  onChange={(proxyConfigId) =>
-                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
-                      ...prev,
-                      proxyConfigId,
-                    }))
-                  }
-                />
+              <div className="grid gap-3 md:col-span-3 md:grid-cols-2">
+                <label>
+                  <Label className="mb-2 block">
+                    {t("settings.downloadClientUrlPreview")}
+                  </Label>
+                  <Input
+                    value={urlPreview || "https://..."}
+                    readOnly
+                    disabled
+                    className="text-muted-foreground"
+                  />
+                </label>
+                <div id="settings-download-client-proxy-field">
+                  <ProxyAssignmentSelect
+                    selectId="settings-download-client-proxy-select"
+                    label={t("settings.proxyAssignment")}
+                    proxies={proxyConfigs}
+                    value={downloadClientDraft.proxyConfigId}
+                    onChange={(proxyConfigId) =>
+                      setDownloadClientDraft((prev: DownloadClientDraft) => ({
+                        ...prev,
+                        proxyConfigId,
+                      }))
+                    }
+                  />
+                </div>
               </div>
               <div className="md:col-span-3 rounded-xl border border-border bg-card/60 p-3">
                 <label className="flex items-center gap-3">
