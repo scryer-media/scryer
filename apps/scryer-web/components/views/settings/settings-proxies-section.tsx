@@ -1114,6 +1114,30 @@ export function SettingsProxiesSection({
                 ) : null}
                 {showProxyDetails ? (
                   <div className="flex items-end gap-2">
+                    <Button
+                      id="settings-indexer-proxy-save"
+                      type="submit"
+                      className="w-36"
+                      disabled={mutatingProxyId !== null}
+                    >
+                      {mutatingProxyId
+                        ? t("label.saving")
+                        : editingProxyId
+                          ? t("settings.proxyUpdate")
+                          : t("settings.proxyCreate")}
+                    </Button>
+                    {editingProxyId ? (
+                      <Button
+                        id="settings-indexer-proxy-cancel"
+                        type="button"
+                        variant="outline"
+                        className="w-36"
+                        onClick={resetProxyDraft}
+                        disabled={mutatingProxyId !== null}
+                      >
+                        {t("label.cancel")}
+                      </Button>
+                    ) : null}
                     <label className="flex items-center gap-3">
                       <Checkbox
                         id="settings-indexer-proxy-enabled"
@@ -1129,28 +1153,6 @@ export function SettingsProxiesSection({
                       />
                       <span>{t("label.enabled")}</span>
                     </label>
-                    <Button
-                      id="settings-indexer-proxy-save"
-                      type="submit"
-                      disabled={mutatingProxyId !== null}
-                    >
-                      {mutatingProxyId
-                        ? t("label.saving")
-                        : editingProxyId
-                          ? t("settings.proxyUpdate")
-                          : t("settings.proxyCreate")}
-                    </Button>
-                    {editingProxyId ? (
-                      <Button
-                        id="settings-indexer-proxy-cancel"
-                        type="button"
-                        variant="outline"
-                        onClick={resetProxyDraft}
-                        disabled={mutatingProxyId !== null}
-                      >
-                        {t("label.cancel")}
-                      </Button>
-                    ) : null}
                   </div>
                 ) : null}
               </form>
