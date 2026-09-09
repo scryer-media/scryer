@@ -1427,3 +1427,75 @@ async fn high_risk_sequence_failures_trip_the_per_pass_breaker_before_a_fourth_d
         "the circuit breaker must not begin a deletion or sequence history journal for the fourth candidate"
     );
 }
+
+#[tokio::test]
+async fn transient_tag_conflict_scan_failure_holds_tags_but_not_unrelated_actions() {
+    let fixture = execution_app(None);
+    let title = seed_title(&fixture.app, &fixture.user, "Conflict scan failure", true).await;
+    define_title_tags(&fixture, &["keep"]).await;
+    for kind in [
+        MaintenanceActionStepKind::AddTags,
+        MaintenanceActionStepKind::RemoveTags,
+    ] {
+        arm_and_evaluate_all(
+            &fixture,
+            sequence_draft(vec![MaintenanceActionStep {
+                id: "tags".into(),
+                kind,
+                parameters: MaintenanceActionStepParameters::Tags {
+                    tags: vec!["keep".into()],
+                },
+            }]),
+        )
+        .await;
+    }
+    arm_and_evaluate_all(
+        &fixture,
+        sequence_draft(vec![MaintenanceActionStep {
+            id: "unmonitor".into(),
+            kind: MaintenanceActionStepKind::Unmonitor,
+            parameters: MaintenanceActionStepParameters::Unmonitor {
+                include_descendants: false,
+            },
+        }]),
+    )
+    .await;
+    fixture
+        .evaluation
+        .fail_next_due_read
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    fixture
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("handler");
+    let candidates = fixture.evaluation.all_candidates().await;
+    let held: Vec<_> = candidates
+        .iter()
+        .filter(|row| row.state == MaintenanceCandidateState::Blocked)
+        .collect();
+    assert_eq!(held.len(), 2, "{candidates:?}");
+    assert!(held.iter().all(|row| row.action_attempts == 0));
+    assert!(
+        held.iter().all(|row| row.state_reason
+            == crate::maintenance_rules::execution_reason::UNKNOWN_AT_EXECUTION)
+    );
+    assert_eq!(
+        candidates
+            .iter()
+            .filter(|row| row.state == MaintenanceCandidateState::Succeeded)
+            .count(),
+        1
+    );
+    let title = fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!title.monitored);
+    assert!(!title.tags.iter().any(|tag| tag == "keep"));
+}

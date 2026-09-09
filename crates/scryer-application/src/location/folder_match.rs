@@ -536,16 +536,33 @@ impl AppUseCase {
 
         let mut detached = 0;
         if let Some(previous) = previous_folder.as_deref() {
-            detached =
-                detach_title_media_in_folder(self, &title_id, &stored_path_to_path_buf(previous))
-                    .await?;
+            detached = match detach_title_media_in_folder(
+                self,
+                &title_id,
+                &stored_path_to_path_buf(previous),
+            )
+            .await
+            {
+                Ok(detached) => detached,
+                Err(error) => {
+                    self.restore_title_folder(actor, &title_id, previous_folder.as_deref())
+                        .await;
+                    return Err(error);
+                }
+            };
         }
 
         // The folder now has an owner, so it is no longer awaiting a match. The
         // old folder is left unowned, which is what puts it back in front of
         // unmatched discovery on the next scan (FR-003).
-        self.clear_folder_match_unmatched_item(&context, &context.selected_folder)
-            .await?;
+        if let Err(error) = self
+            .clear_folder_match_unmatched_item(&context, &context.selected_folder)
+            .await
+        {
+            self.restore_title_folder(actor, &title_id, previous_folder.as_deref())
+                .await;
+            return Err(error);
+        }
 
         let scan = match self.scan_title_library(actor, &title_id).await {
             Ok(scan) => scan,

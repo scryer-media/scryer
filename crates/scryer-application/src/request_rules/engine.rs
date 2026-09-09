@@ -56,6 +56,12 @@ impl RequestRuleScope {
 pub struct RequestRulesEngineCache {
     pub engine: RequestRulesEngine,
     pub scopes: HashMap<String, RequestRuleScope>,
+    /// Monotonically increasing refresh identity. A rebuild may install its
+    /// result only while this still identifies its own refresh.
+    pub generation: u64,
+    /// True after a persisted rule mutation could not be reflected in this
+    /// generation. Evaluation must hold rather than consult stale policy.
+    pub unavailable: bool,
 }
 
 impl Default for RequestRulesEngineCache {
@@ -63,6 +69,8 @@ impl Default for RequestRulesEngineCache {
         Self {
             engine: RequestRulesEngine::empty(),
             scopes: HashMap::new(),
+            generation: 0,
+            unavailable: false,
         }
     }
 }
@@ -106,9 +114,9 @@ pub type RequestRulesEngineHandle = Arc<RwLock<RequestRulesEngineCache>>;
 impl AppUseCase {
     /// Read the current engine generation.
     ///
-    /// A poisoned lock degrades to an empty engine rather than failing the
-    /// submission: no rules means the legacy permission check decides, which is
-    /// the safe direction, and the next rebuild replaces the poisoned value.
+    /// A poisoned lock produces an unavailable generation. Request evaluation
+    /// holds while the instance gate is armed rather than deciding against an
+    /// empty engine that might omit persisted enforcing rules.
     pub(crate) fn request_rules_engine_snapshot(&self) -> RequestRulesEngineCache {
         self.services
             .customization
@@ -118,10 +126,32 @@ impl AppUseCase {
             .unwrap_or_else(|error| {
                 tracing::warn!(
                     error = %error,
-                    "request rules engine lock poisoned; evaluating with no rules"
+                    "request rules engine lock poisoned; request rules are unavailable"
                 );
-                RequestRulesEngineCache::default()
+                RequestRulesEngineCache {
+                    unavailable: true,
+                    ..RequestRulesEngineCache::default()
+                }
             })
+    }
+
+    /// Begin a new refresh by invalidating the current policy before any store
+    /// read can suspend. A later refresh owns a distinct generation, so an
+    /// earlier in-flight read cannot replace a newer unavailable generation.
+    fn begin_request_rules_engine_rebuild(&self) -> AppResult<u64> {
+        let mut guard = self
+            .services
+            .customization
+            .request_rules_engine
+            .write()
+            .map_err(|error| {
+                AppError::Repository(format!("request rules engine lock poisoned: {error}"))
+            })?;
+        guard.unavailable = true;
+        guard.generation = guard.generation.checked_add(1).ok_or_else(|| {
+            AppError::Repository("request rules engine generation exhausted".to_string())
+        })?;
+        Ok(guard.generation)
     }
 
     /// Rebuild the engine from every rule set in `shadow` or `enforce`.
@@ -136,6 +166,7 @@ impl AppUseCase {
     /// the alternative — refusing to build any engine — would silently disarm
     /// every other rule on the instance.
     pub async fn rebuild_request_rules_engine(&self) -> AppResult<()> {
+        let generation = self.begin_request_rules_engine_rebuild()?;
         let rule_sets = self
             .services
             .customization
@@ -222,7 +253,20 @@ impl AppUseCase {
             .map_err(|error| {
                 AppError::Repository(format!("request rules engine lock poisoned: {error}"))
             })?;
-        *guard = RequestRulesEngineCache { engine, scopes };
+        if guard.generation != generation {
+            tracing::debug!(
+                generation,
+                current_generation = guard.generation,
+                "discarding stale request rules engine rebuild"
+            );
+            return Ok(());
+        }
+        *guard = RequestRulesEngineCache {
+            engine,
+            scopes,
+            generation,
+            unavailable: false,
+        };
         drop(guard);
 
         tracing::debug!(rule_count, "request rules engine rebuilt");

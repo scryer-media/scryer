@@ -2068,3 +2068,97 @@ async fn action_sequence_migration_preserves_pre_0232_in_flight_legacy_rows() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn guarded_rule_deletion_cannot_erase_a_concurrently_created_candidate() {
+    let (services, db) = temp_services("guarded_maintenance_delete").await;
+    let rules = crate::MaintenanceRuleSetStore::new(services.datastore());
+    let evaluation = evaluation_store(&services);
+    for n in 0..8 {
+        let rule_id = format!("race-{n}");
+        seed_rule_set(&services, &rule_id).await;
+        let row = candidate(&format!("candidate-{n}"), &rule_id, "title", 1);
+        let (deleted, inserted) = tokio::join!(
+            rules.delete_rule_set_if_unused(&rule_id),
+            evaluation.create_candidate(&row)
+        );
+        assert_ne!(
+            deleted.is_ok(),
+            inserted.is_ok(),
+            "one operation must win: {deleted:?} {inserted:?}"
+        );
+        if inserted.is_ok() {
+            assert!(rules.get_rule_set(&rule_id).await.unwrap().is_some());
+            assert_eq!(
+                evaluation
+                    .get_active_candidate(&rule_id, "title")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                row.id
+            );
+            assert!(rules.delete_rule_set_if_unused(&rule_id).await.is_err());
+        } else {
+            assert!(rules.get_rule_set(&rule_id).await.unwrap().is_none());
+        }
+    }
+    services.pool().close().await;
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn guarded_rule_deletion_preserves_action_history_even_for_terminal_candidates() {
+    let (services, db) = temp_services("guarded_maintenance_history").await;
+    seed_rule_set(&services, "history-rule").await;
+    let store = evaluation_store(&services);
+    let mut row = candidate("history-candidate", "history-rule", "title", 1);
+    row.state = MaintenanceCandidateState::Succeeded;
+    store.create_candidate(&row).await.unwrap();
+    let now = Utc::now();
+    let run = scryer_domain::LifecycleActionRun {
+        id: "history-run".into(),
+        candidate_id: row.id.clone(),
+        rule_set_id: row.rule_set_id.clone(),
+        revision_number: 1,
+        title_id: row.title_id.clone(),
+        subject_id: row.subject_id.clone(),
+        subject_kind: row.subject_kind.clone(),
+        action_kind: row.action_kind.clone(),
+        match_generation: 1,
+        idempotency_key: "history-key".into(),
+        attempt: 1,
+        status: scryer_domain::LifecycleActionRunStatus::Succeeded,
+        hold_reason: None,
+        error: None,
+        detail: "{}".into(),
+        started_at: now,
+        finished_at: Some(now),
+        created_at: now,
+    };
+    store.start_action_run(&run).await.unwrap();
+    let rules = crate::MaintenanceRuleSetStore::new(services.datastore());
+    assert!(
+        rules
+            .delete_rule_set_if_unused(&row.rule_set_id)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .list_action_runs(Some(&row.rule_set_id), None, Some(10))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        rules
+            .get_rule_set(&row.rule_set_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    services.pool().close().await;
+    let _ = std::fs::remove_file(db);
+}

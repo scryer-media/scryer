@@ -31,6 +31,16 @@ impl SettingsRepository for MockSettingsRepo {
         Ok(())
     }
 
+    async fn upsert_global_settings_json(
+        &self,
+        _scope: &str,
+        _values: &[(String, String)],
+        _source: &str,
+        _updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn delete_setting_value(
         &self,
         _scope: &str,
@@ -136,6 +146,20 @@ impl SettingsRepository for StoredSettingsRepo {
             (scope.to_string(), key_name.to_string(), scope_id),
             value_json,
         );
+        Ok(())
+    }
+
+    async fn upsert_global_settings_json(
+        &self,
+        scope: &str,
+        values: &[(String, String)],
+        _source: &str,
+        _updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        let mut stored = self.values.lock().await;
+        for (key, value) in values {
+            stored.insert((scope.to_string(), key.clone(), None), value.clone());
+        }
         Ok(())
     }
 
@@ -514,11 +538,16 @@ impl MetadataGateway for BlockingBatchMetadataGateway {
 #[derive(Default, Clone)]
 pub(super) struct TrackingLibraryScanUnmatchedItemRepo {
     pub(super) items: Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>,
+    delete_error: Arc<Mutex<Option<String>>>,
 }
 
 impl TrackingLibraryScanUnmatchedItemRepo {
     pub(super) async fn items(&self) -> Vec<LibraryScanUnmatchedItem> {
         self.items.lock().await.clone()
+    }
+
+    pub(super) async fn fail_delete(&self, message: &str) {
+        *self.delete_error.lock().await = Some(message.to_string());
     }
 }
 
@@ -564,6 +593,9 @@ impl LibraryScanUnmatchedItemRepository for TrackingLibraryScanUnmatchedItemRepo
         facet: MediaFacet,
         item_path: &str,
     ) -> AppResult<()> {
+        if let Some(message) = self.delete_error.lock().await.clone() {
+            return Err(AppError::Repository(message));
+        }
         self.items.lock().await.retain(|item| {
             !(item.library_id == library_id && item.facet == facet && item.item_path == item_path)
         });

@@ -65,6 +65,7 @@ pub(super) type MaintenanceActionJobReceipts = Arc<Mutex<Vec<MaintenanceActionJo
 #[derive(Default)]
 pub(super) struct InMemoryMaintenanceEvaluationRepo {
     pub(super) fail_action_completion: AtomicBool,
+    pub(super) fail_next_due_read: AtomicBool,
     candidates: Mutex<Vec<LifecycleCandidate>>,
     exclusions: Mutex<Vec<MaintenanceRuleExclusion>>,
     runs: Mutex<Vec<MaintenanceEvaluationRun>>,
@@ -379,6 +380,11 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         stale_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
+        if self.fail_next_due_read.swap(false, Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "transient due-candidate read failure".into(),
+            ));
+        }
         let mut rows: Vec<LifecycleCandidate> = self
             .candidates
             .lock()

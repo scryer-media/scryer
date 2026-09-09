@@ -431,6 +431,101 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     // A row the old per-table disposition list unioned. It retires with the
     // title now.
     insert_wanted_item(&datastore, "wanted-1", SOURCE, "s-e1", "wanted").await;
+    run(
+        &datastore,
+        "INSERT INTO maintenance_rule_sets (id, name) VALUES ('rule-1', 'Rule')",
+        vec![],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, matcher_content_hash,
+                                            title_id, library_id, facet, subject_id)
+         VALUES ('candidate-1', 'rule-1', 1, 'hash', {}, 'library-a', 'series', {})",
+        vec![
+            SqlArg::Text(SOURCE.to_string()),
+            SqlArg::Text(SOURCE.to_string()),
+        ],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO lifecycle_action_runs (id, candidate_id, rule_set_id, revision_number, title_id,
+                                           action_kind, match_generation, idempotency_key, attempt, status,
+                                           started_at)
+         VALUES ('action-run-1', 'candidate-1', 'rule-1', 1, {}, 'delete', 1, 'action-run-key', 1,
+                 'succeeded', '2026-01-01T00:00:00Z')",
+        vec![SqlArg::Text(SOURCE.to_string())],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO maintenance_action_steps (candidate_id, match_generation, revision_number, step_id,
+                                                rule_set_id, title_id, subject_kind, subject_id,
+                                                sequence_content_hash, step_kind, state, created_at, updated_at)
+         VALUES ('candidate-1', 1, 1, 'step-1', 'rule-1', {}, 'title', {}, 'sequence-hash', 'delete',
+                 'succeeded', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(SOURCE.to_string()),
+            SqlArg::Text(SOURCE.to_string()),
+        ],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO maintenance_action_step_attempts (id, candidate_id, match_generation, revision_number,
+                                                        step_id, attempt, state, started_at, created_at, updated_at)
+         VALUES ('step-attempt-1', 'candidate-1', 1, 1, 'step-1', 1, 'succeeded',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO maintenance_action_job_receipts (candidate_id, match_generation, revision_number, step_id,
+                                                       dispatch_attempt, schema_version, logical_request_key,
+                                                       request_hash, state, created_at, updated_at)
+         VALUES ('candidate-1', 1, 1, 'step-1', 1, 1, 'request-1', 'hash-1', 'completed',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO maintenance_sequence_terminal_memberships
+             (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id, subject_kind,
+              subject_id, match_generation, sequence_content_hash, outcome, created_at)
+         VALUES ('terminal-membership-1', 'candidate-1', 'rule-1', 1, 'hash', {}, 'title', {}, 1,
+                 'sequence-hash', 'succeeded', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(SOURCE.to_string()),
+            SqlArg::Text(SOURCE.to_string()),
+        ],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO maintenance_rule_exclusions (id, title_id, reason)
+         VALUES ('exclusion-1', {}, 'merged source')",
+        vec![SqlArg::Text(SOURCE.to_string())],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO media_server_connections (id, provider, display_name, base_url, created_at, updated_at)
+         VALUES ('connection-1', 'jellyfin', 'Server', 'http://server.invalid',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO media_server_user_media_signals (id, connection_id, provider, external_user_id,
+                                                       provider_item_id, kind, scryer_title_id)
+         VALUES ('signal-1', 'connection-1', 'jellyfin', 'user-1', 'item-1', 'episode', {})",
+        vec![SqlArg::Text(SOURCE.to_string())],
+    )
+    .await;
 
     let plan = plan_for(&store).await;
     assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
@@ -443,8 +538,9 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     assert_eq!(plan.summary.media_files_repointed, 2);
     // One `history_events` row plus one `domain_events` row.
     assert_eq!(plan.summary.history_rows_carried, 2);
-    // The wanted item and the source external id.
-    assert_eq!(plan.summary.source_records_dropped, 2);
+    // The wanted item and source external id, the six rows of action evidence
+    // (including the candidate), and the two non-FK records.
+    assert_eq!(plan.summary.source_records_dropped, 10);
     let map = plan.require_identity_map().expect("a complete map");
     assert_eq!(map.episode("s-e1"), Some("d-e1"));
     assert_eq!(map.episode("s-e2"), Some("d-e2"));
@@ -460,6 +556,20 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
         Some(&1)
     );
     assert_eq!(outcome.rows_affected.get("retire:titles"), Some(&1));
+    for table in [
+        "maintenance_action_step_attempts",
+        "maintenance_action_job_receipts",
+        "maintenance_action_steps",
+        "maintenance_sequence_terminal_memberships",
+        "lifecycle_action_runs",
+        "lifecycle_candidates",
+    ] {
+        assert_eq!(
+            outcome.rows_affected.get(&format!("retire:{table}")),
+            Some(&1),
+            "{table} should be explicitly accounted before its parent cascade"
+        );
+    }
 
     // The source title is gone, and its files came with it.
     assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 0);
@@ -490,6 +600,10 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
         ("domain_events", "title_id"),
         ("media_files", "title_id"),
         ("wanted_items", "title_id"),
+        ("lifecycle_candidates", "title_id"),
+        ("lifecycle_action_runs", "title_id"),
+        ("maintenance_rule_exclusions", "title_id"),
+        ("media_server_user_media_signals", "scryer_title_id"),
     ] {
         assert_eq!(
             rows_referencing_source(&datastore, table, column).await,

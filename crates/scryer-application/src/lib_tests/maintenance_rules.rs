@@ -226,6 +226,12 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         Ok(())
     }
 
+    async fn delete_rule_set_if_unused(&self, id: &str) -> AppResult<()> {
+        // Application guard tests use the separate in-memory evaluation store;
+        // SQL concurrency and atomic guard behavior are covered by store tests.
+        self.delete_rule_set(id).await
+    }
+
     async fn update_rule_set_evaluation_mode(
         &self,
         id: &str,

@@ -2190,3 +2190,20 @@ kind = "sql"
 file = "postgres/migrations/0232_maintenance_action_sequences.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 233
+description = "pending title tag delete recovery"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0233_pending_title_tag_deletions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0233_pending_title_tag_deletions.sql"
+engine = "postgres"
+scope = "all"

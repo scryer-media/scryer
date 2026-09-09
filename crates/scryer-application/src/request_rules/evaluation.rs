@@ -223,6 +223,20 @@ impl AppUseCase {
             });
 
         let cache = self.request_rules_engine_snapshot();
+        if cache.unavailable {
+            tracing::warn!(
+                library_id = library.id.as_str(),
+                "request rules engine generation is unavailable; holding the request"
+            );
+            return Ok(self
+                .record_unavailable_engine_fallback(
+                    &purpose,
+                    permission,
+                    gate_enabled,
+                    metadata_partial,
+                )
+                .await);
+        }
         let consulted: Vec<(String, crate::request_rules::engine::RequestRuleScope)> = cache
             .scopes_for_library(&library.id)
             .into_iter()
@@ -527,6 +541,34 @@ impl AppUseCase {
         // never an approval (FR-012).
         evaluation.policy_outcome = RequestDecisionOutcome::ManualReview;
         evaluation.evaluation_mode = mode;
+        evaluation.decision_id = self
+            .record_request_decision(purpose, &evaluation, &[], &[], "")
+            .await;
+        evaluation
+    }
+
+    /// A rule mutation committed but its replacement generation could not be
+    /// built. The prior cache might still contain a rule that was just
+    /// disarmed, so this is stricter than an ordinary fact-read failure: while
+    /// the gate is armed, never fall back to Auto-Approve.
+    async fn record_unavailable_engine_fallback(
+        &self,
+        purpose: &RequestEvaluationPurpose,
+        permission: bool,
+        gate_enabled: bool,
+        metadata_partial: bool,
+    ) -> RequestEvaluation {
+        let mut evaluation = RequestEvaluation::legacy(
+            permission,
+            gate_enabled,
+            metadata_partial,
+            Some(FALLBACK_ERROR),
+        );
+        evaluation.policy_outcome = RequestDecisionOutcome::ManualReview;
+        if gate_enabled {
+            evaluation.effective_outcome = RequestDecisionOutcome::ManualReview;
+        }
+        evaluation.evaluation_mode = RequestRuleEvaluationMode::Enforce;
         evaluation.decision_id = self
             .record_request_decision(purpose, &evaluation, &[], &[], "")
             .await;

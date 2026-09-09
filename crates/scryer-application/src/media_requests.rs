@@ -231,6 +231,22 @@ impl AppUseCase {
             }),
         );
 
+        let request_id = request.id.clone();
+        // Evaluate the draft before adding its row to the repositories that
+        // supply history facts. A submission must see the same prior-request
+        // state that preflight saw for this draft.
+        let evaluation = self
+            .evaluate_request_draft(
+                actor,
+                &library,
+                &request_draft_from_new_media_request(&request),
+                &metadata_snapshot,
+                crate::request_rules::RequestEvaluationPurpose::Submit {
+                    request_id: request_id.clone(),
+                },
+            )
+            .await?;
+
         let submission = self
             .services
             .catalog
@@ -240,23 +256,6 @@ impl AppUseCase {
         drop(profile_reference_guard);
         self.publish_stored_domain_event(&submission.event).await;
         let submitted_request = submission.request;
-        let request_id = submitted_request.id.clone();
-
-        // The bare Auto-Approve permission check that used to live here is now
-        // *inside* the evaluation: with no rules, an unreadable gate, or any
-        // failure, `effective_outcome` is exactly what that check produced
-        // (spec 0003 FR-011, FR-012).
-        let evaluation = self
-            .evaluate_request_draft(
-                actor,
-                &library,
-                &request_draft_from_media_request(&submitted_request),
-                &metadata_snapshot,
-                crate::request_rules::RequestEvaluationPurpose::Submit {
-                    request_id: request_id.clone(),
-                },
-            )
-            .await?;
         self.stamp_request_decision(&request_id, &evaluation).await;
         self.act_on_request_decision(actor, submitted_request, &evaluation)
             .await?;
@@ -1519,6 +1518,27 @@ pub const CLAIM_RELEASE_REQUEST_REJECTED: &str = "request_rejected";
 /// what was written rather than what the caller happened to pass in.
 pub(crate) fn request_draft_from_media_request(
     request: &MediaRequest,
+) -> crate::request_rules::RequestDraft {
+    crate::request_rules::RequestDraft {
+        facet: request.facet.clone(),
+        title: request.title.clone(),
+        year: request.year,
+        external_ids: request.external_ids.clone(),
+        identity_fingerprint: request.identity_fingerprint.clone(),
+        quality_profile_id: request.requested_quality_profile_id.clone(),
+        quality_profile_name: request.requested_quality_profile_name.clone(),
+        monitor_type: request.requested_monitor_type.clone(),
+        monitor_selection: request.requested_monitor_selection.clone(),
+        requested_lease_days: request.requested_lease_days,
+    }
+}
+
+/// The submit-time view of a request before its row is inserted. Keeping this
+/// separate from [`request_draft_from_media_request`] lets evaluation read the
+/// same history snapshot as preflight while retaining the generated request id
+/// for its decision trace.
+fn request_draft_from_new_media_request(
+    request: &crate::ports::NewMediaRequest,
 ) -> crate::request_rules::RequestDraft {
     crate::request_rules::RequestDraft {
         facet: request.facet.clone(),

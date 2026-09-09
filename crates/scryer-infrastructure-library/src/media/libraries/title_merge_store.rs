@@ -50,10 +50,10 @@ const LIVE_CHECKPOINT_STATES: &str = "'pending', 'moving', 'verifying', 'reconci
 /// title — the SQL form of `submission_is_queued`.
 const LIVE_TRACKED_STATES: &str = "'downloading', 'import_pending', 'importing', 'import_blocked'";
 
-/// Everything recorded against the source title that retires with it, counted
-/// once for the preview's single "source records dropped" figure. Media files
-/// and history are not here: they are the two things the merge carries.
-const DROPPED_TABLES: &[(&str, &str)] = &[
+/// Direct source-title rows that retire with the source, counted once for the
+/// preview's single "source records dropped" figure. Media files and history
+/// are not here: they are the two things the merge carries.
+const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
     ("wanted_items", "title_id"),
     ("download_submissions", "title_id"),
     ("download_import_artifacts", "title_id"),
@@ -74,11 +74,20 @@ const DROPPED_TABLES: &[(&str, &str)] = &[
     ("release_decisions", "title_id"),
     ("title_search_terms", "title_id"),
     ("title_external_ids", "title_id"),
-    ("lifecycle_candidates", "title_id"),
-    ("lifecycle_action_runs", "title_id"),
     ("maintenance_rule_exclusions", "title_id"),
     ("media_server_user_media_signals", "scryer_title_id"),
     ("library_scan_unmatched_items", "title_id"),
+];
+
+/// Maintenance action evidence belongs to a candidate. Delete its leaf rows
+/// before the candidate so the preview and outcome both account for every
+/// retired audit row, instead of hiding them behind the candidate cascade.
+const DROPPED_CANDIDATE_CHILD_TABLES: &[&str] = &[
+    "maintenance_action_step_attempts",
+    "maintenance_action_job_receipts",
+    "maintenance_action_steps",
+    "maintenance_sequence_terminal_memberships",
+    "lifecycle_action_runs",
 ];
 
 #[derive(Clone)]
@@ -117,8 +126,13 @@ impl TitleMergeRepository for TitleMergeStore {
             load_history_payload_ids(exec(), source_title_id).await?;
 
         let mut dropped_record_count = 0i64;
-        for (table, column) in DROPPED_TABLES {
+        for (table, column) in DROPPED_TITLE_TABLES {
             dropped_record_count += count_rows(exec(), table, column, source_title_id).await?;
+        }
+        dropped_record_count +=
+            count_rows(exec(), "lifecycle_candidates", "title_id", source_title_id).await?;
+        for table in DROPPED_CANDIDATE_CHILD_TABLES {
+            dropped_record_count += count_candidate_rows(exec(), table, source_title_id).await?;
         }
 
         Ok(MergeCatalogSnapshot {
@@ -200,6 +214,7 @@ impl TitleMergeRepository for TitleMergeStore {
                     ],
                 )
                 .await?;
+                purge_title_dependent_records(tx, &map, &mut outcome).await?;
                 retire_source_title(tx, &map, &mut outcome).await?;
                 Ok(outcome)
             })
@@ -461,6 +476,26 @@ async fn count_rows(
         exec,
         &format!("SELECT COUNT(*) AS row_count FROM {table} WHERE {column} = {{}}"),
         &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?
+    .ok_or_else(|| AppError::Repository(format!("missing count for {table}")))?;
+    row.i64("row_count")
+}
+
+async fn count_candidate_rows(
+    exec: SqlExec<'_, '_>,
+    table: &str,
+    source_title_id: &str,
+) -> AppResult<i64> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        &format!(
+            "SELECT COUNT(*) AS row_count FROM {table}
+              WHERE candidate_id IN (
+                  SELECT id FROM lifecycle_candidates WHERE title_id = {{}}
+              )"
+        ),
+        &[SqlArg::Text(source_title_id.to_string())],
     )
     .await?
     .ok_or_else(|| AppError::Repository(format!("missing count for {table}")))?;
@@ -806,26 +841,54 @@ fn remap_payload_ids(payload: &mut Value, map: &MergeIdentityMap) -> bool {
     changed
 }
 
-/// Step 3. The source title row goes, and every cascading dependent with it.
-/// The caller runs the ordinary title-delete path's logical cleanup afterwards
-/// for the rows no foreign key reaches.
+/// Retire every source-title record that is deliberately dropped by a merge.
+/// The candidate graph is removed from leaf to root, preserving exact preview
+/// and outcome counts for maintenance action evidence despite its cascades.
+async fn purge_title_dependent_records(
+    tx: &mut SqlTx<'_>,
+    map: &MergeIdentityMap,
+    outcome: &mut MergeOutcome,
+) -> AppResult<()> {
+    for (table, column) in DROPPED_TITLE_TABLES {
+        let removed = tx
+            .execute(
+                &format!("DELETE FROM {table} WHERE {column} = {{}}"),
+                &[SqlArg::Text(map.source_title_id.clone())],
+            )
+            .await?;
+        record(outcome, &format!("retire:{table}"), removed);
+    }
+    for table in DROPPED_CANDIDATE_CHILD_TABLES {
+        let removed = tx
+            .execute(
+                &format!(
+                    "DELETE FROM {table}
+                      WHERE candidate_id IN (
+                          SELECT id FROM lifecycle_candidates WHERE title_id = {{}}
+                      )"
+                ),
+                &[SqlArg::Text(map.source_title_id.clone())],
+            )
+            .await?;
+        record(outcome, &format!("retire:{table}"), removed);
+    }
+    let removed = tx
+        .execute(
+            "DELETE FROM lifecycle_candidates WHERE title_id = {}",
+            &[SqlArg::Text(map.source_title_id.clone())],
+        )
+        .await?;
+    record(outcome, "retire:lifecycle_candidates", removed);
+    Ok(())
+}
+
+/// Step 3. The source title row goes after its logical dependents have retired,
+/// and any remaining foreign-key dependents go with it.
 async fn retire_source_title(
     tx: &mut SqlTx<'_>,
     map: &MergeIdentityMap,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
-    // `title_external_ids` carries `idx_title_external_ids_library_lookup` on
-    // `(library_id, source, external_id)` and the destination already holds the
-    // same `(source, external_id)` under FR-055, so the source rows go first —
-    // before anything could write destination external ids.
-    let removed = tx
-        .execute(
-            "DELETE FROM title_external_ids WHERE title_id = {}",
-            &[SqlArg::Text(map.source_title_id.clone())],
-        )
-        .await?;
-    record(outcome, "retire:title_external_ids", removed);
-
     let removed = tx
         .execute(
             "DELETE FROM titles WHERE id = {}",

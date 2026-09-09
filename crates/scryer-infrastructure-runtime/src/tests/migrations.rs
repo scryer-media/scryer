@@ -5371,7 +5371,27 @@ async fn migration_0221_creates_the_tag_registry_and_adopts_the_labels_already_i
              series_title_id TEXT NOT NULL
          );
          INSERT INTO series_movie_links (id, series_title_id) VALUES
-             ('link-one', 'title-one');",
+             ('link-one', 'title-one');
+         CREATE TABLE settings_definitions (
+             id TEXT PRIMARY KEY NOT NULL,
+             scope TEXT NOT NULL,
+             key_name TEXT NOT NULL
+         );
+         CREATE TABLE settings_values (
+             id TEXT PRIMARY KEY NOT NULL,
+             setting_definition_id TEXT NOT NULL,
+             scope TEXT NOT NULL,
+             scope_id TEXT,
+             value_json TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );
+         INSERT INTO settings_definitions (id, scope, key_name) VALUES
+             ('delay-profiles', 'system', 'acquisition.delay_profiles');
+         INSERT INTO settings_values
+             (id, setting_definition_id, scope, scope_id, value_json, updated_at) VALUES
+             ('delay-profiles-value', 'delay-profiles', 'system', NULL,
+              '[{\"id\":\"review\",\"name\":\"Review\",\"tags\":[\"Needs  Review\",\"keep\"]}]',
+              '2026-01-01T00:00:00Z');",
     )
     .execute(&pool)
     .await
@@ -5416,6 +5436,21 @@ async fn migration_0221_creates_the_tag_registry_and_adopts_the_labels_already_i
         .await
         .expect("read rewritten bag");
     assert_eq!(rewritten, "[\"needs review\",\"keep\"]");
+
+    let delay_profiles: serde_json::Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT value_json FROM settings_values WHERE id = 'delay-profiles-value'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read rewritten delay profiles"),
+    )
+    .expect("delay profile catalog remains valid JSON");
+    assert_eq!(
+        delay_profiles[0]["tags"],
+        serde_json::json!(["needs review", "keep"]),
+        "delay profiles follow the same tag-label rewrite as title bags"
+    );
 
     // A bag that was already clean is left byte-for-byte alone.
     let untouched: String = sqlx::query_scalar("SELECT tags FROM titles WHERE id = 'title-one'")

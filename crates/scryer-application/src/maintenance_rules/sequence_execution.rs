@@ -96,7 +96,7 @@ struct SequenceStepExecutionContext<'a> {
     input: &'a scryer_rules::maintenance::MaintenanceInput,
     evaluator: &'a mut MaintenanceRulesEvaluator,
     libraries: &'a HashMap<String, MaintenanceLibraryRef>,
-    tag_conflicts: &'a std::collections::HashSet<String>,
+    tag_conflicts: &'a Option<std::collections::HashSet<String>>,
 }
 
 struct SequenceStepRunContext<'a> {
@@ -115,7 +115,7 @@ pub(super) struct SequenceCandidateExecutionContext<'a> {
     pub(super) sequence: &'a MaintenanceActionSequence,
     pub(super) evaluator: &'a mut MaintenanceRulesEvaluator,
     pub(super) libraries: &'a HashMap<String, MaintenanceLibraryRef>,
-    pub(super) tag_conflicts: &'a std::collections::HashSet<String>,
+    pub(super) tag_conflicts: &'a Option<std::collections::HashSet<String>>,
     pub(super) budget: &'a mut MaintenanceSequencePassBudget,
 }
 

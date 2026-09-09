@@ -81,6 +81,9 @@ pub struct AppIntegrationServices {
     pub(crate) indexer_configs: Arc<dyn IndexerConfigRepository>,
     pub(crate) indexer_errors: Arc<dyn IndexerErrorRepository>,
     pub(crate) proxy_configs: Arc<dyn ProxyConfigRepository>,
+    /// Serializes proxy assignment, disablement, and deletion so no client or
+    /// indexer can retain a reference to a missing or disabled proxy.
+    pub(crate) proxy_assignment_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) scope_indexer_coverage: Arc<dyn ScopeIndexerCoverageRepository>,
     pub(crate) indexer_caps_refresher: RuntimeFeature<Arc<dyn IndexerCapsSnapshotRefresher>>,
     pub(crate) indexer_client: Arc<dyn IndexerClient>,
@@ -344,6 +347,7 @@ impl AppServices {
                 indexer_configs,
                 indexer_errors: Arc::new(null_repositories::NullIndexerErrorRepository),
                 proxy_configs: Arc::new(null_repositories::NullProxyConfigRepository),
+                proxy_assignment_lock: Arc::new(tokio::sync::Mutex::new(())),
                 scope_indexer_coverage: Arc::new(
                     null_repositories::NullScopeIndexerCoverageRepository,
                 ),

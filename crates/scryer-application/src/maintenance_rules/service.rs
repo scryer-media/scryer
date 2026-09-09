@@ -534,7 +534,7 @@ impl AppUseCase {
         self.services
             .customization
             .maintenance_rule_sets
-            .delete_rule_set(rule_set_id)
+            .delete_rule_set_if_unused(rule_set_id)
             .await
     }
 

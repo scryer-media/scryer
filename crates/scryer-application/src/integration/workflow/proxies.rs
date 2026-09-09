@@ -146,6 +146,12 @@ impl AppUseCase {
             ));
         }
 
+        let proxy_assignment = self
+            .services
+            .integrations
+            .proxy_assignment_lock
+            .lock()
+            .await;
         let mut config = self
             .services
             .integrations
@@ -280,6 +286,7 @@ impl AppUseCase {
         config.updated_at = Utc::now();
 
         let config = self.services.integrations.proxy_configs.update(config).await?;
+        drop(proxy_assignment);
         crate::tunnel_proxy::activate_tunnel_config(&config);
         if config.provider_type == scryer_domain::ProxyProviderType::SshTunnel {
             crate::tunnel_proxy::TunnelHostKeyLedger::shared().register(&config)
@@ -295,6 +302,12 @@ impl AppUseCase {
         if id.is_empty() {
             return Err(AppError::Validation("proxy config id is required".into()));
         }
+        let proxy_assignment = self
+            .services
+            .integrations
+            .proxy_assignment_lock
+            .lock()
+            .await;
         let assigned = self
             .services
             .integrations
@@ -325,6 +338,7 @@ impl AppUseCase {
             ));
         }
         self.services.integrations.proxy_configs.delete(id).await?;
+        drop(proxy_assignment);
         // Reject retained snapshots as well as closing the current front.
         crate::tunnel_proxy::forget_tunnel_config(id);
         crate::tunnel_proxy::TunnelHostKeyLedger::shared().forget(id);

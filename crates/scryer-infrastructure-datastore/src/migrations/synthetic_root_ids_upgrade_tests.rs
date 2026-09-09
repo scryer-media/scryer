@@ -181,7 +181,7 @@ async fn failed_root_reference_update_rolls_back_and_can_be_retried() {
     assert_eq!(title_root(&pool, "rollback-title").await, legacy);
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 215 AND success = 1"
+            "SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 216 AND success = 1"
         )
         .fetch_one(&pool)
         .await

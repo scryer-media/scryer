@@ -259,6 +259,30 @@ async fn tracked_pack_update_keeps_ids_preferences_and_disables_removed_and_reap
 }
 
 #[tokio::test]
+async fn tracked_pack_apply_normalizes_prefixed_catalog_and_installed_versions() {
+    let (app, repo, mut installation) = tracked_app().await;
+    installation.version = "v1.0.0".to_string();
+    assert!(
+        repo.apply_rule_pack_installation(&installation, Some(1), &[], &[])
+            .await
+            .expect("legacy installation should be stored")
+    );
+
+    let updated = app
+        .apply_verified_tracked_pack_update(
+            &User::system_execution_actor(),
+            &tracked_fixture("v1.0.1", &[("a", 400)]),
+            1,
+            false,
+        )
+        .await
+        .expect("prefixed catalog versions should update a prefixed installation");
+
+    assert_eq!(updated.version, "v1.0.1");
+    assert_eq!(tracked_score(&app), 400);
+}
+
+#[tokio::test]
 async fn tracked_pack_failed_validation_commit_and_stale_updates_preserve_the_active_engine() {
     let (app, repo, initial) = tracked_app().await;
     let actor = User::system_execution_actor();
