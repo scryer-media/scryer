@@ -26,7 +26,7 @@ export const DEFAULT_PORT_FOR_CLIENT_TYPE: Record<string, string> = {
 };
 
 export const DEFAULT_DOWNLOAD_CLIENT_DRAFT: DownloadClientDraft = {
-  name: "",
+  name: "Weaver",
   clientType: DEFAULT_DOWNLOAD_CLIENT_TYPE,
   host: "",
   port: DEFAULT_PORT_FOR_CLIENT_TYPE[DEFAULT_DOWNLOAD_CLIENT_TYPE] ?? "8080",
