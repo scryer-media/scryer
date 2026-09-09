@@ -335,7 +335,8 @@ async fn root_filtered_files(
         files
             .iter()
             .zip(membership)
-            .filter_map(|(file, on_root)| on_root.then(|| file.clone()))
+            .filter(|(_, on_root)| *on_root)
+            .map(|(file, _)| file.clone())
             .collect(),
     )
 }
@@ -375,9 +376,7 @@ fn physical_root_membership(root: &str, paths: &[String]) -> Option<Vec<bool>> {
     // is authorized for the physical location, not merely a lexical prefix:
     // `/media/root/escape -> /other` must never become root-local deletion.
     let root_path = std::fs::canonicalize(root).ok()?;
-    let Some(root_path) = root_path.to_str() else {
-        return None;
-    };
+    let root_path = root_path.to_str()?;
     paths
         .iter()
         .map(|path| {
@@ -430,11 +429,11 @@ fn physical_root_identity(root: &str) -> Option<String> {
     {
         use std::os::unix::fs::MetadataExt;
         let metadata = std::fs::metadata(canonical).ok()?;
-        return Some(format!("{canonical}:device={}", metadata.dev()));
+        Some(format!("{canonical}:device={}", metadata.dev()))
     }
     #[cfg(windows)]
     {
-        return Some(format!("{canonical}:volume={}", volume_path(canonical)?));
+        Some(format!("{canonical}:volume={}", volume_path(canonical)?))
     }
     #[cfg(not(any(unix, windows)))]
     {

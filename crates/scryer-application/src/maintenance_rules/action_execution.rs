@@ -288,6 +288,21 @@ pub(super) enum ActionResult {
     },
 }
 
+/// Fresh evidence and mutable execution state shared by an action dispatcher
+/// and its scoped-deletion implementation. Keeping this as one bundle makes
+/// the action boundary explicit without splitting a single lease across
+/// loosely related parameters.
+pub(super) struct MaintenanceExecutionContext<'a> {
+    pub(super) detail: &'a MaintenanceRuleSetDetail,
+    pub(super) candidate: &'a LifecycleCandidate,
+    pub(super) title: &'a Title,
+    pub(super) input: &'a scryer_rules::maintenance::MaintenanceInput,
+    pub(super) run: &'a mut LifecycleActionRun,
+    pub(super) evaluator: &'a mut MaintenanceRulesEvaluator,
+    pub(super) libraries: &'a HashMap<String, MaintenanceLibraryRef>,
+    pub(super) tag_conflicts: &'a HashSet<String>,
+}
+
 // ── Arming ──────────────────────────────────────────────────────────────────
 
 impl AppUseCase {
@@ -941,20 +956,20 @@ impl AppUseCase {
                 }
             }
             SafetyDecision::Proceed(title, input) => {
-                match self
-                    .execute_maintenance_action(
+                let action_result = {
+                    let mut context = MaintenanceExecutionContext {
                         detail,
-                        kind,
-                        &candidate,
-                        &title,
-                        &input,
-                        &mut run,
+                        candidate: &candidate,
+                        title: &title,
+                        input: &input,
+                        run: &mut run,
                         evaluator,
                         libraries,
                         tag_conflicts,
-                    )
-                    .await
-                {
+                    };
+                    self.execute_maintenance_action(kind, &mut context).await
+                };
+                match action_result {
                     Ok(ActionResult::Executed { detail: evidence }) => {
                         run.status = LifecycleActionRunStatus::Succeeded;
                         run.detail = evidence.to_string();
@@ -1605,16 +1620,17 @@ impl AppUseCase {
     /// Perform the action through existing use cases, as the system actor.
     async fn execute_maintenance_action(
         &self,
-        detail: &MaintenanceRuleSetDetail,
         kind: MaintenanceActionKind,
-        candidate: &LifecycleCandidate,
-        title: &Title,
-        input: &scryer_rules::maintenance::MaintenanceInput,
-        run: &mut LifecycleActionRun,
-        evaluator: &mut MaintenanceRulesEvaluator,
-        libraries: &HashMap<String, MaintenanceLibraryRef>,
-        tag_conflicts: &HashSet<String>,
+        context: &mut MaintenanceExecutionContext<'_>,
     ) -> AppResult<ActionResult> {
+        let detail = context.detail;
+        let candidate = context.candidate;
+        let title = context.title;
+        let input = context.input;
+        let run = &mut *context.run;
+        let evaluator = &mut *context.evaluator;
+        let libraries = context.libraries;
+        let tag_conflicts = context.tag_conflicts;
         let actor = User::system_execution_actor();
         match kind {
             MaintenanceActionKind::DoNothing => {
@@ -1672,18 +1688,18 @@ impl AppUseCase {
             }
             MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
             | MaintenanceActionKind::UnmonitorScopeDeleteFiles => {
-                self.execute_scoped_maintenance_deletion(
+                let mut scoped_context = MaintenanceExecutionContext {
+                    detail,
                     candidate,
                     title,
                     input,
                     run,
-                    detail.revision.storage_root_id.as_deref(),
-                    detail,
                     evaluator,
                     libraries,
                     tag_conflicts,
-                )
-                .await
+                };
+                self.execute_scoped_maintenance_deletion(&mut scoped_context)
+                    .await
             }
             MaintenanceActionKind::UnmonitorShowDeleteExistingFiles
             | MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
