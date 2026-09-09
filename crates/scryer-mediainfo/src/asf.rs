@@ -26,6 +26,12 @@ const EXTENDED_STREAM_PROPERTIES_GUID: [u8; 16] = [
 const STREAM_BITRATE_PROPERTIES_GUID: [u8; 16] = [
     0xce, 0x75, 0xf8, 0x7b, 0x8d, 0x46, 0xd1, 0x11, 0x8d, 0x82, 0x00, 0x60, 0x97, 0xc9, 0xa2, 0xb2,
 ];
+const METADATA_GUID: [u8; 16] = [
+    0xea, 0xcb, 0xf8, 0xc5, 0xaf, 0x5b, 0x77, 0x48, 0x84, 0x67, 0xaa, 0x8c, 0x44, 0xfa, 0x4c, 0xca,
+];
+const METADATA_LIBRARY_GUID: [u8; 16] = [
+    0x94, 0x1c, 0x23, 0x44, 0x98, 0x94, 0xd1, 0x49, 0xa1, 0x41, 0x1d, 0x13, 0x4e, 0x45, 0x70, 0x54,
+];
 const LANGUAGE_LIST_GUID: [u8; 16] = [
     0xa9, 0x46, 0x43, 0x7c, 0xe0, 0xef, 0xfc, 0x4b, 0xb2, 0x29, 0x39, 0x3e, 0xde, 0x41, 0x5c, 0x85,
 ];
@@ -64,6 +70,9 @@ struct StreamState {
     frame_rate_fps: Option<f64>,
     declared_frame_rate: Option<scryer_media_types::Rational>,
     language_index: Option<usize>,
+    aspect_x: Option<u32>,
+    aspect_y: Option<u32>,
+    aspect_conflict: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -132,6 +141,7 @@ pub(crate) fn parse_asf_source(
 
     let languages = state.languages;
     let original_languages = state.original_languages;
+    let mut details = scryer_media_types::AnalysisDetails::default();
     let mut tracks = Vec::new();
     for stream_number in state.stream_order {
         let Some(stream) = state.streams.remove(&stream_number) else {
@@ -150,6 +160,42 @@ pub(crate) fn parse_asf_source(
             });
             if track.kind == TrackKind::Video {
                 track.metadata.declared_frame_rate = stream.declared_frame_rate;
+                let aspect = stream
+                    .aspect_x
+                    .zip(stream.aspect_y)
+                    .filter(|(x, y)| !stream.aspect_conflict && *x > 0 && *y > 0)
+                    .and_then(|(x, y)| {
+                        scryer_media_types::Rational::new(i64::from(x), u64::from(y))
+                    });
+                if let Some(aspect) = aspect {
+                    track.metadata.sample_aspect_ratio = Some(aspect);
+                    track.metadata.display_aspect_ratio = track
+                        .width
+                        .zip(track.height)
+                        .filter(|(width, height)| *width > 0 && *height > 0)
+                        .and_then(|(width, height)| {
+                            scryer_media_types::Rational::new(
+                                aspect.numerator * i64::from(width),
+                                aspect.denominator * height as u64,
+                            )
+                        });
+                } else if stream.aspect_conflict
+                    || stream.aspect_x.is_some()
+                    || stream.aspect_y.is_some()
+                {
+                    details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                    details
+                        .report
+                        .warnings
+                        .push(scryer_media_types::ProbeWarning {
+                        code: "asf_aspect_incomplete".into(),
+                        message:
+                            "Stream pixel aspect attributes are incomplete, invalid, or conflicting"
+                                .into(),
+                        stream_id: track.metadata.id.clone(),
+                        ..Default::default()
+                    });
+                }
                 if let Some(timing) = probed_frame_rates.get(&stream_number) {
                     track.metadata.observed_frame_rate = Some(timing.observed_rate);
                     track.metadata.variable_frame_rate = Some(timing.variable);
@@ -177,7 +223,7 @@ pub(crate) fn parse_asf_source(
     }
 
     Ok(RawContainer {
-        details: Default::default(),
+        details,
         format_name: "asf".into(),
         duration_seconds: state.duration_seconds,
         num_chapters: state.chapters,
@@ -227,6 +273,7 @@ fn parse_object(
         EXTENDED_STREAM_PROPERTIES_GUID => parse_extended_stream_properties(payload, state),
         STREAM_BITRATE_PROPERTIES_GUID => parse_stream_bitrates(payload, state),
         LANGUAGE_LIST_GUID => parse_languages(payload, state),
+        METADATA_GUID | METADATA_LIBRARY_GUID => parse_stream_metadata(payload, state),
         MARKER_GUID => parse_markers(payload, state),
         _ => Ok(()),
     }
@@ -359,6 +406,48 @@ fn parse_video_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
         track.metadata.pixel_format = Some("yuv420p".into());
     }
     Ok(track)
+}
+
+fn parse_stream_metadata(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+    let mut reader = SliceReader::new(data);
+    let count = reader.u16_le()?;
+    for _ in 0..count {
+        reader.skip(2)?; // Reserved in Metadata; language index in Metadata Library.
+        let stream_number = reader.u16_le()?;
+        let name_length = usize::from(reader.u16_le()?);
+        let value_type = reader.u16_le()?;
+        let value_length = reader.u32_le()? as usize;
+        let name = reader.take(name_length)?;
+        let value = reader.take(value_length)?;
+        if name_length % 2 != 0 {
+            return Err(parse_error("invalid ASF metadata name length"));
+        }
+        let named = |expected: &str| {
+            name.chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .eq(expected.encode_utf16())
+        };
+        let x_axis = named("AspectRatioX\0");
+        if !(1..=127).contains(&stream_number) || (!x_axis && !named("AspectRatioY\0")) {
+            continue;
+        }
+        let stream = state.streams.entry(stream_number).or_default();
+        // These stream attributes are DWORDs. An unsupported representation
+        // cannot establish a ratio, and must not supersede another valid value.
+        if value_type != 3 || value.len() != 4 {
+            stream.aspect_conflict = true;
+            continue;
+        }
+        let value = u32::from_le_bytes(value.try_into().unwrap());
+        let axis = if x_axis {
+            &mut stream.aspect_x
+        } else {
+            &mut stream.aspect_y
+        };
+        stream.aspect_conflict |= value == 0 || axis.is_some_and(|previous| previous != value);
+        *axis = Some(value);
+    }
+    Ok(())
 }
 
 fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
@@ -915,9 +1004,117 @@ mod tests {
                 .unwrap();
             assert_eq!(video.metadata.bit_depth, Some(8), "{fixture}");
             assert_eq!(
+                video.metadata.sample_aspect_ratio,
+                scryer_media_types::Rational::new(1, 1),
+                "{fixture}"
+            );
+            assert_eq!(
+                video.metadata.display_aspect_ratio,
+                scryer_media_types::Rational::new(20, 11),
+                "{fixture}"
+            );
+            assert_eq!(
                 video.metadata.pixel_format.as_deref(),
                 Some("yuv420p"),
                 "{fixture}"
+            );
+        }
+    }
+
+    #[test]
+    fn pixel_aspect_attributes_are_stream_specific_and_conflict_aware() {
+        fn record(stream: u16, name: &str, value: u32) -> Vec<u8> {
+            let name = name
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            let mut bytes = 1_u16.to_le_bytes().to_vec();
+            bytes.extend(0_u16.to_le_bytes());
+            bytes.extend(stream.to_le_bytes());
+            bytes.extend((name.len() as u16).to_le_bytes());
+            bytes.extend(3_u16.to_le_bytes());
+            bytes.extend(4_u32.to_le_bytes());
+            bytes.extend(name);
+            bytes.extend(value.to_le_bytes());
+            bytes
+        }
+        let mut state = AsfState::default();
+        let x = record(7, "AspectRatioX", 12);
+        for end in 0..x.len() {
+            assert!(parse_stream_metadata(&x[..end], &mut AsfState::default()).is_err());
+        }
+        parse_object(METADATA_GUID, &x, &mut state).unwrap();
+        parse_object(
+            METADATA_LIBRARY_GUID,
+            &record(7, "AspectRatioY", 11),
+            &mut state,
+        )
+        .unwrap();
+        parse_stream_metadata(&record(3, "AspectRatioX", 1), &mut state).unwrap();
+        assert_eq!(state.streams[&7].aspect_x, Some(12));
+        assert_eq!(state.streams[&7].aspect_y, Some(11));
+        assert!(state.streams[&3].aspect_y.is_none());
+        assert!(!state.streams[&7].aspect_conflict);
+        parse_stream_metadata(&x, &mut state).unwrap();
+        assert!(!state.streams[&7].aspect_conflict);
+        parse_stream_metadata(&record(7, "AspectRatioX", 16), &mut state).unwrap();
+        assert!(state.streams[&7].aspect_conflict);
+    }
+
+    #[test]
+    fn invalid_or_missing_pixel_aspect_does_not_become_square_pixels() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/wmv_wmv1_wmav1.wmv");
+        let original = std::fs::read(path).unwrap();
+        let positions = ["AspectRatioX", "AspectRatioY"].map(|name| {
+            let name = name
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            let start = original
+                .windows(name.len())
+                .position(|bytes| bytes == name)
+                .unwrap();
+            (start, start + name.len())
+        });
+        for (x, y, incomplete) in [
+            (Some(4_u32), Some(3_u32), false),
+            (Some(0), Some(1), true),
+            (None, Some(1), true),
+            (None, None, false),
+        ] {
+            let mut bytes = original.clone();
+            for ((name_at, value_at), value) in positions.into_iter().zip([x, y]) {
+                if let Some(value) = value {
+                    bytes[value_at..value_at + 4].copy_from_slice(&value.to_le_bytes());
+                } else {
+                    bytes[name_at] = b'Z';
+                }
+            }
+            let parsed = parse_asf_source(&mut std::io::Cursor::new(bytes)).unwrap();
+            let video = parsed
+                .tracks
+                .iter()
+                .find(|track| track.kind == TrackKind::Video)
+                .unwrap();
+            if x == Some(4) {
+                assert_eq!(
+                    video.metadata.sample_aspect_ratio,
+                    scryer_media_types::Rational::new(4, 3)
+                );
+                assert_eq!(
+                    video.metadata.display_aspect_ratio,
+                    scryer_media_types::Rational::new(80, 33)
+                );
+            } else {
+                assert!(video.metadata.sample_aspect_ratio.is_none());
+                assert!(video.metadata.display_aspect_ratio.is_none());
+            }
+            assert_eq!(
+                parsed.details.report.status == scryer_media_types::ProbeStatus::Incomplete,
+                incomplete
             );
         }
     }
