@@ -7,8 +7,9 @@ use scryer_domain::{
 };
 use sqlx::Row;
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
-use crate::storage::sql::json::{canonical_json_text, json_text_or};
+use crate::queries::sql_runtime::{
+    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+};
 
 #[derive(Clone)]
 pub struct MaintenanceRuleSetStore {
@@ -24,27 +25,20 @@ impl MaintenanceRuleSetStore {
 #[async_trait]
 impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
     async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>> {
-        let sql = format!(
-            "SELECT {RULE_SET_COLUMNS} FROM maintenance_rule_sets ORDER BY name ASC, id ASC"
-        );
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[])
-            .await?
-            .iter()
-            .map(row_to_rule_set)
-            .collect()
+        let sql = format!("{RULE_SET_SELECT} ORDER BY name ASC, id ASC, scope.position ASC");
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[]).await?;
+        rows_to_rule_sets(&rows)
     }
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>> {
-        let sql = format!("SELECT {RULE_SET_COLUMNS} FROM maintenance_rule_sets WHERE id = {{}}");
-        SqlRuntime::fetch_optional(
+        let sql = format!("{RULE_SET_SELECT} WHERE id = {{}} ORDER BY scope.position ASC");
+        let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &sql,
             &[SqlArg::Text(id.to_string())],
         )
-        .await?
-        .as_ref()
-        .map(row_to_rule_set)
-        .transpose()
+        .await?;
+        Ok(rows_to_rule_sets(&rows)?.into_iter().next())
     }
 
     async fn create_rule_set(
@@ -52,15 +46,20 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         rule_set: &MaintenanceRuleSet,
         revision: &MaintenanceRuleRevision,
     ) -> AppResult<()> {
-        let rule_set_args = rule_set_args(rule_set)?;
+        let rule_set_args = rule_set_args(rule_set);
         let revision_args = revision_args(revision);
+        let rule_set_id = rule_set.id.clone();
+        let library_ids = rule_set.library_ids.clone();
 
         SqlRuntime::run_in_transaction(&self.datastore, "create_maintenance_rule_set", move |tx| {
             let rule_set_args = rule_set_args.clone();
             let revision_args = revision_args.clone();
+            let rule_set_id = rule_set_id.clone();
+            let library_ids = library_ids.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, &rule_set_args).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args).await?;
+                replace_library_scope(tx, &rule_set_id, &library_ids).await?;
                 Ok(())
             })
         })
@@ -162,9 +161,8 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         let mut args = vec![
             SqlArg::Text(name.to_string()),
             SqlArg::Text(description.to_string()),
-            SqlArg::Text(canonical_json_text(&library_ids)?),
         ];
-        // The disarm rides in the same UPDATE as the scope that invalidated it,
+        // The disarm rides in the same transaction as the scope that invalidated it,
         // exactly as `add_revision` carries its own: there must be no instant at
         // which a re-scoped rule is in force under the previous scope's arming.
         let sql = if disarm {
@@ -172,21 +170,30 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                 MaintenanceEffectArming::None.as_storage_str().to_string(),
             ));
             "UPDATE maintenance_rule_sets
-                SET name = {}, description = {}, library_ids = {}, effect_arming = {},
+                SET name = {}, description = {}, effect_arming = {},
                     updated_at = {}
               WHERE id = {}"
         } else {
             "UPDATE maintenance_rule_sets
-                SET name = {}, description = {}, library_ids = {}, updated_at = {}
+                SET name = {}, description = {}, updated_at = {}
               WHERE id = {}"
         };
         args.push(SqlArg::Timestamp(updated_at));
         args.push(SqlArg::Text(id.to_string()));
-        execute_write(
+        let id = id.to_string();
+        let library_ids = library_ids.to_vec();
+        SqlRuntime::run_in_transaction(
             &self.datastore,
             "update_maintenance_rule_set_metadata",
-            sql,
-            args,
+            move |tx| {
+                let args = args.clone();
+                let id = id.clone();
+                let library_ids = library_ids.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), sql, &args).await?;
+                    replace_library_scope(tx, &id, &library_ids).await
+                })
+            },
         )
         .await
     }
@@ -248,16 +255,19 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
     }
 }
 
-const RULE_SET_COLUMNS: &str = "id, name, description, enabled, evaluation_mode, effect_arming,
-    subject_kind, library_ids, current_revision_number, created_at, updated_at";
+// Fetch metadata and scope in one snapshot, including global rules with no scope rows.
+const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming,
+    subject_kind, current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
+    FROM maintenance_rule_sets
+    LEFT JOIN maintenance_rule_set_libraries scope ON scope.rule_set_id = maintenance_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, action_spec,
     grace_days, matcher_content_hash, created_by, created_at";
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO maintenance_rule_sets
         (id, name, description, enabled, evaluation_mode, effect_arming, subject_kind,
-         library_ids, current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         current_revision_number, created_at, updated_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO maintenance_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
@@ -280,8 +290,8 @@ async fn execute_write(
     .await
 }
 
-fn rule_set_args(rule_set: &MaintenanceRuleSet) -> AppResult<Vec<SqlArg>> {
-    Ok(vec![
+fn rule_set_args(rule_set: &MaintenanceRuleSet) -> Vec<SqlArg> {
+    vec![
         SqlArg::Text(rule_set.id.clone()),
         SqlArg::Text(rule_set.name.clone()),
         SqlArg::Text(rule_set.description.clone()),
@@ -289,11 +299,10 @@ fn rule_set_args(rule_set: &MaintenanceRuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
         SqlArg::Text(rule_set.effect_arming.as_storage_str().to_string()),
         SqlArg::Text(rule_set.subject_kind.as_storage_str().to_string()),
-        SqlArg::Text(canonical_json_text(&rule_set.library_ids)?),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
-    ])
+    ]
 }
 
 fn revision_args(revision: &MaintenanceRuleRevision) -> Vec<SqlArg> {
@@ -325,7 +334,7 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<MaintenanceRuleSet> {
         // none, so this build never acts under an arming it cannot interpret.
         effect_arming: MaintenanceEffectArming::parse_storage(&row.text("effect_arming")?)
             .unwrap_or_default(),
-        library_ids: library_ids(row)?,
+        library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         subject_kind: MaintenanceRuleSubjectKind::parse_storage(&row.text("subject_kind")?)
             .unwrap_or_default(),
         current_revision_number: row.i64("current_revision_number")?,
@@ -348,10 +357,46 @@ fn row_to_revision(row: &SqlRow) -> AppResult<MaintenanceRuleRevision> {
     })
 }
 
-/// Stored as a JSON text array; empty means every library.
-fn library_ids(row: &SqlRow) -> AppResult<Vec<String>> {
-    let raw = json_text_or(row, "library_ids", "[]")?;
-    Ok(serde_json::from_str(&raw).unwrap_or_default())
+fn rows_to_rule_sets(rows: &[SqlRow]) -> AppResult<Vec<MaintenanceRuleSet>> {
+    let mut rules: Vec<MaintenanceRuleSet> = Vec::new();
+    for row in rows {
+        let id = row.text("id")?;
+        if let Some(rule) = rules.last_mut().filter(|rule| rule.id == id) {
+            rule.library_ids.extend(row.opt_text("scope_library_id")?);
+        } else {
+            rules.push(row_to_rule_set(row)?);
+        }
+    }
+    Ok(rules)
+}
+
+async fn replace_library_scope(
+    tx: &mut SqlTx<'_>,
+    rule_set_id: &str,
+    library_ids: &[String],
+) -> AppResult<()> {
+    tx.execute(
+        "DELETE FROM maintenance_rule_set_libraries WHERE rule_set_id = {}",
+        &[SqlArg::Text(rule_set_id.to_string())],
+    )
+    .await?;
+    let mut seen = std::collections::HashSet::new();
+    for (position, library_id) in library_ids.iter().enumerate() {
+        if !seen.insert(library_id) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO maintenance_rule_set_libraries (rule_set_id, library_id, position)
+             VALUES ({}, {}, {})",
+            &[
+                SqlArg::Text(rule_set_id.to_string()),
+                SqlArg::Text(library_id.clone()),
+                SqlArg::I64(position as i64),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {

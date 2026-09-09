@@ -5,11 +5,23 @@ CREATE TABLE maintenance_rule_sets (
     enabled INTEGER NOT NULL DEFAULT 0,
     evaluation_mode TEXT NOT NULL DEFAULT 'disabled',
     subject_kind TEXT NOT NULL DEFAULT 'title',
-    library_ids TEXT NOT NULL DEFAULT '[]',
     current_revision_number INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+-- No scope rows means all libraries. Restrict library deletion so removing
+-- the last selected library cannot silently turn a scoped rule into a global one.
+CREATE TABLE maintenance_rule_set_libraries (
+    rule_set_id TEXT NOT NULL REFERENCES maintenance_rule_sets(id) ON DELETE CASCADE,
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    PRIMARY KEY (rule_set_id, library_id),
+    UNIQUE (rule_set_id, position)
+);
+
+CREATE INDEX idx_maintenance_rule_set_libraries_library
+    ON maintenance_rule_set_libraries(library_id);
 
 CREATE TABLE maintenance_rule_revisions (
     id TEXT PRIMARY KEY NOT NULL,

@@ -5,8 +5,221 @@ use scryer_domain::{
     MaintenanceRuleSubjectKind,
 };
 
-fn maintenance_rule_set_store(services: &SqliteServices) -> crate::MaintenanceRuleSetStore {
+pub(super) async fn seed_rule_libraries(
+    datastore: &scryer_infrastructure_sql::runtime::StoreDatastore,
+) {
+    use scryer_infrastructure_sql::runtime::{SqlArg, SqlRuntime};
+    for id in ["library-1", "library-2", "library-9"] {
+        SqlRuntime::execute_write(
+            datastore,
+            "seed_rule_library",
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ({}, 'movie', {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.into()),
+                SqlArg::Text(id.into()),
+                SqlArg::Text(id.into()),
+                SqlArg::Bool(false),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+}
+
+async fn maintenance_rule_set_store(services: &SqliteServices) -> crate::MaintenanceRuleSetStore {
+    seed_rule_libraries(&services.datastore()).await;
     crate::MaintenanceRuleSetStore::new(services.datastore())
+}
+
+#[tokio::test]
+async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
+    let (services, db) = temp_services("scryer_maintenance_scope_integrity").await;
+    let store = maintenance_rule_set_store(&services).await;
+    let pool = services.pool();
+    let scope = vec![
+        "library-2".to_string(),
+        "library-1".to_string(),
+        "library-2".to_string(),
+    ];
+    store
+        .create_rule_set(&rule_set("scoped", scope), &revision("scoped", 1))
+        .await
+        .unwrap();
+    store
+        .create_rule_set(&rule_set("global", vec![]), &revision("global", 1))
+        .await
+        .unwrap();
+    let expected = vec!["library-2".to_string(), "library-1".to_string()];
+    assert_eq!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .library_ids,
+        expected
+    );
+    let listed = store.list_rule_sets().await.unwrap();
+    assert_eq!(listed.len(), 2, "joins must not duplicate rules");
+    assert!(
+        listed
+            .iter()
+            .find(|rule| rule.id == "global")
+            .unwrap()
+            .library_ids
+            .is_empty()
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|rule| rule.id == "scoped")
+            .unwrap()
+            .library_ids,
+        expected
+    );
+    assert!(store.get_rule_set("absent").await.unwrap().is_none());
+
+    let columns = sqlx::query("PRAGMA table_info(maintenance_rule_sets)")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert!(
+        !columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "library_ids")
+    );
+    let stored: Vec<String> = sqlx::query_scalar(
+        "SELECT library_id FROM maintenance_rule_set_libraries WHERE rule_set_id = 'scoped' ORDER BY position"
+    ).fetch_all(pool).await.unwrap();
+    assert_eq!(stored, expected);
+    assert!(sqlx::query(
+        "INSERT INTO maintenance_rule_set_libraries (rule_set_id, library_id, position) VALUES ('scoped', 'library-1', 9)"
+    ).execute(pool).await.is_err(), "duplicate associations must be rejected");
+    assert!(sqlx::query(
+        "INSERT INTO maintenance_rule_set_libraries (rule_set_id, library_id, position) VALUES ('scoped', 'library-9', 0)"
+    ).execute(pool).await.is_err(), "positions must be unique within a rule");
+
+    let bad = rule_set("bad", vec!["library-1".into(), "missing-library".into()]);
+    assert!(
+        store
+            .create_rule_set(&bad, &revision("bad", 1))
+            .await
+            .is_err()
+    );
+    assert!(store.get_rule_set("bad").await.unwrap().is_none());
+    assert!(store.list_revisions("bad").await.unwrap().is_empty());
+    store
+        .update_rule_set_arming(
+            "scoped",
+            scryer_domain::MaintenanceEffectArming::Destructive,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let before = store.get_rule_set("scoped").await.unwrap().unwrap();
+    assert!(
+        store
+            .update_rule_set_metadata(
+                "scoped",
+                "Must roll back",
+                "bad scope",
+                &["library-9".into(), "missing-library".into()],
+                true,
+                Utc::now()
+            )
+            .await
+            .is_err()
+    );
+    let unchanged = store.get_rule_set("scoped").await.unwrap().unwrap();
+    assert_eq!(
+        unchanged.library_ids, expected,
+        "failed replacement must preserve every scope row"
+    );
+    assert_eq!(unchanged.name, before.name);
+    assert_eq!(unchanged.updated_at, before.updated_at);
+    assert_eq!(
+        unchanged.effect_arming,
+        scryer_domain::MaintenanceEffectArming::Destructive
+    );
+
+    store
+        .update_rule_set_metadata(
+            "scoped",
+            "Scoped",
+            "",
+            &["library-1".into()],
+            true,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .effect_arming,
+        scryer_domain::MaintenanceEffectArming::None
+    );
+    assert!(
+        sqlx::query("DELETE FROM libraries WHERE id = 'library-1'")
+            .execute(pool)
+            .await
+            .is_err(),
+        "deleting the final scoped library must not silently make the rule global"
+    );
+    assert_eq!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .library_ids,
+        vec!["library-1"]
+    );
+
+    store
+        .update_rule_set_metadata("scoped", "Global", "", &[], true, Utc::now())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .library_ids
+            .is_empty()
+    );
+    sqlx::query("DELETE FROM libraries WHERE id = 'library-1'")
+        .execute(pool)
+        .await
+        .unwrap();
+    store
+        .update_rule_set_metadata(
+            "scoped",
+            "Scoped again",
+            "",
+            &["library-2".into()],
+            true,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    store.delete_rule_set("scoped").await.unwrap();
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM maintenance_rule_set_libraries")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "deleting a rule must cascade its associations"
+    );
+    let _ = std::fs::remove_file(db);
 }
 
 fn rule_set(id: &str, library_ids: Vec<String>) -> MaintenanceRuleSet {
@@ -43,7 +256,7 @@ fn revision(rule_set_id: &str, number: i64) -> MaintenanceRuleRevision {
 #[tokio::test]
 async fn rule_sets_and_revisions_round_trip() {
     let (services, db) = temp_services("scryer_maintenance_rules").await;
-    let store = maintenance_rule_set_store(&services);
+    let store = maintenance_rule_set_store(&services).await;
 
     let created = rule_set("rule-a", vec!["library-1".to_string()]);
     store
@@ -81,7 +294,7 @@ async fn rule_sets_and_revisions_round_trip() {
 #[tokio::test]
 async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
     let (services, db) = temp_services("scryer_maintenance_revisions").await;
-    let store = maintenance_rule_set_store(&services);
+    let store = maintenance_rule_set_store(&services).await;
 
     store
         .create_rule_set(&rule_set("rule-b", Vec::new()), &revision("rule-b", 1))
@@ -142,7 +355,7 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
 #[tokio::test]
 async fn metadata_updates_leave_the_revision_pointer_alone() {
     let (services, db) = temp_services("scryer_maintenance_metadata").await;
-    let store = maintenance_rule_set_store(&services);
+    let store = maintenance_rule_set_store(&services).await;
 
     let mut armed = rule_set("rule-c", Vec::new());
     armed.effect_arming = scryer_domain::MaintenanceEffectArming::Reversible;
@@ -189,7 +402,7 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
 #[tokio::test]
 async fn a_scope_change_disarms_in_the_same_write() {
     let (services, db) = temp_services("scryer_maintenance_rescope").await;
-    let store = maintenance_rule_set_store(&services);
+    let store = maintenance_rule_set_store(&services).await;
 
     let mut armed = rule_set("rule-f", vec!["library-1".to_string()]);
     armed.effect_arming = scryer_domain::MaintenanceEffectArming::Destructive;
@@ -235,7 +448,7 @@ async fn a_scope_change_disarms_in_the_same_write() {
 #[tokio::test]
 async fn deleting_a_rule_set_cascades_to_its_revisions() {
     let (services, db) = temp_services("scryer_maintenance_delete").await;
-    let store = maintenance_rule_set_store(&services);
+    let store = maintenance_rule_set_store(&services).await;
 
     store
         .create_rule_set(&rule_set("rule-d", Vec::new()), &revision("rule-d", 1))
@@ -259,7 +472,7 @@ async fn deleting_a_rule_set_cascades_to_its_revisions() {
 #[tokio::test]
 async fn a_duplicate_revision_number_is_rejected() {
     let (services, db) = temp_services("scryer_maintenance_duplicate").await;
-    let store = maintenance_rule_set_store(&services);
+    let store = maintenance_rule_set_store(&services).await;
 
     store
         .create_rule_set(&rule_set("rule-e", Vec::new()), &revision("rule-e", 1))

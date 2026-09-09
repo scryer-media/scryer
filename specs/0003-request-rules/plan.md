@@ -266,11 +266,23 @@ UNIQUE (producer, producer_ref) WHERE state IN ('dormant','active');  INDEX (tit
 
 | migration | contents |
 |---|---|
-| `0221_request_rule_sets.sql` | `request_rule_sets(id, name, description, enabled, evaluation_mode 'disabled', library_ids '[]', current_revision_number, created_at, updated_at)`; `request_rule_revisions(id, rule_set_id FK cascade, revision_number, rego_source, matcher_content_hash, created_by, created_at, UNIQUE(rule_set_id, revision_number))`; `request_rule_decisions(id, request_id, evaluated_at, mode, effective_outcome, policy_outcome, fallback_reason, votes_json, tags_json, input_hash, input_schema_version, created_at)` + index `(request_id)`. |
+| `0221_request_rule_sets.sql` | `request_rule_sets(id, name, description, enabled, evaluation_mode 'disabled', current_revision_number, created_at, updated_at)`; `request_rule_set_libraries(rule_set_id FK cascade, library_id FK restrict, position, PRIMARY KEY(rule_set_id, library_id), UNIQUE(rule_set_id, position))`; `request_rule_revisions(id, rule_set_id FK cascade, revision_number, rego_source, matcher_content_hash, created_by, created_at, UNIQUE(rule_set_id, revision_number))`; `request_rule_decisions(id, request_id, evaluated_at, mode, effective_outcome, policy_outcome, fallback_reason, votes_json, tags_json, input_hash, input_schema_version, created_at)` + index `(request_id)`. |
 | `0222_lifecycle_claims.sql` | §5 table. |
 | `0223_media_request_policy.sql` | `media_requests` + `requested_lease_days INT NULL`, `approved_lease_days INT NULL`, `decision_id TEXT NULL`, `decided_by_rule_set_ids TEXT NOT NULL DEFAULT '[]'`, `policy_tags_json TEXT NOT NULL DEFAULT '[]'`, `metadata_snapshot_json TEXT NOT NULL DEFAULT '{}'`; `resolved_by_user_id` → nullable via the 0206 rebuild pattern (SQLite) / `DROP NOT NULL` (PG). |
 
-Renumber per the standing recipe if `main` claims 0218+ first (it did: title tags took 0218, so these are 0219–0221).
+Library scope is relational in both rule families: migration 0211 defines the
+matching `maintenance_rule_set_libraries` table. Empty scope still means all
+libraries. The stores retain first-occurrence order, deduplicate IDs, and replace
+scope rows atomically with metadata and maintenance disarming. Library deletion
+is restricted while a rule references it, preventing implicit scope widening.
+Both association tables are included in logical backups. These changes amend
+the original pre-release migrations; they do not add a follow-up migration.
+
+Focused validation: 14 tests passed in Nextest run
+`1ff6c57a-6349-432f-91d2-d3403b2a698e`, covering rule stores, scope integrity and
+rollback, backup catalog completeness, and historical SQLite upgrade baselines.
+Rust formatting passed. PostgreSQL execution and full workspace checks remain
+deferred; both SQL dialects and their shared storage paths were updated.
 
 Stores: `RequestRuleSetStore` + `RequestRuleDecisionStore` in `crates/scryer-infrastructure-configuration/src/customization/` (pattern: `maintenance_rule_set_store.rs`), `LifecycleClaimStore` in `crates/scryer-infrastructure-library/src/media/`, new columns in `media/requests.rs` (`insert_media_request_tx`, row mapper ~L760, `resolve_*`). Ports in `ports.rs`: `RequestRuleSetRepository` (mirror `MaintenanceRuleSetRepository` L5880 minus arming), `RequestRuleDecisionRepository`, `LifecycleClaimRepository`, extended `NewMediaRequest`/`MediaRequestResolution`/`MediaRequestQuery` (history counters: `count_for_requester(user_id, status, since)`, `history_for_fingerprint`). Domain: `RequestRuleSet`, `RequestRuleRevision`, `RequestRuleEvaluationMode`, `RequestRuleDecisionRecord`, `LifecycleClaim` (+ enums); `MediaRequest` gains the new columns; `MediaRequestResolvedEventData` gains `#[serde(default)] decided_by_rule_set_ids`, `decision_reason_codes`, `approved_lease_days`, `policy_tags`.
 

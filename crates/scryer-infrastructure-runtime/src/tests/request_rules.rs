@@ -12,6 +12,165 @@ use scryer_domain::{
     RequestRuleRevision, RequestRuleSet,
 };
 
+#[tokio::test]
+async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
+    let (services, db) = temp_services("scryer_request_scope_integrity").await;
+    super::maintenance_rule_sets::seed_rule_libraries(&services.datastore()).await;
+    let store = crate::RequestRuleSetStore::new(services.datastore());
+    let pool = services.pool();
+    let scope = vec![
+        "library-2".to_string(),
+        "library-1".to_string(),
+        "library-2".to_string(),
+    ];
+    store
+        .create_rule_set(&rule_set("scoped", scope), &revision("scoped", 1))
+        .await
+        .unwrap();
+    store
+        .create_rule_set(&rule_set("global", vec![]), &revision("global", 1))
+        .await
+        .unwrap();
+    let expected = vec!["library-2".to_string(), "library-1".to_string()];
+    assert_eq!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .library_ids,
+        expected
+    );
+    let listed = store.list_rule_sets().await.unwrap();
+    assert_eq!(listed.len(), 2, "joins must not duplicate rules");
+    assert!(
+        listed
+            .iter()
+            .find(|rule| rule.id == "global")
+            .unwrap()
+            .library_ids
+            .is_empty()
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|rule| rule.id == "scoped")
+            .unwrap()
+            .library_ids,
+        expected
+    );
+    assert!(store.get_rule_set("absent").await.unwrap().is_none());
+
+    let columns = sqlx::query("PRAGMA table_info(request_rule_sets)")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert!(
+        !columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "library_ids")
+    );
+    let stored: Vec<String> = sqlx::query_scalar(
+        "SELECT library_id FROM request_rule_set_libraries WHERE rule_set_id = 'scoped' ORDER BY position"
+    ).fetch_all(pool).await.unwrap();
+    assert_eq!(stored, expected);
+    assert!(sqlx::query(
+        "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position) VALUES ('scoped', 'library-1', 9)"
+    ).execute(pool).await.is_err(), "duplicate associations must be rejected");
+    assert!(sqlx::query(
+        "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position) VALUES ('scoped', 'library-9', 0)"
+    ).execute(pool).await.is_err(), "positions must be unique within a rule");
+
+    let bad = rule_set("bad", vec!["library-1".into(), "missing-library".into()]);
+    assert!(
+        store
+            .create_rule_set(&bad, &revision("bad", 1))
+            .await
+            .is_err()
+    );
+    assert!(store.get_rule_set("bad").await.unwrap().is_none());
+    assert!(store.list_revisions("bad").await.unwrap().is_empty());
+    let before = store.get_rule_set("scoped").await.unwrap().unwrap();
+    assert!(
+        store
+            .update_rule_set_metadata(
+                "scoped",
+                "Must roll back",
+                "bad scope",
+                &["library-9".into(), "missing-library".into()],
+                Utc::now()
+            )
+            .await
+            .is_err()
+    );
+    let unchanged = store.get_rule_set("scoped").await.unwrap().unwrap();
+    assert_eq!(
+        unchanged.library_ids, expected,
+        "failed replacement must preserve every scope row"
+    );
+    assert_eq!(unchanged.name, before.name);
+    assert_eq!(unchanged.updated_at, before.updated_at);
+
+    store
+        .update_rule_set_metadata("scoped", "Scoped", "", &["library-1".into()], Utc::now())
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("DELETE FROM libraries WHERE id = 'library-1'")
+            .execute(pool)
+            .await
+            .is_err(),
+        "deleting the final scoped library must not silently make the rule global"
+    );
+    assert_eq!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .library_ids,
+        vec!["library-1"]
+    );
+
+    store
+        .update_rule_set_metadata("scoped", "Global", "", &[], Utc::now())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .get_rule_set("scoped")
+            .await
+            .unwrap()
+            .unwrap()
+            .library_ids
+            .is_empty()
+    );
+    sqlx::query("DELETE FROM libraries WHERE id = 'library-1'")
+        .execute(pool)
+        .await
+        .unwrap();
+    store
+        .update_rule_set_metadata(
+            "scoped",
+            "Scoped again",
+            "",
+            &["library-2".into()],
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    store.delete_rule_set("scoped").await.unwrap();
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM request_rule_set_libraries")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "deleting a rule must cascade its associations"
+    );
+    let _ = std::fs::remove_file(db);
+}
+
 fn rule_set(id: &str, library_ids: Vec<String>) -> RequestRuleSet {
     let now = Utc::now();
     RequestRuleSet {
@@ -266,6 +425,7 @@ async fn assert_decisions_outlive_their_rule_set(
 async fn request_rule_sets_and_revisions_round_trip() {
     let (services, db) = temp_services("scryer_request_rules").await;
     let store = crate::RequestRuleSetStore::new(services.datastore());
+    super::maintenance_rule_sets::seed_rule_libraries(&services.datastore()).await;
     assert_rule_set_round_trip(&store)
         .await
         .expect("rule sets should round-trip");
@@ -328,6 +488,7 @@ async fn request_rule_stores_round_trip_postgres() -> AppResult<()> {
         let rules = crate::RequestRuleSetStore::new(services.datastore());
         let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
         let result = async {
+            super::maintenance_rule_sets::seed_rule_libraries(&services.datastore()).await;
             assert_rule_set_round_trip(&rules).await?;
             assert_decision_round_trip(&decisions).await?;
             assert_decisions_outlive_their_rule_set(&rules, &decisions).await

@@ -4,8 +4,9 @@ use scryer_application::{AppResult, RequestRuleSetRepository};
 use scryer_domain::{RequestRuleEvaluationMode, RequestRuleRevision, RequestRuleSet};
 use sqlx::Row;
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
-use crate::storage::sql::json::{canonical_json_text, json_text_or};
+use crate::queries::sql_runtime::{
+    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+};
 
 #[derive(Clone)]
 pub struct RequestRuleSetStore {
@@ -21,26 +22,20 @@ impl RequestRuleSetStore {
 #[async_trait]
 impl RequestRuleSetRepository for RequestRuleSetStore {
     async fn list_rule_sets(&self) -> AppResult<Vec<RequestRuleSet>> {
-        let sql =
-            format!("SELECT {RULE_SET_COLUMNS} FROM request_rule_sets ORDER BY name ASC, id ASC");
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[])
-            .await?
-            .iter()
-            .map(row_to_rule_set)
-            .collect()
+        let sql = format!("{RULE_SET_SELECT} ORDER BY name ASC, id ASC, scope.position ASC");
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[]).await?;
+        rows_to_rule_sets(&rows)
     }
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<RequestRuleSet>> {
-        let sql = format!("SELECT {RULE_SET_COLUMNS} FROM request_rule_sets WHERE id = {{}}");
-        SqlRuntime::fetch_optional(
+        let sql = format!("{RULE_SET_SELECT} WHERE id = {{}} ORDER BY scope.position ASC");
+        let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &sql,
             &[SqlArg::Text(id.to_string())],
         )
-        .await?
-        .as_ref()
-        .map(row_to_rule_set)
-        .transpose()
+        .await?;
+        Ok(rows_to_rule_sets(&rows)?.into_iter().next())
     }
 
     async fn create_rule_set(
@@ -48,15 +43,20 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         rule_set: &RequestRuleSet,
         revision: &RequestRuleRevision,
     ) -> AppResult<()> {
-        let rule_set_args = rule_set_args(rule_set)?;
+        let rule_set_args = rule_set_args(rule_set);
         let revision_args = revision_args(revision);
+        let rule_set_id = rule_set.id.clone();
+        let library_ids = rule_set.library_ids.clone();
 
         SqlRuntime::run_in_transaction(&self.datastore, "create_request_rule_set", move |tx| {
             let rule_set_args = rule_set_args.clone();
             let revision_args = revision_args.clone();
+            let rule_set_id = rule_set_id.clone();
+            let library_ids = library_ids.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, &rule_set_args).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args).await?;
+                replace_library_scope(tx, &rule_set_id, &library_ids).await?;
                 Ok(())
             })
         })
@@ -147,21 +147,25 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         library_ids: &[String],
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
-        execute_write(
-            &self.datastore,
-            "update_request_rule_set_metadata",
-            "UPDATE request_rule_sets
-                SET name = {}, description = {}, library_ids = {}, updated_at = {}
-              WHERE id = {}",
-            vec![
-                SqlArg::Text(name.to_string()),
-                SqlArg::Text(description.to_string()),
-                SqlArg::Text(canonical_json_text(&library_ids)?),
-                SqlArg::Timestamp(updated_at),
-                SqlArg::Text(id.to_string()),
-            ],
-        )
-        .await
+        let args = vec![
+            SqlArg::Text(name.to_string()),
+            SqlArg::Text(description.to_string()),
+            SqlArg::Timestamp(updated_at),
+            SqlArg::Text(id.to_string()),
+        ];
+        let id = id.to_string();
+        let library_ids = library_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "update_request_rule_set_metadata", move |tx| {
+            let args = args.clone();
+            let id = id.clone();
+            let library_ids = library_ids.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "UPDATE request_rule_sets SET name = {}, description = {}, updated_at = {} WHERE id = {}",
+                    &args).await?;
+                replace_library_scope(tx, &id, &library_ids).await
+            })
+        }).await
     }
 
     async fn update_rule_set_evaluation_mode(
@@ -200,16 +204,19 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
     }
 }
 
-const RULE_SET_COLUMNS: &str = "id, name, description, enabled, evaluation_mode,
-    library_ids, current_revision_number, created_at, updated_at";
+// Fetch metadata and scope in one snapshot, including global rules with no scope rows.
+const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode,
+    current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
+    FROM request_rule_sets
+    LEFT JOIN request_rule_set_libraries scope ON scope.rule_set_id = request_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source,
     matcher_content_hash, created_by, created_at";
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO request_rule_sets
-        (id, name, description, enabled, evaluation_mode, library_ids,
+        (id, name, description, enabled, evaluation_mode,
          current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO request_rule_revisions
         (id, rule_set_id, revision_number, rego_source, matcher_content_hash,
@@ -232,18 +239,17 @@ async fn execute_write(
     .await
 }
 
-fn rule_set_args(rule_set: &RequestRuleSet) -> AppResult<Vec<SqlArg>> {
-    Ok(vec![
+fn rule_set_args(rule_set: &RequestRuleSet) -> Vec<SqlArg> {
+    vec![
         SqlArg::Text(rule_set.id.clone()),
         SqlArg::Text(rule_set.name.clone()),
         SqlArg::Text(rule_set.description.clone()),
         SqlArg::Bool(rule_set.enabled),
         SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
-        SqlArg::Text(canonical_json_text(&rule_set.library_ids)?),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
-    ])
+    ]
 }
 
 fn revision_args(revision: &RequestRuleRevision) -> Vec<SqlArg> {
@@ -269,7 +275,7 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RequestRuleSet> {
         // not implement.
         evaluation_mode: RequestRuleEvaluationMode::parse_storage(&row.text("evaluation_mode")?)
             .unwrap_or_default(),
-        library_ids: library_ids(row)?,
+        library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         current_revision_number: row.i64("current_revision_number")?,
         created_at: timestamp_or_now(row, "created_at")?,
         updated_at: timestamp_or_now(row, "updated_at")?,
@@ -288,10 +294,46 @@ fn row_to_revision(row: &SqlRow) -> AppResult<RequestRuleRevision> {
     })
 }
 
-/// Stored as a JSON text array; empty means every library.
-fn library_ids(row: &SqlRow) -> AppResult<Vec<String>> {
-    let raw = json_text_or(row, "library_ids", "[]")?;
-    Ok(serde_json::from_str(&raw).unwrap_or_default())
+fn rows_to_rule_sets(rows: &[SqlRow]) -> AppResult<Vec<RequestRuleSet>> {
+    let mut rules: Vec<RequestRuleSet> = Vec::new();
+    for row in rows {
+        let id = row.text("id")?;
+        if let Some(rule) = rules.last_mut().filter(|rule| rule.id == id) {
+            rule.library_ids.extend(row.opt_text("scope_library_id")?);
+        } else {
+            rules.push(row_to_rule_set(row)?);
+        }
+    }
+    Ok(rules)
+}
+
+async fn replace_library_scope(
+    tx: &mut SqlTx<'_>,
+    rule_set_id: &str,
+    library_ids: &[String],
+) -> AppResult<()> {
+    tx.execute(
+        "DELETE FROM request_rule_set_libraries WHERE rule_set_id = {}",
+        &[SqlArg::Text(rule_set_id.to_string())],
+    )
+    .await?;
+    let mut seen = std::collections::HashSet::new();
+    for (position, library_id) in library_ids.iter().enumerate() {
+        if !seen.insert(library_id) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position)
+             VALUES ({}, {}, {})",
+            &[
+                SqlArg::Text(rule_set_id.to_string()),
+                SqlArg::Text(library_id.clone()),
+                SqlArg::I64(position as i64),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// The SQLite column defaults to `strftime(...)`, which a row inserted by the
