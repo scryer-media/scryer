@@ -727,7 +727,10 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
 
     for state in &mut states {
         let track_index = state.track_index;
-        state.finish(&mut tracks[track_index]);
+        state.finish(
+            &mut tracks[track_index],
+            packets_scanned >= STREAM_PROBE_PACKET_LIMIT,
+        );
         report.budget_exhausted |= state.metadata_report.budget_exhausted;
         if state.metadata_report.status == scryer_media_types::ProbeStatus::Incomplete {
             report.status = state.metadata_report.status;
@@ -840,8 +843,23 @@ impl TsStreamProbeState {
         }
     }
 
-    fn finish(&mut self, track: &mut RawTrack) {
+    fn finish(&mut self, track: &mut RawTrack, packet_budget_exhausted: bool) {
         self.probe(track);
+        if !self.complete {
+            let exhausted = self.budget.exhausted() || packet_budget_exhausted;
+            self.metadata_report.budget_exhausted |= exhausted;
+            self.metadata_report.status = scryer_media_types::ProbeStatus::Incomplete;
+            self.metadata_report.warnings.push(scryer_media_types::ProbeWarning {
+                code: if exhausted { "ts_stream_probe_budget" } else { "ts_stream_probe_incomplete" }.into(),
+                message: if exhausted {
+                    "Transport stream enrichment reached its read budget before all requested metadata was established"
+                } else {
+                    "Transport stream enrichment ended before all requested metadata was established"
+                }.into(),
+                stream_id: track.metadata.id.clone(),
+                ..Default::default()
+            });
+        }
         if self.kind == TrackKind::Video
             && let Some(observed_fps) = estimate_frame_rate_from_pts(&self.pts_values)
             && should_use_pts_frame_rate(
@@ -2341,6 +2359,89 @@ mod tests {
         ];
         let dovi = extract_dovi_config(&descriptors).unwrap();
         assert_eq!(dovi, vec![1, 0, 0b0000_1111, 0b0001_1101, 0b1011_0000]);
+    }
+
+    #[test]
+    fn transport_enrichment_reports_packet_payload_and_short_source_limits() {
+        for (pid, packets, exhausted) in [
+            (0x1fff_u16, STREAM_PROBE_PACKET_LIMIT + 10, true),
+            (
+                256,
+                STREAM_PROBE_MAX_BYTES_PER_PID as usize / 184 + STREAM_PROBE_BATCH_PACKETS * 2,
+                true,
+            ),
+            (256, 5, false),
+        ] {
+            let mut packet = [0_u8; TS_PACKET_SIZE];
+            packet[..4].copy_from_slice(&[SYNC_BYTE, (pid >> 8) as u8, pid as u8, 0x10]);
+            let mut source = std::io::Cursor::new(packet.repeat(packets));
+            let entries = [EsEntry {
+                program_id: 1,
+                stream_type: 0x87,
+                pid: 256,
+                descriptors: Vec::new(),
+                dovi_config: None,
+            }];
+            let mut tracks = [build_track(&entries[0])];
+            let mut report = scryer_media_types::ProbeReport::default();
+            enrich_tracks_from_probe(
+                &mut source,
+                &entries,
+                &mut tracks,
+                TsPacketLayout {
+                    raw_packet_size: TS_PACKET_SIZE,
+                    sync_offset: 0,
+                },
+                &mut report,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(report.status, scryer_media_types::ProbeStatus::Incomplete);
+            assert_eq!(report.budget_exhausted, exhausted);
+            assert!(
+                report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.stream_id.as_deref() == Some("256")
+                        && warning.code
+                            == if exhausted {
+                                "ts_stream_probe_budget"
+                            } else {
+                                "ts_stream_probe_incomplete"
+                            })
+            );
+            assert!(tracks[0].channels.is_none());
+            assert!(source.position() <= (STREAM_PROBE_PACKET_LIMIT * TS_PACKET_SIZE) as u64);
+            if exhausted {
+                assert!(source.position() < source.get_ref().len() as u64);
+                if pid == 256 {
+                    let read_bound = (STREAM_PROBE_MAX_BYTES_PER_PID as usize).div_ceil(184)
+                        + STREAM_PROBE_BATCH_PACKETS;
+                    assert!(
+                        source.position() <= (read_bound * TS_PACKET_SIZE) as u64,
+                        "read-ahead must stay within one packet batch of the payload budget"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn completed_transport_enrichment_does_not_report_an_unused_budget() {
+        let mut track = RawTrack {
+            codec_name: Some("aac".into()),
+            ..Default::default()
+        };
+        let mut state = TsStreamProbeState::new(0, TrackKind::Audio, Some("aac".into()));
+        state.push_payload(
+            &[0xFF, 0xF1, 0x50, 0x80, 0x00, 0xFF, 0xFC].repeat(128),
+            &mut track,
+        );
+        assert!(state.complete);
+        state.finish(&mut track, true);
+        assert!(!state.metadata_report.budget_exhausted);
+        assert!(state.metadata_report.warnings.is_empty());
+        assert_eq!(track.channels, Some(2));
     }
 
     #[test]
