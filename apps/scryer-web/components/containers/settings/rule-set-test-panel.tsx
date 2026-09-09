@@ -2,6 +2,7 @@ import * as React from "react";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { scoringEntryText, type ScoringEntryKind } from "@/lib/utils/release-decision-explanation";
 import {
@@ -253,7 +254,7 @@ export function RuleSetTestPanel({
               ariaLabel="Library title"
             />
           </div>
-          {episodic ? <div><Label htmlFor="settings-rule-test-episode" className="mb-1 block">Episode</Label><select id="settings-rule-test-episode" className="h-9 w-full rounded border border-input bg-background px-2 text-sm" value={episodeId} onChange={(event) => setEpisodeId(event.target.value)} disabled={loadingEpisodes}><option value="">{loadingEpisodes ? "Loading episodes…" : "Select an episode"}</option>{episodes.map((episode) => <option key={episode.id} value={episode.id}>{episodeLabel(episode)}</option>)}</select></div> : null}
+          {episodic ? <div><Label htmlFor="settings-rule-test-episode" className="mb-1 block">Episode</Label><FilterableSelect id="settings-rule-test-episode" value={episodeId} onValueChange={setEpisodeId} options={episodes.map((episode) => ({ value: episode.id, label: episodeLabel(episode) }))} placeholder={loadingEpisodes ? "Loading episodes…" : "Select an episode"} filterPlaceholder="Filter episodes" ariaLabel="Episode" optionIdPrefix="settings-rule-test-episode-option" disabled={loadingEpisodes} /></div> : null}
         </div>
         <div className="max-w-sm">
           <Label htmlFor="settings-rule-test-size" className="mb-1 block">Size (GiB, optional)</Label>
