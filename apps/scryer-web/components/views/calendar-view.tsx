@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useCallback, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/context/translate-context";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/react/daygrid";
@@ -18,6 +17,7 @@ import type {
   MountInfo,
 } from "@fullcalendar/react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import { TitleHoverCard } from "@/components/common/title-hover-card";
 import {
   WatchInMediaServerMenu,
   type MediaServerPlaybackLink,
@@ -28,7 +28,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import type { LibraryRecord } from "@/lib/types";
-import { artworkFallbackStyle } from "@/lib/utils/artwork-fallback";
 import { buildCalendarEventHref } from "@/lib/utils/calendar-event-href";
 import {
   readStoredCalendarViewMode,
@@ -313,98 +312,64 @@ function CalendarEventHoverCard({
 }) {
   const t = useTranslate();
   const { episode, anchor } = preview;
-  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
-
-  if (typeof document === "undefined") return null;
-
   const isMovie = episode.titleFacet === "movie";
-  const fallbackTone = isMovie
-    ? "MOVIE"
-    : episode.titleFacet === "anime"
-      ? "ANIME"
-      : "SERIES";
-  const gap = 12;
-  const viewportPadding = 12;
-  const width = Math.min(isMovie ? 360 : 380, window.innerWidth - viewportPadding * 2);
-  const estimatedHeight = isMovie ? 220 : 370;
-  const fitsOnRight = anchor.right + gap + width <= window.innerWidth - viewportPadding;
-  const unclampedLeft = fitsOnRight ? anchor.right + gap : anchor.left - gap - width;
-  const left = Math.max(
-    viewportPadding,
-    Math.min(unclampedLeft, window.innerWidth - width - viewportPadding),
-  );
-  const top = Math.max(
-    viewportPadding,
-    Math.min(
-      anchor.top + (anchor.bottom - anchor.top - estimatedHeight) / 2,
-      window.innerHeight - estimatedHeight - viewportPadding,
-    ),
-  );
   const badge = formatEpisodeBadge(episode);
   const availabilityPill = episodeAvailabilityPill(episode.mediaAvailability, t);
   const airDate = formatAirDateLabel(episode.airDate);
 
-  return createPortal(
-    <aside
-      role="dialog"
-      aria-label={`Watch options for ${episode.titleName}`}
-      className={`fc-scryer-hover-card${isMovie ? " is-movie" : " is-episode"}`}
-      style={{ left, top, width }}
+  return (
+    <TitleHoverCard
+      key={episode.id || episode.titleId}
+      preview={{
+        id: episode.id || episode.titleId,
+        title: episode.titleName,
+        facet: episode.titleFacet,
+        posterUrl: episode.imageUrl,
+        anchor,
+        badges: (
+          <>
+            <span className="fc-scryer-hover-card-meta-badge">
+              {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
+            </span>
+            {badge ? <span className="fc-scryer-hover-card-meta-badge">{badge}</span> : null}
+            {availabilityPill ? (
+              <span className="fc-scryer-hover-card-meta-badge">
+                {availabilityPill.label}
+              </span>
+            ) : null}
+            {!episode.monitored ? (
+              <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
+            ) : null}
+          </>
+        ),
+        subtitle: !isMovie ? episode.episodeTitle : null,
+        summary: episode.overview,
+        details: (
+          <WatchInMediaServerMenu
+            links={episode.playbackLinks}
+            showLabel
+            className="mt-2"
+          />
+        ),
+        footer: (
+          <>
+            {airDate ? (
+              <span>
+                <CalendarClock aria-hidden="true" />
+                {airDate}
+              </span>
+            ) : null}
+            <span>{episode.libraryName ?? episode.libraryId}</span>
+          </>
+        ),
+        layout: isMovie ? "movie" : "episode",
+        width: isMovie ? 360 : 380,
+        estimatedHeight: isMovie ? 220 : 370,
+      }}
+      ariaLabel={`Watch options for ${episode.titleName}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-    >
-      <div
-        className="fc-scryer-hover-card-image-wrap"
-        style={artworkFallbackStyle(episode.id || episode.titleId, fallbackTone)}
-      >
-        {episode.imageUrl && failedImageUrl !== episode.imageUrl ? (
-          <img
-            src={episode.imageUrl}
-            alt=""
-            className="fc-scryer-hover-card-image"
-            onError={() => setFailedImageUrl(episode.imageUrl)}
-          />
-        ) : null}
-      </div>
-      <div className="fc-scryer-hover-card-copy">
-        <div className="fc-scryer-hover-card-badges">
-          <span className="fc-scryer-hover-card-meta-badge">
-            {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
-          </span>
-          {badge ? <span className="fc-scryer-hover-card-meta-badge">{badge}</span> : null}
-          {availabilityPill ? (
-            <span className="fc-scryer-hover-card-meta-badge">
-              {availabilityPill.label}
-            </span>
-          ) : null}
-          {!episode.monitored ? (
-            <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
-          ) : null}
-        </div>
-        <h3 className="fc-scryer-hover-card-title">{episode.titleName}</h3>
-        {!isMovie && episode.episodeTitle ? (
-          <p className="fc-scryer-hover-card-episode-title">{episode.episodeTitle}</p>
-        ) : null}
-        {episode.overview ? (
-          <p className="fc-scryer-hover-card-overview">{episode.overview}</p>
-        ) : null}
-        <WatchInMediaServerMenu
-          links={episode.playbackLinks}
-          showLabel
-          className="mt-2"
-        />
-        <div className="fc-scryer-hover-card-footer">
-          {airDate ? (
-            <span>
-              <CalendarClock aria-hidden="true" />
-              {airDate}
-            </span>
-          ) : null}
-          <span>{episode.libraryName ?? episode.libraryId}</span>
-        </div>
-      </div>
-    </aside>,
-    document.body,
+    />
   );
 }
 

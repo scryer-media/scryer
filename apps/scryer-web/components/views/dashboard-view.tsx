@@ -1,10 +1,8 @@
 import * as React from "react";
-import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
   ActivitySquare,
   ArrowUp,
-  CalendarClock,
   CircleAlert,
   Database,
   Download,
@@ -22,6 +20,7 @@ import { Link } from "react-router";
 
 import { AuthenticatedAvatar } from "@/components/common/authenticated-avatar";
 import { DownloadClientTypeLogo } from "@/components/common/download-client-type-logo";
+import { TitleHoverCard } from "@/components/common/title-hover-card";
 import {
   IndexerErrorHistoryModal,
   type IndexerErrorHistoryScope,
@@ -89,7 +88,6 @@ import {
   usageTone,
 } from "@/lib/utils/dashboard";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
-import { artworkFallbackStyle } from "@/lib/utils/artwork-fallback";
 import { buildViewPath } from "@/lib/utils/routing";
 
 /** Rows visible before the top panels start scrolling. */
@@ -786,93 +784,6 @@ type RecentlyImportedHoverPreview = {
   };
 };
 
-function RecentlyImportedHoverCard({
-  preview,
-  onMouseEnter,
-  onMouseLeave,
-}: {
-  preview: RecentlyImportedHoverPreview;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
-}) {
-  const t = useTranslate();
-  const { item, anchor } = preview;
-  const [failedPosterUrl, setFailedPosterUrl] = React.useState<string | null>(null);
-
-  if (typeof document === "undefined") return null;
-
-  const facet = normalizeFacet(item.facet);
-  const gap = 12;
-  const viewportPadding = 12;
-  const width = Math.min(360, window.innerWidth - viewportPadding * 2);
-  const estimatedHeight = 240;
-  const fitsOnRight = anchor.right + gap + width <= window.innerWidth - viewportPadding;
-  const unclampedLeft = fitsOnRight ? anchor.right + gap : anchor.left - gap - width;
-  const left = Math.max(
-    viewportPadding,
-    Math.min(unclampedLeft, window.innerWidth - width - viewportPadding),
-  );
-  const top = Math.max(
-    viewportPadding,
-    Math.min(
-      anchor.top + (anchor.bottom - anchor.top - estimatedHeight) / 2,
-      window.innerHeight - estimatedHeight - viewportPadding,
-    ),
-  );
-
-  return createPortal(
-    <aside
-      role="dialog"
-      aria-label={`${t("dashboard.recentlyImported")} ${item.titleName ?? item.titleId}`}
-      className="fc-scryer-hover-card is-movie"
-      style={{ left, top, width }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      <div
-        className="fc-scryer-hover-card-image-wrap"
-        style={artworkFallbackStyle(item.id || item.titleId, facet ?? "SERIES")}
-      >
-        {item.posterUrl && failedPosterUrl !== item.posterUrl ? (
-          <img
-            src={item.posterUrl}
-            alt=""
-            className="fc-scryer-hover-card-image"
-            onError={() => setFailedPosterUrl(item.posterUrl)}
-          />
-        ) : null}
-      </div>
-      <div className="fc-scryer-hover-card-copy">
-        <div className="fc-scryer-hover-card-badges">
-          {facet ? (
-            <span className="fc-scryer-hover-card-meta-badge">{facet}</span>
-          ) : null}
-          <span className="fc-scryer-hover-card-meta-badge">
-            {item.eventType === "FILE_UPGRADED"
-              ? t("dashboard.upgradeBadge")
-              : t("dashboard.recentlyImported")}
-          </span>
-          {item.quality ? (
-            <span className="fc-scryer-hover-card-meta-badge">{item.quality}</span>
-          ) : null}
-        </div>
-        <h3 className="fc-scryer-hover-card-title">{item.titleName ?? item.titleId}</h3>
-        <p className="fc-scryer-hover-card-overview">
-          {formatBytes(item.sizeBytes)}
-        </p>
-        <div className="fc-scryer-hover-card-footer">
-          <span>
-            <CalendarClock aria-hidden="true" />
-            {formatCompactAge(item.occurredAt) ?? "—"}
-          </span>
-          {item.libraryId ? <span>{item.libraryId}</span> : null}
-        </div>
-      </div>
-    </aside>,
-    document.body,
-  );
-}
-
 function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -975,9 +886,44 @@ function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
         )}
       </DashboardPanel>
       {!isMobile && hoverPreview ? (
-        <RecentlyImportedHoverCard
+        <TitleHoverCard
           key={hoverPreview.item.id}
-          preview={hoverPreview}
+          preview={{
+            id: hoverPreview.item.id || hoverPreview.item.titleId,
+            title: hoverPreview.item.titleName ?? hoverPreview.item.titleId,
+            facet: hoverPreview.item.facet,
+            posterUrl: hoverPreview.item.posterUrl,
+            anchor: hoverPreview.anchor,
+            badges: (
+              <>
+                {normalizeFacet(hoverPreview.item.facet) ? (
+                  <span className="fc-scryer-hover-card-meta-badge">
+                    {normalizeFacet(hoverPreview.item.facet)}
+                  </span>
+                ) : null}
+                <span className="fc-scryer-hover-card-meta-badge">
+                  {hoverPreview.item.eventType === "FILE_UPGRADED"
+                    ? t("dashboard.upgradeBadge")
+                    : t("dashboard.recentlyImported")}
+                </span>
+                {hoverPreview.item.quality ? (
+                  <span className="fc-scryer-hover-card-meta-badge">
+                    {hoverPreview.item.quality}
+                  </span>
+                ) : null}
+              </>
+            ),
+            summary: formatBytes(hoverPreview.item.sizeBytes),
+            footer: (
+              <>
+                <span>{formatCompactAge(hoverPreview.item.occurredAt) ?? "—"}</span>
+                {hoverPreview.item.libraryId ? (
+                  <span>{hoverPreview.item.libraryId}</span>
+                ) : null}
+              </>
+            ),
+          }}
+          ariaLabel={`${t("dashboard.recentlyImported")} ${hoverPreview.item.titleName ?? hoverPreview.item.titleId}`}
           onMouseEnter={clearHoverTimer}
           onMouseLeave={scheduleHoverPreviewClose}
         />
