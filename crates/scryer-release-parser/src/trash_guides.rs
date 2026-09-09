@@ -1,9 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-#[cfg(test)]
-use crate::model::{GuideFact, ParsedReleaseMetadata};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenPatternKind {
     Sequence,
@@ -59,66 +56,6 @@ pub(crate) struct TokenSignalRule {
     pub source_path: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub enum TitleCategoryScope {
-    Any,
-    Anime,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub struct BlockedTitleRule {
-    pub code: &'static str,
-    pub facet: RuleFacet,
-    pub category: TitleCategoryScope,
-    pub pattern: TokenPattern,
-    pub app: &'static str,
-    pub stem: &'static str,
-    pub trash_id: &'static str,
-    pub cf_name: &'static str,
-    pub spec_name: &'static str,
-    pub source_path: &'static str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub(crate) struct FactRule {
-    pub code: &'static str,
-    pub facet: RuleFacet,
-    pub category: TitleCategoryScope,
-    pub pattern: TokenPattern,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub(crate) enum LocaleGroupMatchKind {
-    Exact,
-    #[allow(dead_code)]
-    Prefix,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub(crate) enum LocaleSourceContext {
-    Web,
-    BluRay,
-    UhdBluRay,
-    Remux,
-    Anime,
-    Any,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub(crate) struct LocaleGroupFactRule {
-    pub code: &'static str,
-    pub matcher: &'static str,
-    pub match_kind: LocaleGroupMatchKind,
-    pub facet: RuleFacet,
-    pub source_context: LocaleSourceContext,
-}
-
 include!("trash_guides_parser_knowledge.generated.rs");
 
 #[derive(Debug, Default)]
@@ -161,32 +98,6 @@ fn token_signal_index() -> &'static TokenAnchorIndex {
     INDEX.get_or_init(|| {
         TokenAnchorIndex::from_patterns(
             TOKEN_SIGNAL_RULES
-                .iter()
-                .enumerate()
-                .map(|(index, rule)| (index, &rule.pattern)),
-        )
-    })
-}
-
-#[cfg(test)]
-fn blocked_title_index() -> &'static TokenAnchorIndex {
-    static INDEX: OnceLock<TokenAnchorIndex> = OnceLock::new();
-    INDEX.get_or_init(|| {
-        TokenAnchorIndex::from_patterns(
-            BLOCKED_TITLE_RULES
-                .iter()
-                .enumerate()
-                .map(|(index, rule)| (index, &rule.pattern)),
-        )
-    })
-}
-
-#[cfg(test)]
-fn fact_index() -> &'static TokenAnchorIndex {
-    static INDEX: OnceLock<TokenAnchorIndex> = OnceLock::new();
-    INDEX.get_or_init(|| {
-        TokenAnchorIndex::from_patterns(
-            FACT_RULES
                 .iter()
                 .enumerate()
                 .map(|(index, rule)| (index, &rule.pattern)),
@@ -291,320 +202,6 @@ pub(crate) fn detect_token_signals(normalized_tokens: &[String]) -> TokenSignalM
         }
     }
     matched
-}
-
-#[cfg(test)]
-pub(crate) fn derive_facts(raw_title: &str, category_hint: Option<&str>) -> Vec<GuideFact> {
-    let tokens = normalize_raw_title_tokens(raw_title);
-    derive_facts_from_tokens(raw_title, &tokens, category_hint)
-}
-
-#[cfg(test)]
-pub(crate) fn derive_locale_group_facts(
-    projected: &ParsedReleaseMetadata,
-    category_hint: Option<&str>,
-) -> Vec<GuideFact> {
-    let Some(release_group) = projected.release_group.as_deref() else {
-        return Vec::new();
-    };
-    let facet = normalize_facet(category_hint);
-    let mut codes = BTreeSet::new();
-    for rule in LOCALE_GROUP_FACT_RULES {
-        if rule.facet == facet
-            && locale_group_matches(rule, release_group)
-            && locale_source_context_matches(rule.source_context, projected)
-        {
-            codes.insert(rule.code);
-        }
-    }
-    codes
-        .into_iter()
-        .map(|code| GuideFact {
-            code: code.to_string(),
-        })
-        .collect()
-}
-
-#[cfg(test)]
-pub(crate) fn derive_structural_facts(
-    projected: &ParsedReleaseMetadata,
-    category_hint: Option<&str>,
-) -> Vec<GuideFact> {
-    if projected.release_group.is_some() {
-        return Vec::new();
-    }
-    let facet = normalize_facet(category_hint);
-    NO_RELEASE_GROUP_FACT_FACETS
-        .contains(&facet)
-        .then(|| GuideFact {
-            code: "trash.no_release_group".to_string(),
-        })
-        .into_iter()
-        .collect()
-}
-
-#[cfg(test)]
-fn locale_group_matches(rule: &LocaleGroupFactRule, release_group: &str) -> bool {
-    match rule.match_kind {
-        LocaleGroupMatchKind::Exact => rule.matcher.eq_ignore_ascii_case(release_group),
-        LocaleGroupMatchKind::Prefix => release_group
-            .get(..rule.matcher.len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(rule.matcher)),
-    }
-}
-
-#[cfg(test)]
-fn locale_source_context_matches(
-    source_context: LocaleSourceContext,
-    projected: &ParsedReleaseMetadata,
-) -> bool {
-    match source_context {
-        LocaleSourceContext::Any | LocaleSourceContext::Anime => true,
-        LocaleSourceContext::Web => matches!(
-            projected.source,
-            Some(crate::model::ReleaseSource::WebDl | crate::model::ReleaseSource::WebRip)
-        ),
-        LocaleSourceContext::Remux => projected.is_remux,
-        LocaleSourceContext::BluRay => {
-            matches!(projected.source, Some(crate::model::ReleaseSource::BluRay))
-                && !projected.is_remux
-                && !is_uhd_quality(projected.quality.as_deref())
-        }
-        LocaleSourceContext::UhdBluRay => {
-            matches!(projected.source, Some(crate::model::ReleaseSource::BluRay))
-                && is_uhd_quality(projected.quality.as_deref())
-        }
-    }
-}
-
-#[cfg(test)]
-fn is_uhd_quality(quality: Option<&str>) -> bool {
-    quality.is_some_and(|quality| quality.contains("2160"))
-}
-
-#[cfg(test)]
-fn derive_facts_from_tokens(
-    raw_title: &str,
-    normalized_tokens: &[String],
-    category_hint: Option<&str>,
-) -> Vec<GuideFact> {
-    let scope = normalize_scope(category_hint);
-    let facet = normalize_facet(category_hint);
-    let mut codes = BTreeSet::new();
-
-    for index in token_signal_index().candidate_indices(normalized_tokens) {
-        let rule = &TOKEN_SIGNAL_RULES[index];
-        if !pattern_matches(&rule.pattern, normalized_tokens) {
-            continue;
-        }
-        match rule.kind {
-            ParserSignalKind::AiEnhanced => {
-                codes.insert("trash.ai_enhanced");
-            }
-            ParserSignalKind::Proper => {
-                codes.insert("trash.proper");
-            }
-            ParserSignalKind::Repack => {
-                codes.insert("trash.proper");
-                codes.insert("trash.repack");
-            }
-            ParserSignalKind::DubsOnly => {
-                codes.insert("trash.dubs_only");
-            }
-            ParserSignalKind::HardcodedSubs => {
-                codes.insert("trash.hardcoded_subs");
-            }
-        }
-    }
-
-    for index in blocked_title_index().candidate_indices(normalized_tokens) {
-        let rule = &BLOCKED_TITLE_RULES[index];
-        if rule_applies(rule.facet, rule.category, facet, scope)
-            && pattern_matches(&rule.pattern, normalized_tokens)
-        {
-            codes.insert(blocked_fact_code(rule.code));
-        }
-    }
-
-    for index in fact_index().candidate_indices(normalized_tokens) {
-        let rule = &FACT_RULES[index];
-        if rule_applies(rule.facet, rule.category, facet, scope)
-            && pattern_matches(&rule.pattern, normalized_tokens)
-        {
-            codes.insert(rule.code);
-        }
-    }
-
-    if has_french_vf2_exclusion(raw_title) {
-        codes.remove("trash.locale.french.marker.vff");
-        codes.remove("trash.locale.french.marker.vfq");
-    }
-    if codes.contains("trash.locale.german.marker.subbed")
-        && !matches_german_subbed(normalized_tokens)
-    {
-        codes.remove("trash.locale.german.marker.subbed");
-    }
-
-    codes
-        .into_iter()
-        .map(|code| GuideFact {
-            code: code.to_string(),
-        })
-        .collect()
-}
-
-#[cfg(test)]
-fn has_french_vf2_exclusion(raw_title: &str) -> bool {
-    let upper = raw_title.to_ascii_uppercase();
-    [
-        "VF2", "VFF.VFF", "VFF.VFQ", "VFQ.VFF", "VFQ.VFQ", "VFF VFF", "VFF VFQ", "VFQ VFF",
-        "VFQ VFQ",
-    ]
-    .iter()
-    .any(|pattern| contains_ascii_bounded(&upper, pattern))
-}
-
-#[cfg(test)]
-fn matches_german_subbed(normalized_tokens: &[String]) -> bool {
-    for (language_index, language) in normalized_tokens.iter().enumerate() {
-        if !matches!(language.as_str(), "GER" | "GERMAN") {
-            continue;
-        }
-        for (subtitle_offset, subtitle) in
-            normalized_tokens[language_index + 1..].iter().enumerate()
-        {
-            if !matches!(subtitle.as_str(), "OMU" | "SUB" | "SUBBED" | "SUBS") {
-                continue;
-            }
-            let subtitle_index = language_index + 1 + subtitle_offset;
-            let gap = &normalized_tokens[language_index + 1..subtitle_index];
-            if gap.iter().all(|token| {
-                token.chars().all(|ch| ch.is_ascii_alphabetic())
-                    && !token.contains("DUB")
-                    && !matches!(token.as_str(), "DL" | "ML")
-            }) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-#[cfg(test)]
-fn contains_ascii_bounded(value: &str, pattern: &str) -> bool {
-    value.match_indices(pattern).any(|(start, _)| {
-        let end = start + pattern.len();
-        let before_is_word = start > 0 && value.as_bytes()[start - 1].is_ascii_alphanumeric();
-        let after_is_word = end < value.len() && value.as_bytes()[end].is_ascii_alphanumeric();
-        !before_is_word && !after_is_word
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn project_safe_facts(projected: &mut ParsedReleaseMetadata) {
-    for fact in &projected.guide_facts {
-        match fact.code.as_str() {
-            "trash.ai_enhanced" => projected.is_ai_enhanced = true,
-            "trash.proper" => projected.is_proper_upload = true,
-            "trash.repack" => {
-                projected.is_proper_upload = true;
-                projected.is_repack = true;
-            }
-            "trash.hardcoded_subs" => projected.is_hardcoded_subs = true,
-            _ => {}
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn detect_blocked_title(raw_title: &str, category_hint: Option<&str>) -> Option<&'static str> {
-    let tokens = normalize_raw_title_tokens(raw_title);
-    detect_blocked_title_tokens(&tokens, category_hint)
-}
-
-#[cfg(test)]
-pub(crate) fn detect_blocked_title_tokens(
-    normalized_tokens: &[String],
-    category_hint: Option<&str>,
-) -> Option<&'static str> {
-    let scope = normalize_scope(category_hint);
-    let facet = normalize_facet(category_hint);
-    blocked_title_index()
-        .candidate_indices(normalized_tokens)
-        .into_iter()
-        .map(|index| &BLOCKED_TITLE_RULES[index])
-        .find(|rule| {
-            rule_applies(rule.facet, rule.category, facet, scope)
-                && pattern_matches(&rule.pattern, normalized_tokens)
-        })
-        .map(|rule| rule.code)
-}
-
-#[cfg(test)]
-fn rule_applies(
-    rule_facet: RuleFacet,
-    rule_category: TitleCategoryScope,
-    facet: RuleFacet,
-    scope: TitleCategoryScope,
-) -> bool {
-    rule_facet == facet
-        && (matches!(rule_category, TitleCategoryScope::Any)
-            || matches!(scope, TitleCategoryScope::Anime)
-                && matches!(rule_category, TitleCategoryScope::Anime))
-}
-
-#[cfg(test)]
-fn blocked_fact_code(code: &str) -> &'static str {
-    match code {
-        "trash_guides_anime_raws" => "trash.blocked.anime_raws",
-        "trash_guides_lq_release_title" => "trash.blocked.lq_release_title",
-        "trash_guides_fansub" => "trash.blocked.fansub",
-        "trash_guides_fastsub" => "trash.blocked.fastsub",
-        _ => "trash.blocked.legacy",
-    }
-}
-
-#[cfg(test)]
-fn normalize_facet(category_hint: Option<&str>) -> RuleFacet {
-    match category_hint
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("anime") => RuleFacet::Anime,
-        Some("series") => RuleFacet::Series,
-        _ => RuleFacet::Movie,
-    }
-}
-
-#[cfg(test)]
-fn normalize_scope(category_hint: Option<&str>) -> TitleCategoryScope {
-    match category_hint
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("anime") => TitleCategoryScope::Anime,
-        _ => TitleCategoryScope::Any,
-    }
-}
-
-#[cfg(test)]
-fn normalize_raw_title_tokens(raw_title: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    for ch in raw_title.chars() {
-        if ch.is_ascii_alphanumeric() {
-            current.push(ch.to_ascii_uppercase());
-        } else if !current.is_empty() {
-            tokens.push(current.clone());
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
 }
 
 fn pattern_matches(pattern: &TokenPattern, normalized_tokens: &[String]) -> bool {
@@ -757,7 +354,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn parser_keeps_ordinary_signals_and_streaming_service_without_guide_facts() {
         let context = crate::ReleaseParseContext {
             facet_hint: crate::ContextFacetHint::Movie,
@@ -794,8 +390,18 @@ mod tests {
                 .iter()
                 .any(|token| token == "MAX")
         );
-        assert!(analysis.guide_facts.is_empty());
-        assert!(projected.guide_facts.is_empty());
+        assert!(
+            serde_json::to_value(&analysis)
+                .unwrap()
+                .get("guide_facts")
+                .is_none()
+        );
+        assert!(
+            serde_json::to_value(&projected)
+                .unwrap()
+                .get("guide_facts")
+                .is_none()
+        );
     }
 
     #[test]

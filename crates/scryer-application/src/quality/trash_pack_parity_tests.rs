@@ -67,7 +67,14 @@ fn trash_pack_matches_native_numeric_golden() {
     let mut mismatches = 0;
     let mut samples = Vec::new();
     let mut differences = BTreeMap::<String, usize>::new();
-    for case in &golden.cases {
+    // Keep the native numeric oracle immutable. The reviewed contract overlay
+    // records only the former mandatory DV rejection becoming recoverable.
+    let contract: Value =
+        serde_json::from_str(include_str!("fixtures/trash-recoverable-expectations.json")).unwrap();
+    let mut additions: BTreeMap<usize, BTreeMap<String, i32>> =
+        serde_json::from_value(contract["cases"].clone()).unwrap();
+    assert_eq!(additions.len(), 48);
+    for (case_index, case) in golden.cases.iter().enumerate() {
         let mut profile = QualityProfile::parse(r#"{"id":"t","name":"T","criteria":{"quality_tiers":["2160P","1080P"],"allow_upgrades":true}}"#).unwrap();
         profile.criteria.scoring_persona = case.persona.clone();
         profile.criteria.scoring_overrides = case.overrides.clone();
@@ -118,7 +125,15 @@ fn trash_pack_matches_native_numeric_golden() {
             .iter()
             .map(|entry| (entry.code.clone(), entry.delta))
             .collect::<BTreeMap<_, _>>();
-        let expected = case.entries.iter().cloned().collect::<BTreeMap<_, _>>();
+        let mut expected = case.entries.iter().cloned().collect::<BTreeMap<_, _>>();
+        if let Some(entries) = additions.remove(&case_index) {
+            for (code, delta) in entries {
+                assert!(
+                    expected.insert(code, delta).is_none(),
+                    "contract additions must not replace native numeric expectations"
+                );
+            }
+        }
         if actual != expected || !result.errors.is_empty() || actual.len() != result.entries.len() {
             mismatches += 1;
             for code in actual
@@ -142,6 +157,10 @@ fn trash_pack_matches_native_numeric_golden() {
             }
         }
     }
+    assert!(
+        additions.is_empty(),
+        "every reviewed case must be evaluated"
+    );
     assert_eq!(
         mismatches,
         0,

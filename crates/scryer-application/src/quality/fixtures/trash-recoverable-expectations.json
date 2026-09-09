@@ -1,0 +1,149 @@
+{
+  "reason": "The native oracle at a96e86366 rejected Dolby Vision without fallback as a mandatory requirement when explicitly configured. The recoverable scoring contract moves this to a -10000 Rego contribution. These exact 48 case indices add that contribution; all original numeric expectations remain unchanged.",
+  "cases": {
+    "1476": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "1477": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "1478": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "1479": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2092": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2093": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2094": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2095": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "244": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "245": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "246": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "247": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2708": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2709": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2710": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "2711": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3324": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3325": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3326": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3327": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3940": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3941": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3942": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "3943": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "4556": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "4557": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "4558": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "4559": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5172": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5173": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5174": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5175": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5788": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5789": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5790": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "5791": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "6404": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "6405": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "6406": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "6407": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "7020": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "7021": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "7022": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "7023": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "860": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "861": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "862": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    },
+    "863": {
+      "dolby_vision_missing_hdr_fallback": -10000
+    }
+  }
+}

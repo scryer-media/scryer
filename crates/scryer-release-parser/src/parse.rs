@@ -263,7 +263,6 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
     ReleaseParseAnalysis {
         raw_input: inputs.raw_input.to_string(),
         sanitized_input: inputs.sanitized_input.to_string(),
-        guide_facts: Vec::new(),
         parse_hints,
         tokens: lexed.tokens,
         annotations,
@@ -4420,7 +4419,6 @@ fn build_candidate(
         .is_some_and(|value| value.eq_ignore_ascii_case("remux"));
     let projected = ParsedReleaseMetadata {
         raw_title: raw_input.to_string(),
-        guide_facts: Vec::new(),
         normalized_tokens: tokens
             .iter()
             .map(|token| token.normalized.clone())

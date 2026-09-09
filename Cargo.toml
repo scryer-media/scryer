@@ -4,7 +4,6 @@ members = [
     "xtask-release",
     "xtask-migrations",
     "xtask-support",
-    "xtask-trash-guides",
     "crates/scryer-domain",
     "crates/scryer-application",
     "crates/scryer-webauthn",

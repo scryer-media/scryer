@@ -39,6 +39,7 @@ fn fixture(persona: &str, category: &str) -> Value {
             "languages_audio": ["eng"], "languages_subtitles": [],
             "release_group": "Unknown", "has_release_group": true,
             "is_dual_audio": false, "is_atmos": false, "is_dolby_vision": false,
+            "has_hdr_fallback": false,
             "detected_hdr": false, "is_hdr10plus": false, "is_hlg": false,
             "is_10bit": false, "is_uncensored": false, "is_dubs_only": false,
             "is_remux": false, "is_bd_disk": false, "is_proper_upload": false

@@ -504,7 +504,6 @@ jobs:
             --exclude xtask-release \
             --exclude xtask-migrations \
             --exclude xtask-support \
-            --exclude xtask-trash-guides \
             --all-features \
             --no-fail-fast 2>&1 | tee rust-nextest.log
 

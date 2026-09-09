@@ -13,13 +13,13 @@ mod trash_pack_parity_tests;
 #[cfg(test)]
 mod trash_size_parity_tests;
 
+#[cfg(test)]
+pub(crate) mod pack_test_support;
 pub(crate) mod profile;
 pub mod release_dedup;
 pub(crate) mod release_group_db;
 pub(crate) mod release_parser;
 pub(crate) mod scoring_weights;
-#[cfg(test)]
-pub(crate) mod trash_scores;
 
 /// The hand-authored TRaSH ranking corpus. It spans the parser, the profile
 /// scoring path, the release-group tiers and the managed locale packs, so it
