@@ -187,6 +187,26 @@ impl DownloadRegistryRepository for RecordingDownloadRegistry {
         }))
     }
 
+    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
+        let ended = self.ended.lock().await;
+        let mut clients: Vec<(String, String)> = self
+            .reconcile_candidates
+            .lock()
+            .await
+            .iter()
+            .filter(|binding| binding.ended_at.is_none() && !ended.contains(&binding.download_id))
+            .filter_map(|binding| {
+                Some((
+                    binding.client_config_id.clone()?,
+                    binding.client_type_snapshot.clone()?.to_ascii_lowercase(),
+                ))
+            })
+            .collect();
+        clients.sort();
+        clients.dedup();
+        Ok(clients)
+    }
+
     async fn list_active_bindings_for_client_before(
         &self,
         client_config_id: &str,
@@ -806,6 +826,74 @@ async fn restart_ghost_reconcile_preserves_durable_post_queue_bindings() {
             Some(state.as_str().to_string())
         );
     }
+}
+
+/// A job bound to a client whose configuration was deleted is invisible to
+/// the per-client reconciliation above. It must still be failed, or its
+/// `Downloading` claim holds the scope against every future search.
+#[tokio::test]
+async fn snapshot_reconciles_bindings_left_on_a_deleted_client() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions,
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    // The stub stands in for the router, which reports jobs on a deleted
+    // client as authoritatively absent.
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone(), "deleted-client".to_string()])
+        .await;
+    let orphaned_download_id = scryer_domain::download_identity::DownloadId::new();
+    let orphaned_source = ClientJobLocator::new(Some("deleted-client"), "nzbget", "orphaned-1");
+    registry.bind(orphaned_source, orphaned_download_id).await;
+    registry
+        .set_reconcile_candidates(vec![DownloadClientBindingRecord {
+            download_id: orphaned_download_id,
+            client_config_id: Some("deleted-client".to_string()),
+            client_type_snapshot: Some("nzbget".to_string()),
+            client_name_snapshot: Some("Old NZBGet".to_string()),
+            native_item_id: Some("orphaned-1".to_string()),
+            created_at: Utc::now() - chrono::Duration::minutes(11),
+            last_seen_at: Some(Utc::now() - chrono::Duration::minutes(11)),
+            ended_at: None,
+        }])
+        .await;
+
+    let (_command_tx, tracked_download_rx) = tokio::sync::mpsc::channel(8);
+    let (_snapshot_tx, snapshot_rx) = tokio::sync::mpsc::channel(1);
+    let token = tokio_util::sync::CancellationToken::new();
+    let poller = tokio::spawn(
+        crate::integration::start_download_queue_poller_with_options(
+            app.clone(),
+            token.child_token(),
+            tracked_download_rx,
+            snapshot_rx,
+            crate::integration::DownloadQueuePollerOptions {
+                interval: Duration::from_millis(50),
+                ..Default::default()
+            },
+        ),
+    );
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if registry.ended.lock().await.contains(&orphaned_download_id) {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a binding on a deleted client should be reconciled and ended");
+    token.cancel();
+    poller.await.expect("poller should stop cleanly");
 }
 
 #[tokio::test]

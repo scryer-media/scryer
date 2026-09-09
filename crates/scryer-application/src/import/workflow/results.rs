@@ -412,6 +412,7 @@ async fn reconcile_terminal_download_cleanup(
     let host_managed_payload = remove_data
         && client_type.trim() != "weaver"
         && !plugin_has_native_data_removal(app, client_id).await;
+    let mut payload_disposition = None;
     let payload_cleanup_checkpoint = if host_managed_payload {
         match remove_host_payload_before_entry_cleanup(
             app,
@@ -423,24 +424,74 @@ async fn reconcile_terminal_download_cleanup(
         )
         .await
         {
-            Ok(checkpoint) => checkpoint,
+            Ok(report) => {
+                payload_disposition = Some(report.disposition);
+                report.filesystem_checkpoint
+            }
             Err(error) => {
+                // Counted on the checkpoint rather than the row's claim count
+                // so seeding holds and client outages do not spend the host
+                // deletion retry budget.
+                let mut checkpoint = record
+                    .and_then(|record| record.payload_checkpoint.as_deref())
+                    .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                    .filter(serde_json::Value::is_object)
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let failures = checkpoint
+                    .get("host_payload_failures")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|failures| u32::try_from(failures).ok())
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                if let Some(record) = record {
+                    checkpoint["host_payload_failures"] = serde_json::json!(failures);
+                    if let Err(error) = app
+                        .services
+                        .workflow
+                        .download_submissions
+                        .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint.to_string())
+                        .await
+                    {
+                        tracing::warn!(client_id, download_client_item_id, error = %error,
+                            "failed to checkpoint host payload failure count");
+                    }
+                }
+                let attempts = failures;
+                if attempts < HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL {
+                    tracing::warn!(
+                        client_id,
+                        client_type,
+                        download_client_item_id,
+                        state = state.as_str(),
+                        attempts,
+                        error = %error,
+                        "failed to remove download client payload before removing the client entry; will retry"
+                    );
+                    let seeding = seeding_report.map(|report| SeedingGateReport {
+                        action: Some(SeedingReleaseAction::Kept),
+                        ..report
+                    });
+                    return TerminalDownloadCleanup {
+                        outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                        seeding,
+                        payload: None,
+                    };
+                }
+                // Sonarr parity: host-side data deletion is best-effort. After
+                // repeated failures the client entry is removed anyway so the
+                // scope is released; the payload stays for the operator and
+                // the settled outcome says so.
                 tracing::warn!(
                     client_id,
                     client_type,
                     download_client_item_id,
                     state = state.as_str(),
+                    attempts,
                     error = %error,
-                    "failed to remove download client payload before removing the client entry"
+                    "giving up on host payload deletion; removing the client entry with the payload retained on disk"
                 );
-                let seeding = seeding_report.map(|report| SeedingGateReport {
-                    action: Some(SeedingReleaseAction::Kept),
-                    ..report
-                });
-                return TerminalDownloadCleanup {
-                    outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
-                    seeding,
-                };
+                payload_disposition = Some(HostPayloadDisposition::Unverified);
+                None
             }
         }
     } else {
@@ -582,7 +633,11 @@ async fn reconcile_terminal_download_cleanup(
         },
         ..report
     });
-    TerminalDownloadCleanup { outcome, seeding }
+    TerminalDownloadCleanup {
+        outcome,
+        seeding,
+        payload: payload_disposition,
+    }
 }
 
 async fn plugin_has_native_data_removal(app: &AppUseCase, client_id: &str) -> bool {
@@ -608,6 +663,456 @@ async fn plugin_has_native_data_removal(app: &AppUseCase, client_id: &str) -> bo
         .is_some_and(|client| client.supports_native_data_removal())
 }
 
+/// How much of each inventoried file is sampled for its content proof: the
+/// first and last 256 KiB. Enough to notice a replaced or rewritten file on a
+/// retry without re-reading every archive volume in full.
+const PAYLOAD_SAMPLE_BYTES: u64 = 256 * 1024;
+const PAYLOAD_INVENTORY_MAX_ENTRIES: usize = 10_000;
+const PAYLOAD_INVENTORY_MAX_DEPTH: usize = 8;
+/// A host payload cleanup that keeps failing is retried this many times before
+/// the client entry is removed anyway. Sonarr's `DeleteItemData` is
+/// best-effort for the same reason: the client entry is what blocks the scope,
+/// and an operator can sweep a leftover folder, whereas an entry that never
+/// leaves the client keeps every future grab for that scope on hold.
+pub(crate) const HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL: u32 = 3;
+
+/// What host-side payload deletion actually achieved for one terminal cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HostPayloadDisposition {
+    /// Every inventoried file was re-verified and removed, and the job
+    /// directory (when there was one) is gone.
+    Removed,
+    /// Only verified files were removed; something unrecognised, changed, or
+    /// not provably this job's stayed behind, and so did its directory.
+    PartiallyRetained,
+    /// Host deletion kept failing; the entry was removed with the payload
+    /// left in place for the operator.
+    Unverified,
+}
+
+struct HostPayloadCleanupReport {
+    disposition: HostPayloadDisposition,
+    filesystem_checkpoint: Option<std::path::PathBuf>,
+}
+
+/// One file Scryer expects to delete, captured before the first deletion and
+/// re-verified file by file on every attempt. A file that no longer matches
+/// its identity and content sample is not the file that was inventoried and
+/// is left alone.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PayloadInventoryEntry {
+    path: String,
+    len: u64,
+    modified_unix_nanos: Option<i64>,
+    dev: Option<u64>,
+    ino: Option<u64>,
+    sample_bytes: u64,
+    sample_blake3: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PayloadInventory {
+    pub(crate) target: String,
+    pub(crate) entries: Vec<PayloadInventoryEntry>,
+    /// Relative paths inside the job directory that are not payload-class
+    /// files (or are symlinks) and are never deleted by Scryer.
+    pub(crate) retained: Vec<String>,
+    pub(crate) directories: Vec<String>,
+}
+
+struct PayloadRemovalResult {
+    removed: usize,
+    retained: Vec<String>,
+    directory_removed: bool,
+}
+
+/// Payload classes a download client leaves behind for a job: the media
+/// itself, its subtitles and artwork, archive volumes, parity, and the scene
+/// sidecars. Anything else is unknown to Scryer and stays on disk.
+fn is_payload_class_file(path: &std::path::Path) -> bool {
+    if scryer_domain::is_video_file(path) || scryer_domain::is_subtitle_file(path) {
+        return true;
+    }
+    let Some(extension) = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+    else {
+        return false;
+    };
+    const SIDECAR_EXTENSIONS: &[&str] = &[
+        "rar", "zip", "7z", "par2", "nfo", "sfv", "srr", "srs", "txt", "log", "md5", "sha1",
+        "sha256", "url", "diz", "m3u", "torrent", "nzb", "jpg", "jpeg", "png", "webp", "gif",
+    ];
+    if SIDECAR_EXTENSIONS.contains(&extension.as_str()) {
+        return true;
+    }
+    // Multi-volume archives: `.r00`..`.r99` (and `.s00`, `.z00` continuations)
+    // plus raw split volumes `.001`...
+    let bytes = extension.as_bytes();
+    bytes.len() == 3
+        && bytes[1..].iter().all(u8::is_ascii_digit)
+        && (matches!(bytes[0], b'r' | b's' | b'z') || bytes[0].is_ascii_digit())
+}
+
+/// A job directory is Scryer's to sweep when its name is the release Scryer
+/// grabbed. Clients sanitise names differently (SABnzbd and NZBGet both strip
+/// or replace characters), so the comparison ignores everything but
+/// alphanumerics.
+fn payload_directory_name_matches_release(name: &str, source_title: &str) -> bool {
+    if name == source_title {
+        return true;
+    }
+    let normalize = |value: &str| {
+        value
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    let title = normalize(source_title);
+    !title.is_empty() && normalize(name) == title
+}
+
+fn unix_nanos(time: Option<std::time::SystemTime>) -> Option<i64> {
+    let time = time?;
+    match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_nanos()).ok(),
+        Err(error) => i64::try_from(error.duration().as_nanos())
+            .ok()
+            .map(|nanos| -nanos),
+    }
+}
+
+#[cfg(unix)]
+fn file_device_and_inode(metadata: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
+    use std::os::unix::fs::MetadataExt;
+    (Some(metadata.dev()), Some(metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_device_and_inode(_metadata: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
+    (None, None)
+}
+
+fn sample_file_proof(path: &std::path::Path, len: u64) -> std::io::Result<(u64, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = blake3::Hasher::new();
+    let head = len.min(PAYLOAD_SAMPLE_BYTES);
+    let mut buffer = vec![0u8; head as usize];
+    file.read_exact(&mut buffer)?;
+    hasher.update(&buffer);
+    let mut sampled = head;
+    if len > 2 * PAYLOAD_SAMPLE_BYTES {
+        file.seek(SeekFrom::End(-(PAYLOAD_SAMPLE_BYTES as i64)))?;
+        let mut tail = vec![0u8; PAYLOAD_SAMPLE_BYTES as usize];
+        file.read_exact(&mut tail)?;
+        hasher.update(&tail);
+        sampled += PAYLOAD_SAMPLE_BYTES;
+    } else if len > head {
+        let mut rest = Vec::new();
+        file.read_to_end(&mut rest)?;
+        hasher.update(&rest);
+        sampled = len;
+    }
+    Ok((sampled, hasher.finalize().to_hex().to_string()))
+}
+
+pub(crate) fn inventory_payload_directory_blocking(target: &std::path::Path) -> AppResult<PayloadInventory> {
+    let mut inventory = PayloadInventory {
+        target: target.to_string_lossy().into_owned(),
+        ..PayloadInventory::default()
+    };
+    let mut stack = vec![(target.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    let io_error = |what: &str, path: &std::path::Path, error: std::io::Error| {
+        AppError::Repository(format!("failed to {what} {}: {error}", path.display()))
+    };
+    while let Some((directory, depth)) = stack.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| io_error("inventory download payload directory", &directory, error))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| io_error("read download payload directory", &directory, error))?;
+            seen += 1;
+            if seen > PAYLOAD_INVENTORY_MAX_ENTRIES {
+                return Err(AppError::Validation(format!(
+                    "download payload directory {} has too many entries to inventory safely",
+                    target.display()
+                )));
+            }
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(target)
+                .map_err(|_| {
+                    AppError::Repository(format!(
+                        "download payload entry {} escaped {}",
+                        path.display(),
+                        target.display()
+                    ))
+                })?
+                .to_string_lossy()
+                .into_owned();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| io_error("inspect download payload entry", &path, error))?;
+            if metadata.file_type().is_symlink() {
+                inventory.retained.push(relative);
+                continue;
+            }
+            if metadata.is_dir() {
+                if depth + 1 > PAYLOAD_INVENTORY_MAX_DEPTH {
+                    inventory.retained.push(relative);
+                    continue;
+                }
+                inventory.directories.push(relative);
+                stack.push((path, depth + 1));
+                continue;
+            }
+            if !metadata.is_file() || !is_payload_class_file(&path) {
+                inventory.retained.push(relative);
+                continue;
+            }
+            let (sample_bytes, sample_blake3) = sample_file_proof(&path, metadata.len())
+                .map_err(|error| io_error("sample download payload file", &path, error))?;
+            let (dev, ino) = file_device_and_inode(&metadata);
+            inventory.entries.push(PayloadInventoryEntry {
+                path: relative,
+                len: metadata.len(),
+                modified_unix_nanos: unix_nanos(metadata.modified().ok()),
+                dev,
+                ino,
+                sample_bytes,
+                sample_blake3,
+            });
+        }
+    }
+    Ok(inventory)
+}
+
+fn relative_payload_path_is_safe(relative: &str) -> bool {
+    let path = std::path::Path::new(relative);
+    !relative.is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+/// Re-checks, immediately before one file is deleted, that the path still
+/// lands where the inventory saw it: every directory between the job
+/// directory and the file is a real directory (not a symlink planted since),
+/// and the file's real parent is still inside the job directory and outside
+/// every library and recycle root. An inode-and-hash match alone would follow
+/// a moved directory into a library.
+fn payload_file_location_is_verified(
+    target: &std::path::Path,
+    canonical_target: &std::path::Path,
+    path: &std::path::Path,
+    protected_roots: &[String],
+) -> bool {
+    let Ok(relative) = path.strip_prefix(target) else {
+        return false;
+    };
+    let components: Vec<_> = relative.components().collect();
+    let Some((_, ancestors)) = components.split_last() else {
+        return false;
+    };
+    let mut cursor = target.to_path_buf();
+    for component in ancestors {
+        cursor.push(component);
+        match std::fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            _ => return false,
+        }
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Ok(canonical_parent) = std::fs::canonicalize(parent) else {
+        return false;
+    };
+    if !canonical_parent.starts_with(canonical_target) {
+        return false;
+    }
+    let canonical_parent = canonical_parent.to_string_lossy();
+    !protected_roots.iter().any(|root| {
+        crate::catalog_workflow::library_root_paths_overlap(&canonical_parent, root)
+    })
+}
+
+fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path::PathBuf> {
+    match std::fs::symlink_metadata(target) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(AppError::Validation(format!(
+                "download payload directory {} is no longer a real directory",
+                target.display()
+            )));
+        }
+        Err(error) => {
+            return Err(AppError::Repository(format!(
+                "failed to inspect download payload directory {}: {error}",
+                target.display()
+            )));
+        }
+    }
+    std::fs::canonicalize(target).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to resolve download payload directory {}: {error}",
+            target.display()
+        ))
+    })
+}
+
+/// Deletes exactly the inventoried files that still match their recorded
+/// identity and content sample, then removes directories only once they are
+/// empty. Never a recursive delete: an unknown, changed, or symlinked entry
+/// keeps itself and every directory above it.
+fn remove_inventoried_payload_blocking(
+    target: &std::path::Path,
+    inventory: &PayloadInventory,
+    protected_roots: &[String],
+) -> AppResult<PayloadRemovalResult> {
+    let canonical_target = canonical_payload_directory(target)?;
+    let mut removed = 0usize;
+    let mut retained = Vec::new();
+    for entry in &inventory.entries {
+        if !relative_payload_path_is_safe(&entry.path) {
+            return Err(AppError::Validation(format!(
+                "download payload inventory entry {:?} is not a safe relative path",
+                entry.path
+            )));
+        }
+        let path = target.join(&entry.path);
+        if !payload_file_location_is_verified(target, &canonical_target, &path, protected_roots) {
+            retained.push(entry.path.clone());
+            continue;
+        }
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "failed to inspect download payload file {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        let (dev, ino) = file_device_and_inode(&metadata);
+        let identity_matches = !metadata.file_type().is_symlink()
+            && metadata.is_file()
+            && metadata.len() == entry.len
+            && unix_nanos(metadata.modified().ok()) == entry.modified_unix_nanos
+            && dev == entry.dev
+            && ino == entry.ino;
+        if !identity_matches {
+            retained.push(entry.path.clone());
+            continue;
+        }
+        let proof = sample_file_proof(&path, metadata.len()).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to re-sample download payload file {}: {error}",
+                path.display()
+            ))
+        })?;
+        if proof != (entry.sample_bytes, entry.sample_blake3.clone()) {
+            retained.push(entry.path.clone());
+            continue;
+        }
+        #[cfg(windows)]
+        {
+            let mut permissions = metadata.permissions();
+            if permissions.readonly() {
+                permissions.set_readonly(false);
+                let _ = std::fs::set_permissions(&path, permissions);
+            }
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "failed to remove download payload file {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    // Deepest directories first; a directory that still holds anything simply
+    // stays, and so do its ancestors.
+    let mut directories: Vec<&String> = inventory
+        .directories
+        .iter()
+        .filter(|directory| relative_payload_path_is_safe(directory))
+        .collect();
+    directories.sort_by_key(|directory| std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count()));
+    for directory in directories {
+        let _ = std::fs::remove_dir(target.join(directory));
+    }
+    let directory_removed = match std::fs::remove_dir(target) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    };
+    if !directory_removed {
+        // Report what is still there, bounded, so the outcome explains itself.
+        let mut leftovers = Vec::new();
+        let mut stack = vec![target.to_path_buf()];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if leftovers.len() >= 50 {
+                    break;
+                }
+                let relative = path
+                    .strip_prefix(target)
+                    .map(|relative| relative.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                        stack.push(path);
+                    }
+                    _ => leftovers.push(relative),
+                }
+            }
+        }
+        for leftover in leftovers {
+            if !retained.contains(&leftover) {
+                retained.push(leftover);
+            }
+        }
+    }
+    Ok(PayloadRemovalResult {
+        removed,
+        retained,
+        directory_removed,
+    })
+}
+
+/// Host-side payload deletion for clients that cannot delete their own data
+/// (NZBGet, entry-only torrent plugins) or whose deletion Scryer mirrors
+/// (SABnzbd). Deletion is inventory-and-verify, never a recursive wipe:
+///
+/// 1. The job directory must be provably this job's (named for the release
+///    Scryer grabbed), or Scryer's own completed import record must place an
+///    imported source file inside it (in which case only those imported files
+///    are removed, nothing else).
+/// 2. Its contents are inventoried (identity + content sample) and persisted on
+///    the cleanup row before anything is deleted, restricted to payload classes.
+/// 3. Each inventoried file is re-verified against that record immediately
+///    before its own `remove_file`; anything else stays, and directories are
+///    only removed once empty.
+///
+/// Operator path mappings are still honoured for remote-to-local translation
+/// and, when a mapped root contains the payload, for the root-availability and
+/// symlink-ancestor checks; they are no longer required to exist. Library and
+/// recycle roots are refused outright.
 async fn remove_host_payload_before_entry_cleanup(
     app: &AppUseCase,
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
@@ -615,7 +1120,7 @@ async fn remove_host_payload_before_entry_cleanup(
     client_type: &str,
     download_client_item_id: &str,
     record: Option<&crate::DownloadCleanupRecord>,
-) -> AppResult<Option<std::path::PathBuf>> {
+) -> AppResult<HostPayloadCleanupReport> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
         return Err(AppError::Validation(
@@ -640,15 +1145,21 @@ async fn remove_host_payload_before_entry_cleanup(
             download_client_item_id,
             "payload deletion already checkpointed; retrying entry operation only"
         );
-        return Ok(saved
-            .get("filesystem_checkpoint")
-            .and_then(serde_json::Value::as_str)
-            .map(std::path::PathBuf::from));
+        return Ok(HostPayloadCleanupReport {
+            disposition: saved
+                .get("disposition")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or(HostPayloadDisposition::Removed),
+            filesystem_checkpoint: saved
+                .get("filesystem_checkpoint")
+                .and_then(serde_json::Value::as_str)
+                .map(std::path::PathBuf::from),
+        });
     }
 
-    let mut completed = if let Some(completed) = record
-        .and_then(|record| record.payload_checkpoint.as_deref())
-        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+    let mut completed = if let Some(completed) = saved
+        .as_ref()
         .and_then(|checkpoint| checkpoint.get("completed").cloned())
         .and_then(|completed| {
             serde_json::from_value::<scryer_domain::CompletedDownload>(completed).ok()
@@ -678,9 +1189,9 @@ async fn remove_host_payload_before_entry_cleanup(
     let mappings = parse_download_client_remote_path_mappings(&config.config_json)?;
     apply_remote_path_mappings_to_completed_download(&mut completed, &mappings);
 
-    // Remote metadata describes a job; it cannot authorize local deletion.
-    // Only roots saved by the operator in this client's path mappings grant
-    // that authority, including explicit identity mappings on shared hosts.
+    // Mapped roots translate paths and, when one contains the payload, add the
+    // root-availability and symlink-ancestor checks. Deletion authority itself
+    // comes from the per-file verification below, not from the roots.
     let roots = mappings
         .iter()
         .map(|mapping| {
@@ -700,12 +1211,6 @@ async fn remove_host_payload_before_entry_cleanup(
             Ok(root)
         })
         .collect::<AppResult<Vec<_>>>()?;
-    if roots.is_empty() {
-        return Err(AppError::Validation(
-            "host payload cleanup requires an operator-configured local root in remote path mappings"
-                .to_string(),
-        ));
-    }
 
     let target = std::path::PathBuf::from(completed.dest_dir.trim());
     if !target.is_absolute() {
@@ -717,27 +1222,24 @@ async fn remove_host_payload_before_entry_cleanup(
     if target
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
+        || target.parent().is_none()
     {
         return Err(AppError::Validation(format!(
-            "download client payload path must not contain traversal: {}",
+            "download client payload path must not be a filesystem root or contain traversal: {}",
             target.display()
         )));
     }
-    let containing_root = crate::fs_safety::most_specific_containing_root(&target, &roots)
-        .ok_or_else(|| {
-            AppError::Validation(format!(
-                "download client payload path {} is outside configured output roots",
-                target.display()
-            ))
-        })?;
-    if target == containing_root {
+    if roots.contains(&target) {
         return Err(AppError::Validation(format!(
             "refusing to delete download client output root {}",
             target.display()
         )));
     }
-    crate::fs_safety::resolve_available_root_for_path(&target, &roots)?;
-    ensure_payload_target_parents_are_not_symlinks(&containing_root, &target).await?;
+    let containing_root = crate::fs_safety::most_specific_containing_root(&target, &roots);
+    if let Some(root) = containing_root.as_deref() {
+        crate::fs_safety::resolve_available_root_for_path(&target, &roots)?;
+        ensure_payload_target_parents_are_not_symlinks(root, &target).await?;
+    }
 
     let libraries = app.services.catalog.libraries.list(None).await?;
     let library_roots =
@@ -766,101 +1268,154 @@ async fn remove_host_payload_before_entry_cleanup(
     if library_roots.is_empty() {
         recycle_roots.push("/tmp/.scryer-recycle".into());
     }
-    if recycle_roots.iter().any(|root| {
-        crate::catalog_workflow::library_root_paths_overlap(
-            &completed.dest_dir,
-            &root.to_string_lossy(),
-        )
-    }) {
-        return Err(AppError::Validation(
-            "payload overlaps a recycle root".into(),
-        ));
-    }
-    if crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
+    let protected_roots: Vec<String> = library_roots
         .iter()
-        .any(|root| {
-            crate::catalog_workflow::library_root_paths_overlap(&completed.dest_dir, &root.path)
-        })
+        .map(|root| root.path.clone())
+        .chain(
+            recycle_roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned()),
+        )
+        .collect();
+    // The path as reported and, when it resolves differently, the path as it
+    // actually lands on disk: a symlinked job folder must not reach a library.
+    let mut protected_candidates = vec![target.to_string_lossy().into_owned()];
+    if let Ok(canonical) = tokio::fs::canonicalize(&target).await
+        && canonical != target
     {
-        return Err(AppError::Validation(format!(
-            "refusing to delete download client payload {} because it overlaps a configured library root",
-            target.display()
-        )));
+        protected_candidates.push(canonical.to_string_lossy().into_owned());
+    }
+    for candidate in &protected_candidates {
+        if recycle_roots.iter().any(|root| {
+            crate::catalog_workflow::library_root_paths_overlap(candidate, &root.to_string_lossy())
+        }) {
+            return Err(AppError::Validation("payload overlaps a recycle root".into()));
+        }
+        if library_roots
+            .iter()
+            .any(|root| crate::catalog_workflow::library_root_paths_overlap(candidate, &root.path))
+        {
+            return Err(AppError::Validation(format!(
+                "refusing to delete download client payload {} because it overlaps a configured library root",
+                target.display()
+            )));
+        }
     }
 
-    let checkpoint = host_payload_cleanup_checkpoint(
-        &containing_root,
-        client_id,
-        client_type,
-        download_client_item_id,
-        &target,
-    );
-    ensure_host_payload_cleanup_checkpoint(&checkpoint).await?;
+    let checkpoint = containing_root.as_deref().map(|root| {
+        host_payload_cleanup_checkpoint(
+            root,
+            client_id,
+            client_type,
+            download_client_item_id,
+            &target,
+        )
+    });
+    if let Some(checkpoint) = checkpoint.as_deref() {
+        ensure_host_payload_cleanup_checkpoint(checkpoint).await?;
+    }
 
-    if let Some(record) = record {
-        let plan = serde_json::json!({
-            "completed": authoritative_completed, "payload_removed": false
-        });
-        app.services
+    // Scryer's own completed import records for this canonical job: the files
+    // it actually imported from this payload, with the sizes it verified.
+    let mut imported_sources: Vec<(std::path::PathBuf, Option<u64>)> = Vec::new();
+    if let Some(download_id) = canonical_download_id {
+        let locator =
+            crate::ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
+        let imports = app
+            .services
             .workflow
-            .download_submissions
-            .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
+            .imports
+            .list_imports_for_identities(&[locator])
             .await?;
-    }
-    match tokio::fs::symlink_metadata(&target).await {
-        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
-            // A mapped root grants containment, not ownership of each file.
-            // Require Scryer's persisted import result for this canonical job;
-            // a fresh client path/name (or a checkpoint of it) is not proof.
-            let download_id = canonical_download_id.ok_or_else(|| {
-                AppError::Validation("file payload cleanup requires durable job ownership".into())
-            })?;
-            let locator =
-                crate::ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
-            let imports = app
-                .services
-                .workflow
-                .imports
-                .list_imports_for_identities(&[locator])
-                .await?;
-            let mut owned = false;
-            for import in imports {
-                if import.status != ImportStatus::Completed
-                    || app
-                        .services
-                        .workflow
-                        .imports
-                        .canonical_download_id_for_import(&import.id)
-                        .await?
-                        != Some(*download_id)
-                {
-                    continue;
-                }
-                let result = import
-                    .result_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
-                if result.as_ref().is_some_and(|result| {
-                    result.get("decision").and_then(|v| v.as_str()) == Some("imported")
-                        && result
-                            .get("source_path")
-                            .and_then(|v| v.as_str())
-                            .is_some_and(|path| std::path::Path::new(path) == target)
-                }) {
-                    owned = true;
-                    break;
-                }
+        for import in imports {
+            if import.status != ImportStatus::Completed
+                || app
+                    .services
+                    .workflow
+                    .imports
+                    .canonical_download_id_for_import(&import.id)
+                    .await?
+                    != Some(*download_id)
+            {
+                continue;
             }
-            if !owned {
+            let Some(result) = import
+                .result_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            else {
+                continue;
+            };
+            if result.get("decision").and_then(|v| v.as_str()) != Some("imported") {
+                continue;
+            }
+            if let Some(source) = result.get("source_path").and_then(|v| v.as_str()) {
+                imported_sources.push((
+                    std::path::PathBuf::from(source),
+                    result
+                        .get("file_size_bytes")
+                        .and_then(serde_json::Value::as_i64)
+                        .and_then(|size| u64::try_from(size).ok()),
+                ));
+            }
+        }
+    }
+
+    // Host deletion failures are counted on the checkpoint, separately from
+    // the row's claim count: seeding holds and client outages must not eat
+    // the retry budget promised to a temporarily unavailable mount.
+    let prior_failures = saved
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.get("host_payload_failures").cloned());
+    let persist_plan = |mut plan: serde_json::Value| {
+        let prior_failures = prior_failures.clone();
+        async move {
+        if let Some(failures) = prior_failures {
+            plan["host_payload_failures"] = failures;
+        }
+        if let Some(record) = record {
+            app.services
+                .workflow
+                .download_submissions
+                .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
+                .await?;
+        }
+        AppResult::Ok(())
+        }
+    };
+
+    let disposition = match tokio::fs::symlink_metadata(&target).await {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
+            // A single-file job: the client's path and name are not proof.
+            // Require Scryer's persisted import result for this canonical job.
+            if canonical_download_id.is_none() {
+                return Err(AppError::Validation(
+                    "file payload cleanup requires durable job ownership".into(),
+                ));
+            }
+            if !imported_sources
+                .iter()
+                .any(|(source, _)| source.as_path() == target)
+            {
                 return Err(AppError::Validation(
                     "file payload ownership is unverified; retaining source and client entry"
                         .into(),
                 ));
             }
-            crate::fs_safety::remove_file_safely_if_exists(&target).await
+            persist_plan(serde_json::json!({
+                "completed": authoritative_completed, "payload_removed": false,
+                "target": target,
+            }))
+            .await?;
+            crate::fs_safety::remove_file_safely_if_exists(&target).await?;
+            HostPayloadDisposition::Removed
         }
         Ok(metadata) if metadata.is_dir() => {
-            let source_title = match record {
+            // The release Scryer grabbed, from the durable cleanup row or the
+            // submission it was copied from. Legacy jobs whose client-side id
+            // is not a canonical Scryer id still have a submission for this
+            // exact client/item locator.
+            let mut source_title = match record {
                 Some(record) => record.source_title.clone(),
                 None => match canonical_download_id {
                     Some(id) => app
@@ -873,42 +1428,165 @@ async fn remove_host_payload_before_entry_cleanup(
                     None => None,
                 },
             };
-            let owned_name = target
+            if source_title.is_none() {
+                let locator = crate::ClientJobLocator::new(
+                    Some(client_id),
+                    client_type,
+                    download_client_item_id,
+                );
+                source_title = app
+                    .services
+                    .workflow
+                    .download_submissions
+                    .list_for_client_items(&[locator])
+                    .await?
+                    .into_iter()
+                    .filter_map(|submission| submission.source_title)
+                    .next_back();
+            }
+            let name_matches_release = target
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| source_title.as_deref() == Some(name));
-            if !owned_name {
+                .zip(source_title.as_deref())
+                .is_some_and(|(name, title)| payload_directory_name_matches_release(name, title));
+            let imported_here: Vec<&(std::path::PathBuf, Option<u64>)> = imported_sources
+                .iter()
+                .filter(|(source, _)| source.starts_with(&target) && source.as_path() != target)
+                .collect();
+            if name_matches_release {
+                // The release's own job directory: inventory it once, then
+                // delete only what re-verifies.
+                let inventory = match saved
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.get("inventory").cloned())
+                    .and_then(|value| serde_json::from_value::<PayloadInventory>(value).ok())
+                    .filter(|inventory| {
+                        std::path::Path::new(&inventory.target) == target.as_path()
+                    }) {
+                    Some(inventory) => inventory,
+                    None => {
+                        let walk_target = target.clone();
+                        let inventory = tokio::task::spawn_blocking(move || {
+                            inventory_payload_directory_blocking(&walk_target)
+                        })
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(format!("payload inventory task panicked: {error}"))
+                        })??;
+                        persist_plan(serde_json::json!({
+                            "completed": authoritative_completed, "payload_removed": false,
+                            "target": target, "inventory": inventory,
+                        }))
+                        .await?;
+                        inventory
+                    }
+                };
+                let remove_target = target.clone();
+                let remove_protected = protected_roots.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    remove_inventoried_payload_blocking(&remove_target, &inventory, &remove_protected)
+                })
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!("payload removal task panicked: {error}"))
+                })??;
+                if result.directory_removed && result.retained.is_empty() {
+                    tracing::info!(client_id, client_type, download_client_item_id,
+                        path = %target.display(), removed = result.removed,
+                        "terminal download payload removed");
+                    HostPayloadDisposition::Removed
+                } else {
+                    tracing::warn!(client_id, client_type, download_client_item_id,
+                        path = %target.display(), removed = result.removed,
+                        retained = ?result.retained,
+                        "terminal download payload partially retained: unrecognised or changed files were left in place");
+                    HostPayloadDisposition::PartiallyRetained
+                }
+            } else if !imported_here.is_empty() {
+                // Not provably the job's own directory (a shared completed
+                // folder, or a client-renamed duplicate). Remove only the files
+                // Scryer itself imported from it, verified by size, and leave
+                // the directory and everything else alone.
+                persist_plan(serde_json::json!({
+                    "completed": authoritative_completed, "payload_removed": false,
+                    "target": target,
+                    "imported_sources": imported_here.iter().map(|(source, _)| source).collect::<Vec<_>>(),
+                }))
+                .await?;
+                let canonical_target = canonical_payload_directory(&target)?;
+                let mut removed = 0usize;
+                for (source, size) in imported_here {
+                    if !payload_file_location_is_verified(
+                        &target,
+                        &canonical_target,
+                        source,
+                        &protected_roots,
+                    ) {
+                        tracing::warn!(client_id, client_type, download_client_item_id,
+                            path = %source.display(),
+                            "imported source no longer resolves inside the job directory; retained");
+                        continue;
+                    }
+                    match tokio::fs::symlink_metadata(source).await {
+                        Ok(metadata)
+                            if metadata.is_file()
+                                && !metadata.file_type().is_symlink()
+                                && size.is_none_or(|size| size == metadata.len()) =>
+                        {
+                            crate::fs_safety::remove_file_safely_if_exists(source).await?;
+                            removed += 1;
+                        }
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(AppError::Repository(format!(
+                                "failed to inspect imported source {}: {error}",
+                                source.display()
+                            )));
+                        }
+                    }
+                }
+                // Only ever an empty-directory removal; anything left keeps it.
+                let directory_removed = tokio::fs::remove_dir(&target).await.is_ok();
+                tracing::warn!(client_id, client_type, download_client_item_id,
+                    path = %target.display(), removed, directory_removed,
+                    "payload directory is not provably this job's; removed only Scryer's own imported files");
+                if directory_removed {
+                    HostPayloadDisposition::Removed
+                } else {
+                    HostPayloadDisposition::PartiallyRetained
+                }
+            } else {
                 return Err(AppError::Validation(
                     "payload directory ownership is unverified; refusing shared-directory deletion"
                         .into(),
                 ));
             }
-            crate::fs_safety::remove_dir_all_safely_if_exists(&target).await
         }
-        Ok(_) => Err(AppError::Validation(format!(
-            "download client payload path {} is not a file, directory, or symlink",
-            target.display()
-        ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to inspect download client payload {}: {error}",
-            target.display()
-        ))),
-    }?;
-    if let Some(record) = record {
-        let plan = serde_json::json!({
-            "completed": authoritative_completed, "payload_removed": true,
-            "filesystem_checkpoint": checkpoint
-        });
-        app.services
-            .workflow
-            .download_submissions
-            .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
-            .await?;
-    }
-    tracing::info!(client_id, client_type, download_client_item_id, path = %target.display(),
-        "terminal download payload removed");
-    Ok(Some(checkpoint))
+        Ok(_) => {
+            return Err(AppError::Validation(format!(
+                "download client payload path {} is not a file, directory, or symlink",
+                target.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HostPayloadDisposition::Removed,
+        Err(error) => {
+            return Err(AppError::Repository(format!(
+                "failed to inspect download client payload {}: {error}",
+                target.display()
+            )));
+        }
+    };
+    persist_plan(serde_json::json!({
+        "completed": authoritative_completed, "payload_removed": true,
+        "target": target, "disposition": disposition,
+        "filesystem_checkpoint": checkpoint,
+    }))
+    .await?;
+    Ok(HostPayloadCleanupReport {
+        disposition,
+        filesystem_checkpoint: checkpoint,
+    })
 }
 
 fn host_payload_cleanup_checkpoint(

@@ -304,11 +304,18 @@ fn submission_blocks_search_for_wanted_item(
     // An unobservable queue reads as "possibly active" everywhere else too
     // (`DownloadClientSnapshot::is_active`); with no way to build honest queued
     // pseudo-incumbents, the old whole-scope skip is the safe answer.
-    if (dl_snapshot.client_unreadable(submission.download_client_id.as_deref())
+    //
+    // A settled import that has not yet reached the catalog only holds the
+    // scope while the client is unreadable: during an outage the entry may
+    // still be there and must not be replaced. Once the client answers and the
+    // entry is simply gone, the import is history and the scope is free.
+    let client_unreadable = dl_snapshot.client_unreadable(submission.download_client_id.as_deref());
+    if (client_unreadable
         || (!submission_is_active(submission, dl_snapshot)
             && !submission_is_completed(submission, dl_snapshot)))
         && (!tracked_state.is_some_and(|state| state.is_import_settled())
-            || (!scope_is_occupied
+            || (client_unreadable
+                && !scope_is_occupied
                 && tracked_state.is_some_and(|state| state.counts_as_imported())))
     {
         tracing::info!(
@@ -4470,6 +4477,36 @@ mod task_runner_tests {
             &snapshot,
             None,
             false
+        ));
+    }
+
+    /// The outage hold above is only an outage hold: once the client answers
+    /// and the imported job is simply gone from it, the import is history and
+    /// an empty scope is free to search again.
+    #[test]
+    fn a_settled_import_absent_from_a_readable_client_frees_its_empty_scope() {
+        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+        let submission = episode_submission(
+            &item.title_id,
+            item.episode_id.as_deref().unwrap(),
+            "job-old",
+        );
+        let snapshot = snapshot_with_job("another-job", false);
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &snapshot,
+            Some(scryer_domain::TrackedDownloadState::Imported),
+            false,
+        ));
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &snapshot,
+            Some(scryer_domain::TrackedDownloadState::ImportedSeeding),
+            false,
         ));
     }
 

@@ -470,8 +470,31 @@ impl AppUseCase {
                                 AppError::DownloadSubmitUnavailable(error.to_string())
                             })?;
                         if binding.is_some() {
-                            return Err(AppError::DownloadSubmitUnavailable(
-                                "download absence is awaiting lifecycle reconciliation; acquisition deferred".into()));
+                            // The lifecycle reconciler only visits configured
+                            // clients; a binding on a deleted client would
+                            // otherwise defer this scope forever.
+                            let client_exists = match locator.client_id.as_deref() {
+                                Some(client_id) => self
+                                    .services
+                                    .integrations
+                                    .download_client_configs
+                                    .get_by_id(client_id)
+                                    .await
+                                    .map_err(|error| {
+                                        AppError::DownloadSubmitUnavailable(error.to_string())
+                                    })?
+                                    .is_some(),
+                                None => true,
+                            };
+                            if client_exists {
+                                return Err(AppError::DownloadSubmitUnavailable(
+                                    "download absence is awaiting lifecycle reconciliation; acquisition deferred".into()));
+                            }
+                            tracing::warn!(
+                                download_id = %submission.download_id,
+                                client_id = ?locator.client_id,
+                                "download client was deleted with an active binding; treating the job as absent"
+                            );
                         }
                         snapshot
                             .items

@@ -3946,6 +3946,13 @@ pub trait DownloadRegistryRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Distinct `(client_config_id, client_type)` pairs that still hold an
+    /// active binding, so the reconciler can find bindings whose client
+    /// configuration has since been deleted.
+    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
     /// End an active binding; ending an already-ended or absent binding is a no-op.
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()>;
 }

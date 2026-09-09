@@ -1259,6 +1259,102 @@ async fn reconcile_restart_ghost_bindings(
             reconcile_authoritatively_absent_source(app, tracker, &source_identity).await;
         }
     }
+
+    reconcile_deleted_client_bindings(app, tracker, excluded_client_type_refs, observed_before, remaining)
+        .await;
+}
+
+/// Bindings whose download client configuration no longer exists. The loop
+/// above only visits configured clients, so without this pass a job grabbed
+/// on a since-deleted client stays `Downloading` forever and holds its scope
+/// against every future search. The router reports such jobs as
+/// authoritatively absent, which lets the usual absent-source path fail them.
+async fn reconcile_deleted_client_bindings(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    excluded_client_type_refs: &[&str],
+    observed_before: chrono::DateTime<chrono::Utc>,
+    mut remaining: usize,
+) {
+    if remaining == 0 {
+        return;
+    }
+    let bound_clients = match app
+        .services
+        .workflow
+        .download_registry
+        .list_active_binding_clients()
+        .await
+    {
+        Ok(clients) => clients,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to list clients holding active bindings");
+            return;
+        }
+    };
+    if bound_clients.is_empty() {
+        return;
+    }
+    let configured = match app
+        .services
+        .integrations
+        .download_client_configs
+        .list(None)
+        .await
+    {
+        Ok(configs) => configs
+            .into_iter()
+            .map(|config| config.id)
+            .collect::<HashSet<_>>(),
+        Err(error) => {
+            tracing::warn!(error = %error, "skipping deleted-client binding reconciliation without client configuration");
+            return;
+        }
+    };
+    for (client_id, client_type) in bound_clients {
+        if remaining == 0 {
+            break;
+        }
+        if configured.contains(&client_id)
+            || crate::tracked_downloads::tracked_client_type_is_excluded(
+                &client_type,
+                excluded_client_type_refs,
+            )
+        {
+            continue;
+        }
+        let bindings = match app
+            .services
+            .workflow
+            .download_registry
+            .list_active_bindings_for_client_before(
+                &client_id,
+                &client_type,
+                observed_before,
+                remaining,
+            )
+            .await
+        {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                tracing::warn!(error = %error, client_id, client_type,
+                    "failed to list active bindings for a deleted download client");
+                continue;
+            }
+        };
+        remaining = remaining.saturating_sub(bindings.len());
+        for binding in bindings {
+            let Some(native_item_id) = binding.native_item_id else {
+                continue;
+            };
+            tracing::warn!(download_id = %binding.download_id, client_id, client_type,
+                item_id = %native_item_id,
+                "download client was deleted while this job was bound; reconciling it as absent");
+            let source_identity =
+                crate::ClientJobLocator::new(Some(client_id.as_str()), &client_type, native_item_id);
+            reconcile_authoritatively_absent_source(app, tracker, &source_identity).await;
+        }
+    }
 }
 
 pub(crate) async fn reconcile_authoritatively_absent_source(

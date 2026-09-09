@@ -1303,6 +1303,71 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     row.text("tracked_state")?,
                 ));
             }
+
+            // Submissions that pre-date identity states (or whose state row
+            // was never written) still carry a legacy `tracked_state` on the
+            // submission itself. Without it a settled legacy job reads as
+            // "never tracked" and freezes its scope while absent.
+            let missing: Vec<&ClientJobLocator> = chunk
+                .iter()
+                .filter(|identity| {
+                    !states.iter().any(|(known, _)| {
+                        known.client_type == identity.client_type
+                            && known.item_id == identity.item_id
+                            && normalize_download_client_id(known.client_id.as_deref())
+                                == normalize_download_client_id(identity.client_id.as_deref())
+                    })
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            let mut args = Vec::with_capacity(missing.len() * 3);
+            let clauses = missing
+                .iter()
+                .map(|identity| {
+                    args.push(SqlArg::Text(identity.client_type.clone()));
+                    args.push(SqlArg::Text(identity.item_id.clone()));
+                    args.push(SqlArg::Text(normalize_download_client_id(
+                        identity.client_id.as_deref(),
+                    )));
+                    "(download_client_type = {} AND download_client_item_id = {} AND COALESCE(download_client_id, '') = {})"
+                })
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let rows = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT download_client_id, download_client_type, download_client_item_id,
+                            tracked_state
+                     FROM (
+                         SELECT download_client_id, download_client_type,
+                                download_client_item_id, tracked_state,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY COALESCE(download_client_id, ''),
+                                                 download_client_type,
+                                                 download_client_item_id
+                                    ORDER BY submitted_at DESC, id DESC
+                                ) AS row_number
+                         FROM download_submissions
+                         WHERE tracked_state IS NOT NULL AND tracked_state <> ''
+                           AND ({clauses})
+                     ) ranked
+                     WHERE row_number = 1"
+                ),
+                &args,
+            )
+            .await?;
+            for row in rows {
+                states.push((
+                    ClientJobLocator::new(
+                        row.opt_text("download_client_id")?.as_deref(),
+                        row.text("download_client_type")?,
+                        row.text("download_client_item_id")?,
+                    ),
+                    row.text("tracked_state")?,
+                ));
+            }
         }
         Ok(states)
     }
@@ -3209,6 +3274,67 @@ mod seed_goal_tests {
         let remainder = store.list_due_download_cleanup(100).await.unwrap();
         assert_eq!(remainder.len(), 5);
         assert!(remainder.iter().all(|record| record.download_id != live));
+    }
+
+    #[tokio::test]
+    async fn legacy_submission_tracked_state_backfills_a_missing_identity_state() {
+        let store = store().await;
+        let legacy = DownloadId::new();
+        store
+            .record_submission(submission(legacy, "legacy-job", "title-1"))
+            .await
+            .unwrap();
+        // A row from before identity states existed: its only tracked state
+        // lives on the submission itself.
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "legacy_fixture",
+            "UPDATE download_submissions SET tracked_state = 'imported' WHERE id = {}",
+            vec![SqlArg::Text(legacy.to_string())],
+        )
+        .await
+        .unwrap();
+        let modern = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(modern, "modern-job", "title-1"),
+                submission_identity(modern),
+                None,
+            )
+            .await
+            .unwrap();
+        let modern_locator = ClientJobLocator::new(Some("primary"), "qbittorrent", "modern-job");
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&modern),
+                &submission_identity(modern),
+                Some(&modern_locator),
+                "downloading",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut states = store
+            .list_identity_tracked_states_for_client_items(&[
+                ClientJobLocator::new(Some("primary"), "qbittorrent", "legacy-job"),
+                modern_locator.clone(),
+                ClientJobLocator::new(Some("primary"), "qbittorrent", "never-seen"),
+            ])
+            .await
+            .unwrap();
+        states.sort_by(|left, right| left.0.item_id.cmp(&right.0.item_id));
+        assert_eq!(
+            states,
+            vec![
+                (
+                    ClientJobLocator::new(Some("primary"), "qbittorrent", "legacy-job"),
+                    "imported".to_string()
+                ),
+                (modern_locator, "downloading".to_string()),
+            ]
+        );
     }
 
     #[tokio::test]
