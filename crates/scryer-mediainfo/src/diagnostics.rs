@@ -280,6 +280,9 @@ fn sample_transport<R: MediaSource>(
             })
         });
     let Some((size, sync)) = layout else {
+        if prefix[..count].starts_with(&[0, 0, 1, 0xba]) {
+            return sample_program(source, budget, windows, result);
+        }
         return Ok(());
     };
     result.checks.extend(
@@ -329,6 +332,238 @@ fn sample_transport<R: MediaSource>(
         );
     }
     Ok(())
+}
+
+fn sample_program<R: MediaSource>(
+    source: &mut TraceSource<BoundedSource<R>>,
+    budget: u64,
+    windows: usize,
+    result: &mut StructuralDiagnostics,
+) -> io::Result<()> {
+    result.checks.extend(
+        [
+            "program_stream_packet_headers",
+            "presentation_timestamp_continuity",
+            "elementary_frame_headers",
+        ]
+        .map(str::to_owned),
+    );
+    let count = (budget.saturating_sub(source.inner.bytes_read) / windows as u64)
+        .min(1024 * 1024)
+        .min(source.len());
+    if count == 0 {
+        result.report.budget_exhausted = true;
+        return Ok(());
+    }
+    let mut previous_end = 0;
+    for index in 0..windows {
+        let first = if windows == 1 {
+            0
+        } else {
+            (u128::from(source.len().saturating_sub(count)) * index as u128 / (windows - 1) as u128)
+                as u64
+        }
+        .max(previous_end);
+        let count = count.min(source.len().saturating_sub(first));
+        if count == 0 {
+            continue;
+        }
+        source.seek(SeekFrom::Start(first))?;
+        let mut bytes = vec![0; count as usize];
+        source.read_exact(&mut bytes)?;
+        inspect_program_packets(&bytes, first, source.len(), result);
+        previous_end = first + count;
+    }
+    Ok(())
+}
+
+fn program_warning(
+    result: &mut StructuralDiagnostics,
+    code: &str,
+    message: &str,
+    id: u16,
+    offset: u64,
+) {
+    push_warning(
+        result,
+        ProbeWarning {
+            code: code.into(),
+            message: message.into(),
+            stream_id: Some(format!("{id:04x}")),
+            offset: Some(offset),
+        },
+    );
+}
+
+fn inspect_program_packets(
+    bytes: &[u8],
+    offset: u64,
+    source_length: u64,
+    result: &mut StructuralDiagnostics,
+) {
+    let mut pos = 0;
+    let mut timestamps = BTreeMap::new();
+    while pos + 4 <= bytes.len() {
+        if bytes[pos..pos + 3] != [0, 0, 1] || bytes[pos + 3] < 0xb9 {
+            pos += 1;
+            continue;
+        }
+        let stream = bytes[pos + 3];
+        let at = offset + pos as u64;
+        result.packets_sampled += 1;
+        if stream == 0xb9 {
+            pos += 4;
+            continue;
+        }
+        let header = if stream == 0xba {
+            match bytes.get(pos + 4) {
+                Some(value) if value & 0xc0 == 0x40 => {
+                    bytes.get(pos + 13).map(|value| 14 + usize::from(value & 7))
+                }
+                Some(value) if value & 0xf0 == 0x20 => Some(12),
+                Some(_) => {
+                    program_warning(
+                        result,
+                        "program_pack_header",
+                        "Unrecognized pack header version",
+                        u16::from(stream),
+                        at,
+                    );
+                    pos += 4;
+                    continue;
+                }
+                None => None,
+            }
+        } else {
+            bytes
+                .get(pos + 4..pos + 6)
+                .map(|length| 6 + usize::from(u16::from_be_bytes([length[0], length[1]])))
+        };
+        let Some(length) = header else {
+            if offset + bytes.len() as u64 == source_length {
+                program_warning(
+                    result,
+                    "program_truncation",
+                    "Source ends inside a packet header",
+                    u16::from(stream),
+                    at,
+                );
+            }
+            break;
+        };
+        if length as u64 > source_length.saturating_sub(at) {
+            program_warning(
+                result,
+                "program_truncation",
+                "Declared packet extends beyond the source",
+                u16::from(stream),
+                at,
+            );
+            break;
+        }
+        if length > bytes.len() - pos {
+            // The packet can continue outside this sampled window. Its source
+            // extent was checked above; a sample boundary is not truncation.
+            break;
+        }
+        let packet = &bytes[pos..pos + length];
+        pos += length;
+        if !matches!(stream, 0xbd | 0xc0..=0xef) {
+            continue;
+        }
+        if length == 6 {
+            program_warning(
+                result,
+                "program_unbounded_packet",
+                "A zero-length PES packet cannot be fully delimited in this sample",
+                u16::from(stream),
+                at,
+            );
+            continue;
+        }
+        let body = &packet[6..];
+        let mpeg2 = body[0] & 0xc0 == 0x80;
+        if mpeg2 && body[0] & 0x30 != 0 {
+            result.report.status = ProbeStatus::Encrypted;
+            program_warning(
+                result,
+                "program_scrambled",
+                "PES packet declares scrambled payload",
+                u16::from(stream),
+                at,
+            );
+            continue;
+        }
+        let Some((mut payload, timestamp)) = crate::ps::pes_payload(body) else {
+            program_warning(
+                result,
+                "program_pes_header",
+                "PES header does not fit its declared packet",
+                u16::from(stream),
+                at,
+            );
+            continue;
+        };
+        let mut id = u16::from(stream);
+        if stream == 0xbd {
+            let Some(substream) = payload.first().copied() else {
+                program_warning(
+                    result,
+                    "program_private_header",
+                    "Private packet has no substream identifier",
+                    id,
+                    at,
+                );
+                continue;
+            };
+            id = 0xbd00 | u16::from(substream);
+            let skip = if substream >= 0x80 { 4 } else { 1 };
+            let Some(rest) = payload.get(skip..) else {
+                program_warning(
+                    result,
+                    "program_private_header",
+                    "Private stream header is truncated",
+                    id,
+                    at,
+                );
+                continue;
+            };
+            payload = rest;
+        }
+        if mpeg2
+            && (body[1] & 0xc0 == 0x40
+                || (body[1] & 0x80 != 0 && (body[2] < 5 || timestamp.is_none())))
+        {
+            program_warning(
+                result,
+                "presentation_timestamp_markers",
+                "PES timestamp flags, length, or marker bits are invalid",
+                id,
+                at,
+            );
+        } else if let Some(timestamp) = timestamp {
+            if let Some(old) = timestamps.insert(id, timestamp) {
+                let backward = (old + (1_u64 << 33) - timestamp) % (1_u64 << 33);
+                if backward > 90_000 && backward < (1_u64 << 32) {
+                    program_warning(
+                        result,
+                        "presentation_timestamp_regression",
+                        "Presentation timestamp moves backward by over one second within a sampled window",
+                        id,
+                        at,
+                    );
+                }
+            }
+        }
+        if (0xe0..=0xef).contains(&stream) {
+            result.frame_headers_sampled += payload
+                .windows(6)
+                .filter(|header| {
+                    header[..4] == [0, 0, 1, 0] && (1..=4).contains(&((header[5] >> 3) & 7))
+                })
+                .count() as u64;
+        }
+    }
 }
 
 fn inspect_packets(
@@ -526,6 +761,109 @@ mod tests {
             ((timestamp as u8 & 0x7f) << 1) | 1,
         ]);
         packet
+    }
+
+    #[test]
+    fn program_sampling_checks_timestamps_scrambling_and_true_truncation() {
+        fn pes(timestamp: u64) -> Vec<u8> {
+            let mut bytes = packet(0, timestamp)[4..18].to_vec();
+            bytes[4..6].copy_from_slice(&14_u16.to_be_bytes());
+            bytes.extend([0, 0, 1, 0, 0, 8]);
+            bytes
+        }
+        let bytes = [pes(900_000), pes(903_600), pes(90_000)].concat();
+        let mut report = StructuralDiagnostics::default();
+        inspect_program_packets(&bytes, 0, bytes.len() as u64, &mut report);
+        assert_eq!(report.packets_sampled, 3);
+        assert_eq!(report.frame_headers_sampled, 3);
+        assert!(report.report.warnings.iter().any(|warning| warning.code
+            == "presentation_timestamp_regression"
+            && warning.stream_id.as_deref() == Some("00e0")));
+        let bytes = [pes((1 << 33) - 1800), pes(1800)].concat();
+        let mut report = StructuralDiagnostics::default();
+        inspect_program_packets(&bytes, 0, bytes.len() as u64, &mut report);
+        assert!(report.report.warnings.is_empty());
+        let full = pes(0);
+        for (source_length, truncated) in [
+            (full.len() as u64 + 100, false),
+            (full.len() as u64 - 1, true),
+        ] {
+            let mut report = StructuralDiagnostics::default();
+            inspect_program_packets(&full[..full.len() - 1], 0, source_length, &mut report);
+            assert_eq!(
+                report
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "program_truncation"),
+                truncated
+            );
+        }
+        for (index, value, warning) in [
+            (6, 0x90, "program_scrambled"),
+            (8, 255, "program_pes_header"),
+            (9, 0x20, "presentation_timestamp_markers"),
+        ] {
+            let mut bytes = full.clone();
+            bytes[index] = value;
+            let mut report = StructuralDiagnostics::default();
+            inspect_program_packets(&bytes, 0, bytes.len() as u64, &mut report);
+            assert!(
+                report
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|item| item.code == warning),
+                "{warning}"
+            );
+            if index == 6 {
+                assert_eq!(report.report.status, ProbeStatus::Encrypted);
+            }
+        }
+    }
+
+    #[test]
+    fn program_diagnostics_share_the_aggregate_budget_and_report_partial_coverage() {
+        let mut unit = vec![0, 0, 1, 0xba, 0x44, 0, 4, 0, 4, 1, 0, 0, 3, 0xf8];
+        let mut pes = packet(0, 0)[4..18].to_vec();
+        pes[4..6].copy_from_slice(&14_u16.to_be_bytes());
+        pes.extend([0, 0, 1, 0, 0, 8]);
+        unit.extend(pes);
+        let mut source = io::Cursor::new(unit.repeat(5000));
+        let report = diagnose_source(
+            &mut source,
+            "vob",
+            DiagnosticsOptions {
+                read_budget_bytes: 8192,
+                sample_windows: 4,
+                ..Default::default()
+            },
+        );
+        assert!(
+            report
+                .checks
+                .iter()
+                .any(|check| check == "program_stream_packet_headers")
+        );
+        assert!(report.packets_sampled > 0);
+        assert!(report.frame_headers_sampled > 0);
+        assert!(report.report.bytes_read <= 8192);
+        assert_eq!(report.report.status, ProbeStatus::Incomplete);
+        assert!(
+            report
+                .coverage
+                .iter()
+                .map(|range| range.length)
+                .sum::<u64>()
+                < report.source_length
+        );
+        assert!(
+            !report
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "program_truncation")
+        );
     }
 
     #[test]

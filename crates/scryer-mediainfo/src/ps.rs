@@ -145,7 +145,7 @@ fn pts(bytes: &[u8]) -> Option<u64> {
     )
 }
 
-fn pes_payload(packet: &[u8]) -> Option<(&[u8], Option<u64>)> {
+pub(crate) fn pes_payload(packet: &[u8]) -> Option<(&[u8], Option<u64>)> {
     let mut pos = 0;
     if packet.first()? & 0xc0 == 0x80 {
         if packet.len() < 3 || packet[0] & 0x30 != 0 {
