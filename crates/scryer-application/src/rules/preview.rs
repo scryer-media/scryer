@@ -202,14 +202,12 @@ impl AppUseCase {
                 .rule_sets
                 .list_enabled_rule_sets()
                 .await?;
-            let draft_source = edit_source.as_ref().or(copy_source.as_ref());
-            let draft_phase = draft_source
-                .map(|source| source.evaluation_phase)
-                .unwrap_or_default();
-            let draft_exclusive_group =
-                draft_source.and_then(|source| source.exclusive_group.clone());
-            let draft_tags = draft_source.and_then(|source| source.managed_tag_filter.clone());
-            if let Some(source) = edit_source {
+            // Edits retain their saved metadata. An ordinary copy is a new
+            // user rule and follows create_rule_set's additional/default
+            // metadata; only the tracked copy-and-disable path preserves the
+            // managed source's phase, group, and tag scope.
+            let mut tracked_copy = false;
+            if let Some(source) = edit_source.as_ref() {
                 enabled.retain(|rule_set| rule_set.id != source.id);
             }
             if let Some(source) = copy_source.as_ref() {
@@ -228,7 +226,17 @@ impl AppUseCase {
                 if tracked && request.copy_disables_source {
                     enabled.retain(|rule_set| rule_set.id != source.id);
                 }
+                tracked_copy = tracked;
             }
+            let inherited_source = edit_source
+                .as_ref()
+                .or_else(|| tracked_copy.then_some(copy_source.as_ref()).flatten());
+            let draft_phase = inherited_source
+                .map(|source| source.evaluation_phase)
+                .unwrap_or_default();
+            let draft_exclusive_group =
+                inherited_source.and_then(|source| source.exclusive_group.clone());
+            let draft_tags = inherited_source.and_then(|source| source.managed_tag_filter.clone());
             let plugin_policies = self
                 .services
                 .integrations

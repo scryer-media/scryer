@@ -245,6 +245,7 @@ impl QualityProfileDecision {
     }
 
     /// Record a decision point and keep the derived fields consistent.
+    #[cfg(test)]
     fn log(&mut self, code: &str, delta: i32) {
         self.log_with_source(code, delta, ScoringSource::Builtin);
     }
@@ -1353,14 +1354,12 @@ pub fn parse_published_at(raw: &str) -> Option<DateTime<Utc>> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
 enum MediaSizeCategory {
     Movie,
     Series,
     Anime,
 }
 
-#[cfg(test)]
 fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCategory {
     let Some(raw) = category_hint else {
         return MediaSizeCategory::Movie;
@@ -1379,7 +1378,6 @@ fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCatego
 /// values produce expected GiB equivalent to the previous hardcoded table.
 /// 2160P values were intentionally recalibrated upward based on real remux and
 /// WEB-DL sizes (e.g. movie 2160P: old 22 GiB → new ~50 GiB at 120 min).
-#[cfg(test)]
 fn expected_bitrate_mbps(
     quality: Option<&str>,
     media_category: MediaSizeCategory,
@@ -1421,7 +1419,6 @@ fn expected_bitrate_mbps(
 ///
 /// Values match the canonical codec strings emitted by `parse_release_metadata`
 /// (`"H.264"`, `"H.265"`, `"AV1"`, `"VP9"`).
-#[cfg(test)]
 fn codec_efficiency_factor(codec: Option<&VideoCodec>) -> f64 {
     match codec {
         Some(VideoCodec::Av1) => 0.50,
@@ -1434,7 +1431,6 @@ fn codec_efficiency_factor(codec: Option<&VideoCodec>) -> f64 {
 
 /// Source-type multiplier applied to the expected bitrate.  Bluray encodes are
 /// larger than WEB-DL; remuxes larger still.
-#[cfg(test)]
 fn source_size_factor(
     source: Option<&ReleaseSource>,
     is_remux: bool,
@@ -1459,7 +1455,6 @@ fn source_size_factor(
 }
 
 /// Default runtime (minutes) assumed when TVDB metadata is unavailable.
-#[cfg(test)]
 fn default_runtime_minutes(media_category: MediaSizeCategory) -> f64 {
     match media_category {
         MediaSizeCategory::Movie => 120.0,
@@ -1797,6 +1792,62 @@ impl CoverageSizeBasis {
 #[cfg(test)]
 pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
 
+/// Preserve the mandatory upper size bound independently of customizable scores.
+/// This emits only a zero-point requirement failure; the pack owns the size curve.
+pub(crate) fn apply_size_requirement(
+    decision: &mut QualityProfileDecision,
+    profile: &QualityProfile,
+    release: &ParsedReleaseMetadata,
+    size_bytes: Option<i64>,
+    category_hint: Option<&str>,
+    size_basis: CoverageSizeBasis,
+) {
+    let Some(bytes) = size_bytes.filter(|bytes| *bytes > 0) else {
+        return;
+    };
+    let category = normalize_media_size_category(category_hint);
+    let balanced = profile.criteria.scoring_persona == ScoringPersona::Balanced;
+    // These are the release's admission limits, not persona score weights.
+    let bitrate = expected_bitrate_mbps(
+        normalize_quality_tier(release.quality.as_deref()).as_deref(),
+        category,
+        if balanced { 32.0 } else { 57.0 },
+    );
+    let codec_factor = codec_efficiency_factor(release.video_codec.as_ref());
+    let source_factor = source_size_factor(
+        release.source.as_ref(),
+        release.is_remux,
+        release.is_bd_disk,
+        category == MediaSizeCategory::Anime,
+        if profile.criteria.prefer_remux || !balanced {
+            1.45
+        } else {
+            1.0
+        },
+    );
+    let runtime = size_basis
+        .total_runtime_minutes
+        .filter(|minutes| *minutes > 0)
+        .map(f64::from)
+        .unwrap_or_else(|| default_runtime_minutes(category));
+    let expected_gib =
+        (bitrate * codec_factor * source_factor * (runtime * 60.0) / 8.0 / 1024.0).max(0.5);
+    let upper_ratio = if category == MediaSizeCategory::Anime {
+        6.0
+    } else {
+        8.0
+    } * if release.video_codec == Some(VideoCodec::Av1) {
+        1.5
+    } else {
+        1.0
+    };
+    // The member-size reinterpretation only applies below the lower bands and
+    // therefore cannot change this upper-bound verdict.
+    if bytes as f64 / (1024.0 * 1024.0 * 1024.0) / expected_gib >= upper_ratio {
+        decision.reject_requirement("size_implausible_for_quality");
+    }
+}
+
 /// Apply category-aware size scoring using a bitrate-based model.
 ///
 /// Expected file size is derived from `bitrate × runtime × codec_factor ×
@@ -1969,6 +2020,111 @@ mod tests {
     use scryer_release_parser::{
         ContextEpisode, ContextFacetHint, ContextTitle, ReleaseParseContext,
     };
+
+    #[test]
+    fn mandatory_size_bound_preserves_legacy_verdict_without_numeric_entries() {
+        for persona in [
+            ScoringPersona::Balanced,
+            ScoringPersona::Audiophile,
+            ScoringPersona::Efficient,
+            ScoringPersona::Compatible,
+        ] {
+            let weights = build_weights(&persona, &ScoringOverrides::default());
+            for category in ["movie", "series", "anime"] {
+                let media = normalize_media_size_category(Some(category));
+                for name in [
+                    "Film.2160p.BluRay.Remux.H.265",
+                    "Film.1080p.WEB-DL.H.264",
+                    "Film.2160p.WEB-DL.AV1",
+                    "Film.480p.BluRay.H.264",
+                ] {
+                    let parsed = parse_release_metadata(name);
+                    for prefer_remux in [false, true] {
+                        let mut profile = QualityProfile::parse(r#"{"id":"size","name":"Size","criteria":{"allow_unknown_quality":true}}"#).unwrap();
+                        profile.criteria.scoring_persona = persona.clone();
+                        profile.criteria.prefer_remux = prefer_remux;
+                        for basis in [
+                            CoverageSizeBasis::default(),
+                            CoverageSizeBasis::single(Some(140)),
+                            CoverageSizeBasis::aggregate(Some(540), Some(45), 12),
+                        ] {
+                            let expected = (expected_bitrate_mbps(
+                                normalize_quality_tier(parsed.quality.as_deref()).as_deref(),
+                                media,
+                                weights.movie_2160p_bitrate_mbps,
+                            ) * codec_efficiency_factor(
+                                parsed.video_codec.as_ref(),
+                            ) * source_size_factor(
+                                parsed.source.as_ref(),
+                                parsed.is_remux,
+                                parsed.is_bd_disk,
+                                media == MediaSizeCategory::Anime,
+                                if prefer_remux {
+                                    1.45
+                                } else {
+                                    weights.remux_size_factor_when_not_preferred
+                                },
+                            ) * (basis
+                                .total_runtime_minutes
+                                .map(f64::from)
+                                .unwrap_or_else(|| default_runtime_minutes(media))
+                                * 60.0)
+                                / 8.0
+                                / 1024.0)
+                                .max(0.5);
+                            let boundary = (expected
+                                * size_ratio_thresholds_for_codec(
+                                    media,
+                                    parsed.video_codec.as_ref(),
+                                )
+                                .implausible
+                                * 1024.0
+                                * 1024.0
+                                * 1024.0) as i64;
+                            for bytes in [
+                                None,
+                                Some(0),
+                                Some(-1),
+                                Some(boundary - 1),
+                                Some(boundary),
+                                Some(boundary + 1),
+                            ] {
+                                let mut oracle = evaluate_profile_requirements(
+                                    &profile,
+                                    &parsed,
+                                    false,
+                                    Some(category),
+                                );
+                                let mut actual = oracle.clone();
+                                super::apply_size_scoring_for_category_with_remux_preference(
+                                    &mut oracle,
+                                    &parsed,
+                                    bytes,
+                                    Some(category),
+                                    basis,
+                                    prefer_remux,
+                                    &weights,
+                                );
+                                apply_size_requirement(
+                                    &mut actual,
+                                    &profile,
+                                    &parsed,
+                                    bytes,
+                                    Some(category),
+                                    basis,
+                                );
+                                assert_eq!(
+                                    actual.block_codes, oracle.block_codes,
+                                    "{persona:?} {category} {name} remux={prefer_remux} {basis:?} {bytes:?}"
+                                );
+                                assert!(actual.scoring_log.iter().all(|entry| entry.delta == 0));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     fn apply_size_scoring_for_category(
         decision: &mut QualityProfileDecision,

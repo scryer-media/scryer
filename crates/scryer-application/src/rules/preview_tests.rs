@@ -1,7 +1,8 @@
 use super::*;
+use crate::RuleSetRepository;
 use crate::lib_tests::bootstrap;
 use crate::rules::workflow::tests::TestRuleSetRepo;
-use scryer_domain::{MediaFacet, NewTitle};
+use scryer_domain::{MediaFacet, NewTitle, RuleEvaluationPhase, RuleSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -200,6 +201,55 @@ async fn preview_replaces_edits_but_keeps_ordinary_copy_source_active() {
                 .entries
                 .iter()
                 .any(|entry| entry.code == "replacement_score")
+    }));
+}
+
+#[tokio::test]
+async fn preview_ordinary_copy_uses_create_metadata_instead_of_custom_source_metadata() {
+    let (app, user, repo) = preview_app_without_policies();
+    let title = movie(&app, &user).await;
+    let now = chrono::Utc::now();
+    let source = RuleSet {
+        id: "custom_baseline".to_string(),
+        name: "Custom baseline".to_string(),
+        description: String::new(),
+        rego_source: scryer_rules::rewrite_package_declaration(
+            "score_entry[\"source_baseline\"] := 11",
+            "custom_baseline",
+        ),
+        enabled: true,
+        priority: 0,
+        evaluation_phase: RuleEvaluationPhase::Baseline,
+        exclusive_group: Some("custom-group".to_string()),
+        disabled_reason: None,
+        applied_facets: vec![MediaFacet::Movie],
+        created_at: now,
+        updated_at: now,
+        is_managed: false,
+        managed_key: None,
+        managed_tag_filter: None,
+    };
+    repo.create_rule_set(&source)
+        .await
+        .expect("custom source should persist");
+
+    let mut copied = request(
+        title.id,
+        "score_entry[\"draft_subtotal\"] := input.builtin_score.total",
+    );
+    copied.copy_source_rule_set_id = Some(source.id.clone());
+    let result = app
+        .test_rule_set(&user, copied)
+        .await
+        .expect("ordinary copy preview should use create-rule metadata");
+
+    assert_eq!(result.draft_contribution.score, 11);
+    assert!(result.rule_sets.iter().any(|rule| {
+        rule.rule_set_id.as_deref() == Some(source.id.as_str())
+            && rule
+                .entries
+                .iter()
+                .any(|entry| entry.code == "source_baseline")
     }));
 }
 

@@ -336,11 +336,19 @@ pub(crate) fn build_import_profile_decision(
     size_bytes: Option<i64>,
     has_existing_file: bool,
 ) -> crate::QualityProfileDecision {
-    let decision = crate::quality_profile::evaluate_profile_requirements(
+    let mut decision = crate::quality_profile::evaluate_profile_requirements(
         profile,
         parsed,
         has_existing_file,
         Some(category_hint),
+    );
+    crate::quality_profile::apply_size_requirement(
+        &mut decision,
+        profile,
+        parsed,
+        size_bytes,
+        Some(category_hint),
+        size_basis,
     );
     decision
 }

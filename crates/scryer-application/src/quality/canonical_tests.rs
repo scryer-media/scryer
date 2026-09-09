@@ -362,6 +362,46 @@ fn large_analyzed_swing_is_contradicted_and_clamped() {
     );
 }
 
+#[test]
+fn size_contradictions_require_comparable_facts_even_without_scoring_rules() {
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let mut context = ctx(&profile, &weights, &[]);
+    context.rules = None;
+    for (claim, actual, contradicts) in [
+        (Some(8 * GIB), 2 * GIB, false),
+        (Some(8 * GIB), 2 * GIB - 1, true),
+        (Some(GIB), 4 * GIB, false),
+        (Some(GIB), 4 * GIB + 1, true),
+        (None, GIB, false),
+        (Some(0), GIB, false),
+        (Some(-1), GIB, false),
+        (Some(8 * GIB), 0, false),
+    ] {
+        let mut evidence = announced(8.0).with_analysis(analyzed(1.0, None));
+        evidence.announced_size_bytes = claim;
+        evidence.analyzed.as_mut().unwrap().actual_size_bytes = actual;
+        let scored = score_release(&evidence, &context);
+        assert_eq!(
+            matches!(scored.truth_verdict, TruthVerdict::Contradicted { .. }),
+            contradicts,
+            "claim={claim:?}, actual={actual}: {:?}",
+            scored.truth_verdict
+        );
+        assert_eq!(
+            scored.truth_variance, 0,
+            "facts do not invent score contributions"
+        );
+    }
+    context.size_basis = CoverageSizeBasis::aggregate(Some(540), Some(45), 12);
+    let scored = score_release(&announced(8.0).with_analysis(analyzed(1.0, None)), &context);
+    assert_eq!(
+        scored.truth_verdict,
+        TruthVerdict::Consistent,
+        "a pack's announced bytes are not comparable to one landed member"
+    );
+}
+
 /// A small, honest difference is a variance, not a contradiction, and it lands
 /// in the persisted bar unclamped.
 #[test]

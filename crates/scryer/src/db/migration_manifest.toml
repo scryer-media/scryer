@@ -2107,18 +2107,18 @@ engine = "postgres"
 scope = "all"
 
 [[migration]]
-version = 229
+version = 228
 description = "rule set evaluation metadata"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0229_rule_set_evaluation_metadata.sql"
+file = "migrations/0228_rule_set_evaluation_metadata.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0229_rule_set_evaluation_metadata.sql"
+file = "postgres/migrations/0228_rule_set_evaluation_metadata.sql"
 engine = "postgres"
 scope = "all"

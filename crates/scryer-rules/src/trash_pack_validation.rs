@@ -226,8 +226,14 @@ fn benchmark_trash_pack_rebuild_cycles() {
     let policies = pack_policies();
     let input = fixture("balanced", "anime");
     let mut retained = Vec::new();
-    for _ in 0..12 {
-        let engine = UserRulesEngine::build(&policies).unwrap();
+    for revision in 0..12 {
+        let mut revised_policies = policies.clone();
+        for policy in &mut revised_policies {
+            policy
+                .rego_source
+                .push_str(&format!("\nupdate_revision := {revision}\n"));
+        }
+        let engine = UserRulesEngine::build(&revised_policies).unwrap();
         let mut evaluator = engine.evaluator();
         evaluator.engine.set_input(input.clone().into());
         for policy in &policies {
@@ -240,6 +246,7 @@ fn benchmark_trash_pack_rebuild_cycles() {
         }
         drop(evaluator);
         drop(engine);
+        drop(revised_policies);
         retained.push(resident_bytes());
     }
     println!("after_drop_resident_bytes_by_cycle={retained:?}");

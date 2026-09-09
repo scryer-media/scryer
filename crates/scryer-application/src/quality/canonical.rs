@@ -53,14 +53,8 @@ use crate::quality_profile::{
 };
 use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
 
-/// Cap on how far analyzed evidence may move a score before the difference stops
-/// being a *variance* and becomes a *contradiction*.
-///
-/// One size-bucket step on the Balanced curve. A release that probes one bucket
-/// away from its announcement is the ordinary case — packaging overhead, a
-/// slightly short episode. A release that moves further than this was not the
-/// release it claimed to be, and that is a truth verdict for admission to act
-/// on, not a number to fold into the bar.
+/// Clamp on the informational difference between announced and analyzed scores.
+/// Customizable arithmetic cannot establish factual contradictions.
 pub(crate) const TRUTH_VARIANCE_BOUND: i32 = 700;
 
 /// The single `search_mode` value handed to score-bearing rules.
@@ -181,8 +175,7 @@ pub(crate) struct ScoredReleasePreview {
 pub(crate) enum TruthVerdict {
     /// No analysis yet, or the file matched its announcement within bounds.
     Consistent,
-    /// The file differs from its announcement by more than [`TRUTH_VARIANCE_BOUND`],
-    /// or a scored fact changed materially. The release was mis-advertised.
+    /// Measured size or quality materially contradicts a comparable announcement.
     Contradicted { codes: Vec<String> },
     /// The announcement **asserted** the field a veto keys on and the file
     /// contradicts it: the name said H.265 and the stream is a blocklisted
@@ -355,6 +348,14 @@ fn score_release_with_rules(
             );
             let mut classified =
                 classify_truth(&evidence.parsed, &announced_decision, &analyzed_pass);
+            if matches!(classified.1, TruthVerdict::Consistent)
+                && !ctx.size_basis.covers_multiple_members()
+                && size_claim_mismatch(evidence.announced_size_bytes, analyzed.actual_size_bytes)
+            {
+                classified.1 = TruthVerdict::Contradicted {
+                    codes: vec!["size_claim_mismatch".into()],
+                };
+            }
             analyzed_quality = analyzed_parsed.quality.clone();
 
             // A quality change is a contradiction on its own, whatever the
@@ -453,6 +454,14 @@ fn run_term_pipeline(
     // admission concern and is applied there, against the real incumbent set.
     let mut decision =
         evaluate_profile_requirements(&resolved_profile, parsed, false, Some(ctx.category));
+    crate::quality_profile::apply_size_requirement(
+        &mut decision,
+        &resolved_profile,
+        parsed,
+        size_bytes,
+        Some(ctx.category),
+        ctx.size_basis,
+    );
 
     // Deliberately absent: apply_age_scoring. Release age is listing metadata,
     // and a freshness bonus makes a same-size re-grab read as an upgrade —
@@ -666,66 +675,22 @@ fn classify_truth(
 
     // Rule/pack changes report variance but cannot on their own prove a lie.
     let raw = numeric_score(analyzed).saturating_sub(numeric_score(announced));
-    let builtin_score = |decision: &QualityProfileDecision| {
-        crate::quality_profile::sum_score_deltas(
-            decision
-                .scoring_log
-                .iter()
-                .filter(|entry| {
-                    entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
-                        && matches!(entry.source, ScoringSource::Builtin)
-                })
-                .map(|entry| entry.delta),
-        )
-    };
-    let builtin_variance = builtin_score(analyzed).saturating_sub(builtin_score(announced));
-
-    if builtin_variance.unsigned_abs() > TRUTH_VARIANCE_BOUND as u32 {
-        return (
-            raw.clamp(-TRUTH_VARIANCE_BOUND, TRUTH_VARIANCE_BOUND),
-            TruthVerdict::Contradicted {
-                codes: contradiction_codes(announced, analyzed),
-            },
-        );
-    }
-
     (
         raw.clamp(-TRUTH_VARIANCE_BOUND, TRUTH_VARIANCE_BOUND),
         TruthVerdict::Consistent,
     )
 }
 
-/// Name only built-in numeric evidence that moved. Rule-authored codes are
-/// arithmetic labels and must never impersonate evidence of a quality change.
-fn contradiction_codes(
-    announced: &QualityProfileDecision,
-    analyzed: &QualityProfileDecision,
-) -> Vec<String> {
-    use std::collections::HashMap;
-
-    let announced_by_code: HashMap<&str, i32> = announced
-        .scoring_log
-        .iter()
-        .filter(|entry| {
-            entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
-                && matches!(entry.source, ScoringSource::Builtin)
-        })
-        .map(|entry| (entry.code.as_str(), entry.delta))
-        .collect();
-
-    let mut codes: Vec<String> = analyzed
-        .scoring_log
-        .iter()
-        .filter(|entry| {
-            entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
-                && matches!(entry.source, ScoringSource::Builtin)
-        })
-        .filter(|entry| announced_by_code.get(entry.code.as_str()) != Some(&entry.delta))
-        .map(|entry| entry.code.clone())
-        .collect();
-    codes.sort();
-    codes.dedup();
-    codes
+/// Compare only known positive byte counts. A fourfold discrepancy is well
+/// outside normal packaging overhead; score weights cannot affect this fact.
+/// The caller must establish that both byte counts cover the same single item.
+fn size_claim_mismatch(announced: Option<i64>, actual: i64) -> bool {
+    let Some(announced) = announced.filter(|bytes| *bytes > 0) else {
+        return false;
+    };
+    actual > 0
+        && (i128::from(actual) * 4 < i128::from(announced)
+            || i128::from(announced) * 4 < i128::from(actual))
 }
 
 /// Rebuild the analyzed half of a stored file's evidence.
