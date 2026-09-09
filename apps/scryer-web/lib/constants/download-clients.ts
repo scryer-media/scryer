@@ -6,7 +6,7 @@ export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = [
   "nzbget",
 ] as const;
 
-export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "nzbget";
+export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "weaver";
 
 export const BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS: Record<string, string> = {
   nzbget: "NZBGet",
