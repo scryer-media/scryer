@@ -369,6 +369,7 @@ export function RuleSetTestPanel({
                     loadingEpisodes ? "Loading episodes…" : "Select an episode"
                   }
                   filterPlaceholder="Filter episodes"
+                  filterByValue={false}
                   ariaLabel="Episode"
                   optionIdPrefix="settings-rule-test-episode-option"
                   disabled={loadingEpisodes}

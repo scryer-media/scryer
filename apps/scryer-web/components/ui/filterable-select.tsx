@@ -34,6 +34,7 @@ type FilterableSelectProps = {
   id?: string;
   placeholder?: string;
   filterPlaceholder?: string;
+  filterByValue?: boolean;
   emptyLabel?: string;
   ariaLabel?: string;
   disabled?: boolean;
@@ -58,6 +59,7 @@ export function FilterableSelect({
   id,
   placeholder,
   filterPlaceholder,
+  filterByValue = true,
   emptyLabel,
   ariaLabel,
   disabled = false,
@@ -79,11 +81,11 @@ export function FilterableSelect({
     }
 
     return options.filter((option) =>
-      `${option.label} ${option.description ?? ""} ${option.value}`
+      `${option.label} ${option.description ?? ""} ${filterByValue ? option.value : ""}`
         .toLocaleLowerCase()
         .includes(query),
     );
-  }, [filter, options]);
+  }, [filter, filterByValue, options]);
 
   return (
     <Popover
@@ -141,7 +143,7 @@ export function FilterableSelect({
           />
           <CommandList>
             {filteredOptions.length === 0 ? (
-              <CommandEmpty forceMount>
+              <CommandEmpty>
                 {emptyLabel ?? t("label.noMatchingOptions")}
               </CommandEmpty>
             ) : null}
