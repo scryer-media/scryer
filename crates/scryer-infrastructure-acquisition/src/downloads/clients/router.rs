@@ -200,6 +200,15 @@ impl FeedbackTimeoutDownloadClient {
 
 #[async_trait]
 impl DownloadClient for FeedbackTimeoutDownloadClient {
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        self.run_feedback_read(self.inner.observe_download(locator, offset))
+            .await
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -1823,6 +1832,77 @@ impl PrioritizedDownloadClientRouter {
 
 #[async_trait]
 impl DownloadClient for PrioritizedDownloadClientRouter {
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        use scryer_application::DownloadClientObservation;
+        let clients = self.list_enabled_clients_by_priority_excluding(&[]).await?;
+        let Some(config) = clients.iter().find(|config| {
+            locator.client_id.as_deref() == Some(config.id.as_str())
+                && config
+                    .client_type
+                    .eq_ignore_ascii_case(&locator.client_type)
+        }) else {
+            // A client that no longer exists at all can hold nothing: the job
+            // is authoritatively absent. A client that exists but is disabled
+            // may still hold it, so that stays unknown.
+            let deleted = match locator.client_id.as_deref() {
+                Some(client_id) => !self
+                    .download_client_configs
+                    .list(None)
+                    .await?
+                    .iter()
+                    .any(|config| config.id == client_id),
+                None => false,
+            };
+            if deleted {
+                return Ok(DownloadClientObservation::Absent);
+            }
+            return Ok(DownloadClientObservation::Unknown {
+                reason: "original download client is unavailable or ambiguous".into(),
+                next_history_offset: offset,
+            });
+        };
+        for kind in [
+            DownloadFeedbackReadKind::Queue,
+            DownloadFeedbackReadKind::History,
+        ] {
+            if self.feedback_backoff_remaining(&config.id, kind).is_some() {
+                return Ok(DownloadClientObservation::Unknown {
+                    reason: "original download client is in feedback backoff".into(),
+                    next_history_offset: offset,
+                });
+            }
+        }
+        let client = Self::client_from_config(
+            config,
+            self.staged_nzb_store.clone(),
+            self.staged_nzb_pipeline_limit.clone(),
+            self.plugin_provider.as_ref(),
+            self.feedback_read_timeout,
+        )?;
+        let started = Instant::now();
+        let mut observation = match client.observe_download(locator, offset).await {
+            Ok(observation) => observation,
+            Err(error) => {
+                self.record_feedback_read_failure(
+                    &config.id,
+                    DownloadFeedbackReadKind::History,
+                    started.elapsed(),
+                );
+                return Err(error);
+            }
+        };
+        if let DownloadClientObservation::Present(item) = &mut observation {
+            item.client_id.clone_from(&config.id);
+            item.client_name.clone_from(&config.name);
+            item.client_type.clone_from(&config.client_type);
+        }
+        Ok(observation)
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -7714,6 +7794,48 @@ mod tests {
             .map(|item| item.download_client_item_id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn observe_download_treats_a_deleted_client_as_absent_and_a_disabled_one_as_unknown() {
+        use scryer_application::DownloadClientObservation;
+        let first = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("first".to_string(), first)],
+            });
+        let mut disabled = test_config("second", "Second", "qbittorrent", 1);
+        disabled.is_enabled = false;
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("first", "First", "qbittorrent", 0), disabled],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        // A client that no longer exists cannot hold the job.
+        let deleted = scryer_application::ClientJobLocator::new(Some("gone"), "qbittorrent", "job");
+        assert!(matches!(
+            router.observe_download(&deleted, 0).await.unwrap(),
+            DownloadClientObservation::Absent
+        ));
+        // A disabled client may still hold it; nothing can be proven.
+        let paused =
+            scryer_application::ClientJobLocator::new(Some("second"), "qbittorrent", "job");
+        assert!(matches!(
+            router.observe_download(&paused, 0).await.unwrap(),
+            DownloadClientObservation::Unknown { .. }
+        ));
+        // A legacy locator with no client id is ambiguous, never absent.
+        let ambiguous = scryer_application::ClientJobLocator::new(None, "qbittorrent", "job");
+        assert!(matches!(
+            router.observe_download(&ambiguous, 0).await.unwrap(),
+            DownloadClientObservation::Unknown { .. }
+        ));
     }
 
     #[tokio::test]

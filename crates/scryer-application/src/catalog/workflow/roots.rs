@@ -64,7 +64,7 @@ pub(crate) fn library_root_folders_from_libraries(
     }
     roots
 }
-fn submission_scopes_overlap(
+pub(crate) fn submission_scopes_overlap(
     title_id: &str,
     existing: &SubmissionScope,
     requested: &SubmissionScope,

@@ -1458,6 +1458,37 @@ async fn queue_existing_title_download_adopts_same_title_client_identity() {
         .await
         .expect("record client-created seed binding");
     download_client
+        .set_queue_error(Some("queue unavailable"))
+        .await;
+    download_client
+        .set_recent_activity_error(Some("history unavailable"))
+        .await;
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/second.nzb".into()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Second.Release.2026.1080p".into()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("a cold-cache total outage must remain a retryable deferral");
+    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty()
+    );
+    download_client.set_queue_error(None).await;
+    download_client.set_recent_activity_error(None).await;
+    download_client
         .set_snapshot_authoritative_client_ids(["primary".to_string()])
         .await;
 
@@ -1724,6 +1755,70 @@ async fn queue_existing_title_download_requires_the_relevant_client_to_be_author
     download_client
         .set_snapshot_authoritative_client_ids(["primary".to_string()])
         .await;
+    *download_client.observation_error.lock().await = Some("connection lost after snapshot".into());
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/second.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Second.Release.2026.1080p".to_string()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("fresh admission must fail closed after a healthy snapshot");
+    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty()
+    );
+    let prior = download_submissions.store.lock().await[0].clone();
+    download_submissions
+        .record_identity_tracked_state(
+            &DownloadSubmissionIdentity::default(),
+            Some(&ClientJobLocator::from_submission(&prior)),
+            "imported",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    download_submissions
+        .pending_cleanup
+        .lock()
+        .await
+        .insert(prior.download_id);
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/second.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Second.Release.2026.1080p".to_string()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("an imported download awaiting cleanup must still defer during an outage");
+    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty()
+    );
+    *download_client.observation_error.lock().await = None;
     app.queue_existing_title_download(
         &user,
         &title.id,

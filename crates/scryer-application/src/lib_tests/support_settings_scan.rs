@@ -48,6 +48,7 @@ impl SettingsRepository for MockSettingsRepo {
 #[derive(Default, Clone)]
 pub(super) struct StoredSettingsRepo {
     pub(super) values: StoredSettingValues,
+    pub(super) read_error_key: Arc<Mutex<Option<String>>>,
 }
 
 pub(super) type StoredSettingValues = Arc<Mutex<HashMap<(String, String, Option<String>), String>>>;
@@ -111,6 +112,9 @@ impl SettingsRepository for StoredSettingsRepo {
         key_name: &str,
         scope_id: Option<String>,
     ) -> AppResult<Option<String>> {
+        if self.read_error_key.lock().await.as_deref() == Some(key_name) {
+            return Err(AppError::Repository("settings read unavailable".into()));
+        }
         Ok(self
             .values
             .lock()

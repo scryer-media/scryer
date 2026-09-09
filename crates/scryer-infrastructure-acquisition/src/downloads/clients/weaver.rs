@@ -237,12 +237,6 @@ struct HistoryItemsPayload {
     history_items: Vec<WeaverQueueItem>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryItemPayload {
-    history_item: Option<WeaverQueueItem>,
-}
-
 const TARGETED_HISTORY_FALLBACK_LIMIT: usize = 100;
 const SCRYER_TITLE_ID_ATTRIBUTE_KEY: &str = "*scryer_title_id";
 
@@ -851,12 +845,23 @@ impl WeaverDownloadClient {
     }
 
     async fn query_history_item(&self, id: i32) -> AppResult<Option<WeaverQueueItem>> {
-        self.graphql_request::<HistoryItemPayload>(
-            graphql_docs::HISTORY_ITEM_QUERY,
-            json!({ "id": id }),
-        )
-        .await
-        .map(|data| data.history_item)
+        let data = self
+            .graphql_request::<serde_json::Value>(
+                graphql_docs::HISTORY_ITEM_QUERY,
+                json!({ "id": id }),
+            )
+            .await?;
+        let item = data.get("historyItem").ok_or_else(|| {
+            AppError::Repository("weaver historyItem response is missing its result".into())
+        })?;
+        if item.is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(item.clone())
+            .map(Some)
+            .map_err(|error| {
+                AppError::Repository(format!("invalid weaver historyItem response: {error}"))
+            })
     }
 
     async fn query_completed_download_recent_fallback(
@@ -1234,6 +1239,50 @@ fn map_weaver_outbound_error(operation: &str, error: OutboundHttpError) -> AppEr
 
 #[async_trait]
 impl DownloadClient for WeaverDownloadClient {
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        use scryer_application::DownloadClientObservation;
+        if let Some(item) = self
+            .list_queue()
+            .await?
+            .into_iter()
+            .find(|item| item.download_client_item_id == locator.item_id)
+        {
+            return Ok(DownloadClientObservation::Present(Box::new(item)));
+        }
+        let id = locator
+            .item_id
+            .parse::<i32>()
+            .map_err(|_| AppError::Validation("invalid Weaver job identity".into()))?;
+        match self.query_history_item(id).await {
+            Ok(Some(item)) => Ok(DownloadClientObservation::Present(Box::new(
+                weaver_item_to_queue_item(&item),
+            ))),
+            Ok(None) => Ok(DownloadClientObservation::Absent),
+            Err(error) if is_weaver_schema_error(&error, "historyItem") => {
+                let page = self.list_history_page(offset, 100).await?;
+                let count = page.len();
+                if count == 0 {
+                    return Ok(DownloadClientObservation::Absent);
+                }
+                if let Some(item) = page
+                    .into_iter()
+                    .find(|item| item.download_client_item_id == locator.item_id)
+                {
+                    return Ok(DownloadClientObservation::Present(Box::new(item)));
+                }
+                Ok(DownloadClientObservation::Unknown {
+                    reason: "Weaver lacks exact history lookup; continuing history recovery".into(),
+                    next_history_offset: offset.saturating_add(count),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -1790,6 +1839,15 @@ impl DownloadClient for WeaverDownloadClient {
     }
 }
 
+/// Weaver's refusal when an API key without admin scope asks for
+/// `deleteFiles`: "admin scope required to delete completed files".
+///
+/// TODO(0.21.0): remove this compatibility shim (this needle, the refusal
+/// arm in `remove_history_item`, and the host-deletion fallback it drives in
+/// `reconcile_terminal_download_cleanup`) once Weaver integration-scoped
+/// keys can delete completed files again.
+const ADMIN_SCOPE_REFUSAL_NEEDLE: &str = "admin scope required";
+
 impl WeaverDownloadClient {
     /// Remove one history entry, with the published-schema fallbacks the
     /// history path has always carried.
@@ -1829,6 +1887,18 @@ impl WeaverDownloadClient {
                     .into());
                 }
             }
+            Err(error) if remove_data && error.is_schema_error(ADMIN_SCOPE_REFUSAL_NEEDLE) => {
+                // The key can remove the entry but not the files. Leave the
+                // entry in place and say so with a typed error, so the caller
+                // can delete the payload itself and then remove the entry.
+                warn!(
+                    error = %error,
+                    "weaver: the API key lacks the scope to delete completed files; the history entry is kept for host-side payload deletion"
+                );
+                return Err(WeaverRequestError::Failed(AppError::Unauthorized(format!(
+                    "weaver refused payload deletion: {error}"
+                ))));
+            }
             Err(error)
                 if remove_data
                     && (error.is_schema_error("Unknown argument \"deleteFiles\"")
@@ -1838,19 +1908,7 @@ impl WeaverDownloadClient {
                     error = %error,
                     "weaver: deleteFiles is unsupported; data could not be deleted"
                 );
-                let data: RemoveHistoryItemsPayload = self
-                    .graphql_request_typed(
-                        self.mutation_policy("weaver_remove_history_items"),
-                        graphql_docs::REMOVE_HISTORY_ITEMS_MUTATION,
-                        json!({ "ids": [job_id] }),
-                    )
-                    .await?;
-                if !data.remove_history_items.success {
-                    return Err(AppError::Repository(
-                        "weaver removeHistoryItems did not succeed".into(),
-                    )
-                    .into());
-                }
+                return Err(error);
             }
             Err(error) if error.is_schema_error("Unknown field \"removeHistoryItems\"") => {
                 let data: PublishedDeleteHistoryPayload = self
@@ -2141,6 +2199,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_observation_advances_capped_pages_and_finishes_history() {
+        use base64::Engine;
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("queueItems"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":{"queueItems":[]}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("historyItem(id"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"errors":[{"message":"Unknown field historyItem"}]})),
+            )
+            .mount(&server)
+            .await;
+        for offset in 0..=2 {
+            let cursor =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("off:{offset}"));
+            let items = if offset == 2 {
+                json!([])
+            } else {
+                json!([{"id":offset + 1,"name":"release","state":"COMPLETE","progressPercent":100.0,
+                    "totalBytes":42,"attributes":[],"createdAt":"2024-01-01T00:00:00Z"}])
+            };
+            Mock::given(method("POST"))
+                .and(body_string_contains("historyItems"))
+                .and(body_string_contains(format!("\"after\":\"{cursor}\"")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"data":{"historyItems":items}})),
+                )
+                .mount(&server)
+                .await;
+        }
+        let client = WeaverDownloadClient::new(server.uri(), None);
+        let locator = ClientJobLocator::new(Some("weaver"), "weaver", "2");
+        assert!(matches!(
+            client.observe_download(&locator, 0).await.unwrap(),
+            DownloadClientObservation::Unknown {
+                next_history_offset: 1,
+                ..
+            }
+        ));
+        assert!(
+            matches!(client.observe_download(&locator, 1).await.unwrap(),
+            DownloadClientObservation::Present(item) if item.download_client_item_id == "2")
+        );
+        let missing = ClientJobLocator::new(Some("weaver"), "weaver", "3");
+        assert!(matches!(
+            client.observe_download(&missing, 1).await.unwrap(),
+            DownloadClientObservation::Unknown {
+                next_history_offset: 2,
+                ..
+            }
+        ));
+        assert!(matches!(
+            client.observe_download(&missing, 2).await.unwrap(),
+            DownloadClientObservation::Absent
+        ));
+    }
+
+    #[tokio::test]
+    async fn exact_observation_distinguishes_absent_from_malformed_history() {
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        for (data, absent) in [(json!({"historyItem": null}), true), (json!({}), false)] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(body_string_contains("queueItems"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"data":{"queueItems":[]}})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(body_string_contains("historyItem(id"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":data})))
+                .mount(&server)
+                .await;
+            let client = WeaverDownloadClient::new(server.uri(), None);
+            let result = client
+                .observe_download(&ClientJobLocator::new(Some("weaver-1"), "weaver", "123"), 0)
+                .await;
+            if absent {
+                assert!(matches!(result, Ok(DownloadClientObservation::Absent)));
+            } else {
+                assert!(result.is_err(), "missing result must not prove job absence");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn delete_history_item_with_data_removal_uses_delete_files_mutation() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -2163,7 +2316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_history_item_falls_back_when_delete_files_is_unsupported() {
+    async fn delete_history_item_preserves_entry_when_delete_files_is_unsupported() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -2186,7 +2339,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": { "removeHistoryItems": { "success": true } }
             })))
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
 
@@ -2194,7 +2347,50 @@ mod tests {
         client
             .delete_queue_item("10002", true, true)
             .await
-            .expect("legacy fallback should remove the history entry");
+            .expect_err("unsupported payload deletion must preserve the history entry");
+    }
+
+    // An API key without admin scope may remove the entry but not the files.
+    // The entry must survive and the refusal must be typed, so the workflow
+    // can delete the payload itself and come back for the entry.
+    #[tokio::test]
+    async fn delete_history_item_reports_an_admin_scope_refusal_as_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains("RemoveHistoryItemsDeleteFiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{
+                    "message": "admin scope required to delete completed files",
+                    "extensions": { "code": "FORBIDDEN" }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains(
+                "mutation RemoveHistoryItems($ids: [Int!]!)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "removeHistoryItems": { "success": true } }
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = WeaverDownloadClient::new(server.uri(), Some("wvr_test".to_string()));
+        let error = client
+            .delete_queue_item("10002", true, true)
+            .await
+            .expect_err("a scope refusal must preserve the history entry");
+        assert!(
+            matches!(&error, AppError::Unauthorized(message) if message.contains("admin scope required")),
+            "unexpected error: {error}"
+        );
     }
 
     // The queue hint is stale: the job finished between the last poll and the

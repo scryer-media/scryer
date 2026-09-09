@@ -77,6 +77,7 @@ pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
     IndexerSearchNumberingContext, TitleOptionsPatch,
 };
+pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
 mod quality;
 mod rate_limit_signal;
 mod rules;

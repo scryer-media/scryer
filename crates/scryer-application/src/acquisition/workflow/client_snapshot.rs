@@ -198,6 +198,7 @@ async fn record_failed_release_outcome(
     blocklist_reason: Option<String>,
     source_password: Option<String>,
 ) {
+    let title_id = title_id.map(str::trim).filter(|id| !id.is_empty());
     let normalized_source_title = normalize_release_name(source_title.as_deref());
     let normalized_source_hint = normalize_release_attempt_hint(source_hint.as_deref());
     let normalized_client_id = normalized_non_empty_owned(client_id);
@@ -541,6 +542,9 @@ impl DownloadClientSnapshot {
     /// cycle. A submission that names no client is judged against every
     /// client, so any unreadable client makes its absence unprovable.
     pub(crate) fn client_unreadable(&self, client_id: Option<&str>) -> bool {
+        if self.queue_listing_failed || self.history_listing_failed {
+            return true;
+        }
         match client_id.map(str::trim).filter(|value| !value.is_empty()) {
             Some(client_id) => self.unreadable_client_ids.contains(client_id),
             None => !self.unreadable_client_ids.is_empty(),
@@ -608,7 +612,7 @@ impl DownloadClientSnapshot {
         client_id: Option<&str>,
         download_client_item_id: &str,
     ) -> bool {
-        if self.queue_listing_failed {
+        if self.client_unreadable(client_id) {
             return false;
         }
         let exact_key = download_client_item_identity(client_id, download_client_item_id);
@@ -707,7 +711,10 @@ pub(crate) fn submission_is_live_claim(
         tracked_state,
         submission_is_active(submission, dl_snapshot)
             || submission_is_completed(submission, dl_snapshot)
-            || dl_snapshot.client_unreadable(submission.download_client_id.as_deref()),
+            || dl_snapshot.client_unreadable(submission.download_client_id.as_deref())
+            // A recent-history omission cannot retire a persisted claim. The
+            // lifecycle owner records authoritative absence in the ledger.
+            || tracked_state.is_none(),
     )
 }
 /// Check grabbed wanted items against the download client. If a grabbed
@@ -1398,8 +1405,12 @@ async fn resolve_failure_wanted_item(
             .as_ref()
             == Some(&failed_release);
         let scope_matches = match &submission.scope {
-            SubmissionScope::Title => item.episode_id.is_none() && item.series_movie_link_id.is_none(),
-            SubmissionScope::Episode { episode_id } => item.episode_id.as_deref() == Some(episode_id),
+            SubmissionScope::Title => {
+                item.episode_id.is_none() && item.series_movie_link_id.is_none()
+            }
+            SubmissionScope::Episode { episode_id } => {
+                item.episode_id.as_deref() == Some(episode_id)
+            }
             SubmissionScope::SeriesMovie {
                 series_movie_link_id,
             } => item.series_movie_link_id.as_deref() == Some(series_movie_link_id),
@@ -2322,8 +2333,8 @@ mod client_snapshot_tests {
         let submission = live_claim_submission("11818");
         let mut snap = snapshot(false, false);
 
-        // Invisible to both sets: no claim (the item left the client).
-        assert!(!submission_is_live_claim(&submission, None, &snap));
+        // Recent listings cannot prove that an unseen item left the client.
+        assert!(submission_is_live_claim(&submission, None, &snap));
 
         // Completed in the client, no tracked row yet: still a claim.
         snap.completed_client_ids
@@ -2353,7 +2364,10 @@ mod client_snapshot_tests {
             "Show.S01E01.1080p.WEB-DL"
         );
         // Only a suffix is shed, exactly once, and only when present.
-        assert_eq!(strip_nzb_suffix("Show.S01E01.1080p.WEB-DL"), "Show.S01E01.1080p.WEB-DL");
+        assert_eq!(
+            strip_nzb_suffix("Show.S01E01.1080p.WEB-DL"),
+            "Show.S01E01.1080p.WEB-DL"
+        );
         assert_eq!(strip_nzb_suffix("Show.nzb.S01E01"), "Show.nzb.S01E01");
         assert_eq!(strip_nzb_suffix("Show.nzb.nzb"), "Show.nzb");
         assert_eq!(strip_nzb_suffix(".nzb"), "");
@@ -2361,17 +2375,16 @@ mod client_snapshot_tests {
     }
 
     /// **Unreadable client.** The aggregate router degrades a dead client to
-    /// an empty listing rather than an error, so "absent from queue and
-    /// history" is only proof of absence when that client actually answered.
-    /// A submission on a client that did not answer keeps its claim; one on a
-    /// client that did answer is judged on what it said.
+    /// an empty listing rather than an error. Neither an unreadable client
+    /// nor an omission from recent history retires a persisted claim; the
+    /// lifecycle ledger records authoritative resolution.
     #[test]
     fn a_submission_on_an_unreadable_client_keeps_its_claim() {
         use scryer_domain::TrackedDownloadState as State;
 
         let submission = live_claim_submission("nzo_1");
         let mut snap = snapshot(false, false);
-        assert!(!submission_is_live_claim(&submission, None, &snap));
+        assert!(submission_is_live_claim(&submission, None, &snap));
 
         snap.unreadable_client_ids.insert("client-1".to_string());
         assert!(snap.client_unreadable(Some("client-1")));
@@ -2382,7 +2395,12 @@ mod client_snapshot_tests {
 
         let mut other_client = live_claim_submission("nzo_2");
         other_client.download_client_id = Some("client-2".to_string());
-        assert!(!submission_is_live_claim(&other_client, None, &snap));
+        assert!(submission_is_live_claim(&other_client, None, &snap));
+        assert!(!submission_is_live_claim(
+            &other_client,
+            Some(State::Failed),
+            &snap
+        ));
 
         // The tracked ledger still settles it: a terminal state releases the
         // claim even while the client stays unreadable.
@@ -2405,7 +2423,12 @@ mod client_snapshot_tests {
 
         let mut unreadable = std::collections::HashSet::new();
         let mut failed = false;
-        let items = note_unreadable_clients(listing(&["sab"], 1), "history", &mut unreadable, &mut failed);
+        let items = note_unreadable_clients(
+            listing(&["sab"], 1),
+            "history",
+            &mut unreadable,
+            &mut failed,
+        );
         assert!(items.is_empty());
         assert!(failed, "a leg nobody answered is unobservable");
         assert!(unreadable.contains("sab"));

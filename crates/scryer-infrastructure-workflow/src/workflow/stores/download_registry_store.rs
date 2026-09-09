@@ -205,6 +205,25 @@ impl DownloadRegistryRepository for DownloadRegistryStore {
         .collect()
     }
 
+    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT DISTINCT client_config_id,
+                    LOWER(TRIM(COALESCE(client_type_snapshot, ''))) AS client_type
+             FROM download_client_bindings
+             WHERE ended_at IS NULL
+               AND native_item_id IS NOT NULL
+               AND client_config_id IS NOT NULL
+               AND client_config_id <> ''
+             ORDER BY client_config_id, client_type",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.text("client_config_id")?, row.text("client_type")?)))
+        .collect()
+    }
+
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()> {
         let id = id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "end_download_client_binding", move |tx| {

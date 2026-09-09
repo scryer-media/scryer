@@ -3946,6 +3946,13 @@ pub trait DownloadRegistryRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Distinct `(client_config_id, client_type)` pairs that still hold an
+    /// active binding, so the reconciler can find bindings whose client
+    /// configuration has since been deleted.
+    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
     /// End an active binding; ending an already-ended or absent binding is a no-op.
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()>;
 }
@@ -3961,7 +3968,61 @@ pub struct IdentityTrackedStateTarget<'a> {
 
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
+    fn supports_durable_download_cleanup(&self) -> bool {
+        false
+    }
+
+    /// After verified import, cleanup remains unresolved until an intent is
+    /// completed. A legacy row awaiting intent backfill is unresolved too.
+    async fn has_pending_download_cleanup(&self, _id: &DownloadId) -> AppResult<bool> {
+        Ok(false)
+    }
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()>;
+
+    /// Persist the operator-selected routing before terminalizing a manual import.
+    async fn set_download_cleanup_attribution(
+        &self,
+        _id: &DownloadId,
+        _title_id: &str,
+        _facet: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn seed_download_cleanup(&self, _limit: usize) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn list_due_download_cleanup(
+        &self,
+        _limit: usize,
+    ) -> AppResult<Vec<DownloadCleanupRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn claim_download_cleanup(&self, _id: &DownloadId) -> AppResult<DownloadCleanupClaim> {
+        Ok(DownloadCleanupClaim::Unmanaged)
+    }
+
+    async fn checkpoint_download_cleanup_payload(
+        &self,
+        _id: &DownloadId,
+        _checkpoint: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn finish_download_cleanup(
+        &self,
+        _id: &DownloadId,
+        _outcome: &str,
+        _complete: bool,
+        _retry_seconds: i64,
+        _history_offset: usize,
+        _error: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
 
     /// The most recent downloads whose durable tracked state is terminal
     /// (imported / failed / ignored), newest first, capped at `limit`.
@@ -6764,8 +6825,44 @@ pub struct DownloadClientFeedbackScope {
     pub categories: Vec<String>,
 }
 
-/// A lenient queue/activity snapshot with the subset of clients for which
-/// absence is authoritative.
+/// Fresh evidence about one job on its original configured client.
+#[derive(Clone, Debug)]
+pub enum DownloadClientObservation {
+    Present(Box<DownloadQueueItem>),
+    Absent,
+    Unknown {
+        reason: String,
+        next_history_offset: usize,
+    },
+}
+
+/// Persistent automatic cleanup, separate from the import outcome.
+#[derive(Clone, Debug)]
+pub struct DownloadCleanupRecord {
+    pub download_id: DownloadId,
+    pub client_id: String,
+    pub client_type: String,
+    pub item_id: String,
+    pub tracked_state: String,
+    pub title_id: Option<String>,
+    pub facet: Option<String>,
+    pub source_title: Option<String>,
+    pub attempts: u32,
+    pub history_offset: usize,
+    pub payload_checkpoint: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum DownloadCleanupClaim {
+    /// Compatibility repositories without durable cleanup support.
+    Unmanaged,
+    Deferred,
+    Claimed(Box<DownloadCleanupRecord>),
+    Settled {
+        outcome: String,
+    },
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct DownloadClientSnapshotOutcome {
     pub items: Vec<DownloadQueueItem>,
@@ -6816,6 +6913,41 @@ pub trait IndexerArtifactResolver: Send + Sync {
 
 #[async_trait]
 pub trait DownloadClient: Send + Sync {
+    /// Whether this adapter can delete payloads through its native API.
+    fn supports_native_data_removal(&self) -> bool {
+        false
+    }
+    /// An absence verdict requires an adapter that can prove a complete read.
+    /// The conservative default can discover retained items but never turns
+    /// an unsupported or truncated history into permission to replace them.
+    async fn observe_download(
+        &self,
+        locator: &ClientJobLocator,
+        history_offset: usize,
+    ) -> AppResult<DownloadClientObservation> {
+        let matches = |item: &DownloadQueueItem| {
+            item.download_client_item_id == locator.item_id
+                && (item.client_id.is_empty()
+                    || locator.client_id.as_deref() == Some(item.client_id.as_str()))
+        };
+        if let Some(item) = self.list_queue().await?.into_iter().find(&matches) {
+            return Ok(DownloadClientObservation::Present(Box::new(item)));
+        }
+        let page = self.list_history_page(history_offset, 100).await?;
+        let count = page.len();
+        if let Some(item) = page.into_iter().find(matches) {
+            return Ok(DownloadClientObservation::Present(Box::new(item)));
+        }
+        Ok(DownloadClientObservation::Unknown {
+            reason: "client history does not establish exact job absence".to_string(),
+            next_history_offset: if count == 100 {
+                history_offset.saturating_add(100)
+            } else {
+                0
+            },
+        })
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,

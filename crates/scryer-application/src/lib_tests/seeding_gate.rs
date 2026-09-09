@@ -31,9 +31,12 @@ impl TorrentPluginProvider {
 impl DownloadClientPluginProvider for TorrentPluginProvider {
     fn client_for_config(
         &self,
-        _config: &scryer_domain::DownloadClientConfig,
+        config: &scryer_domain::DownloadClientConfig,
     ) -> Option<Arc<dyn DownloadClient>> {
-        None
+        Some(Arc::new(StubDownloadClient {
+            native_data_removal: config.client_type == "qbittorrent",
+            ..Default::default()
+        }))
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -70,6 +73,8 @@ fn bootstrap_with_torrent_clients(
         crate::RuntimeFeature::enabled(Arc::new(TorrentPluginProvider::new(&[
             "qbittorrent",
             "rtorrent",
+            "downloadstation",
+            "aria2",
             "torrent-blackhole",
         ])) as Arc<dyn DownloadClientPluginProvider>);
     (app, user, download_submissions)
@@ -268,17 +273,1245 @@ async fn torrent_blackhole_entries_are_never_auto_removed() {
     assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
+async fn host_payload_fixture(
+    app: &AppUseCase,
+    user: &scryer_domain::User,
+    client: &StubDownloadClient,
+    tracked: &TrackedDownload,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let source_title = tracked.source_title.as_deref().unwrap_or("Release");
+    let payload = root.path().join(source_title);
+    record_host_job_ownership(app, tracked, source_title).await;
+    configure_host_cleanup_root(app, user, &tracked.client_id, root.path()).await;
+    std::fs::create_dir(&payload).unwrap();
+    std::fs::write(payload.join("movie.mkv"), b"media").unwrap();
+    client
+        .set_client_status(crate::DownloadClientStatus {
+            remote_output_roots: vec![root.path().display().to_string()],
+            ..Default::default()
+        })
+        .await;
+    client
+        .completed_downloads
+        .lock()
+        .await
+        .push(scryer_domain::CompletedDownload {
+            client_type: tracked.client_type.clone(),
+            client_id: tracked.client_id.clone(),
+            download_client_item_id: tracked.client_item.download_client_item_id.clone(),
+            download_id: Some(tracked.download_id.to_wire()),
+            name: source_title.into(),
+            release_name: None,
+            dest_dir: payload.display().to_string(),
+            category: Some("scryer-movies".into()),
+            size_bytes: None,
+            completed_at: None,
+            parameters: vec![],
+        });
+    (root, payload)
+}
+
+async fn configure_host_cleanup_root(
+    app: &AppUseCase,
+    user: &scryer_domain::User,
+    client_id: &str,
+    root: &std::path::Path,
+) {
+    app.update_download_client_config(
+        user,
+        crate::DownloadClientConfigUpdate {
+            id: client_id.into(),
+            config_json: Some(
+                serde_json::json!({
+                    "remote_path_mappings": format!("{} => {}", root.display(), root.display())
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn record_host_job_ownership(
+    app: &AppUseCase,
+    tracked: &TrackedDownload,
+    source_title: &str,
+) {
+    app.services
+        .workflow
+        .download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: tracked.download_id,
+            title_id: tracked.title_id.clone().unwrap_or_default(),
+            purpose: DownloadSubmissionPurpose::Standard,
+            facet: tracked.facet.clone().unwrap_or_default(),
+            download_client_id: Some(tracked.client_id.clone()),
+            download_client_type: tracked.client_type.clone(),
+            download_client_item_id: tracked.client_item.download_client_item_id.clone(),
+            source_title: Some(source_title.into()),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Orphan,
+        })
+        .await
+        .unwrap();
+}
+
+async fn record_file_import_ownership(
+    app: &mut AppUseCase,
+    tracked: &TrackedDownload,
+    path: &Path,
+) {
+    let imports = Arc::new(TrackingImportRepo::default());
+    let import_id = imports
+        .queue_import_request(
+            ClientJobLocator::new(
+                Some(&tracked.client_id),
+                &tracked.client_type,
+                &tracked.client_item.download_client_item_id,
+            ),
+            "completed_download".into(),
+            "{}".into(),
+        )
+        .await
+        .unwrap();
+    imports
+        .update_import_status(
+            &import_id,
+            ImportStatus::Completed,
+            Some(serde_json::json!({"decision": "imported", "source_path": path}).to_string()),
+        )
+        .await
+        .unwrap();
+    imports
+        .canonical_ids
+        .lock()
+        .await
+        .insert(import_id, tracked.download_id);
+    app.services.workflow.imports = imports;
+}
+
+fn cleanup_record_for(tracked: &TrackedDownload) -> crate::DownloadCleanupRecord {
+    crate::DownloadCleanupRecord {
+        download_id: tracked.download_id,
+        client_id: tracked.client_id.clone(),
+        client_type: tracked.client_type.clone(),
+        item_id: tracked.client_item.download_client_item_id.clone(),
+        tracked_state: tracked.state.as_str().into(),
+        title_id: tracked.title_id.clone(),
+        facet: tracked.facet.clone(),
+        source_title: tracked.source_title.clone(),
+        attempts: 1,
+        history_offset: 0,
+        payload_checkpoint: None,
+    }
+}
+
 #[tokio::test]
-async fn usenet_downloads_are_removed_on_import_exactly_as_before() {
+async fn durable_payload_checkpoint_does_not_delete_recreated_content() {
+    for client_type in ["nzbget", "sabnzbd"] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, client_type, client_type).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "Checkpoint Recovery").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            client_type,
+            "checkpoint-job",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+        client
+            .history_items
+            .lock()
+            .await
+            .push(tracked.client_item.clone());
+        let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+        let mut record = cleanup_record_for(&tracked);
+        client.set_delete_error(Some("entry delete failed")).await;
+        let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+        assert!(!payload.exists());
+        let checkpoint = repository.cleanup_checkpoints.lock().await[&record.download_id].clone();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&checkpoint).unwrap()["payload_removed"],
+            true
+        );
+
+        std::fs::create_dir(&payload).unwrap();
+        std::fs::write(payload.join("unrelated.txt"), b"keep this new content").unwrap();
+        record.payload_checkpoint = Some(checkpoint.clone());
+        record.attempts = 2;
+        client.set_delete_error(None).await;
+        // Payload proof also avoids depending on a mount/status read after restart.
+        *client.client_status.lock().await = None;
+        let retry = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+            .await
+            .unwrap();
+        assert_eq!(retry.2, TerminalDownloadCleanupOutcome::Removed);
+        assert_eq!(
+            std::fs::read(payload.join("unrelated.txt")).unwrap(),
+            b"keep this new content"
+        );
+        assert_eq!(
+            repository.cleanup_checkpoints.lock().await[&tracked.download_id],
+            checkpoint
+        );
+        assert!(
+            !client.deleted_requests.lock().await.last().unwrap().4,
+            "entry retries must not repeat backend payload deletion either"
+        );
+    }
+}
+
+#[tokio::test]
+async fn durable_pause_failure_stays_retryable_until_pause_succeeds() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, mut tracked) = torrent_cleanup_fixture(
+        client.clone(),
+        "Pause Retry",
+        "pause-retry",
+        Some(PersistedSeedGoals {
+            goal_met_action: Some(scryer_domain::SeedGoalMetAction::StopSeeding),
+            ..persisted_goals(false)
+        }),
+    )
+    .await;
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(false),
+            can_move_files: Some(true),
+            seed_ratio: Some(2.5),
+            ..Default::default()
+        },
+        &mut tracked,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let record = cleanup_record_for(&tracked);
+    *client.pause_error.lock().await = Some("temporary client outage".into());
+    let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert!(!crate::import::import::terminal_download_cleanup_is_complete(first.2.outcome));
+    *client.pause_error.lock().await = None;
+    let retry = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(retry.2, TerminalDownloadCleanupOutcome::SeedingEntryKept);
+    assert!(crate::import::import::terminal_download_cleanup_is_complete(retry.2.outcome));
+    assert_eq!(client.paused_requests.lock().await.len(), 1);
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn host_cleanup_preserves_custom_recycle_roots_and_defers_on_settings_failure() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let settings = Arc::new(StoredSettingsRepo::default());
+    app.services.config.settings = settings.clone();
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Recycle Protection").await;
+    let tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "recycle-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    app.services.catalog.libraries = Arc::new(MockLibraryRepo::default());
+    *settings.read_error_key.lock().await =
+        Some(crate::settings::keys::RECYCLE_BIN_PATH_KEY.into());
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert!(payload.join("movie.mkv").exists());
+    assert!(client.deleted_requests.lock().await.is_empty());
+
+    *settings.read_error_key.lock().await = None;
+    settings
+        .set_value(
+            crate::settings::keys::SETTINGS_SCOPE_MEDIA,
+            crate::settings::keys::RECYCLE_BIN_PATH_KEY,
+            &payload.display().to_string(),
+        )
+        .await;
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert!(payload.join("movie.mkv").exists());
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn durable_torrent_cleanup_uses_frozen_info_hash_when_the_internal_name_differs() {
+    for client_type in ["qbittorrent", "rtorrent"] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, user, submissions) = bootstrap_with_torrent_clients(client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, client_type, client_type).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "Paperman.2012.720p.WEB-DL").await;
+        let hash = "5b4ba671c3729e34718de86e3372be2ecb527b15";
+        let mut tracked = tracked_for(
+            &config.id,
+            client_type,
+            hash,
+            &title,
+            TrackedDownloadState::Imported,
+            false,
+        );
+        tracked.client_item.download_id = None;
+        tracked.client_item.title_name = format!("{}.mkv", title.name);
+        tracked.client_item.seeding = Some(DownloadSeedingSnapshot {
+            is_private: Some(true),
+            can_remove: Some(true),
+            ..Default::default()
+        });
+        record_host_job_ownership(&app, &tracked, &title.name).await;
+        submissions.store.lock().await[0].info_hash = Some(hash.into());
+        app.services
+            .workflow
+            .download_registry
+            .resolve_observation(&ObservedClientJob {
+                locator: ClientJobLocator::new(Some(&config.id), client_type, hash),
+                wire_token: Some(tracked.download_id.to_wire()),
+                observed_name: Some(title.name.clone()),
+                observed_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        client
+            .history_items
+            .lock()
+            .await
+            .push(tracked.client_item.clone());
+        let record = cleanup_record_for(&tracked);
+        let recovered =
+            crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+                .await
+                .expect("the same torrent must reach the seeding gate despite its internal name");
+        assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::HeldForSeeding);
+        assert_eq!(
+            recovered.2.seeding.unwrap().reason,
+            "private_torrent_without_resolved_goals"
+        );
+        assert!(client.deleted_requests.lock().await.is_empty());
+
+        // A different persisted content identity is rejected even with the same name.
+        let mut items = client.history_items.lock().await;
+        items[0].title_name = title.name.clone();
+        drop(items);
+        submissions.store.lock().await[0].info_hash = Some("a".repeat(40));
+        assert!(
+            crate::import::import::run_claimed_download_cleanup(&app, record, None)
+                .await
+                .is_none()
+        );
+        assert!(client.deleted_requests.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn durable_cleanup_recovers_an_untrackable_import_and_rejects_a_reused_locator() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Recovered Import").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "123",
+        &title,
+        TrackedDownloadState::Imported,
+        false,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let record = cleanup_record_for(&tracked);
+    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(recovered.1.unwrap().id, tracked.id);
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+    client.history_items.lock().await[0].download_id =
+        Some(scryer_domain::download_identity::DownloadId::new().to_wire());
+    assert!(
+        crate::import::import::run_claimed_download_cleanup(&app, record, None)
+            .await
+            .is_none()
+    );
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn durable_entry_only_cleanup_recovers_absence_but_not_unknown_or_reused_identity() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Failed entry recovery").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "failed-entry",
+        &title,
+        TrackedDownloadState::Failed,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let mut record = cleanup_record_for(&tracked);
+    client.set_delete_error(Some("response lost")).await;
+    let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    record.payload_checkpoint =
+        Some(repository.cleanup_checkpoints.lock().await[&record.download_id].clone());
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(record.payload_checkpoint.as_ref().unwrap()).unwrap();
+    assert_eq!(checkpoint["entry_only_remove_requested"], true);
+    assert_eq!(checkpoint["native_remove_requested"], false);
+    client.history_items.lock().await.clear();
+    *client.observation_error.lock().await = Some("offline".into());
+    assert!(
+        crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+            .await
+            .is_none()
+    );
+    *client.observation_error.lock().await = None;
+    // A checkpoint minted for another job identity is never credited as this
+    // row's recovery: absence still settles the row (nothing can change on
+    // retry), but as an unverified payload, not a recovered removal.
+    let mut wrong = record.clone();
+    wrong.item_id = "different-job".into();
+    let unverified = crate::import::import::run_claimed_download_cleanup(&app, wrong, None)
+        .await
+        .unwrap();
+    assert_eq!(unverified.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    let last_finish =
+        |finished: &[(scryer_domain::download_identity::DownloadId, String, bool)]| {
+            finished
+                .last()
+                .map(|(_, outcome, complete)| (outcome.clone(), *complete))
+        };
+    assert_eq!(
+        last_finish(&repository.finished_cleanup.lock().await),
+        Some(("entry_absent_payload_unverified".to_string(), true))
+    );
+    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    assert_eq!(
+        last_finish(&repository.finished_cleanup.lock().await),
+        Some(("entry_absent".to_string(), true))
+    );
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn host_cleanup_preserves_unowned_files_inside_an_authorized_root() {
+    for client_type in ["nzbget", "sabnzbd"] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, client_type, client_type).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "File ownership").await;
+        let tracked = tracked_for(
+            &config.id,
+            client_type,
+            "owned-job",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+        let file = payload.join("movie.mkv");
+        client.completed_downloads.lock().await[0].dest_dir = file.display().to_string();
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Imported,
+            None,
+        )
+        .await;
+        assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+        assert_eq!(std::fs::read(&file).unwrap(), b"media");
+        assert!(client.deleted_requests.lock().await.is_empty());
+        let other = payload.parent().unwrap().join("Unrelated job");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("keep.mkv"), b"other media").unwrap();
+        {
+            let mut completed = client.completed_downloads.lock().await;
+            completed[0].name = "Unrelated job".into();
+            completed[0].dest_dir = other.display().to_string();
+        }
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Imported,
+            None,
+        )
+        .await;
+        assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+        assert!(other.join("keep.mkv").exists());
+        assert!(client.deleted_requests.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn host_file_cleanup_requires_a_successful_import_for_the_same_canonical_job() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let imports = Arc::new(TrackingImportRepo::default());
+    app.services.workflow.imports = imports.clone();
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Verified source file").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "file-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let file = payload.join("movie.mkv");
+    client.completed_downloads.lock().await[0].dest_dir = file.display().to_string();
+    let import_id = imports
+        .queue_import_request(
+            ClientJobLocator::new(Some(&config.id), "nzbget", "file-job"),
+            "completed_download".into(),
+            "{}".into(),
+        )
+        .await
+        .unwrap();
+    imports
+        .update_import_status(
+            &import_id,
+            ImportStatus::Completed,
+            Some(serde_json::json!({"decision": "imported", "source_path": file}).to_string()),
+        )
+        .await
+        .unwrap();
+    imports.canonical_ids.lock().await.insert(
+        import_id.clone(),
+        scryer_domain::download_identity::DownloadId::new(),
+    );
+    let record = cleanup_record_for(&tracked);
+    let wrong_job = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        wrong_job.2,
+        TerminalDownloadCleanupOutcome::RetryableFailure
+    );
+    assert!(file.exists());
+    assert!(client.deleted_requests.lock().await.is_empty());
+    imports
+        .canonical_ids
+        .lock()
+        .await
+        .insert(import_id, record.download_id);
+    let owned_job = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(owned_job.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!file.exists());
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn durable_native_cleanup_recovers_a_lost_response_without_redeleting() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Lost native response").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "125",
+        &title,
+        TrackedDownloadState::Imported,
+        false,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let mut record = cleanup_record_for(&tracked);
+    client.set_delete_error(Some("response lost")).await;
+    let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    record.payload_checkpoint =
+        Some(repository.cleanup_checkpoints.lock().await[&record.download_id].clone());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(record.payload_checkpoint.as_ref().unwrap())
+            .unwrap()["native_remove_requested"],
+        true
+    );
+    client.history_items.lock().await.clear();
+    *client.observation_error.lock().await = Some("offline".into());
+    assert!(
+        crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+            .await
+            .is_none()
+    );
+    *client.observation_error.lock().await = None;
+    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn durable_cleanup_replays_retained_outcomes_without_client_reads() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    let title = movie_title(&app, &user, "Retained entry").await;
+    let tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "127",
+        &title,
+        TrackedDownloadState::Imported,
+        false,
+    );
+    *client.observation_error.lock().await = Some("offline".into());
+    for (outcome, expected) in [
+        (
+            "policy_retained",
+            TerminalDownloadCleanupOutcome::NotConfigured,
+        ),
+        ("handed_off", TerminalDownloadCleanupOutcome::HandedOff),
+        (
+            "seeding_entry_kept",
+            TerminalDownloadCleanupOutcome::SeedingEntryKept,
+        ),
+    ] {
+        repository
+            .settled_cleanup
+            .lock()
+            .await
+            .insert(tracked.download_id, outcome.into());
+        let result = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            tracked.state,
+            None,
+        )
+        .await;
+        assert_eq!(result, expected);
+        assert!(crate::import::import::terminal_download_cleanup_is_complete(result.outcome));
+    }
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn durable_ignored_orphan_cleanup_removes_only_entry() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    let title = movie_title(&app, &user, "Ignored orphan").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "126",
+        &title,
+        TrackedDownloadState::Ignored,
+        false,
+    );
+    tracked.title_id = None;
+    tracked.facet = None;
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let record = cleanup_record_for(&tracked);
+    let result = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!client.deleted_requests.lock().await[0].4);
+    client.history_items.lock().await.clear();
+    let result = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+}
+
+#[tokio::test]
+async fn durable_cleanup_settles_an_absent_entry_without_a_payload_checkpoint() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Lost Response").await;
+    let tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "124",
+        &title,
+        TrackedDownloadState::Imported,
+        false,
+    );
+    let mut record = cleanup_record_for(&tracked);
+    // Absence is the adapter's authoritative answer and there is nothing left
+    // to verify: the row settles as gone on its first attempt with the payload
+    // reported unverified, rather than burning a retry budget (an upgrade
+    // backfills every historical download through here).
+    let settled = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(settled.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    record.payload_checkpoint = Some(r#"{"payload_removed":true}"#.into());
+    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    *client.observation_error.lock().await = Some("client offline".into());
+    assert!(
+        crate::import::import::run_claimed_download_cleanup(&app, record, None)
+            .await
+            .is_none()
+    );
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn host_cleanup_verifies_payload_files_without_operator_roots() {
+    // Deletion authority comes from the per-file inventory check, not from an
+    // operator-configured root: an install with no path mappings (or
+    // mappings that do not contain the payload) still cleans up its own job.
+    for client_type in ["nzbget", "sabnzbd", "rtorrent", "downloadstation", "aria2"] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, client_type, client_type).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "Root authority").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            client_type,
+            "root-authority",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        observed(
+            DownloadSeedingSnapshot {
+                can_remove: Some(true),
+                can_move_files: Some(true),
+                ..Default::default()
+            },
+            &mut tracked,
+        );
+        let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+        let configured = tempfile::tempdir().unwrap();
+        for mapping in [
+            String::new(),
+            format!(
+                "{} => {}",
+                configured.path().display(),
+                configured.path().display()
+            ),
+        ] {
+            if !payload.exists() {
+                std::fs::create_dir(&payload).unwrap();
+                std::fs::write(payload.join("movie.mkv"), b"media").unwrap();
+            }
+            client.deleted_requests.lock().await.clear();
+            app.update_download_client_config(
+                &user,
+                crate::DownloadClientConfigUpdate {
+                    id: config.id.clone(),
+                    config_json: Some(
+                        serde_json::json!({"remote_path_mappings":mapping}).to_string(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+                &app,
+                &tracked,
+                tracked.state,
+                None,
+            )
+            .await;
+            assert_eq!(
+                outcome,
+                TerminalDownloadCleanupOutcome::Removed,
+                "{client_type} mapping={mapping:?}"
+            );
+            assert!(!payload.exists(), "{client_type} mapping={mapping:?}");
+            let requests = client.deleted_requests.lock().await;
+            assert_eq!(requests.len(), 1, "{client_type}");
+            assert_eq!(requests[0].4, client_type == "sabnzbd", "{client_type}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn host_cleanup_retains_unrecognised_files_and_reports_a_partial_payload() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Partial Payload").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "partial-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    std::fs::create_dir(payload.join("Sample")).unwrap();
+    std::fs::write(payload.join("Sample").join("sample.mkv"), b"sample").unwrap();
+    std::fs::write(payload.join("release.nfo"), b"nfo").unwrap();
+    // Not a payload class Scryer knows: whatever it is, it is not Scryer's to
+    // delete, and neither is the directory holding it.
+    std::fs::write(payload.join("notes.bin"), b"operator data").unwrap();
+    let record = cleanup_record_for(&tracked);
+    let result = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        result.2.payload,
+        Some(crate::import::import::HostPayloadDisposition::PartiallyRetained)
+    );
+    assert!(!payload.join("movie.mkv").exists());
+    assert!(!payload.join("release.nfo").exists());
+    assert!(!payload.join("Sample").exists());
+    assert_eq!(
+        std::fs::read(payload.join("notes.bin")).unwrap(),
+        b"operator data"
+    );
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(&repository.cleanup_checkpoints.lock().await[&tracked.download_id])
+            .unwrap();
+    assert_eq!(checkpoint["payload_removed"], true);
+    assert_eq!(checkpoint["disposition"], "partially_retained");
+    let requests = client.deleted_requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].4);
+}
+
+#[tokio::test]
+async fn host_cleanup_skips_files_that_changed_since_the_inventory() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Changed Payload").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "changed-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let completed = client.completed_downloads.lock().await[0].clone();
+    // An inventory persisted before a crash that no longer matches what is on
+    // disk: the file was rewritten since. It must be left alone.
+    let mut record = cleanup_record_for(&tracked);
+    record.attempts = 2;
+    record.payload_checkpoint = Some(
+        serde_json::json!({
+            "completed": completed,
+            "payload_removed": false,
+            "target": payload,
+            "inventory": {
+                "target": payload,
+                "entries": [{
+                    "path": "movie.mkv", "len": 5, "modified_unix_nanos": 1,
+                    "dev": null, "ino": null, "sample_bytes": 5,
+                    "sample_blake3": "stale"
+                }],
+                "retained": [],
+                "directories": []
+            }
+        })
+        .to_string(),
+    );
+    let result = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        result.2.payload,
+        Some(crate::import::import::HostPayloadDisposition::PartiallyRetained)
+    );
+    assert_eq!(std::fs::read(payload.join("movie.mkv")).unwrap(), b"media");
+    assert!(payload.exists());
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn host_cleanup_never_follows_a_symlinked_ancestor_planted_after_the_inventory() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Moved Subdirectory").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "moved-sub-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    std::fs::create_dir(payload.join("Sub")).unwrap();
+    std::fs::write(payload.join("Sub").join("clip.mkv"), b"clip").unwrap();
+    let inventory = crate::import::import::inventory_payload_directory_blocking(&payload).unwrap();
+    assert_eq!(inventory.entries.len(), 2);
+    let completed = client.completed_downloads.lock().await[0].clone();
+
+    // Between the inventory and the retry the subdirectory was moved out (same
+    // inodes, sizes, hashes) and a symlink left in its place.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::rename(payload.join("Sub"), elsewhere.path().join("Sub")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path().join("Sub"), payload.join("Sub")).unwrap();
+
+    let mut record = cleanup_record_for(&tracked);
+    record.attempts = 2;
+    record.payload_checkpoint = Some(
+        serde_json::json!({
+            "completed": completed,
+            "payload_removed": false,
+            "target": payload,
+            "inventory": inventory,
+        })
+        .to_string(),
+    );
+    let result = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(result.2, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        result.2.payload,
+        Some(crate::import::import::HostPayloadDisposition::PartiallyRetained)
+    );
+    assert!(!payload.join("movie.mkv").exists());
+    assert_eq!(
+        std::fs::read(elsewhere.path().join("Sub").join("clip.mkv")).unwrap(),
+        b"clip",
+        "a file reached through a symlinked ancestor is never deleted"
+    );
+    assert!(payload.exists());
+}
+
+#[tokio::test]
+async fn host_cleanup_in_an_unproven_directory_removes_only_scryer_imported_files() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Shared Folder").await;
+    let tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "shared-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let (root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    // The client reports a directory that is not named for the release (a
+    // shared completed folder, or a client-renamed duplicate). Only the file
+    // Scryer's own import record proves it imported from there may go.
+    let shared = root.path().join("Completed Jobs");
+    std::fs::rename(&payload, &shared).unwrap();
+    std::fs::write(shared.join("keep.mkv"), b"someone else's").unwrap();
+    client.completed_downloads.lock().await[0].dest_dir = shared.display().to_string();
+    record_file_import_ownership(&mut app, &tracked, &shared.join("movie.mkv")).await;
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        tracked.state,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!shared.join("movie.mkv").exists());
+    assert_eq!(
+        std::fs::read(shared.join("keep.mkv")).unwrap(),
+        b"someone else's"
+    );
+    assert!(shared.exists());
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn host_cleanup_gives_up_after_the_retry_budget_and_removes_the_entry() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Unverifiable Payload").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "unverifiable-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let (root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let unrelated = root.path().join("Unrelated job");
+    std::fs::rename(&payload, &unrelated).unwrap();
+    client.completed_downloads.lock().await[0].dest_dir = unrelated.display().to_string();
+    let mut record = cleanup_record_for(&tracked);
+    // The budget counts host deletion failures, not cleanup claims: a row that
+    // was claimed many times for seeding holds still gets its full retries.
+    record.attempts = 40;
+    for failure in 1..crate::import::import::HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL {
+        let held = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            held.2,
+            TerminalDownloadCleanupOutcome::RetryableFailure,
+            "failure {failure}"
+        );
+        assert!(client.deleted_requests.lock().await.is_empty());
+        let checkpoint = repository.cleanup_checkpoints.lock().await[&record.download_id].clone();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&checkpoint).unwrap()["host_payload_failures"],
+            failure
+        );
+        record.payload_checkpoint = Some(checkpoint);
+        record.attempts += 1;
+    }
+
+    // Sonarr parity: after the budget the entry goes and the payload stays for
+    // the operator, reported as unverified rather than silently.
+    let released = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(released.2, TerminalDownloadCleanupOutcome::Removed);
+    assert_eq!(
+        released.2.payload,
+        Some(crate::import::import::HostPayloadDisposition::Unverified)
+    );
+    assert_eq!(
+        std::fs::read(unrelated.join("movie.mkv")).unwrap(),
+        b"media"
+    );
+    let requests = client.deleted_requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !requests[0].4,
+        "an unverified payload is never deleted through the client either"
+    );
+}
+
+#[tokio::test]
+async fn durable_cleanup_abandons_unattributable_rows_at_once() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Orphan Row").await;
+    let tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "orphan-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let mut record = cleanup_record_for(&tracked);
+    record.title_id = None;
+    record.facet = None;
+    // Missing attribution never heals by retrying (manual import reopens the
+    // row when it attributes it), so the row is abandoned on its first attempt.
+    let settled = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(settled.2, TerminalDownloadCleanupOutcome::NotConfigured);
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn durable_cleanup_settles_when_the_client_no_longer_exists() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Deleted Client").await;
+    let tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "deleted-client-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let mut record = cleanup_record_for(&tracked);
+    record.client_id = "no-such-client".into();
+    // Nothing is observed or deleted through a client that is gone.
+    *client.observation_error.lock().await = Some("must not be consulted".into());
+    let settled = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(settled.2, TerminalDownloadCleanupOutcome::NotConfigured);
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn host_cleanup_removes_payload_for_all_entry_only_client_families() {
+    for client_type in ["nzbget", "sabnzbd", "rtorrent", "downloadstation", "aria2"] {
+        let client = Arc::new(StubDownloadClient::default());
+        let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+        let config =
+            create_enabled_download_client_config(&app, &user, client_type, client_type).await;
+        set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+        let title = movie_title(&app, &user, "Host Cleanup").await;
+        let mut tracked = tracked_for(
+            &config.id,
+            client_type,
+            "host-job",
+            &title,
+            TrackedDownloadState::Imported,
+            true,
+        );
+        observed(
+            DownloadSeedingSnapshot {
+                can_remove: Some(true),
+                can_move_files: Some(true),
+                ..Default::default()
+            },
+            &mut tracked,
+        );
+        let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Imported,
+            None,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            TerminalDownloadCleanupOutcome::Removed,
+            "{client_type}"
+        );
+        assert!(!payload.exists(), "{client_type}");
+        let requests = client.deleted_requests.lock().await;
+        assert_eq!(requests.len(), 1, "{client_type}");
+        assert_eq!(
+            requests[0].4,
+            client_type == "sabnzbd",
+            "SAB-compatible backends also receive their supported deletion flags"
+        );
+    }
+}
+
+#[tokio::test]
+async fn weaver_import_cleanup_removes_entry_and_payload() {
     let download_client = Arc::new(StubDownloadClient::default());
     let (app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
-    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
     set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
     let title = movie_title(&app, &user, "Usenet Movie").await;
 
     let tracked = tracked_for(
         &config.id,
-        "nzbget",
+        "weaver",
         "nzb-1",
         &title,
         TrackedDownloadState::Imported,
@@ -296,19 +1529,159 @@ async fn usenet_downloads_are_removed_on_import_exactly_as_before() {
     assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
     assert_eq!(
         download_client.deleted_requests.lock().await.clone(),
-        // Usenet keeps today's behavior: no data removal.
         vec![(
             Some(config.id.clone()),
             None,
             "nzb-1".to_string(),
             true,
-            false,
+            true,
         )]
     );
 }
 
+// Weaver API keys without admin scope may remove the entry but not the
+// files. The refusal must not strand the job: Scryer deletes the payload
+// itself and then removes the entry without data.
 #[tokio::test]
-async fn a_failed_torrent_is_removed_immediately_so_blocklisting_never_waits_on_seeding() {
+async fn weaver_import_cleanup_falls_back_to_host_payload_deletion_when_weaver_refuses() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Refused Movie").await;
+    let tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "nzb-1",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let (_root, payload) = host_payload_fixture(&app, &user, &download_client, &tracked).await;
+    *download_client.payload_delete_refusal.lock().await = Some(
+        "weaver refused payload deletion: admin scope required to delete completed files".into(),
+    );
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert!(
+        !payload.exists(),
+        "the host must delete the payload Weaver refused to"
+    );
+    assert_eq!(
+        download_client.deleted_requests.lock().await.clone(),
+        vec![
+            (
+                Some(config.id.clone()),
+                None,
+                "nzb-1".to_string(),
+                true,
+                true
+            ),
+            (
+                Some(config.id.clone()),
+                None,
+                "nzb-1".to_string(),
+                true,
+                false
+            ),
+        ]
+    );
+}
+
+// The refusal is remembered on the cleanup row: a later attempt goes straight
+// to host deletion (resuming its failure budget) instead of asking Weaver for
+// the files again.
+#[tokio::test]
+async fn weaver_payload_refusal_is_remembered_across_cleanup_attempts() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Refusal Memory").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "refused-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    *client.payload_delete_refusal.lock().await =
+        Some("admin scope required to delete completed files".into());
+    let mut record = cleanup_record_for(&tracked);
+
+    // Weaver refuses the files and the host cannot find the payload yet: the
+    // row retries, with the refusal and the host failure both checkpointed.
+    let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![(
+            Some(config.id.clone()),
+            None,
+            "refused-job".to_string(),
+            true,
+            true
+        )]
+    );
+    let checkpoint = repository.cleanup_checkpoints.lock().await[&record.download_id].clone();
+    let checkpoint_json = serde_json::from_str::<serde_json::Value>(&checkpoint).unwrap();
+    assert_eq!(checkpoint_json["client_refused_payload_deletion"], true);
+    assert_eq!(checkpoint_json["host_payload_failures"], 1);
+
+    // The payload is reachable now: the retry deletes it on the host and
+    // removes the entry without asking Weaver for the files again.
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    record.payload_checkpoint = Some(checkpoint);
+    record.attempts = 2;
+    let retry = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(retry.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!payload.exists());
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![
+            (
+                Some(config.id.clone()),
+                None,
+                "refused-job".to_string(),
+                true,
+                true
+            ),
+            (
+                Some(config.id.clone()),
+                None,
+                "refused-job".to_string(),
+                true,
+                false
+            ),
+        ]
+    );
+    let settled = repository.cleanup_checkpoints.lock().await[&tracked.download_id].clone();
+    let settled = serde_json::from_str::<serde_json::Value>(&settled).unwrap();
+    assert_eq!(settled["client_refused_payload_deletion"], true);
+    assert_eq!(settled["payload_removed"], true);
+}
+
+#[tokio::test]
+async fn a_failed_torrent_without_removal_eligibility_keeps_its_entry_and_data() {
     let download_client = Arc::new(StubDownloadClient::default());
     let (app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
     let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
@@ -332,23 +1705,8 @@ async fn a_failed_torrent_is_removed_immediately_so_blocklisting_never_waits_on_
     )
     .await;
 
-    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
-    assert_eq!(
-        download_client.deleted_requests.lock().await.clone(),
-        // The entry goes immediately, but the payload does not: a failed
-        // download never enters the gate, so with no client verdict to lean on
-        // this stays an entry-only removal. Sonarr is the same shape —
-        // `DownloadEventHub.Handle(DownloadFailedEvent)` returns early unless
-        // `DownloadItem.CanBeRemoved`, which for a torrent client is its own
-        // seed-limit answer.
-        vec![(
-            Some(config.id.clone()),
-            None,
-            "torrent-failed-1".to_string(),
-            true,
-            false
-        )]
-    );
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
 /// Sonarr parity: a torrent warning is never auto-failed, profile or not.
@@ -483,6 +1841,7 @@ async fn a_burned_usenet_failure_removes_history_with_data() {
     );
     tracked.burned_by_import_gate = true;
 
+    let (_root, payload) = host_payload_fixture(&app, &user, &download_client, &tracked).await;
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         &app,
         &tracked,
@@ -499,9 +1858,10 @@ async fn a_burned_usenet_failure_removes_history_with_data() {
             None,
             "nzb-burned-1".to_string(),
             true,
-            true,
+            false,
         )]
     );
+    assert!(!payload.exists());
 }
 
 #[tokio::test]
@@ -520,6 +1880,7 @@ async fn a_restart_recovers_burned_usenet_failure_cleanup_origin() {
         true,
     );
     tracked.client_item.download_id = Some("scryer-download:nzb-burned-restart-1".to_string());
+    let (_root, payload) = host_payload_fixture(&app, &user, &download_client, &tracked).await;
     let identity = crate::tracked_downloads::observed_queue_item_identity(&tracked.client_item);
     let source_identity =
         crate::ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "nzb-burned-restart-1");
@@ -558,9 +1919,10 @@ async fn a_restart_recovers_burned_usenet_failure_cleanup_origin() {
             None,
             "nzb-burned-restart-1".to_string(),
             true,
-            true,
+            false,
         )]
     );
+    assert!(!payload.exists());
 }
 
 #[tokio::test]
@@ -784,23 +2146,13 @@ async fn a_failed_torrent_its_client_refuses_to_release_keeps_its_data() {
     )
     .await;
 
-    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
-    assert_eq!(
-        download_client
-            .deleted_requests
-            .lock()
-            .await
-            .iter()
-            .map(|(_, _, item_id, _, remove_data)| (item_id.clone(), *remove_data))
-            .collect::<Vec<_>>(),
-        vec![("torrent-failed-3".to_string(), false)]
-    );
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
 /// A blackhole "remove" is `remove_dir_all` on a watch folder an *external*
-/// client is seeding from. The gate refuses it for imported states, but a
-/// failed download skips the gate entirely, so the rule is restated at the
-/// data-removal policy: never, whatever the client says.
+/// client is seeding from. Imported and failed states both preserve it,
+/// whatever the client says.
 #[tokio::test]
 async fn a_failed_blackhole_entry_never_asks_for_its_watch_folder_to_be_deleted() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -835,17 +2187,8 @@ async fn a_failed_blackhole_entry_never_asks_for_its_watch_folder_to_be_deleted(
     )
     .await;
 
-    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
-    assert_eq!(
-        download_client
-            .deleted_requests
-            .lock()
-            .await
-            .iter()
-            .map(|(_, _, item_id, _, remove_data)| (item_id.clone(), *remove_data))
-            .collect::<Vec<_>>(),
-        vec![("/downloads/watch/blackhole-failed-1".to_string(), false)]
-    );
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::SeedingEntryKept);
+    assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -1236,6 +2579,7 @@ async fn a_usenet_download_still_stops_being_tracked_once_it_is_removed() {
         TrackedDownloadState::Imported,
         true,
     );
+    let (_root, payload) = host_payload_fixture(&app, &user, &download_client, &tracked).await;
     let id = tracked.id.clone();
     let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
     tracker.insert_for_tests(tracked);
@@ -1249,6 +2593,7 @@ async fn a_usenet_download_still_stops_being_tracked_once_it_is_removed() {
     .await;
 
     assert!(tracker.find(&id).is_none());
+    assert!(!payload.exists());
     assert_eq!(
         download_client.deleted_requests.lock().await.clone(),
         vec![(
@@ -1280,6 +2625,8 @@ struct SeedGoalOnlySubmissionRepo {
     /// When set, the batched read fails — the prefetch must then degrade to
     /// per-row reads, never to "these torrents have no obligation".
     batch_fails: std::sync::atomic::AtomicBool,
+    identity_fails: std::sync::atomic::AtomicBool,
+    info_hash_fails: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -1349,6 +2696,9 @@ impl DownloadSubmissionRepository for SeedGoalOnlySubmissionRepo {
         &self,
         identity: &ClientJobLocator,
     ) -> AppResult<Option<PersistedSeedGoals>> {
+        if self.identity_fails.load(Ordering::Relaxed) {
+            return Err(AppError::Repository("seed goal read unavailable".into()));
+        }
         self.identity_lookups
             .lock()
             .expect("identity lookup log")
@@ -1385,6 +2735,9 @@ impl DownloadSubmissionRepository for SeedGoalOnlySubmissionRepo {
         &self,
         info_hash: &str,
     ) -> AppResult<Option<PersistedSeedGoals>> {
+        if self.info_hash_fails.load(Ordering::Relaxed) {
+            return Err(AppError::Repository("seed hash read unavailable".into()));
+        }
         self.info_hash_lookups
             .lock()
             .expect("info hash lookup log")
@@ -1467,6 +2820,7 @@ async fn the_gate_reads_the_goals_a_grab_was_persisted_under() {
     let goals = app
         .resolved_seed_goals(&key, None)
         .await
+        .expect("goal lookup should succeed")
         .expect("persisted goals should be found by client identity");
 
     assert_eq!(goals.seed_goal_ratio, Some(2.0));
@@ -1512,6 +2866,7 @@ async fn the_gate_falls_back_to_the_info_hash_when_the_client_item_id_moved() {
     let goals = app
         .resolved_seed_goals(&key, None)
         .await
+        .expect("goal lookup should succeed")
         .expect("persisted goals should be found by info hash");
 
     assert_eq!(goals.seed_goal_ratio, Some(2.0));
@@ -1522,6 +2877,164 @@ async fn the_gate_falls_back_to_the_info_hash_when_the_client_item_id_moved() {
             .clone(),
         vec![info_hash.to_string()]
     );
+}
+
+#[tokio::test]
+async fn canonical_seed_policy_overrides_a_tuple_batch_and_missing_plugins_hold() {
+    use crate::seeding_gate::{SeedGoalBatch, SeedGoalLookupKey, SeedGoalsRead};
+    let repo = Arc::new(SeedGoalOnlySubmissionRepo::default());
+    let id = scryer_domain::download_identity::DownloadId::new();
+    repo.by_canonical_download_id
+        .lock()
+        .unwrap()
+        .insert(id, persisted_goals(true));
+    repo.by_identity
+        .lock()
+        .unwrap()
+        .insert("job".into(), persisted_goals(false));
+    let (mut app, _, _) = bootstrap_with_torrent_clients(Arc::new(StubDownloadClient::default()));
+    app.services.workflow.download_submissions = repo.clone();
+    let locator = ClientJobLocator::new(Some("client"), "qbittorrent", "job");
+    let batch = SeedGoalBatch::prefetch(&app, &[locator]).await;
+    repo.by_identity.lock().unwrap().clear();
+    let mut key = SeedGoalLookupKey {
+        canonical_download_id: Some(id),
+        client_id: "client".into(),
+        client_type: "qbittorrent".into(),
+        client_item_id: "job".into(),
+        ..Default::default()
+    };
+    assert!(
+        app.resolved_seed_goals(&key, Some(&batch))
+            .await
+            .unwrap()
+            .unwrap()
+            .never_remove
+    );
+    key.client_type = "unavailable-plugin".into();
+    assert!(crate::seeding_gate::client_type_is_torrent(
+        &app,
+        &key.client_type
+    ));
+    let decision = crate::seeding_gate::evaluate_seeding_gate_with(
+        &app,
+        &key,
+        true,
+        Some(crate::seeding_gate::TorrentSeedingObservation {
+            can_remove: Some(true),
+            ..Default::default()
+        }),
+        None,
+    )
+    .await;
+    assert_eq!(
+        decision.outcome,
+        crate::seeding_gate::SeedingGateOutcome::Hold
+    );
+    assert_eq!(
+        decision.import_mode(ImportMode::Move),
+        ImportMode::HardlinkOrCopy
+    );
+}
+
+#[tokio::test]
+async fn unavailable_seed_goals_hold_even_when_the_client_allows_removal() {
+    for hash_failure in [false, true] {
+        let repo = Arc::new(SeedGoalOnlySubmissionRepo::default());
+        repo.identity_fails.store(!hash_failure, Ordering::Relaxed);
+        repo.info_hash_fails.store(hash_failure, Ordering::Relaxed);
+        let (mut app, _, _) =
+            bootstrap_with_torrent_clients(Arc::new(StubDownloadClient::default()));
+        app.services.workflow.download_submissions = repo;
+        let key = crate::seeding_gate::SeedGoalLookupKey {
+            client_type: "qbittorrent".into(),
+            client_id: "client".into(),
+            client_item_id: "job".into(),
+            info_hash: Some("hash".into()),
+            ..Default::default()
+        };
+        let decision = crate::seeding_gate::evaluate_seeding_gate_with(
+            &app,
+            &key,
+            true,
+            Some(crate::seeding_gate::TorrentSeedingObservation {
+                can_remove: Some(true),
+                can_move_files: Some(true),
+                ..Default::default()
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            decision.outcome,
+            crate::seeding_gate::SeedingGateOutcome::Hold
+        );
+        assert_eq!(
+            decision.import_mode(ImportMode::Move),
+            ImportMode::HardlinkOrCopy
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_torrents_honor_persisted_profiles_and_unknown_fresh_observations() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Failed but still obligated").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "qbittorrent",
+        "seed-job",
+        &title,
+        TrackedDownloadState::Failed,
+        true,
+    );
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(true),
+            can_move_files: Some(true),
+            seed_ratio: Some(0.5),
+            ..Default::default()
+        },
+        &mut tracked,
+    );
+    for never_remove in [false, true] {
+        app.services.workflow.download_submissions =
+            goals_repo("seed-job", persisted_goals(never_remove));
+        let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+            &app,
+            &tracked,
+            TrackedDownloadState::Failed,
+            None,
+        )
+        .await;
+        assert_eq!(outcome, TerminalDownloadCleanupOutcome::HeldForSeeding);
+    }
+    // A fresh unknown observation must not borrow the old cached release.
+    app.services.workflow.download_submissions = Arc::new(SeedGoalOnlySubmissionRepo::default());
+    tracked.state = TrackedDownloadState::Imported;
+    app.runtime
+        .acquisition
+        .tracked_download_snapshot
+        .write()
+        .await
+        .insert(
+            tracked.id.clone(),
+            crate::tracked_downloads::TrackedDownloadQueueMetadata::from(&tracked),
+        );
+    tracked.client_item.seeding = None;
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::HeldForSeeding);
+    assert!(client.deleted_requests.lock().await.is_empty());
+    assert!(client.paused_requests.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -1628,6 +3141,7 @@ async fn rtorrent_cleanup_fixture(
         TrackedDownloadState::Imported,
         true,
     );
+    record_host_job_ownership(&app, &tracked, "Release").await;
     (app, user, config, tracked)
 }
 
@@ -1816,6 +3330,7 @@ async fn rtorrent_cleanup_refuses_to_delete_an_output_root() {
     let root = tempdir.path().join("downloads");
     std::fs::create_dir_all(&root).expect("create output root");
     std::fs::write(root.join(".mounted"), b"mounted").expect("make root available");
+    configure_host_cleanup_root(&app, &_user, &config.id, &root).await;
     download_client
         .set_client_status(crate::DownloadClientStatus {
             remote_output_roots: vec![root.display().to_string()],
@@ -1880,6 +3395,7 @@ async fn rtorrent_cleanup_refuses_a_symlinked_payload_ancestor() {
     std::fs::write(payload.join("movie.mkv"), b"media").expect("create outside media");
     std::os::unix::fs::symlink(&outside, root.join("escape"))
         .expect("create payload ancestor symlink");
+    configure_host_cleanup_root(&app, &_user, &config.id, &root).await;
     download_client
         .set_client_status(crate::DownloadClientStatus {
             remote_output_roots: vec![root.display().to_string()],
@@ -1928,7 +3444,7 @@ async fn rtorrent_cleanup_refuses_a_symlinked_payload_ancestor() {
 #[tokio::test]
 async fn rtorrent_cleanup_allows_an_output_root_below_a_symlinked_ancestor() {
     let download_client = Arc::new(StubDownloadClient::default());
-    let (app, _user, config, mut tracked) = rtorrent_cleanup_fixture(
+    let (mut app, _user, config, mut tracked) = rtorrent_cleanup_fixture(
         download_client.clone(),
         "rTorrent Symlinked Root Ancestor",
         "rtorrent-ancestor-1",
@@ -1944,6 +3460,8 @@ async fn rtorrent_cleanup_allows_an_output_root_below_a_symlinked_ancestor() {
     std::fs::write(real_root.join(".mounted"), b"mounted").expect("make root available");
     std::os::unix::fs::symlink(&real_parent, &alias).expect("create root ancestor alias");
     std::fs::write(&payload, b"media").expect("create payload file through alias");
+    record_file_import_ownership(&mut app, &tracked, &payload).await;
+    configure_host_cleanup_root(&app, &_user, &config.id, &reported_root).await;
     download_client
         .set_client_status(crate::DownloadClientStatus {
             remote_output_roots: vec![reported_root.display().to_string()],
@@ -2000,7 +3518,7 @@ async fn rtorrent_cleanup_allows_an_output_root_below_a_symlinked_ancestor() {
 #[tokio::test]
 async fn rtorrent_cleanup_deletes_a_direct_completed_file() {
     let download_client = Arc::new(StubDownloadClient::default());
-    let (app, _user, config, mut tracked) = rtorrent_cleanup_fixture(
+    let (mut app, _user, config, mut tracked) = rtorrent_cleanup_fixture(
         download_client.clone(),
         "rTorrent Direct File Cleanup",
         "rtorrent-file-1",
@@ -2012,6 +3530,8 @@ async fn rtorrent_cleanup_deletes_a_direct_completed_file() {
     std::fs::create_dir_all(&root).expect("create output root");
     std::fs::write(root.join(".mounted"), b"mounted").expect("make root available");
     std::fs::write(&payload, b"media").expect("create payload file");
+    record_file_import_ownership(&mut app, &tracked, &payload).await;
+    configure_host_cleanup_root(&app, &_user, &config.id, &root).await;
     download_client
         .set_client_status(crate::DownloadClientStatus {
             remote_output_roots: vec![root.display().to_string()],
@@ -2513,12 +4033,10 @@ async fn a_torrent_in_plain_seeding_carries_progress_before_it_is_ever_imported(
 }
 
 #[tokio::test]
-async fn the_import_mode_check_reads_the_observation_from_the_published_snapshot() {
-    // The manual-import path has no tracked row to hand the gate, so it falls
-    // back to the snapshot the poller publishes. Without that lookup a
-    // finished torrent could never be moved, only ever copied.
+async fn the_import_mode_check_requires_fresh_client_evidence_even_with_a_releasing_snapshot() {
     let item_id = "torrent-move-lookup-1";
-    let (app, user, _) = bootstrap_with_torrent_clients(Arc::new(StubDownloadClient::default()));
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
     let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
     let title = movie_title(&app, &user, "Move After Seeding").await;
     app.update_media_settings(
@@ -2549,6 +4067,11 @@ async fn the_import_mode_check_reads_the_observation_from_the_published_snapshot
         },
         &mut tracked,
     );
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
     app.runtime
         .acquisition
         .tracked_download_snapshot
@@ -2574,18 +4097,11 @@ async fn the_import_mode_check_reads_the_observation_from_the_published_snapshot
         "a torrent the client says is done, with stable data, may be moved"
     );
 
-    // Flip only the seeding verdict: the move must go back to a copy.
-    app.runtime
-        .acquisition
-        .tracked_download_snapshot
-        .write()
-        .await
-        .get_mut(&tracked.id)
-        .expect("snapshot row")
-        .client_item
+    // The published snapshot still permits a move; only the fresh verdict changes.
+    client.history_items.lock().await[0]
         .seeding
         .as_mut()
-        .expect("observation")
+        .unwrap()
         .can_remove = Some(false);
 
     let effective = crate::seeding_gate::resolve_seeding_safe_import_mode(
@@ -2650,6 +4166,7 @@ async fn the_reconcile_tick_reads_every_settled_row_s_goals_in_one_batch() {
         let goals = app
             .resolved_seed_goals(&key, Some(&batch))
             .await
+            .expect("goal lookup should succeed")
             .expect("the batch answers for every row it covered");
         assert_eq!(goals.seed_goal_ratio, Some(2.0));
     }
@@ -2696,6 +4213,7 @@ async fn a_covered_row_without_goals_skips_the_identity_query_but_keeps_the_info
     let goals = app
         .resolved_seed_goals(&key, Some(&batch))
         .await
+        .expect("goal lookup should succeed")
         .expect("the info-hash fallback still runs for a covered row with no identity match");
 
     assert_eq!(goals.seed_goal_ratio, Some(2.0));
@@ -2742,6 +4260,7 @@ async fn a_row_the_batch_never_covered_still_takes_the_per_row_path() {
     let goals = app
         .resolved_seed_goals(&key, Some(&batch))
         .await
+        .expect("goal lookup should succeed")
         .expect("an uncovered row falls back to its own identity read");
 
     assert_eq!(goals.seed_goal_ratio, Some(2.0));
@@ -2785,6 +4304,7 @@ async fn a_failed_prefetch_falls_back_to_per_row_reads() {
     let goals = app
         .resolved_seed_goals(&key, Some(&batch))
         .await
+        .expect("goal lookup should succeed")
         .expect("a failed prefetch must not read as 'no obligation'");
 
     assert!(goals.never_remove);

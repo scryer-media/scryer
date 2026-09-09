@@ -187,6 +187,26 @@ impl DownloadRegistryRepository for RecordingDownloadRegistry {
         }))
     }
 
+    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
+        let ended = self.ended.lock().await;
+        let mut clients: Vec<(String, String)> = self
+            .reconcile_candidates
+            .lock()
+            .await
+            .iter()
+            .filter(|binding| binding.ended_at.is_none() && !ended.contains(&binding.download_id))
+            .filter_map(|binding| {
+                Some((
+                    binding.client_config_id.clone()?,
+                    binding.client_type_snapshot.clone()?.to_ascii_lowercase(),
+                ))
+            })
+            .collect();
+        clients.sort();
+        clients.dedup();
+        Ok(clients)
+    }
+
     async fn list_active_bindings_for_client_before(
         &self,
         client_config_id: &str,
@@ -302,6 +322,127 @@ async fn push_snapshot_observation_is_recorded_by_the_registry_resolver() {
     poller
         .await
         .expect("download queue poller should stop cleanly");
+}
+
+#[tokio::test]
+async fn authoritative_absence_follows_the_history_cursor_past_the_first_page() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone()])
+        .await;
+    let first_download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "removed-incomplete-1");
+    registry
+        .bind(source_identity.clone(), first_download_id)
+        .await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: first_download_id,
+            title_id: "title-removed-incomplete".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "removed-incomplete-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Removed.Incomplete.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("seed download submission");
+
+    let mut item =
+        queue_history_fixture_item("removed-incomplete-1", DownloadQueueState::Downloading, 1);
+    item.client_id = config.id.clone();
+    item.client_name = config.name.clone();
+    item.client_type = "nzbget".to_string();
+    item.download_id = Some(first_download_id.to_wire());
+    item.is_scryer_origin = true;
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, item).await;
+
+    // The adapter has no exact lookup and answers page by page; the job is
+    // only proven absent once the scan reaches the end of history.
+    download_client.observation_script.lock().await.extend([
+        crate::DownloadClientObservation::Unknown {
+            reason: "page 1 scanned".into(),
+            next_history_offset: 100,
+        },
+        crate::DownloadClientObservation::Unknown {
+            reason: "page 2 scanned".into(),
+            next_history_offset: 200,
+        },
+        crate::DownloadClientObservation::Absent,
+    ]);
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        vec![0, 100, 200],
+        "each round must resume from the adapter's cursor"
+    );
+    assert!(registry.ended.lock().await.contains(&first_download_id));
+
+    // A cursor that does not advance is not progress: the binding is kept.
+    let second_download_id = scryer_domain::download_identity::DownloadId::new();
+    let stalled_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "removed-incomplete-2");
+    registry
+        .bind(stalled_identity.clone(), second_download_id)
+        .await;
+    download_client
+        .observed_history_offsets
+        .lock()
+        .await
+        .clear();
+    download_client.observation_script.lock().await.extend([
+        crate::DownloadClientObservation::Unknown {
+            reason: "client unavailable".into(),
+            next_history_offset: 0,
+        },
+    ]);
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &stalled_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        vec![0]
+    );
+    assert!(!registry.ended.lock().await.contains(&second_download_id));
 }
 
 #[tokio::test]
@@ -806,6 +947,74 @@ async fn restart_ghost_reconcile_preserves_durable_post_queue_bindings() {
             Some(state.as_str().to_string())
         );
     }
+}
+
+/// A job bound to a client whose configuration was deleted is invisible to
+/// the per-client reconciliation above. It must still be failed, or its
+/// `Downloading` claim holds the scope against every future search.
+#[tokio::test]
+async fn snapshot_reconciles_bindings_left_on_a_deleted_client() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions,
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    // The stub stands in for the router, which reports jobs on a deleted
+    // client as authoritatively absent.
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone(), "deleted-client".to_string()])
+        .await;
+    let orphaned_download_id = scryer_domain::download_identity::DownloadId::new();
+    let orphaned_source = ClientJobLocator::new(Some("deleted-client"), "nzbget", "orphaned-1");
+    registry.bind(orphaned_source, orphaned_download_id).await;
+    registry
+        .set_reconcile_candidates(vec![DownloadClientBindingRecord {
+            download_id: orphaned_download_id,
+            client_config_id: Some("deleted-client".to_string()),
+            client_type_snapshot: Some("nzbget".to_string()),
+            client_name_snapshot: Some("Old NZBGet".to_string()),
+            native_item_id: Some("orphaned-1".to_string()),
+            created_at: Utc::now() - chrono::Duration::minutes(11),
+            last_seen_at: Some(Utc::now() - chrono::Duration::minutes(11)),
+            ended_at: None,
+        }])
+        .await;
+
+    let (_command_tx, tracked_download_rx) = tokio::sync::mpsc::channel(8);
+    let (_snapshot_tx, snapshot_rx) = tokio::sync::mpsc::channel(1);
+    let token = tokio_util::sync::CancellationToken::new();
+    let poller = tokio::spawn(
+        crate::integration::start_download_queue_poller_with_options(
+            app.clone(),
+            token.child_token(),
+            tracked_download_rx,
+            snapshot_rx,
+            crate::integration::DownloadQueuePollerOptions {
+                interval: Duration::from_millis(50),
+                ..Default::default()
+            },
+        ),
+    );
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if registry.ended.lock().await.contains(&orphaned_download_id) {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a binding on a deleted client should be reconciled and ended");
+    token.cancel();
+    poller.await.expect("poller should stop cleanly");
 }
 
 #[tokio::test]
@@ -3256,6 +3465,40 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
 
     let item_id = "imported-cleanup-1";
     let download_id = "download-id-imported-cleanup-1";
+    let output = tempfile::tempdir().unwrap();
+    app.update_download_client_config(&user, crate::DownloadClientConfigUpdate {
+        id: config.id.clone(),
+        config_json: Some(serde_json::json!({
+            "remote_path_mappings": format!("{} => {}", output.path().display(), output.path().display())
+        }).to_string()),
+        ..Default::default()
+    }).await.unwrap();
+    let payload = output.path().join("Imported Cleanup Retry");
+    std::fs::create_dir(&payload).unwrap();
+    std::fs::write(payload.join("movie.mkv"), b"imported media").unwrap();
+    download_client
+        .set_client_status(crate::DownloadClientStatus {
+            remote_output_roots: vec![output.path().display().to_string()],
+            ..Default::default()
+        })
+        .await;
+    download_client
+        .completed_downloads
+        .lock()
+        .await
+        .push(scryer_domain::CompletedDownload {
+            client_type: "nzbget".into(),
+            client_id: config.id.clone(),
+            download_client_item_id: item_id.into(),
+            download_id: Some(download_id.into()),
+            name: "Imported Cleanup Retry".into(),
+            release_name: None,
+            dest_dir: payload.display().to_string(),
+            category: Some("scryer-movies".into()),
+            size_bytes: None,
+            completed_at: None,
+            parameters: vec![],
+        });
     let mut history_item = queue_history_fixture_item(item_id, DownloadQueueState::Completed, 40);
     history_item.client_id = config.id.clone();
     history_item.client_name = config.name.clone();
@@ -3401,9 +3644,13 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
     .await
     .expect("poller should retry imported cleanup on the next cycle");
 
+    assert!(
+        !payload.exists(),
+        "host payload cleanup must precede entry removal"
+    );
     assert_eq!(
         download_client.deleted_requests.lock().await.clone(),
-        // Usenet: the entry goes, the data stays the client's business.
+        // NZBGet receives entry-only removal after guarded host payload deletion.
         vec![(
             Some(config.id.clone()),
             None,

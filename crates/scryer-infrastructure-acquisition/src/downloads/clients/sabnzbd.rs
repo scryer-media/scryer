@@ -375,12 +375,26 @@ impl SabnzbdDownloadClient {
             ])
             .await?;
 
-        Ok(json
+        Self::history_slots_from_response(&json)
+    }
+
+    fn history_slots_from_response(json: &Value) -> AppResult<Vec<Value>> {
+        let slots = json
             .get("history")
             .and_then(slots_from_api_section)
             .or_else(|| json.get("slots").and_then(Value::as_array))
             .cloned()
-            .unwrap_or_default())
+            .ok_or_else(|| AppError::Repository("invalid SABnzbd history response".into()))?;
+        if slots.iter().any(|slot| {
+            slot.get("nzo_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+        }) {
+            return Err(AppError::Repository(
+                "SABnzbd history contains an invalid job identity".into(),
+            ));
+        }
+        Ok(slots)
     }
 
     async fn completed_downloads_page(&self, limit: usize) -> AppResult<Vec<CompletedDownload>> {
@@ -442,6 +456,7 @@ impl SabnzbdDownloadClient {
         }
 
         let mut start = 0;
+        let mut seen_ids = std::collections::HashSet::new();
         loop {
             let slots = self.history_slots_page(start, HISTORY_PAGE_SIZE).await?;
             if let Some(download) = completed_downloads_from_sab_slots(&slots, None)
@@ -450,8 +465,23 @@ impl SabnzbdDownloadClient {
             {
                 return Ok(Some(download));
             }
-            if slots.len() < HISTORY_PAGE_SIZE {
+            // Compatible services can cap pages below the requested size.
+            // A short page is not the end; an empty page is.
+            if slots.is_empty() {
                 return Ok(None);
+            }
+            let mut progressed = false;
+            for id in slots
+                .iter()
+                .filter_map(|slot| slot.get("nzo_id").and_then(Value::as_str))
+            {
+                progressed |= seen_ids.insert(id.to_string());
+            }
+            if !progressed {
+                return Err(AppError::Repository(
+                    "SABnzbd history pagination made no progress; completed payload lookup is unresolved"
+                        .to_string(),
+                ));
             }
             start = start.checked_add(slots.len()).ok_or_else(|| {
                 AppError::Repository("SABnzbd history offset overflow".to_string())
@@ -696,6 +726,86 @@ impl SabnzbdDownloadClient {
 
 #[async_trait]
 impl DownloadClient for SabnzbdDownloadClient {
+    async fn observe_download(
+        &self,
+        locator: &scryer_application::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<scryer_application::DownloadClientObservation> {
+        use scryer_application::DownloadClientObservation;
+        if let Some(item) = self
+            .list_queue()
+            .await?
+            .into_iter()
+            .find(|item| item.download_client_item_id == locator.item_id)
+        {
+            return Ok(DownloadClientObservation::Present(Box::new(item)));
+        }
+        // Real SAB can resolve one retained job regardless of history size.
+        // A compatible backend that ignores the filter returns an ordinary
+        // nonempty page; a different row must never establish absence.
+        match self
+            .api_get(&[
+                ("mode", "history"),
+                ("nzo_ids", locator.item_id.as_str()),
+                ("start", "0"),
+                ("limit", "1"),
+            ])
+            .await
+        {
+            Ok(json) => {
+                let slots = Self::history_slots_from_response(&json)?;
+                if slots.is_empty() {
+                    return Ok(DownloadClientObservation::Absent);
+                }
+                if let Some(slot) = slots.iter().find(|slot| {
+                    slot.get("nzo_id").and_then(Value::as_str) == Some(locator.item_id.as_str())
+                }) {
+                    return Ok(match history_queue_item_from_sab_slot(slot) {
+                        Some(item) => DownloadClientObservation::Present(Box::new(item)),
+                        None => DownloadClientObservation::Unknown {
+                            reason: "SABnzbd job is present but its state could not be read".into(),
+                            next_history_offset: offset,
+                        },
+                    });
+                }
+            }
+            Err(error) => {
+                debug!(error = %error, "SABnzbd exact history lookup unavailable; trying bounded pages");
+            }
+        }
+        let mut start = offset;
+        for _ in 0..4 {
+            let slots = self.history_slots_page(start, 100).await?;
+            let count = slots.len();
+            if slots
+                .iter()
+                .any(|slot| slot.get("nzo_id").and_then(Value::as_str) == Some(&locator.item_id))
+            {
+                if let Some(item) = slots
+                    .iter()
+                    .filter_map(history_queue_item_from_sab_slot)
+                    .find(|item| item.download_client_item_id == locator.item_id)
+                {
+                    return Ok(DownloadClientObservation::Present(Box::new(item)));
+                }
+                return Ok(DownloadClientObservation::Unknown {
+                    reason: "SABnzbd job is present but its state could not be read".into(),
+                    next_history_offset: start,
+                });
+            }
+            // Compatible backends may cap a page below the requested limit.
+            // Advance by the actual count; only an empty page ends this scan.
+            if count == 0 {
+                return Ok(DownloadClientObservation::Absent);
+            }
+            start = start.saturating_add(count);
+        }
+        Ok(DownloadClientObservation::Unknown {
+            reason: "job absent from this SAB history page; retaining its durable claim".into(),
+            next_history_offset: start,
+        })
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -876,8 +986,25 @@ impl DownloadClient for SabnzbdDownloadClient {
 
         let slots = match slots {
             Some(s) => s,
-            None => return Ok(Vec::new()),
+            None => {
+                return Err(AppError::Repository(
+                    "invalid SABnzbd queue response".into(),
+                ));
+            }
         };
+        if slots.iter().any(|slot| {
+            slot.get("nzo_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+        }) || json
+            .get("queue")
+            .and_then(|queue| extract_i64_value(queue.get("noofslots_total")))
+            .is_some_and(|total| total > slots.len() as i64)
+        {
+            return Err(AppError::Repository(
+                "incomplete SABnzbd queue response".into(),
+            ));
+        }
 
         Ok(slots
             .iter()
@@ -1066,78 +1193,9 @@ impl DownloadClient for SabnzbdDownloadClient {
         limit: usize,
     ) -> AppResult<Vec<DownloadQueueItem>> {
         let slots = self.history_slots_page(offset, limit).await?;
-        let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
-
         Ok(slots
             .iter()
-            .filter_map(|slot| {
-                let slot = slot.as_object()?;
-
-                let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
-
-                let completed_ts = extract_i64_value(slot.get("completed"));
-                if let Some(ts) = completed_ts
-                    && ts < cutoff_ts
-                {
-                    return None;
-                }
-
-                let title_name = slot
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Unnamed download")
-                    .to_string();
-
-                let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
-                let fail_message = slot.get("fail_message").and_then(Value::as_str);
-                let (state, attention_reason) = sabnzbd_history_state(status, fail_message)?;
-                let category = extract_sabnzbd_category(slot);
-
-                Some(DownloadQueueItem {
-                    id: nzo_id.clone(),
-                    title_id: None,
-                    episode_id: None,
-                    title_name,
-                    facet: None,
-                    category,
-                    client_id: String::new(),
-                    client_name: String::new(),
-                    client_type: "sabnzbd".to_string(),
-                    state,
-                    progress_percent: if state == DownloadQueueState::Completed {
-                        100
-                    } else {
-                        0
-                    },
-                    import_transfer_phase: None,
-                    import_transfer_bytes: None,
-                    import_transfer_total_bytes: None,
-                    import_transfer_started_at: None,
-                    import_transfer_updated_at: None,
-                    size_bytes: extract_i64_value(slot.get("bytes")),
-                    remaining_seconds: None,
-                    queued_at: extract_i64_value(slot.get("time_added"))
-                        .map(|value| value.to_string()),
-                    last_updated_at: completed_ts.map(|value| value.to_string()),
-                    attention_required: matches!(state, DownloadQueueState::Failed),
-                    attention_reason,
-                    download_client_item_id: nzo_id.clone(),
-                    download_id: Some(nzo_id),
-                    import_status: None,
-                    import_error_code: None,
-                    import_error_message: None,
-                    imported_at: None,
-                    delete_status: None,
-                    delete_error_message: None,
-                    source_provider: None,
-                    is_scryer_origin: false,
-                    tracked_state: None,
-                    tracked_status: None,
-                    tracked_status_messages: Vec::new(),
-                    tracked_match_type: None,
-                    seeding: None,
-                })
-            })
+            .filter_map(history_queue_item_from_sab_slot)
             .collect())
     }
 
@@ -2142,6 +2200,64 @@ fn extract_sabnzbd_release_name(slot: &serde_json::Map<String, Value>) -> Option
         .map(str::to_string)
 }
 
+fn history_queue_item_from_sab_slot(slot: &Value) -> Option<DownloadQueueItem> {
+    let slot = slot.as_object()?;
+    let nzo_id = slot.get("nzo_id").and_then(Value::as_str)?.to_string();
+    let completed_ts = extract_i64_value(slot.get("completed"));
+    let title_name = slot
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Unnamed download")
+        .to_string();
+    let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
+    let fail_message = slot.get("fail_message").and_then(Value::as_str);
+    let (state, attention_reason) = sabnzbd_history_state(status, fail_message)?;
+    let category = extract_sabnzbd_category(slot);
+    Some(DownloadQueueItem {
+        id: nzo_id.clone(),
+        title_id: None,
+        episode_id: None,
+        title_name,
+        facet: None,
+        category,
+        client_id: String::new(),
+        client_name: String::new(),
+        client_type: "sabnzbd".to_string(),
+        state,
+        progress_percent: if state == DownloadQueueState::Completed {
+            100
+        } else {
+            0
+        },
+        import_transfer_phase: None,
+        import_transfer_bytes: None,
+        import_transfer_total_bytes: None,
+        import_transfer_started_at: None,
+        import_transfer_updated_at: None,
+        size_bytes: extract_i64_value(slot.get("bytes")),
+        remaining_seconds: None,
+        queued_at: extract_i64_value(slot.get("time_added")).map(|value| value.to_string()),
+        last_updated_at: completed_ts.map(|value| value.to_string()),
+        attention_required: matches!(state, DownloadQueueState::Failed),
+        attention_reason,
+        download_client_item_id: nzo_id.clone(),
+        download_id: Some(nzo_id),
+        import_status: None,
+        import_error_code: None,
+        import_error_message: None,
+        imported_at: None,
+        delete_status: None,
+        delete_error_message: None,
+        source_provider: None,
+        is_scryer_origin: false,
+        tracked_state: None,
+        tracked_status: None,
+        tracked_status_messages: Vec::new(),
+        tracked_match_type: None,
+        seeding: None,
+    })
+}
+
 fn completed_downloads_from_sab_slots(
     slots: &[Value],
     cutoff_ts: Option<i64>,
@@ -2900,6 +3016,277 @@ mod tests {
             sab_reconcile_slot_nzo_id(&history_slot, "name", &expected).as_deref(),
             Some("SABnzbd_nzo_2")
         );
+    }
+
+    #[tokio::test]
+    async fn exact_observation_resolves_targeted_history_despite_large_backlog() {
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        for (id, slots) in [
+            ("missing-job", json!([])),
+            (
+                "old-job",
+                json!([{"nzo_id":"old-job","name":"old release",
+                "status":"Completed","completed":1,"bytes":42}]),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "queue"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"queue":{"slots":[]}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("nzo_ids", id))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"history":{"slots":slots}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let retained: Vec<_> = (0..501)
+                .map(|index| {
+                    json!({
+                        "nzo_id":format!("retained-{index}"),"name":"other release",
+                        "status":"Completed","completed":1
+                    })
+                })
+                .collect();
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param_is_missing("nzo_ids"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"history":{"slots":retained}})),
+                )
+                .expect(0)
+                .mount(&server)
+                .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            let observation = client
+                .observe_download(&ClientJobLocator::new(Some("sab"), "sabnzbd", id), 0)
+                .await
+                .unwrap();
+            match observation {
+                DownloadClientObservation::Absent => assert_eq!(id, "missing-job"),
+                DownloadClientObservation::Present(item) => {
+                    assert_eq!(id, "old-job");
+                    assert_eq!(item.download_client_item_id, id);
+                    assert_eq!(item.title_name, "old release");
+                    assert_eq!(item.state, scryer_domain::DownloadQueueState::Completed);
+                    assert_eq!(item.size_bytes, Some(42));
+                    assert_eq!(item.last_updated_at.as_deref(), Some("1"));
+                }
+                DownloadClientObservation::Unknown { reason, .. } => {
+                    panic!("unexpected unknown: {reason}")
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_observation_does_not_infer_absence_when_filter_is_ignored() {
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"queue":{"slots":[]}})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "history"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "history":{"slots":[{"nzo_id":"other-job","name":"other job",
+                    "status":"Completed","completed":1}]}
+            })))
+            .expect(5)
+            .mount(&server)
+            .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        assert!(matches!(
+            client
+                .observe_download(
+                    &ClientJobLocator::new(Some("sab"), "sabnzbd", "missing-job"),
+                    0,
+                )
+                .await
+                .unwrap(),
+            DownloadClientObservation::Unknown {
+                next_history_offset: 4,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn exact_observation_rejects_malformed_targeted_history() {
+        use scryer_application::ClientJobLocator;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"queue":{"slots":[]}})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "history"))
+            .and(query_param("nzo_ids", "missing-job"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"history":{}})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let error = client
+            .observe_download(
+                &ClientJobLocator::new(Some("sab"), "sabnzbd", "missing-job"),
+                0,
+            )
+            .await
+            .expect_err("a missing slots envelope cannot establish absence");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid SABnzbd history response")
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_observation_finishes_a_resumed_scan_with_ignored_filter() {
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"queue":{"slots":[]}})))
+            .mount(&server)
+            .await;
+        for offset in 0..=5 {
+            let slots = if offset == 5 {
+                json!([])
+            } else {
+                json!([{"nzo_id":format!("other-{offset}"),"name":"other", "status":"Completed","completed":1}])
+            };
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("start", offset.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"history":{"slots":slots}})),
+                )
+                .mount(&server)
+                .await;
+        }
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let locator = ClientJobLocator::new(Some("sab"), "sabnzbd", "missing");
+        let DownloadClientObservation::Unknown {
+            next_history_offset,
+            ..
+        } = client.observe_download(&locator, 0).await.unwrap()
+        else {
+            panic!("scan must be bounded");
+        };
+        assert_eq!(next_history_offset, 4);
+        assert!(matches!(
+            client
+                .observe_download(&locator, next_history_offset)
+                .await
+                .unwrap(),
+            DownloadClientObservation::Absent
+        ));
+    }
+
+    #[tokio::test]
+    async fn exact_observation_searches_past_backend_capped_history_pages() {
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"queue":{"slots":[]}})))
+            .mount(&server)
+            .await;
+        for (offset, id) in [("0", "new-job"), ("1", "old-job")] {
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("start", offset))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "history":{"slots":[{"nzo_id":id,"name":id,"status":"Completed","completed":1}]}
+                })))
+                .mount(&server)
+                .await;
+        }
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let result = client
+            .observe_download(&ClientJobLocator::new(Some("sab"), "sabnzbd", "old-job"), 0)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, DownloadClientObservation::Present(item) if item.download_client_item_id == "old-job")
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_payload_lookup_follows_capped_history_pages_until_empty() {
+        let server = MockServer::start().await;
+        for (offset, slots) in [
+            (
+                "0",
+                json!([{"nzo_id":"new-job","name":"new-job","status":"Completed",
+                "storage":"/downloads/new-job","completed":1}]),
+            ),
+            (
+                "1",
+                json!([{"nzo_id":"old-job","name":"old-job","status":"Completed",
+                "storage":"/downloads/old-job","completed":1}]),
+            ),
+            ("2", json!([])),
+        ] {
+            // Deliberately ignore nzo_ids and cap every nonempty page at one row.
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("start", offset))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "history":{"slots":slots}
+                })))
+                .mount(&server)
+                .await;
+        }
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let download = client
+            .get_completed_download_for_source("sab", "sabnzbd", "old-job")
+            .await
+            .expect("short pages must not hide older completed payloads")
+            .expect("completed payload must be resolved");
+        assert_eq!(download.download_client_item_id, "old-job");
+        assert_eq!(download.dest_dir, "/downloads/old-job");
+        assert!(
+            client
+                .get_completed_download_for_source("sab", "sabnzbd", "missing-job")
+                .await
+                .expect("an empty final page completes the scan")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_payload_lookup_rejects_history_that_ignores_offsets() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "history"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "history":{"slots":[{"nzo_id":"other-job","name":"other-job",
+                    "status":"Completed","storage":"/downloads/other-job","completed":1}]}
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.get_completed_download_for_source("sab", "sabnzbd", "missing-job"),
+        )
+        .await
+        .expect("a backend ignoring offsets must not loop indefinitely")
+        .expect_err("repeated pages cannot prove the payload is absent");
+        assert!(error.to_string().contains("pagination made no progress"));
     }
 
     #[tokio::test]
