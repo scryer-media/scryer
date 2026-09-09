@@ -89,6 +89,16 @@ impl AppUseCase {
         } else {
             None
         };
+        if let Some(id) = file_id {
+            let saved = expected
+                .as_ref()
+                .ok_or_else(|| AppError::NotFound(format!("media file {id}")))?;
+            if crate::stored_paths::stored_path_to_path_buf(&saved.file_path) != path {
+                return Err(AppError::Validation(
+                    "registered media path changed before inspection".into(),
+                ));
+            }
+        }
         let selection = expected
             .as_ref()
             .and_then(|file| file.analysis_details.disc.as_ref())
@@ -238,7 +248,7 @@ impl AppUseCase {
         Ok(())
     }
 
-    async fn validate_disc_selection_update(
+    pub(crate) async fn validate_disc_selection_update(
         &self,
         title: &scryer_domain::Title,
         expected: &TitleMediaFile,

@@ -185,7 +185,7 @@ impl AppUseCase {
         Ok(())
     }
 
-    async fn record_failed_analysis_refresh(
+    pub(crate) async fn record_failed_analysis_refresh(
         &self,
         expected: &crate::TitleMediaFile,
         message: String,

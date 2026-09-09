@@ -93,6 +93,84 @@ async fn selection_fixture(
 }
 
 #[tokio::test]
+async fn deferred_analysis_failures_preserve_successful_metadata_and_reject_stale_attempts() {
+    struct FailedAnalyzer {
+        invalid: bool,
+        started: Arc<tokio::sync::Notify>,
+        resume: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait]
+    impl MediaAnalyzer for FailedAnalyzer {
+        async fn analyze_file(&self, _path: PathBuf) -> AppResult<MediaAnalysisOutcome> {
+            self.started.notify_one();
+            self.resume.notified().await;
+            if self.invalid {
+                Ok(MediaAnalysisOutcome::Invalid("malformed media".into()))
+            } else {
+                Err(AppError::Repository("probe read failed".into()))
+            }
+        }
+    }
+    for invalid in [false, true] {
+        for changed in [false, true] {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let resume = Arc::new(tokio::sync::Notify::new());
+            let (app, _admin, files, id, dir) = selection_fixture(Arc::new(FailedAnalyzer {
+                invalid,
+                started: started.clone(),
+                resume: resume.clone(),
+            }))
+            .await;
+            {
+                let mut rows = files.store.lock().await;
+                let file = rows.iter_mut().find(|row| row.id == id).unwrap();
+                file.scan_status = "scanned".into();
+                file.analysis_details.revision = scryer_media_types::ANALYSIS_REVISION;
+                file.duration_seconds = Some(7200);
+                file.video_width = Some(1920);
+            }
+            let initial = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+            let task = tokio::spawn({
+                let app = app.clone();
+                let title_id = initial.title_id.clone();
+                let id = id.clone();
+                let path = dir.path().join("Movie.iso");
+                async move {
+                    crate::import::workflow::analyze_and_persist_imported_media_file(
+                        &app, &title_id, &id, &path,
+                    )
+                    .await;
+                }
+            });
+            started.notified().await;
+            if changed {
+                let mut rows = files.store.lock().await;
+                let file = rows.iter_mut().find(|row| row.id == id).unwrap();
+                file.analysis_details.revision += 1;
+                file.video_width = Some(3840);
+            }
+            let expected = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+            resume.notify_one();
+            task.await.unwrap();
+            let saved = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+            assert_eq!(saved.analysis_details, expected.analysis_details);
+            assert_eq!(saved.video_width, expected.video_width);
+            assert_eq!(saved.duration_seconds, Some(7200));
+            assert_eq!(saved.scan_status, "scanned");
+            let attempts = files.analysis_attempts.lock().await;
+            assert_eq!(attempts.len(), usize::from(!changed));
+            if let Some((_, attempt)) = attempts.first() {
+                assert_eq!(
+                    attempt.details.report.status,
+                    scryer_media_types::ProbeStatus::Incomplete
+                );
+                assert_eq!(attempt.details.report.warnings[0].code, "refresh_failed");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
     let analyzer = Arc::new(SelectionAnalyzer {
         seen: Arc::new(Mutex::new(Vec::new())),
@@ -325,6 +403,19 @@ async fn disc_episode_mapping_validates_each_authored_runtime_and_episode_owner(
             .episode_mappings
     );
     drop(attempts);
+    let prior_attempts = files.analysis_attempts.lock().await.len();
+    crate::import::workflow::analyze_and_persist_imported_media_file(
+        &app,
+        &before.title_id,
+        &id,
+        std::path::Path::new(&before.file_path),
+    )
+    .await;
+    assert_eq!(
+        files.analysis_attempts.lock().await.len(),
+        prior_attempts + 1,
+        "deferred import inspection must also validate saved episode runtimes"
+    );
     let after = files.get_media_file_by_id(&id).await.unwrap().unwrap();
     assert_eq!(
         after.analysis_details, before.analysis_details,
@@ -513,6 +604,41 @@ async fn stale_analysis_does_not_record_results_for_replaced_sources() {
 }
 
 #[tokio::test]
+async fn catalogued_analysis_rejects_moved_or_deleted_records_before_probing() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let analyzer = Arc::new(SelectionAnalyzer {
+        seen: seen.clone(),
+        started: Arc::new(tokio::sync::Notify::new()),
+        resume: None,
+    });
+    let (app, _admin, files, id, dir) = selection_fixture(analyzer).await;
+    let other = dir.path().join("other.iso");
+    std::fs::write(&other, b"a different disc").unwrap();
+    let mismatch = app
+        .analyze_catalogued_media_file(Some(&id), other.clone())
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        mismatch
+            .to_string()
+            .contains("registered media path changed")
+    );
+    let saved = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    let missing = app
+        .analyze_catalogued_media_file(Some("missing"), PathBuf::from(&saved.file_path))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(missing, AppError::NotFound(_)));
+    assert!(seen.lock().await.is_empty());
+    assert!(
+        app.analyze_catalogued_media_file(None, other).await.is_ok(),
+        "new-file discovery remains supported"
+    );
+}
+
+#[tokio::test]
 async fn disc_title_override_survives_catalogued_reprobe() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let analyzer = Arc::new(SelectionAnalyzer {
@@ -536,16 +662,42 @@ async fn disc_title_override_survives_catalogued_reprobe() {
         Some("00002")
     );
     let row = files.get_media_file_by_id(&id).await.unwrap().unwrap();
-    app.analyze_catalogued_media_file(Some(&id), PathBuf::from(row.file_path))
+    app.analyze_catalogued_media_file(Some(&id), PathBuf::from(&row.file_path))
         .await
         .unwrap();
+    crate::import::workflow::analyze_and_persist_imported_media_file(
+        &app,
+        "a-different-title",
+        &id,
+        std::path::Path::new(&row.file_path),
+    )
+    .await;
+    crate::import::workflow::analyze_and_persist_imported_media_file(
+        &app,
+        &row.title_id,
+        &id,
+        std::path::Path::new(&row.file_path),
+    )
+    .await;
+    let persisted = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(
+        persisted
+            .analysis_details
+            .disc
+            .as_ref()
+            .unwrap()
+            .selection
+            .title_id
+            .as_deref(),
+        Some("00002")
+    );
     assert_eq!(
         seen.lock()
             .await
             .iter()
             .map(|selection| selection.title_id.as_deref())
             .collect::<Vec<_>>(),
-        vec![Some("00002"), Some("00002")]
+        vec![Some("00002"), Some("00002"), Some("00002")]
     );
     let automatic = app
         .select_media_file_disc_title(&admin, &id, None)

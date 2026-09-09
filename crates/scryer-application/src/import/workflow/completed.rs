@@ -16,7 +16,7 @@ fn maybe_trigger_subtitle_search(app: &AppUseCase, title_id: &str, media_file_id
     });
 }
 
-async fn analyze_and_persist_imported_media_file(
+pub(crate) async fn analyze_and_persist_imported_media_file(
     app: &AppUseCase,
     title_id: &str,
     media_file_id: &str,
@@ -26,23 +26,34 @@ async fn analyze_and_persist_imported_media_file(
     let Ok(Some(expected)) = files.get_media_file_by_id(media_file_id).await else {
         return;
     };
-    if crate::stored_paths::stored_path_to_path_buf(&expected.file_path) != file_path {
+    if expected.title_id != title_id
+        || crate::stored_paths::stored_path_to_path_buf(&expected.file_path) != file_path
+    {
         return;
     }
-    let source = crate::media::discs::MediaSourceVersion::read(file_path)
+    let Some(source) = crate::media::discs::MediaSourceVersion::read(file_path)
         .await
-        .ok();
+        .ok()
+    else {
+        return;
+    };
+    let selection = expected
+        .analysis_details
+        .disc
+        .as_ref()
+        .map(|disc| disc.selection.clone())
+        .unwrap_or_default();
     let outcome = app
         .services
         .library
         .media_analyzer
-        .analyze_file(file_path.to_path_buf())
+        .analyze_file_with_selection(file_path.to_path_buf(), selection)
         .await;
-    if source.is_none()
-        || crate::media::discs::MediaSourceVersion::read(file_path)
-            .await
-            .ok()
-            != source
+    if crate::media::discs::MediaSourceVersion::read(file_path)
+        .await
+        .ok()
+        .as_ref()
+        != Some(&source)
     {
         tracing::warn!(
             media_file_id,
@@ -50,8 +61,26 @@ async fn analyze_and_persist_imported_media_file(
         );
         return;
     }
-    let acceptance = match outcome {
-        Ok(crate::MediaAnalysisOutcome::Valid(analysis)) => {
+    let failure = match outcome {
+        Ok(crate::MediaAnalysisOutcome::Valid(mut analysis)) => {
+            if analysis.details.disc.is_some() {
+                let Ok(Some(title)) = app.services.catalog.titles.get_by_id(title_id).await else {
+                    return;
+                };
+                if let Err(error) = app
+                    .validate_disc_selection_update(
+                        &title,
+                        &expected,
+                        file_path,
+                        &source,
+                        &mut analysis,
+                    )
+                    .await
+                {
+                    tracing::warn!(%error, media_file_id, "imported disc selection requires review");
+                    return;
+                }
+            }
             if let Err(error) = files
                 .update_media_file_analysis_if_unchanged(&expected, *analysis)
                 .await
@@ -69,14 +98,7 @@ async fn analyze_and_persist_imported_media_file(
             }
             return;
         }
-        Ok(crate::MediaAnalysisOutcome::Invalid(error)) => {
-            crate::post_download_gate::ImportedFileAcceptance {
-                analysis: None,
-                scan_error: Some(error),
-                rule_file_doc: None,
-                audio_language_warning: None,
-            }
-        }
+        Ok(crate::MediaAnalysisOutcome::Invalid(error)) => error,
         Err(error) => {
             tracing::warn!(
                 error = %error,
@@ -85,22 +107,11 @@ async fn analyze_and_persist_imported_media_file(
                 file_path = %file_path.display(),
                 "failed to analyze imported media file"
             );
-            crate::post_download_gate::ImportedFileAcceptance {
-                analysis: None,
-                scan_error: Some(error.to_string()),
-                rule_file_doc: None,
-                audio_language_warning: None,
-            }
+            error.to_string()
         }
     };
 
-    if let Err(error) = crate::post_download_gate::persist_media_analysis_result(
-        &app.services.library.media_files,
-        media_file_id,
-        &acceptance,
-    )
-    .await
-    {
+    if let Err(error) = app.record_failed_analysis_refresh(&expected, failure).await {
         tracing::warn!(%error, media_file_id, "imported media analysis requires review");
     }
 }
