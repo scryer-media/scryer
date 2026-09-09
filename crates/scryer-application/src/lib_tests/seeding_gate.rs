@@ -1539,6 +1539,147 @@ async fn weaver_import_cleanup_removes_entry_and_payload() {
     );
 }
 
+// Weaver API keys without admin scope may remove the entry but not the
+// files. The refusal must not strand the job: Scryer deletes the payload
+// itself and then removes the entry without data.
+#[tokio::test]
+async fn weaver_import_cleanup_falls_back_to_host_payload_deletion_when_weaver_refuses() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(download_client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Refused Movie").await;
+    let tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "nzb-1",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let (_root, payload) = host_payload_fixture(&app, &user, &download_client, &tracked).await;
+    *download_client.payload_delete_refusal.lock().await = Some(
+        "weaver refused payload deletion: admin scope required to delete completed files".into(),
+    );
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert!(
+        !payload.exists(),
+        "the host must delete the payload Weaver refused to"
+    );
+    assert_eq!(
+        download_client.deleted_requests.lock().await.clone(),
+        vec![
+            (
+                Some(config.id.clone()),
+                None,
+                "nzb-1".to_string(),
+                true,
+                true
+            ),
+            (
+                Some(config.id.clone()),
+                None,
+                "nzb-1".to_string(),
+                true,
+                false
+            ),
+        ]
+    );
+}
+
+// The refusal is remembered on the cleanup row: a later attempt goes straight
+// to host deletion (resuming its failure budget) instead of asking Weaver for
+// the files again.
+#[tokio::test]
+async fn weaver_payload_refusal_is_remembered_across_cleanup_attempts() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Refusal Memory").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "refused-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    *client.payload_delete_refusal.lock().await =
+        Some("admin scope required to delete completed files".into());
+    let mut record = cleanup_record_for(&tracked);
+
+    // Weaver refuses the files and the host cannot find the payload yet: the
+    // row retries, with the refusal and the host failure both checkpointed.
+    let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![(
+            Some(config.id.clone()),
+            None,
+            "refused-job".to_string(),
+            true,
+            true
+        )]
+    );
+    let checkpoint = repository.cleanup_checkpoints.lock().await[&record.download_id].clone();
+    let checkpoint_json = serde_json::from_str::<serde_json::Value>(&checkpoint).unwrap();
+    assert_eq!(checkpoint_json["client_refused_payload_deletion"], true);
+    assert_eq!(checkpoint_json["host_payload_failures"], 1);
+
+    // The payload is reachable now: the retry deletes it on the host and
+    // removes the entry without asking Weaver for the files again.
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    record.payload_checkpoint = Some(checkpoint);
+    record.attempts = 2;
+    let retry = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(retry.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!payload.exists());
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![
+            (
+                Some(config.id.clone()),
+                None,
+                "refused-job".to_string(),
+                true,
+                true
+            ),
+            (
+                Some(config.id.clone()),
+                None,
+                "refused-job".to_string(),
+                true,
+                false
+            ),
+        ]
+    );
+    let settled = repository.cleanup_checkpoints.lock().await[&tracked.download_id].clone();
+    let settled = serde_json::from_str::<serde_json::Value>(&settled).unwrap();
+    assert_eq!(settled["client_refused_payload_deletion"], true);
+    assert_eq!(settled["payload_removed"], true);
+}
+
 #[tokio::test]
 async fn a_failed_torrent_without_removal_eligibility_keeps_its_entry_and_data() {
     let download_client = Arc::new(StubDownloadClient::default());

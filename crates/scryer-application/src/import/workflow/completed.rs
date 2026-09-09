@@ -760,7 +760,8 @@ pub(crate) async fn run_claimed_download_cleanup(
                 // verified deletion from that checkpoint, then settle.
                 let host_payload_in_flight = !payload_removed
                     && checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.get("completed").is_some())
-                    && record.client_type.trim() != "weaver"
+                    && (record.client_type.trim() != "weaver"
+                        || client_refused_payload_deletion(checkpoint.as_ref()))
                     && !plugin_has_native_data_removal(app, &record.client_id).await;
                 let payload_removed = if host_payload_in_flight {
                     match remove_host_payload_before_entry_cleanup(

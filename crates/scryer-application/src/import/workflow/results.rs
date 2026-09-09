@@ -409,55 +409,88 @@ async fn reconcile_terminal_download_cleanup(
         _ => false,
     };
 
-    let host_managed_payload = remove_data
-        && client_type.trim() != "weaver"
-        && !plugin_has_native_data_removal(app, client_id).await;
-    let mut payload_disposition = None;
-    let payload_cleanup_checkpoint = if host_managed_payload {
-        match remove_host_payload_before_entry_cleanup(
-            app,
-            canonical_download_id,
-            client_id,
-            client_type,
-            download_client_item_id,
-            record,
-        )
-        .await
-        {
-            Ok(report) => {
-                payload_disposition = Some(report.disposition);
-                report.filesystem_checkpoint
-            }
-            Err(error) => {
-                // Counted on the checkpoint rather than the row's claim count
-                // so seeding holds and client outages do not spend the host
-                // deletion retry budget.
-                let mut checkpoint = record
-                    .and_then(|record| record.payload_checkpoint.as_deref())
-                    .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
-                    .filter(serde_json::Value::is_object)
-                    .unwrap_or_else(|| serde_json::json!({}));
-                let failures = checkpoint
-                    .get("host_payload_failures")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|failures| u32::try_from(failures).ok())
-                    .unwrap_or(0)
-                    .saturating_add(1);
-                if let Some(record) = record {
-                    checkpoint["host_payload_failures"] = serde_json::json!(failures);
-                    if let Err(error) = app
-                        .services
-                        .workflow
-                        .download_submissions
-                        .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint.to_string())
-                        .await
-                    {
-                        tracing::warn!(client_id, download_client_item_id, error = %error,
-                            "failed to checkpoint host payload failure count");
-                    }
+    let mut native_payload_refused = record
+        .and_then(|record| record.payload_checkpoint.as_deref())
+        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+        .is_some_and(|checkpoint| client_refused_payload_deletion(Some(&checkpoint)));
+    let mut refused_record: Option<crate::DownloadCleanupRecord> = None;
+    let (outcome, payload_disposition, payload_cleanup_checkpoint) = loop {
+        // Weaver deletes its own files unless its API key was refused the
+        // scope to do so: from then on (persisted on the checkpoint) the host
+        // path deletes the payload and Weaver only removes the entry.
+        let host_managed_payload = remove_data
+            && (client_type.trim() != "weaver" || native_payload_refused)
+            && !plugin_has_native_data_removal(app, client_id).await;
+        let record = refused_record.as_ref().or(record);
+        let mut payload_disposition = None;
+        let payload_cleanup_checkpoint = if host_managed_payload {
+            match remove_host_payload_before_entry_cleanup(
+                app,
+                canonical_download_id,
+                client_id,
+                client_type,
+                download_client_item_id,
+                record,
+            )
+            .await
+            {
+                Ok(report) => {
+                    payload_disposition = Some(report.disposition);
+                    report.filesystem_checkpoint
                 }
-                let attempts = failures;
-                if attempts < HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL {
+                Err(error) => {
+                    // Counted on the checkpoint rather than the row's claim count
+                    // so seeding holds and client outages do not spend the host
+                    // deletion retry budget.
+                    let mut checkpoint = record
+                        .and_then(|record| record.payload_checkpoint.as_deref())
+                        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                        .filter(serde_json::Value::is_object)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    let failures = checkpoint
+                        .get("host_payload_failures")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|failures| u32::try_from(failures).ok())
+                        .unwrap_or(0)
+                        .saturating_add(1);
+                    if let Some(record) = record {
+                        checkpoint["host_payload_failures"] = serde_json::json!(failures);
+                        if let Err(error) = app
+                            .services
+                            .workflow
+                            .download_submissions
+                            .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint.to_string())
+                            .await
+                        {
+                            tracing::warn!(client_id, download_client_item_id, error = %error,
+                                "failed to checkpoint host payload failure count");
+                        }
+                    }
+                    let attempts = failures;
+                    if attempts < HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL {
+                        tracing::warn!(
+                            client_id,
+                            client_type,
+                            download_client_item_id,
+                            state = state.as_str(),
+                            attempts,
+                            error = %error,
+                            "failed to remove download client payload before removing the client entry; will retry"
+                        );
+                        let seeding = seeding_report.map(|report| SeedingGateReport {
+                            action: Some(SeedingReleaseAction::Kept),
+                            ..report
+                        });
+                        return TerminalDownloadCleanup {
+                            outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                            seeding,
+                            payload: None,
+                        };
+                    }
+                    // Sonarr parity: host-side data deletion is best-effort. After
+                    // repeated failures the client entry is removed anyway so the
+                    // scope is released; the payload stays for the operator and
+                    // the settled outcome says so.
                     tracing::warn!(
                         client_id,
                         client_type,
@@ -465,146 +498,166 @@ async fn reconcile_terminal_download_cleanup(
                         state = state.as_str(),
                         attempts,
                         error = %error,
-                        "failed to remove download client payload before removing the client entry; will retry"
+                        "giving up on host payload deletion; removing the client entry with the payload retained on disk"
                     );
-                    let seeding = seeding_report.map(|report| SeedingGateReport {
-                        action: Some(SeedingReleaseAction::Kept),
-                        ..report
-                    });
-                    return TerminalDownloadCleanup {
-                        outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
-                        seeding,
-                        payload: None,
-                    };
+                    payload_disposition = Some(HostPayloadDisposition::Unverified);
+                    None
                 }
-                // Sonarr parity: host-side data deletion is best-effort. After
-                // repeated failures the client entry is removed anyway so the
-                // scope is released; the payload stays for the operator and
-                // the settled outcome says so.
-                tracing::warn!(
-                    client_id,
-                    client_type,
-                    download_client_item_id,
-                    state = state.as_str(),
-                    attempts,
-                    error = %error,
-                    "giving up on host payload deletion; removing the client entry with the payload retained on disk"
-                );
-                payload_disposition = Some(HostPayloadDisposition::Unverified);
-                None
+            }
+        } else {
+            None
+        };
+
+        let payload_already_removed = record
+            .and_then(|record| record.payload_checkpoint.as_deref())
+            .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+            .is_some_and(|checkpoint| {
+                checkpoint
+                    .get("payload_removed")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+            });
+        let client_remove_data = remove_data
+            && !payload_already_removed
+            && (!host_managed_payload || client_type == "sabnzbd");
+        if (client_remove_data || !remove_data)
+            && !host_managed_payload
+            && let Some(record) = record
+        {
+            // Persist the operation and identity only after policy and seeding
+            // eligibility pass. Authoritative absence can then recover a lost
+            // response for either native data deletion or entry-only removal.
+            let checkpoint = serde_json::json!({
+                "native_remove_requested": client_remove_data,
+                "entry_only_remove_requested": !remove_data,
+                "download_id": record.download_id.to_string(),
+                "client_id": record.client_id,
+                "client_type": record.client_type,
+                "item_id": record.item_id,
+            })
+            .to_string();
+            if let Err(error) = app
+                .services
+                .workflow
+                .download_submissions
+                .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint)
+                .await
+            {
+                tracing::warn!(client_id, download_client_item_id, error = %error,
+                    "failed to checkpoint native removal intent");
+                return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
             }
         }
-    } else {
-        None
-    };
-
-    let payload_already_removed = record
-        .and_then(|record| record.payload_checkpoint.as_deref())
-        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
-        .is_some_and(|checkpoint| {
-            checkpoint
-                .get("payload_removed")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-        });
-    let client_remove_data = remove_data
-        && !payload_already_removed
-        && (!host_managed_payload || client_type == "sabnzbd");
-    if (client_remove_data || !remove_data)
-        && !host_managed_payload
-        && let Some(record) = record
-    {
-        // Persist the operation and identity only after policy and seeding
-        // eligibility pass. Authoritative absence can then recover a lost
-        // response for either native data deletion or entry-only removal.
-        let checkpoint = serde_json::json!({
-            "native_remove_requested": client_remove_data,
-            "entry_only_remove_requested": !remove_data,
-            "download_id": record.download_id.to_string(),
-            "client_id": record.client_id,
-            "client_type": record.client_type,
-            "item_id": record.item_id,
-        })
-        .to_string();
-        if let Err(error) = app
-            .services
-            .workflow
-            .download_submissions
-            .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint)
-            .await
-        {
-            tracing::warn!(client_id, download_client_item_id, error = %error,
-                "failed to checkpoint native removal intent");
-            return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
-        }
-    }
-    let delete_result = if client_id.is_empty() {
-        app.services
-            .integrations
-            .download_client
-            .delete_queue_item_for_client(
-                client_type,
-                download_client_item_id,
-                is_history,
-                client_remove_data,
-            )
-            .await
-    } else {
-        app.services
-            .integrations
-            .download_client
-            .delete_queue_item_for_client_id(
-                client_id,
-                download_client_item_id,
-                is_history,
-                client_remove_data,
-            )
-            .await
-    };
-
-    let outcome = match delete_result {
-        Ok(()) => {
-            tracing::info!(
-                client_id,
-                client_type,
-                download_client_item_id,
-                remove_data,
-                "terminal download entry removed"
-            );
-            TerminalDownloadCleanupOutcome::Removed
-        }
-        Err(error) => {
-            if !remove_data
-                && !terminal_download_item_is_still_visible(
-                    app,
-                    client_id,
+        let delete_result = if client_id.is_empty() {
+            app.services
+                .integrations
+                .download_client
+                .delete_queue_item_for_client(
                     client_type,
                     download_client_item_id,
                     is_history,
+                    client_remove_data,
                 )
                 .await
-            {
-                tracing::debug!(
+        } else {
+            app.services
+                .integrations
+                .download_client
+                .delete_queue_item_for_client_id(
+                    client_id,
+                    download_client_item_id,
+                    is_history,
+                    client_remove_data,
+                )
+                .await
+        };
+
+        let outcome = match delete_result {
+            Ok(()) => {
+                tracing::info!(
                     client_id,
                     client_type,
                     download_client_item_id,
-                    state = state.as_str(),
-                    error = %error,
-                    "download item was already absent after delete error"
+                    remove_data,
+                    "terminal download entry removed"
                 );
-                TerminalDownloadCleanupOutcome::AlreadyGone
-            } else {
+                TerminalDownloadCleanupOutcome::Removed
+            }
+            Err(AppError::Unauthorized(error))
+                if client_remove_data && client_type.trim() == "weaver" && !native_payload_refused =>
+            {
+                // Weaver kept the entry and refused only the files. Delete the
+                // payload from the host and come back for the entry; remember
+                // the refusal so later attempts do not ask Weaver again.
                 tracing::warn!(
                     client_id,
                     client_type,
                     download_client_item_id,
                     state = state.as_str(),
                     error = %error,
-                    "failed to remove terminal download from client"
+                    "weaver refused payload deletion (API key lacks admin scope); falling back to host-side payload deletion"
                 );
-                TerminalDownloadCleanupOutcome::RetryableFailure
+                native_payload_refused = true;
+                if let Some(record) = record {
+                    let mut checkpoint = record
+                        .payload_checkpoint
+                        .as_deref()
+                        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                        .filter(serde_json::Value::is_object)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    checkpoint[CLIENT_REFUSED_PAYLOAD_DELETION_KEY] = serde_json::json!(true);
+                    let checkpoint = checkpoint.to_string();
+                    if let Err(error) = app
+                        .services
+                        .workflow
+                        .download_submissions
+                        .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint)
+                        .await
+                    {
+                        tracing::warn!(client_id, download_client_item_id, error = %error,
+                            "failed to checkpoint the client's payload deletion refusal");
+                    }
+                    refused_record = Some(crate::DownloadCleanupRecord {
+                        payload_checkpoint: Some(checkpoint),
+                        ..record.clone()
+                    });
+                }
+                continue;
             }
-        }
+            Err(error) => {
+                if !remove_data
+                    && !terminal_download_item_is_still_visible(
+                        app,
+                        client_id,
+                        client_type,
+                        download_client_item_id,
+                        is_history,
+                    )
+                    .await
+                {
+                    tracing::debug!(
+                        client_id,
+                        client_type,
+                        download_client_item_id,
+                        state = state.as_str(),
+                        error = %error,
+                        "download item was already absent after delete error"
+                    );
+                    TerminalDownloadCleanupOutcome::AlreadyGone
+                } else {
+                    tracing::warn!(
+                        client_id,
+                        client_type,
+                        download_client_item_id,
+                        state = state.as_str(),
+                        error = %error,
+                        "failed to remove terminal download from client"
+                    );
+                    TerminalDownloadCleanupOutcome::RetryableFailure
+                }
+            }
+        };
+        break (outcome, payload_disposition, payload_cleanup_checkpoint);
     };
 
     if matches!(
@@ -1095,6 +1148,20 @@ fn remove_inventoried_payload_blocking(
     })
 }
 
+/// Checkpoint flag set once a client with native data deletion (Weaver)
+/// refused to delete the payload: from then on the host deletes it and the
+/// client only removes the entry, on every later attempt of the same row.
+const CLIENT_REFUSED_PAYLOAD_DELETION_KEY: &str = "client_refused_payload_deletion";
+
+fn client_refused_payload_deletion(checkpoint: Option<&serde_json::Value>) -> bool {
+    checkpoint.is_some_and(|checkpoint| {
+        checkpoint
+            .get(CLIENT_REFUSED_PAYLOAD_DELETION_KEY)
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    })
+}
+
 /// Host-side payload deletion for clients that cannot delete their own data
 /// (NZBGet, entry-only torrent plugins) or whose deletion Scryer mirrors
 /// (SABnzbd). Deletion is inventory-and-verify, never a recursive wipe:
@@ -1367,11 +1434,15 @@ async fn remove_host_payload_before_entry_cleanup(
     let prior_failures = saved
         .as_ref()
         .and_then(|checkpoint| checkpoint.get("host_payload_failures").cloned());
+    let client_refused = client_refused_payload_deletion(saved.as_ref());
     let persist_plan = |mut plan: serde_json::Value| {
         let prior_failures = prior_failures.clone();
         async move {
         if let Some(failures) = prior_failures {
             plan["host_payload_failures"] = failures;
+        }
+        if client_refused {
+            plan[CLIENT_REFUSED_PAYLOAD_DELETION_KEY] = serde_json::json!(true);
         }
         if let Some(record) = record {
             app.services

@@ -8,6 +8,7 @@
 
 ## Included fixes
 
+- Weaver cleanup no longer stalls when the API key is refused file deletion. Current Weaver builds answer a `deleteFiles` request from an integration-scoped key with `admin scope required to delete completed files`, which left the history entry and payload in place and logged a warning on every retry. Scryer now deletes the payload itself from the shared download directory, using the same verified per-file deletion it applies for NZBGet, and then removes the history entry without data. The refusal is remembered on the cleanup row, so later attempts go straight to host deletion instead of asking Weaver again.
 - Policy-retained, recovered-absence and unresolved-client cleanup outcomes log at debug level. A cleanup settled because its download client was removed remains at info.
 - A cleanup that keeps failing warns on its first failure and then once per hour of backoff instead of on every attempt.
 

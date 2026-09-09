@@ -1839,6 +1839,10 @@ impl DownloadClient for WeaverDownloadClient {
     }
 }
 
+/// Weaver's refusal when an API key without admin scope asks for
+/// `deleteFiles`: "admin scope required to delete completed files".
+const ADMIN_SCOPE_REFUSAL_NEEDLE: &str = "admin scope required";
+
 impl WeaverDownloadClient {
     /// Remove one history entry, with the published-schema fallbacks the
     /// history path has always carried.
@@ -1877,6 +1881,18 @@ impl WeaverDownloadClient {
                     )
                     .into());
                 }
+            }
+            Err(error) if remove_data && error.is_schema_error(ADMIN_SCOPE_REFUSAL_NEEDLE) => {
+                // The key can remove the entry but not the files. Leave the
+                // entry in place and say so with a typed error, so the caller
+                // can delete the payload itself and then remove the entry.
+                warn!(
+                    error = %error,
+                    "weaver: the API key lacks the scope to delete completed files; the history entry is kept for host-side payload deletion"
+                );
+                return Err(WeaverRequestError::Failed(AppError::Unauthorized(format!(
+                    "weaver refused payload deletion: {error}"
+                ))));
             }
             Err(error)
                 if remove_data
@@ -2327,6 +2343,49 @@ mod tests {
             .delete_queue_item("10002", true, true)
             .await
             .expect_err("unsupported payload deletion must preserve the history entry");
+    }
+
+    // An API key without admin scope may remove the entry but not the files.
+    // The entry must survive and the refusal must be typed, so the workflow
+    // can delete the payload itself and come back for the entry.
+    #[tokio::test]
+    async fn delete_history_item_reports_an_admin_scope_refusal_as_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains("RemoveHistoryItemsDeleteFiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{
+                    "message": "admin scope required to delete completed files",
+                    "extensions": { "code": "FORBIDDEN" }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .and(body_string_contains(
+                "mutation RemoveHistoryItems($ids: [Int!]!)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "removeHistoryItems": { "success": true } }
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = WeaverDownloadClient::new(server.uri(), Some("wvr_test".to_string()));
+        let error = client
+            .delete_queue_item("10002", true, true)
+            .await
+            .expect_err("a scope refusal must preserve the history entry");
+        assert!(
+            matches!(&error, AppError::Unauthorized(message) if message.contains("admin scope required")),
+            "unexpected error: {error}"
+        );
     }
 
     // The queue hint is stale: the job finished between the last poll and the
