@@ -1115,23 +1115,7 @@ fn probe_mpeg_audio_track(data: &[u8], track: &mut RawTrack) {
     let Some(header) = find_mpeg_audio_header(data) else {
         return;
     };
-    if header.layer == 3 {
-        track.codec_name = Some("mp3".to_owned());
-    } else if header.layer == 2 {
-        track.codec_name = Some("mp2".to_owned());
-    }
-    track.channels = Some(header.channels as i32);
-    track.metadata.sample_rate = Some(header.sample_rate);
-    track.metadata.channel_layout = Some(
-        if header.channels == 1 {
-            "mono"
-        } else {
-            "stereo"
-        }
-        .into(),
-    );
-    track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
-    track.bit_rate_bps = header.bit_rate_bps.map(i64::from);
+    header.apply(track);
 }
 
 fn probe_unknown_audio_track(data: &[u8], track: &mut RawTrack) {
@@ -1189,16 +1173,15 @@ fn probe_dts_track(data: &[u8], track: &mut RawTrack) {
     let Some(header) = find_dts_header(data) else {
         return;
     };
-    track.channels = Some(header.channels as i32);
-    if let Some(channels) = detect_dts_channels_from_probe_bytes(data) {
+    let core_channels = i32::from(header.channels);
+    track.channels = Some(track.channels.unwrap_or(0).max(core_channels));
+    let extension_channels = detect_dts_channels_from_probe_bytes(data);
+    if let Some(channels) = extension_channels {
         track.channels = Some(
             track
                 .channels
                 .map_or(channels, |existing| existing.max(channels)),
         );
-    }
-    if header.bit_rate_bps > 3 {
-        track.bit_rate_bps = Some(i64::from(header.bit_rate_bps));
     }
     merge_audio_profile(
         &mut track.audio_profile,
@@ -1206,6 +1189,19 @@ fn probe_dts_track(data: &[u8], track: &mut RawTrack) {
     );
     if track.audio_profile.as_deref() == Some("DTS-ES") && track.channels == Some(6) {
         track.channels = Some(7);
+    }
+    // The core describes the complete presentation only when no extension is
+    // known. In particular, its bitrate is not the bitrate of a DTS-HD track.
+    if extension_channels.is_none()
+        && matches!(track.audio_profile.as_deref(), None | Some("DTS"))
+        && track.channels == Some(core_channels)
+    {
+        track.metadata.sample_rate = Some(header.sample_rate);
+        track.metadata.channel_layout = header.channel_layout.map(str::to_owned);
+        if header.bit_rate_bps > 3 && track.bit_rate_bps.is_none() {
+            track.bit_rate_bps = Some(i64::from(header.bit_rate_bps));
+            track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
+        }
     }
 }
 
@@ -1307,11 +1303,31 @@ struct MpegVideoSequenceHeader {
     bit_rate_bps: Option<u32>,
 }
 
-struct MpegAudioHeader {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MpegAudioHeader {
     layer: u8,
     channels: u8,
     sample_rate: u32,
     bit_rate_bps: Option<u32>,
+}
+
+impl MpegAudioHeader {
+    pub(crate) fn apply(self, track: &mut RawTrack) {
+        track.codec_name = Some(
+            match self.layer {
+                1 => "mp1",
+                2 => "mp2",
+                _ => "mp3",
+            }
+            .into(),
+        );
+        track.channels = Some(i32::from(self.channels));
+        track.metadata.sample_rate = Some(self.sample_rate);
+        track.metadata.channel_layout =
+            Some(if self.channels == 1 { "mono" } else { "stereo" }.into());
+        // A frame's bitrate is not a declaration that the whole stream is CBR.
+        track.metadata.estimated_bitrate_bps = self.bit_rate_bps.map(u64::from);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1367,6 +1383,8 @@ fn ac3_channel_layout(acmod: usize, lfe: bool) -> &'static str {
 
 pub(crate) struct DtsHeader {
     pub channels: u8,
+    pub sample_rate: u32,
+    pub channel_layout: Option<&'static str>,
     pub bit_rate_bps: u32,
 }
 
@@ -1560,7 +1578,7 @@ fn find_mpeg_video_sequence_header(data: &[u8]) -> Option<MpegVideoSequenceHeade
     })
 }
 
-fn find_mpeg_audio_header(data: &[u8]) -> Option<MpegAudioHeader> {
+pub(crate) fn find_mpeg_audio_header(data: &[u8]) -> Option<MpegAudioHeader> {
     if data.len() < 4 {
         return None;
     }
@@ -1815,6 +1833,13 @@ pub(crate) fn find_dts_header(data: &[u8]) -> Option<DtsHeader> {
 
         return Some(DtsHeader {
             channels: DTS_CHANNELS[audio_mode] + u8::from(lfe_present > 0),
+            sample_rate: DTS_SAMPLE_RATES[sample_rate_code],
+            channel_layout: match audio_mode {
+                0 => Some(ac3_channel_layout(1, lfe_present > 0)),
+                1..=4 => Some(ac3_channel_layout(2, lfe_present > 0)),
+                5..=9 => Some(ac3_channel_layout(audio_mode - 2, lfe_present > 0)),
+                _ => None,
+            },
             bit_rate_bps: DTS_BIT_RATES[bit_rate_code],
         });
     }
@@ -2434,6 +2459,18 @@ mod tests {
         let header = find_mpeg_audio_header(&mp3).unwrap();
         assert_eq!(header.sample_rate, 48_000);
         assert_eq!(header.bit_rate_bps, Some(64_000));
+        let mut track = RawTrack::default();
+        header.apply(&mut track);
+        assert_eq!(track.bit_rate_bps, None);
+        assert_eq!(track.metadata.estimated_bitrate_bps, Some(64_000));
+        track.bit_rate_bps = Some(96_000);
+        track.metadata.bitrate_provenance = scryer_media_types::Provenance::Container;
+        header.apply(&mut track);
+        assert_eq!(track.bit_rate_bps, Some(96_000));
+        assert_eq!(
+            track.metadata.bitrate_provenance,
+            scryer_media_types::Provenance::Container
+        );
         let mut low_rate_mp2 = vec![0; 772];
         low_rate_mp2[..4].copy_from_slice(&[0xff, 0xf5, 0xc4, 0xc0]);
         low_rate_mp2[768..772].copy_from_slice(&[0xff, 0xf5, 0xc4, 0xc0]);
@@ -2486,6 +2523,42 @@ mod tests {
         let header = find_dts_header(&data).unwrap();
         assert_eq!(header.channels, 6);
         assert_eq!(header.bit_rate_bps, 1_536_000);
+        assert_eq!(header.sample_rate, 48_000);
+        assert_eq!(header.channel_layout, None);
+    }
+
+    #[test]
+    fn dts_core_metadata_preserves_extension_declarations() {
+        let data = [
+            0x7F, 0xFE, 0x80, 0x01, 0x7C, 0x7C, 0x05, 0xF2, 0x77, 0x00, 0x02,
+        ];
+        let mut core = RawTrack {
+            codec_name: Some("dts".into()),
+            ..Default::default()
+        };
+        probe_dts_track(&data, &mut core);
+        assert_eq!(core.channels, Some(6));
+        assert_eq!(core.metadata.sample_rate, Some(48_000));
+        assert_eq!(core.metadata.channel_layout.as_deref(), Some("5.1(side)"));
+        assert_eq!(core.bit_rate_bps, Some(1_536_000));
+        assert_eq!(
+            core.metadata.bitrate_provenance,
+            scryer_media_types::Provenance::Bitstream
+        );
+
+        let mut extension = RawTrack {
+            codec_name: Some("dts".into()),
+            audio_profile: Some("DTS-HD MA".into()),
+            channels: Some(8),
+            ..Default::default()
+        };
+        extension.metadata.sample_rate = Some(96_000);
+        extension.metadata.channel_layout = Some("7.1".into());
+        probe_dts_track(&data, &mut extension);
+        assert_eq!(extension.channels, Some(8));
+        assert_eq!(extension.metadata.sample_rate, Some(96_000));
+        assert_eq!(extension.metadata.channel_layout.as_deref(), Some("7.1"));
+        assert_eq!(extension.bit_rate_bps, None);
     }
 
     #[test]

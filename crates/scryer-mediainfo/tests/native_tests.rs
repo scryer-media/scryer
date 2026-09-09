@@ -78,6 +78,38 @@ fn mp4_chapter_lists_and_referenced_text_tracks_preserve_authored_titles() {
 }
 
 #[test]
+fn mpeg_dts_and_extensible_aac_preserve_audio_header_properties() {
+    for (name, codec, channels, layout) in [
+        ("matrix_mkv_001.mkv", "mp3", 2, "stereo"),
+        ("matrix_mkv_002.mkv", "mp3", 2, "stereo"),
+        ("matrix_ts_005.ts", "dts", 6, "5.1(side)"),
+        ("wmv_wmv1_aac_surround.wmv", "aac", 6, "5.1"),
+    ] {
+        let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
+        let stream = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.codec.as_deref() == Some(codec))
+            .unwrap();
+        assert_eq!(stream.channels, Some(channels), "{name}");
+        assert_eq!(stream.metadata.sample_rate, Some(48_000), "{name}");
+        assert_eq!(
+            stream.metadata.channel_layout.as_deref(),
+            Some(layout),
+            "{name}"
+        );
+        if codec == "mp3" {
+            assert_eq!(
+                stream.metadata.estimated_bitrate_bps,
+                Some(64_000),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn opus_vorbis_and_flac_headers_reach_the_canonical_contract() {
     for (name, codec, channels, layout) in [
         ("matrix_mkv_003.mkv", "flac", 1, "mono"),

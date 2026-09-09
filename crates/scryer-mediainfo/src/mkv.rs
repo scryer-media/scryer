@@ -222,14 +222,16 @@ pub(crate) fn parse_mkv_source(
             .into_iter()
             .filter_map(|(track_num, track_idx, header_strip_prefix)| {
                 let codec_name = tracks[track_idx].codec_name.clone()?;
-                matches!(codec_name.as_str(), "ac3" | "eac3" | "truehd" | "dts").then_some(
-                    MkvAudioProbeRequest {
-                        target_track_num: track_num,
-                        track_idx,
-                        codec_name,
-                        header_strip_prefix,
-                    },
+                matches!(
+                    codec_name.as_str(),
+                    "ac3" | "eac3" | "truehd" | "dts" | "mp1" | "mp2" | "mp3"
                 )
+                .then_some(MkvAudioProbeRequest {
+                    target_track_num: track_num,
+                    track_idx,
+                    codec_name,
+                    header_strip_prefix,
+                })
             })
             .collect()
     };
@@ -257,6 +259,9 @@ pub(crate) fn parse_mkv_source(
         if let Some(channels) = scanned.channels {
             tracks[track_idx].channels =
                 merge_scanned_audio_channels(tracks[track_idx].channels, Some(channels));
+        }
+        if let Some(header) = scanned.mpeg_header {
+            header.apply(&mut tracks[track_idx]);
         }
         if let Some(header) = scanned.dolby_header {
             header.apply(&mut tracks[track_idx]);
@@ -1321,6 +1326,7 @@ struct AudioProfileProbeState {
     profile: Option<String>,
     channels: Option<i32>,
     dolby_header: Option<crate::ts::Ac3Header>,
+    mpeg_header: Option<crate::ts::MpegAudioHeader>,
     dts_tentative_profile: Option<String>,
     dts_tentative_hits: usize,
     saw_dts_core: bool,
@@ -1328,7 +1334,8 @@ struct AudioProfileProbeState {
 
 impl AudioProfileProbeState {
     fn done(&self, codec_name: &str) -> bool {
-        audio_profile_probe_is_terminal(codec_name, self.profile.as_deref())
+        self.mpeg_header.is_some()
+            || audio_profile_probe_is_terminal(codec_name, self.profile.as_deref())
             || self.inspected_blocks >= audio_profile_max_blocks(codec_name)
             || self.bytes_read >= MKV_AUDIO_PROFILE_SCAN_MAX_BYTES
     }
@@ -1381,6 +1388,7 @@ impl AudioProfileProbeState {
             profile,
             channels: self.channels,
             dolby_header: self.dolby_header,
+            mpeg_header: self.mpeg_header,
         }
     }
 }
@@ -1410,6 +1418,7 @@ struct ScannedAudioMetadata {
     profile: Option<String>,
     channels: Option<i32>,
     dolby_header: Option<crate::ts::Ac3Header>,
+    mpeg_header: Option<crate::ts::MpegAudioHeader>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1558,8 +1567,10 @@ impl MkvDeepProbePlan {
             .into_iter()
             .filter_map(|target| {
                 let scanned = target.state.finalize(&target.codec_name);
-                (scanned.profile.is_some() || scanned.channels.is_some())
-                    .then_some((target.track_idx, scanned))
+                (scanned.profile.is_some()
+                    || scanned.channels.is_some()
+                    || scanned.mpeg_header.is_some())
+                .then_some((target.track_idx, scanned))
             })
             .collect();
 
@@ -2092,6 +2103,9 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             detect_audio_profile_from_probe_bytes(Some(codec_name), &prefix, suffix.as_deref()),
         );
         let parsed_channels = audio_channels_from_probe_bytes(codec_name, &prefix);
+        if matches!(codec_name, "mp1" | "mp2" | "mp3") && state.mpeg_header.is_none() {
+            state.mpeg_header = crate::ts::find_mpeg_audio_header(&prefix);
+        }
         let dolby_header = match codec_name {
             "ac3" => find_ac3_header(&prefix),
             "eac3" => find_eac3_header(&prefix),
@@ -2502,6 +2516,7 @@ fn audio_header_probe_bytes(codec_name: &str) -> usize {
         "ac3" => 7,
         "eac3" => 6,
         "dts" => 32,
+        "mp1" | "mp2" | "mp3" => 4,
         _ => 0,
     }
 }

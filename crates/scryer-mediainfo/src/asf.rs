@@ -258,7 +258,19 @@ fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
         .map(str::to_owned);
     let mut track = raw_track(TrackKind::Audio, format!("0x{format_tag:04x}"), codec_name);
     track.metadata = crate::audio_metadata::wave_format(data);
-    track.codec_private = codec_private;
+    track.codec_private = if format_tag == 0xfffe && track.codec_name.is_some() {
+        // WAVEFORMATEXTENSIBLE's valid-bits, mask, and GUID precede the codec
+        // configuration. They must not be interpreted as an AAC ASC.
+        codec_private
+            .and_then(|extra| Some(extra.get(22..)?.to_vec()).filter(|bytes| !bytes.is_empty()))
+    } else {
+        codec_private
+    };
+    track.audio_profile = crate::codec::detect_header_audio_profile(
+        &track.codec_id,
+        track.codec_name.as_deref(),
+        track.codec_private.as_deref(),
+    );
     track.channels = (channels > 0).then_some(i32::from(channels));
     track.bit_rate_bps = i64::from(avg_bytes_per_second)
         .checked_mul(8)
@@ -776,6 +788,24 @@ fn parse_error(message: impl Into<String>) -> MediaInfoError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extensible_aac_uses_the_codec_configuration_after_the_wave_header() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/media/wmv_wmv1_aac_surround.wmv");
+        let analysis = crate::analyze_catalog_file(&path).unwrap();
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .unwrap();
+        assert_eq!(audio.codec.as_deref(), Some("aac"));
+        assert_eq!(audio.channels, Some(6));
+        assert_eq!(audio.metadata.channel_layout.as_deref(), Some("5.1"));
+        assert_eq!(audio.metadata.sample_rate, Some(48_000));
+        assert_eq!(audio.metadata.profile.as_deref(), Some("LC"));
+    }
 
     #[test]
     fn maps_windows_media_codecs() {
