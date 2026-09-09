@@ -143,12 +143,17 @@ export function SettingsProxiesSection({
   // The paste buffer is transient: it is what the operator dropped in, not part
   // of the proxy being edited, so it lives here and never reaches the draft.
   const [configText, setConfigText] = React.useState("");
+  const [isWireguardDetailsOpen, setIsWireguardDetailsOpen] =
+    React.useState(
+      () => editingProxyId !== null && isWireguardProxyProvider(proxyDraft.providerType),
+    );
   const configFileRef = React.useRef<HTMLInputElement>(null);
 
   const applyConfigText = React.useCallback(
     (text: string) => {
       if (importWireguardConfig(text)) {
         setConfigText("");
+        setIsWireguardDetailsOpen(true);
       }
     },
     [importWireguardConfig],
@@ -194,6 +199,7 @@ export function SettingsProxiesSection({
   // fields of its own. The API refuses each half on the other, so the editor
   // shows exactly one of them.
   const isWireguardDraft = isWireguardProxyProvider(proxyDraft.providerType);
+  const showProxyDetails = !isWireguardDraft || isWireguardDetailsOpen;
   const acceptsWireguardFields = supportsProxyWireguardFields(
     proxyDraft.providerType,
   );
@@ -205,6 +211,12 @@ export function SettingsProxiesSection({
     supportsProxyPrivateKeyPassphrase(proxyDraft.providerType) &&
     !proxyDraft.clearPrivateKey &&
     (proxyDraft.privateKey.trim() !== "" || proxyDraft.hasStoredPrivateKey);
+
+  React.useEffect(() => {
+    if (editingProxyId !== null && isWireguardDraft) {
+      setIsWireguardDetailsOpen(true);
+    }
+  }, [editingProxyId, isWireguardDraft]);
 
   const editingProxy = React.useMemo(
     () =>
@@ -378,65 +390,6 @@ export function SettingsProxiesSection({
                 className="flex flex-col gap-3"
                 onSubmit={submitProxy}
               >
-                {/* First, because a whole configuration file is what an
-                    operator is handed: filling the form from it beats
-                    transcribing eight fields by hand, and every field below
-                    still accepts the same lines pasted one at a time. */}
-                {isWireguardDraft ? (
-                  <div
-                    id="settings-indexer-proxy-import-config"
-                    className="rounded border border-border bg-card/60 p-3"
-                  >
-                    <div className="mb-1 text-sm font-medium">
-                      {t("settings.proxyImportConfig")}
-                    </div>
-                    <p className="mb-2 text-xs text-muted-foreground">
-                      {t("settings.proxyImportConfigHelp")}
-                    </p>
-                    <Textarea
-                      id="settings-indexer-proxy-import-config-text"
-                      className="min-h-24 font-mono text-xs"
-                      spellCheck={false}
-                      autoComplete="off"
-                      rows={5}
-                      value={configText}
-                      placeholder={
-                        "[Interface]\nPrivateKey = …\nAddress = 10.6.0.2/32\n\n[Peer]\nPublicKey = …\nEndpoint = vpn.example.com:51820"
-                      }
-                      onChange={(event) => setConfigText(event.target.value)}
-                    />
-                    <input
-                      id="settings-indexer-proxy-import-config-file"
-                      ref={configFileRef}
-                      type="file"
-                      accept=".conf,.txt,text/plain"
-                      className="hidden"
-                      onChange={(event) => {
-                        void readConfigFile(event);
-                      }}
-                    />
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        id="settings-indexer-proxy-import-config-apply"
-                        type="button"
-                        variant="outline"
-                        disabled={configText.trim() === ""}
-                        onClick={() => applyConfigText(configText)}
-                      >
-                        {t("settings.proxyImportConfigApply")}
-                      </Button>
-                      <Button
-                        id="settings-indexer-proxy-import-config-choose"
-                        type="button"
-                        variant="outline"
-                        onClick={() => configFileRef.current?.click()}
-                      >
-                        <Upload className="h-4 w-4" />
-                        {t("settings.proxyImportConfigFile")}
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
                 <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto]">
                   <label>
                     <Label
@@ -450,6 +403,7 @@ export function SettingsProxiesSection({
                       disabled={editingProxyId !== null}
                       onValueChange={(value) => {
                         if (!isProxyProviderType(value)) return;
+                        setIsWireguardDetailsOpen(value !== "wireguard");
                         changeProxyProvider(value);
                       }}
                     >
@@ -548,7 +502,71 @@ export function SettingsProxiesSection({
                     <span>{t("label.enabled")}</span>
                   </label>
                 </div>
-                {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? (
+                {isWireguardDraft && !isWireguardDetailsOpen ? (
+                  <div
+                    id="settings-indexer-proxy-import-config"
+                    className="rounded border border-border bg-card/60 p-3"
+                  >
+                    <div className="mb-1 text-sm font-medium">
+                      {t("settings.proxyImportConfig")}
+                    </div>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      {t("settings.proxyImportConfigHelp")}
+                    </p>
+                    <Textarea
+                      id="settings-indexer-proxy-import-config-text"
+                      className="min-h-24 font-mono text-xs"
+                      spellCheck={false}
+                      autoComplete="off"
+                      rows={5}
+                      value={configText}
+                      placeholder={
+                        "[Interface]\nPrivateKey = …\nAddress = 10.6.0.2/32\n\n[Peer]\nPublicKey = …\nEndpoint = vpn.example.com:51820"
+                      }
+                      onChange={(event) => setConfigText(event.target.value)}
+                    />
+                    <input
+                      id="settings-indexer-proxy-import-config-file"
+                      ref={configFileRef}
+                      type="file"
+                      accept=".conf,.txt,text/plain"
+                      className="hidden"
+                      onChange={(event) => {
+                        void readConfigFile(event);
+                      }}
+                    />
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        id="settings-indexer-proxy-import-config-apply"
+                        type="button"
+                        variant="outline"
+                        disabled={configText.trim() === ""}
+                        onClick={() => applyConfigText(configText)}
+                      >
+                        {t("settings.proxyImportConfigApply")}
+                      </Button>
+                      <Button
+                        id="settings-indexer-proxy-import-config-choose"
+                        type="button"
+                        variant="outline"
+                        onClick={() => configFileRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {t("settings.proxyImportConfigFile")}
+                      </Button>
+                      <Button
+                        id="settings-indexer-proxy-import-config-manual"
+                        type="button"
+                        variant="outline"
+                        onClick={() => setIsWireguardDetailsOpen(true)}
+                      >
+                        Enter details manually
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                {showProxyDetails &&
+                (isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3") ? (
                   <p
                     id="settings-indexer-proxy-endpoint-help"
                     className="text-xs text-muted-foreground"
@@ -674,7 +692,7 @@ export function SettingsProxiesSection({
                     </div>
                   </div>
                 ) : null}
-                {acceptsPrivateKey ? (
+                {showProxyDetails && acceptsPrivateKey ? (
                   <div
                     id="settings-indexer-proxy-tunnel-fields"
                     className="flex flex-col gap-3"
@@ -1081,30 +1099,32 @@ export function SettingsProxiesSection({
                     ) : null}
                   </div>
                 ) : null}
-                <div className="flex items-end gap-2">
-                  <Button
-                    id="settings-indexer-proxy-save"
-                    type="submit"
-                    disabled={mutatingProxyId !== null}
-                  >
-                    {mutatingProxyId
-                      ? t("label.saving")
-                      : editingProxyId
-                        ? t("settings.proxyUpdate")
-                        : t("settings.proxyCreate")}
-                  </Button>
-                  {editingProxyId ? (
+                {showProxyDetails ? (
+                  <div className="flex items-end gap-2">
                     <Button
-                      id="settings-indexer-proxy-cancel"
-                      type="button"
-                      variant="outline"
-                      onClick={resetProxyDraft}
+                      id="settings-indexer-proxy-save"
+                      type="submit"
                       disabled={mutatingProxyId !== null}
                     >
-                      {t("label.cancel")}
+                      {mutatingProxyId
+                        ? t("label.saving")
+                        : editingProxyId
+                          ? t("settings.proxyUpdate")
+                          : t("settings.proxyCreate")}
                     </Button>
-                  ) : null}
-                </div>
+                    {editingProxyId ? (
+                      <Button
+                        id="settings-indexer-proxy-cancel"
+                        type="button"
+                        variant="outline"
+                        onClick={resetProxyDraft}
+                        disabled={mutatingProxyId !== null}
+                      >
+                        {t("label.cancel")}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
               </form>
             </CardContent>
           </Card>
@@ -1114,7 +1134,10 @@ export function SettingsProxiesSection({
               id="settings-indexer-proxy-create"
               icon={Plus}
               label={t("settings.proxyCreateNew")}
-              onClick={startCreateProxy}
+              onClick={() => {
+                setIsWireguardDetailsOpen(false);
+                startCreateProxy();
+              }}
               disabled={mutatingProxyId !== null}
             />
           </div>
