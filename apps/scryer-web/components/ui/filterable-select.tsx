@@ -70,10 +70,31 @@ export function FilterableSelect({
 }: FilterableSelectProps) {
   const t = useTranslate();
   const [open, setOpen] = React.useState(false);
+  const [filter, setFilter] = React.useState("");
   const selected = options.find((option) => option.value === value) ?? null;
+  const filteredOptions = React.useMemo(() => {
+    const query = filter.trim().toLocaleLowerCase();
+    if (!query) {
+      return options;
+    }
+
+    return options.filter((option) =>
+      `${option.label} ${option.description ?? ""} ${option.value}`
+        .toLocaleLowerCase()
+        .includes(query),
+    );
+  }, [filter, options]);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) {
+          setFilter("");
+        }
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           id={id}
@@ -110,16 +131,21 @@ export function FilterableSelect({
           // The trigger already names the field; a second label here would be
           // read out twice.
           label={ariaLabel}
+          shouldFilter={false}
           className="bg-transparent"
         >
           <CommandInput
+            value={filter}
+            onValueChange={setFilter}
             placeholder={filterPlaceholder ?? t("label.filterOptions")}
           />
           <CommandList>
-            <CommandEmpty>
-              {emptyLabel ?? t("label.noMatchingOptions")}
-            </CommandEmpty>
-            {options.map((option) => (
+            {filteredOptions.length === 0 ? (
+              <CommandEmpty forceMount>
+                {emptyLabel ?? t("label.noMatchingOptions")}
+              </CommandEmpty>
+            ) : null}
+            {filteredOptions.map((option) => (
               <CommandItem
                 key={option.value}
                 id={
