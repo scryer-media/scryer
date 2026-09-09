@@ -631,19 +631,25 @@ export function SettingsProxiesSection({
                     ) : null}
                     <div className="flex flex-col justify-end gap-2 pb-2">
                       {acceptsRemoteDns ? (
-                        <label className="flex items-center gap-2">
-                          <Checkbox
-                            id="settings-indexer-proxy-remote-dns"
-                            checked={proxyDraft.remoteDns}
-                            onCheckedChange={(value) =>
-                              setProxyDraft((prev) => ({
-                                ...prev,
-                                remoteDns: value === true,
-                              }))
-                            }
+                        <div className="flex items-center gap-1">
+                          <label className="flex items-center gap-2">
+                            <Checkbox
+                              id="settings-indexer-proxy-remote-dns"
+                              checked={proxyDraft.remoteDns}
+                              onCheckedChange={(value) =>
+                                setProxyDraft((prev) => ({
+                                  ...prev,
+                                  remoteDns: value === true,
+                                }))
+                              }
+                            />
+                            <span>{t("settings.proxyRemoteDns")}</span>
+                          </label>
+                          <InfoHelp
+                            ariaLabel={t("settings.proxyRemoteDns")}
+                            text={t("settings.proxyRemoteDnsHelp")}
                           />
-                          <span>{t("settings.proxyRemoteDns")}</span>
-                        </label>
+                        </div>
                       ) : null}
                       {acceptsCredentials &&
                       !isTunnelDraft &&
@@ -666,11 +672,9 @@ export function SettingsProxiesSection({
                       ) : null}
 
                     </div>
-                    {isTunnelDraft || acceptsRemoteDns ? (
+                    {isTunnelDraft ? (
                       <p className="text-xs text-muted-foreground md:col-span-3">
-                        {isTunnelDraft ? t("settings.proxyTunnelAuthHelp") : null}
-                        {isTunnelDraft && acceptsRemoteDns ? " " : null}
-                        {acceptsRemoteDns ? t("settings.proxyRemoteDnsHelp") : null}
+                        {t("settings.proxyTunnelAuthHelp")}
                       </p>
                     ) : null}
                   </div>
