@@ -963,7 +963,7 @@ export function SettingsProxiesSection({
                             />
                           </label>
                         </div>
-                        <div className="grid gap-3 md:grid-cols-[10rem_10rem]">
+                        <div className="grid gap-3 md:grid-cols-[10rem_10rem_minmax(0,1fr)]">
                           <label>
                             <Label
                               className="mb-2 block"
@@ -1030,46 +1030,45 @@ export function SettingsProxiesSection({
                               }
                             />
                           </label>
-                        </div>
-                        {/* The one value the operator has to carry back to
-                            their server, so it is shown in full with a copy
-                            button rather than left to a select-and-drag. */}
-                        <div
-                          id="settings-indexer-proxy-tunnel-public-key"
-                          className="rounded border border-border bg-card/60 p-3"
-                        >
-                          <div className="mb-1 flex items-center gap-1 text-sm font-medium">
-                            {t("settings.proxyTunnelPublicKey")}
-                            <InfoHelp
-                              ariaLabel={t("settings.proxyTunnelPublicKey")}
-                              text={
-                                editingProxy?.tunnelPublicKey
-                                  ? t("settings.proxyTunnelPublicKeyHelp")
-                                  : t("settings.proxyTunnelPublicKeyPending")
-                              }
-                            />
-                          </div>
-                          {editingProxy?.tunnelPublicKey ? (
-                            <>
-                              <div className="break-all font-mono text-xs">
-                                {editingProxy.tunnelPublicKey}
-                              </div>
-                              <Button
+                          <div id="settings-indexer-proxy-tunnel-public-key">
+                            <div className="mb-2 flex items-center gap-1.5">
+                              <Label htmlFor="settings-indexer-proxy-tunnel-public-key-value">
+                                {t("settings.proxyTunnelPublicKey")}
+                              </Label>
+                              <InfoHelp
+                                ariaLabel={t("settings.proxyTunnelPublicKey")}
+                                text={
+                                  editingProxy?.tunnelPublicKey
+                                    ? t("settings.proxyTunnelPublicKeyHelp")
+                                    : t("settings.proxyTunnelPublicKeyPending")
+                                }
+                              />
+                            </div>
+                            <div className="relative">
+                              <Input
+                                id="settings-indexer-proxy-tunnel-public-key-value"
+                                className="pr-10 font-mono text-xs"
+                                value={editingProxy?.tunnelPublicKey ?? ""}
+                                placeholder={t("settings.proxyTunnelPublicKeyPending")}
+                                readOnly
+                              />
+                              <IconButton
                                 id="settings-indexer-proxy-tunnel-public-key-copy"
                                 type="button"
-                                variant="outline"
-                                className="mt-2"
+                                label={t("settings.proxyTunnelPublicKeyCopy")}
+                                appearance="ghost"
+                                className="absolute top-1/2 right-1 h-8 w-8 -translate-y-1/2"
+                                disabled={!editingProxy?.tunnelPublicKey}
                                 onClick={() =>
                                   void copyTunnelPublicKey(
-                                    editingProxy.tunnelPublicKey ?? "",
+                                    editingProxy?.tunnelPublicKey ?? "",
                                   )
                                 }
                               >
                                 <Copy className="h-4 w-4" />
-                                {t("settings.proxyTunnelPublicKeyCopy")}
-                              </Button>
-                            </>
-                          ) : null}
+                              </IconButton>
+                            </div>
+                          </div>
                         </div>
                       </>
                     ) : null}
