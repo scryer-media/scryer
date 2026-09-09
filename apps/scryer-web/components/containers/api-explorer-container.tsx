@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { GraphiQL } from "graphiql";
 import "graphiql/setup-workers/vite";
 import "graphiql/style.css";
+import "./api-explorer.css";
+import { SquareTerminal } from "lucide-react";
+import { ApiExplorerEditorFont } from "./api-explorer-editor-font";
 import { useTheme } from "next-themes";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useRefreshInstanceFeatures } from "@/lib/context/instance-features-context";
@@ -52,7 +55,9 @@ function Editor({ mode }: { mode: ApiExplorerMode }) {
       forcedTheme={resolvedTheme === "dark" ? "dark" : "light"}
       defaultQuery={"query {\n  scryerVersion\n}"}
       defaultEditorToolsVisibility="variables"
-    />
+    >
+      <ApiExplorerEditorFont />
+    </GraphiQL>
   );
 }
 
@@ -60,8 +65,14 @@ export default function ApiExplorerContainer() {
   const t = useTranslate();
   const [mode, setMode] = useState<ApiExplorerMode>("api-key");
   return (
-    <section className="flex h-[calc(100dvh-10rem)] min-h-[32rem] flex-col gap-3" aria-label="API explorer">
-      <div className="flex flex-wrap items-end gap-4">
+    <section className="scryer-api-explorer flex h-[calc(100dvh-5rem)] min-h-[32rem] flex-col gap-4 p-4 sm:p-6" aria-label="API explorer">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-4 rounded-xl border border-border bg-card px-5 py-4">
+        <div className="flex items-center gap-3">
+          <span className="flex size-10 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
+            <SquareTerminal className="size-5" aria-hidden="true" />
+          </span>
+          <h1 className="text-xl font-semibold tracking-tight">API</h1>
+        </div>
         <SingleSelectField
           label={t("apiExplorer.accessMode")}
           value={mode}
@@ -72,12 +83,12 @@ export default function ApiExplorerContainer() {
           ]}
           triggerClassName="w-48"
         />
-        <div className="pb-1 text-sm text-muted-foreground">
+        <div className="min-w-0 flex-1 space-y-1 text-sm text-muted-foreground">
           <p>{t(mode === "api-key" ? "apiExplorer.apiKeyHelp" : "apiExplorer.oauthHelp")}</p>
-          <p>{t("apiExplorer.sessionHelp")}</p>
+          <p className="text-xs">{t("apiExplorer.sessionHelp")}</p>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
         {/* Replace the transport on mode changes without remounting unsaved editor tabs. */}
         <Editor mode={mode} />
       </div>
