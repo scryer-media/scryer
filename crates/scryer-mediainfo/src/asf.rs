@@ -47,6 +47,7 @@ const VIDEO_MEDIA_GUID: [u8; 16] = [
 
 const MAX_HEADER_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OBJECTS: usize = 4_096;
+const MAX_HEADER_EXTENSION_DEPTH: usize = 8;
 const MAX_LANGUAGES: usize = 65_536;
 const MAX_FRAME_RATE_SCAN_BYTES: u64 = 1024 * 1024;
 const MAX_FRAME_RATE_SCAN_PACKETS: usize = 256;
@@ -63,6 +64,8 @@ struct AsfState {
     languages: Vec<String>,
     original_languages: Vec<String>,
     object_count: usize,
+    header_extension_depth: usize,
+    header_nesting_exhausted: bool,
     max_packet_size: Option<u32>,
 }
 
@@ -145,6 +148,15 @@ pub(crate) fn parse_asf_source(
     let languages = state.languages;
     let original_languages = state.original_languages;
     let mut details = scryer_media_types::AnalysisDetails::default();
+    if state.header_nesting_exhausted {
+        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.budget_exhausted = true;
+        details.report.warnings.push(scryer_media_types::ProbeWarning {
+            code: "asf_header_nesting_limit".into(),
+            message: "Header extension nesting exceeded the inspection limit; nested metadata was not inspected".into(),
+            ..Default::default()
+        });
+    }
     let mut tracks = Vec::new();
     for stream_number in state.stream_order {
         let Some(stream) = state.streams.remove(&stream_number) else {
@@ -484,7 +496,14 @@ fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), Media
     r.skip(16 + 2)?;
     let extension_size = r.u32_le()? as usize;
     let extension = r.take(extension_size)?;
-    parse_objects(&mut SliceReader::new(extension), None, state)
+    if state.header_extension_depth >= MAX_HEADER_EXTENSION_DEPTH {
+        state.header_nesting_exhausted = true;
+        return Ok(());
+    }
+    state.header_extension_depth += 1;
+    let result = parse_objects(&mut SliceReader::new(extension), None, state);
+    state.header_extension_depth -= 1;
+    result
 }
 
 fn parse_extended_stream_properties(
@@ -1446,6 +1465,83 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn header_extension_budget_preserves_siblings_and_reports_incomplete_metadata() {
+        fn object(guid: [u8; 16], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::from(guid);
+            bytes.extend((24 + payload.len() as u64).to_le_bytes());
+            bytes.extend(payload);
+            bytes
+        }
+        let mut properties = vec![0; 80];
+        properties[40..48].copy_from_slice(&20_000_000_u64.to_le_bytes());
+        for depth in [
+            1,
+            MAX_HEADER_EXTENSION_DEPTH,
+            MAX_HEADER_EXTENSION_DEPTH + 1,
+        ] {
+            let mut nested = object(FILE_PROPERTIES_GUID, &properties);
+            for _ in 0..depth {
+                let mut extension = vec![0; 18];
+                extension.extend((nested.len() as u32).to_le_bytes());
+                extension.extend(nested);
+                nested = object(HEADER_EXTENSION_GUID, &extension);
+            }
+            let exhausted = depth > MAX_HEADER_EXTENSION_DEPTH;
+            let mut state = AsfState::default();
+            parse_objects(&mut SliceReader::new(&nested), Some(1), &mut state).unwrap();
+            assert_eq!(state.duration_seconds, (!exhausted).then_some(2.0));
+            assert_eq!(state.header_extension_depth, 0);
+            assert_eq!(state.header_nesting_exhausted, exhausted);
+            assert!(state.object_count <= MAX_HEADER_EXTENSION_DEPTH + 1);
+
+            let mut sibling = properties.clone();
+            sibling[40..48].copy_from_slice(&30_000_000_u64.to_le_bytes());
+            nested.extend(object(FILE_PROPERTIES_GUID, &sibling));
+            let mut audio = vec![0; 70];
+            audio[..16].copy_from_slice(&AUDIO_MEDIA_GUID);
+            audio[40..44].copy_from_slice(&16_u32.to_le_bytes());
+            audio[48..50].copy_from_slice(&1_u16.to_le_bytes());
+            audio[54..56].copy_from_slice(&1_u16.to_le_bytes());
+            audio[56..58].copy_from_slice(&1_u16.to_le_bytes());
+            audio[58..62].copy_from_slice(&48_000_u32.to_le_bytes());
+            audio[62..66].copy_from_slice(&96_000_u32.to_le_bytes());
+            audio[66..68].copy_from_slice(&2_u16.to_le_bytes());
+            audio[68..70].copy_from_slice(&16_u16.to_le_bytes());
+            nested.extend(object(STREAM_PROPERTIES_GUID, &audio));
+            let mut image = Vec::from(ASF_HEADER_GUID);
+            image.extend((30 + nested.len() as u64).to_le_bytes());
+            image.extend(3_u32.to_le_bytes());
+            image.extend([1, 2]);
+            image.extend(nested);
+            let result = parse_asf_source(&mut std::io::Cursor::new(image)).unwrap();
+            assert_eq!(result.tracks.len(), 1);
+            assert_eq!(result.duration_seconds, Some(3.0));
+            assert_eq!(result.details.report.budget_exhausted, exhausted);
+            assert_eq!(
+                result
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| { warning.code == "asf_header_nesting_limit" }),
+                exhausted
+            );
+            if exhausted {
+                assert_eq!(
+                    result.details.report.status,
+                    scryer_media_types::ProbeStatus::Incomplete
+                );
+            }
+        }
+        let mut state = AsfState::default();
+        let mut malformed = vec![0; 18];
+        malformed.extend(24_u32.to_le_bytes());
+        malformed.extend(object(FILE_PROPERTIES_GUID, &[]));
+        assert!(parse_header_extension(&malformed, &mut state).is_err());
+        assert_eq!(state.header_extension_depth, 0);
     }
 
     #[test]
