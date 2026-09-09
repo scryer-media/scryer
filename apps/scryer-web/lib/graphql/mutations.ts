@@ -18,6 +18,7 @@ import {
   TITLE_MUTATION_RESULT_FIELDS,
   TITLE_TAG_DEFINITION_FIELDS,
 } from "./queries.ts";
+import { MEDIA_DISC_FIELDS } from "../types/media-analysis.ts";
 
 const AUTH_USER_FIELDS = `
       id
@@ -1484,10 +1485,7 @@ export const beginManualImportSelectionMutation = `mutation BeginManualImportSel
         videoHeight
         durationSeconds
         report { status warnings { code message } }
-        disc {
-          discType selectedTitleId automaticSelection
-          titles { id durationSeconds angleCount report { status } }
-        }
+        disc { ${MEDIA_DISC_FIELDS} }
       }
       quality
       parsedSeason

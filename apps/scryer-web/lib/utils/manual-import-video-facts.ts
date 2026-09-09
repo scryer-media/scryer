@@ -1,19 +1,12 @@
+import type { MediaDiscMetadata } from "../types/media-analysis";
+
 export type ManualDiscSelection = {
   titleId: string | null;
   episodeMappings: { discTitleId: string; episodeId: string }[];
 };
 
-export type ManualDiscInventory = {
-  discType: string;
-  selectedTitleId: string | null;
-  automaticSelection: boolean;
-  titles: {
-    id: string;
-    durationSeconds: number | null;
-    angleCount: number;
-    report: { status: string };
-  }[];
-};
+export type ManualDiscInventory = Pick<MediaDiscMetadata,
+  "discType" | "selectedTitleId" | "automaticSelection" | "titles">;
 
 export type ManualImportVideoFacts = {
   containerFormat: string | null;

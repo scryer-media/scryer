@@ -1,4 +1,5 @@
 import { useTranslate } from "@/lib/context/translate-context";
+import { DiscTitleDetails } from "@/components/common/media-analysis-details";
 import type { ManualDiscInventory, ManualDiscSelection, ManualImportVideoFacts } from "@/lib/utils/manual-import-video-facts";
 
 type Props = {
@@ -63,6 +64,10 @@ export function ManualDiscSelectionControl({ disc, report, isMovie, episodes, va
         );
       })}
       {!titles.length && <p>{t("mediaInfo.discNoTitles")}</p>}
+      {titles.length > 0 && <details className="border-t pt-2">
+        <summary className="cursor-pointer font-medium">{t("mediaFile.discInspectTitles")}</summary>
+        {titles.map((title) => <DiscTitleDetails key={title.id} title={title} />)}
+      </details>}
     </div>
   );
 }

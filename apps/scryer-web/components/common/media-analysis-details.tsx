@@ -1,4 +1,4 @@
-import type { MediaAnalysisAttempt, MediaAnalysisDetails, MediaRational, MediaStreamDetail } from "@/lib/types/media-analysis";
+import type { MediaAnalysisAttempt, MediaAnalysisDetails, MediaDiscTitle, MediaRational, MediaStreamDetail } from "@/lib/types/media-analysis";
 import { useEffect, useState } from "react";
 import { DiscTitleSelection } from "./disc-title-selection";
 import { DiscEpisodeMapping } from "./disc-episode-mapping";
@@ -50,6 +50,29 @@ function Stream({ stream }: { stream: MediaStreamDetail }) {
   </div>;
 }
 
+export function DiscTitleDetails({ title }: { title: MediaDiscTitle }) {
+  const t = useTranslate();
+  return <details className="border-t py-1">
+    <summary className="cursor-pointer font-medium">
+      {t("mediaFile.discTitleIdentity", { id: title.id })} · {title.durationSeconds == null ? t("label.unknown") : time(title.durationSeconds)} · {title.report.status.toLowerCase()}
+    </summary>
+    <div className="space-y-2 py-2">
+      <p>{t("mediaFile.discAngleInventory", { count: title.angleCount || t("label.unknown") })}</p>
+      {title.aliases.length ? <p>{t("mediaFile.discTitleAliases", { ids: title.aliases.join(", ") })}</p> : null}
+      {title.report.budgetExhausted ? <p className="text-amber-500">{t("mediaFile.discTitleBudgetExhausted")}</p> : null}
+      {title.report.warnings.map((warning, index) => <p key={`${warning.code}-${index}`} className="text-amber-500">{warning.message}</p>)}
+      <p className="font-medium">{t("mediaFile.discTitleStreams")}</p>
+      {title.streams.length ? title.streams.map((stream, index) =>
+        <Stream key={`${stream.metadata.programId}-${stream.metadata.id}-${index}`} stream={stream} />)
+        : <p className="text-muted-foreground">{t("mediaFile.discTitleStreamsUnknown")}</p>}
+      <p className="font-medium">{t("mediaFile.discTitleChapters")}</p>
+      {title.chapters.length ? <ol className="space-y-1">{title.chapters.map((chapter, index) => <li key={`${chapter.id}-${index}`}>
+        {time(chapter.startSeconds)}{chapter.endSeconds == null ? "" : `–${time(chapter.endSeconds)}`} · {chapter.title ?? t("mediaFile.discChapterIdentity", { id: chapter.id })}
+      </li>)}</ol> : <p className="text-muted-foreground">{t("mediaFile.discTitleChaptersUnknown")}</p>}
+    </div>
+  </details>;
+}
+
 export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt: storedAttempt, videoBitrateKbps, fileId }: { analysis: MediaAnalysisDetails; attempt?: MediaAnalysisAttempt | null; videoBitrateKbps: number | null; fileId?: string }) {
   const t = useTranslate();
   const [analysis, setAnalysis] = useState(storedAnalysis);
@@ -82,10 +105,7 @@ export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt:
         <p>{analysis.disc?.automaticSelection ? "Automatic longest-title selection" : "Saved title selection"}: {analysis.disc?.selectedTitleId ?? "Requires review"}</p>
         {fileId ? <DiscTitleSelection fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} requiresReview={attempt != null && !attempt.succeeded} /> : null}
         {fileId ? <DiscEpisodeMapping key={fileId} fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} /> : null}
-        {disc.titles.map((title) => <div key={title.id} className="border-t py-1">
-          <p>Title {title.id} · {time(title.durationSeconds)} · {title.angleCount} angle(s) · {title.report.status.toLowerCase()}{title.aliases.length ? ` · aliases ${title.aliases.join(", ")}` : ""}</p>
-          {title.report.warnings.map((warning, index) => <p key={index} className="text-amber-500">{warning.message}</p>)}
-        </div>)}
+        {disc.titles.map((title) => <DiscTitleDetails key={title.id} title={title} />)}
       </div> : null}
       {analysis.programs.map((program) => <p key={program.id}>Program {program.id}{program.name ? ` · ${program.name}` : ""} · streams {program.streamIds.join(", ")}{analysis.selectedProgramId === program.id ? " · selected" : ""}</p>)}
       {analysis.streams.map((stream, index) => <Stream key={`${stream.metadata.programId}-${stream.metadata.id}-${index}`} stream={stream} />)}
