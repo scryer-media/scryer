@@ -278,6 +278,10 @@ impl MaintenanceTitleClaims<'_> {
 /// `files` must be this title's files only; callers batch-load for the whole
 /// selection and group by `title_id` rather than querying per title. The same
 /// holds for [`MaintenanceTitlePeople`] and [`MaintenanceTitleClaims`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fact-source bundles stay explicit at the shared builder boundary"
+)]
 pub fn build_title_input(
     evaluation_time: DateTime<Utc>,
     title: &Title,

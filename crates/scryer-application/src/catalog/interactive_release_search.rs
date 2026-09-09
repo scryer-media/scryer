@@ -237,7 +237,7 @@ enum InteractiveReleaseSearchSubject {
         /// Boxed: a `Title` dwarfs the query variant, and the subject is moved
         /// into the job context once and then only borrowed.
         title_for_search: Box<Title>,
-        subject: ResolvedReleaseSearchSubject,
+        subject: Box<ResolvedReleaseSearchSubject>,
         preserve_subject_scope: bool,
     },
     /// An operator's raw query, with no title to score or judge against (D6).
@@ -248,7 +248,7 @@ enum InteractiveReleaseSearchSubject {
         newznab_categories: Option<Vec<String>>,
         /// Facet default profile and the facet name. `None` for
         /// the raw kind, and when the profile could not be resolved.
-        judge: Option<(QualityProfile, String)>,
+        judge: Option<Box<(QualityProfile, String)>>,
     },
 }
 
@@ -327,7 +327,7 @@ impl AppUseCase {
                 (
                     InteractiveReleaseSearchSubject::Title {
                         title_for_search: Box::new(title_for_search),
-                        subject,
+                        subject: Box::new(subject),
                         preserve_subject_scope,
                     },
                     indexer_routing,
@@ -379,7 +379,7 @@ impl AppUseCase {
                         query: query.to_string(),
                         facet: facet_name,
                         newznab_categories,
-                        judge,
+                        judge: judge.map(Box::new),
                     },
                     indexer_routing,
                 )
@@ -751,7 +751,7 @@ impl AppUseCase {
                             query,
                             facet,
                             newznab_categories,
-                            judge,
+                            judge.as_deref(),
                             &routing_base,
                             &indexer_id,
                             child_token,
@@ -952,7 +952,7 @@ impl AppUseCase {
         query: &str,
         facet: &Option<String>,
         newznab_categories: &Option<Vec<String>>,
-        judge: &Option<(QualityProfile, String)>,
+        judge: Option<&(QualityProfile, String)>,
         routing_base: &HashMap<String, IndexerRoutingEntry>,
         indexer_id: &str,
         cancel_token: CancellationToken,
@@ -1005,7 +1005,7 @@ impl AppUseCase {
             .find(|outcome| outcome.indexer_id == indexer_id)
             .and_then(|outcome| incomplete_indexer_reason(outcome.outcome));
         let rules = self.user_rules_engine_snapshot();
-        let judge = judge.clone();
+        let judge = judge.cloned();
         let indexer_id = indexer_id.to_string();
         let results = tokio::task::spawn_blocking(move || {
             // Reuse one evaluator for this response and keep synchronous rule

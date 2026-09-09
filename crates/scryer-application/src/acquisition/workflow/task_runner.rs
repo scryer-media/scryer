@@ -781,6 +781,7 @@ impl GrabProposal {
 /// Returns `(committed, set_aside)` for the walk's summary line; a proposal
 /// whose submissions all failed is folded into `stats` as a failed work item,
 /// which is what an interactive job's terminal status reads.
+#[expect(clippy::too_many_arguments, reason = "arbitration uses the same explicit cycle inputs as the title walk")]
 async fn arbitrate_and_commit_title_grabs(
     app: &AppUseCase,
     title: &Title,
