@@ -1909,12 +1909,6 @@ mod tests {
         RuntimeSampleValidation::manual_override(expected_runtime_seconds)
     }
 
-    // The title-facet guide-fact derivation formerly asserted here against
-    // `contextualize_import_release` now happens once, in the canonical import
-    // parse (`import_workflow::parse_import_release_for_title`); see
-    // `canonical_import_parse_derives_title_facet_guide_facts` in
-    // `import/app_usecase_import_tests.rs`.
-
     fn criteria(tiers: &[&str]) -> crate::QualityProfileCriteria {
         let tiers = tiers
             .iter()

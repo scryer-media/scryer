@@ -8,9 +8,9 @@
 //!
 //! 1. **Assertions are relative, never absolute.** Each case parses invented
 //!    release names with the real parser and scores them through the real
-//!    weights/profile path (and, for the locale packs, the real rego engine),
+//!    bundled Rego pack (including the optional locale templates),
 //!    then asserts an ordering. No expected score is written down, so
-//!    recalibrating `TRASH_CEILING` or any native weight does not churn the
+//!    recalibrating a pack weight does not churn the
 //!    corpus — only a *reordering* fails it, which is exactly the regression
 //!    worth catching.
 //!
@@ -21,15 +21,15 @@
 //!    dangerous collision tokens, because §6a's collision is with the token, not
 //!    with any particular film.
 
+use crate::quality::pack_test_support::{
+    score_with_pack_for_category, test_scoring_config_for_category,
+};
 use crate::quality_profile::{
     BLOCK_SCORE, QualityProfile, QualityProfileCriteria, QualityProfileDecision, ScoringSource,
-    evaluate_against_profile_for_category,
 };
 use crate::release_parser::parse_release_metadata;
 use crate::rules::builtin_trash;
 use crate::rules::user_rule_input::{ReleaseRuntimeInfo, RuleContextInfo, build_rule_input};
-use crate::scoring_weights::build_weights_for_category;
-use crate::trash_scores::{TRASH_PASSTHROUGH_KNEE, normalize_trash_score};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pipeline seams
@@ -45,16 +45,15 @@ fn corpus_profile() -> QualityProfile {
     }
 }
 
-/// Parse + score through the production path: the real parser, the real
-/// persona-resolved weights, and the real profile evaluation.
+/// Parse and evaluate the bundled scoring rules with profile requirements.
 fn corpus_decision(raw: &str, category: Option<&str>) -> QualityProfileDecision {
     let profile = corpus_profile();
-    let weights = build_weights_for_category(
+    let weights = test_scoring_config_for_category(
         profile.criteria.resolve_persona(category),
         &profile.criteria.scoring_overrides,
         category,
     );
-    let mut decision = evaluate_against_profile_for_category(
+    let mut decision = score_with_pack_for_category(
         &profile,
         &parse_release_metadata(raw),
         false,
@@ -135,13 +134,12 @@ fn evaluate_locale_pack(
     let profile = corpus_profile();
     let category = case.category;
     let parsed = parse_release_metadata(case.raw);
-    let weights = build_weights_for_category(
+    let weights = test_scoring_config_for_category(
         profile.criteria.resolve_persona(category),
         &profile.criteria.scoring_overrides,
         category,
     );
-    let mut decision =
-        evaluate_against_profile_for_category(&profile, &parsed, false, &weights, category);
+    let mut decision = score_with_pack_for_category(&profile, &parsed, false, &weights, category);
 
     let indexer_languages = case
         .indexer_languages
@@ -340,51 +338,6 @@ fn assert_ranks_below_every_allowed_rung(category: Option<&str>, vetoed: &str, r
 // (b) The mapping's documented cost: compression can invert order across the knee
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// **This pins accepted behavior, not a bug.**
-///
-/// The accepted cost, as designed: *"at a 1000 ceiling, four 75-point formats
-/// (300) beat one 1800-point tier-1 group (255), which upstream would never
-/// intend. This is inherent to bounded compression, not to this shape
-/// specifically."* The tie-break band is the identity while the proportional
-/// band is compressed, so a large enough stack of sub-knee formats outweighs one
-/// high-band format.
-///
-/// The arithmetic runs through the real `normalize_trash_score`, not through
-/// written-down numbers. It is asserted at the normalize seam rather than
-/// end-to-end because no shipped locale pack can currently emit four
-/// independent sub-knee positives at once — see
-/// `no_shipped_pack_can_currently_stack_its_way_across_the_knee`, which pins
-/// that the inversion is latent rather than live.
-#[test]
-fn stacked_tie_breakers_can_outweigh_one_compressed_high_band_format() {
-    const DEFAULT_SET_VETO: i64 = 10_000;
-    /// Upstream's own currency ranks the single high-band format far above the
-    /// stack: 4 x 75 = 300 against 1800.
-    const UPSTREAM_TIE_BREAKER: i64 = 75;
-    const UPSTREAM_TIER_ONE: i64 = 1800;
-
-    let tie_breaker = normalize_trash_score(UPSTREAM_TIE_BREAKER, DEFAULT_SET_VETO);
-    let tier_one = normalize_trash_score(UPSTREAM_TIER_ONE, DEFAULT_SET_VETO);
-
-    // Below the knee the map is the identity, so the tie-breaker is unscaled.
-    const { assert!(UPSTREAM_TIE_BREAKER <= TRASH_PASSTHROUGH_KNEE) };
-    assert_eq!(i64::from(tie_breaker), UPSTREAM_TIE_BREAKER);
-    // The high-band format is compressed, so it loses most of its lead.
-    assert!(i64::from(tier_one) < UPSTREAM_TIER_ONE);
-
-    // After normalization the order inverts. Accepted by design.
-    assert!(
-        4 * tie_breaker > tier_one,
-        "documented normalization inversion: 4x{tie_breaker} vs {tier_one}"
-    );
-
-    // The same shape under a 35000-cutoff set inverts harder, because the wider
-    // proportional band compresses the high-band format further.
-    let german_tier_one = normalize_trash_score(UPSTREAM_TIER_ONE, 35_000);
-    assert!(german_tier_one < tier_one);
-    assert!(4 * tie_breaker > german_tier_one);
-}
-
 /// Every `score_entry` a rendered locale template declares, read straight out of
 /// the generated policy so the corpus never restates a score.
 fn pack_score_entries(source: &str) -> Vec<(String, i32)> {
@@ -408,13 +361,15 @@ fn pack_score_entries(source: &str) -> Vec<(String, i32)> {
 /// need revisiting.
 #[test]
 fn no_shipped_pack_can_currently_stack_its_way_across_the_knee() {
+    // Frozen boundary of the converter's tie-break band, not a host formula.
+    const TIE_BREAK_LIMIT: i32 = 100;
     for template in bundled_locale_templates() {
         let entries = pack_score_entries(&template.rego_source);
         assert!(!entries.is_empty(), "{} emitted no scores", template.id);
 
         let sub_knee_total: i32 = entries
             .iter()
-            .filter(|(_, score)| *score > 0 && i64::from(*score) <= TRASH_PASSTHROUGH_KNEE)
+            .filter(|(_, score)| *score > 0 && *score <= TIE_BREAK_LIMIT)
             .map(|(_, score)| *score)
             .sum();
         let strongest = entries

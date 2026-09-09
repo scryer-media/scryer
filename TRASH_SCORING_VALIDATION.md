@@ -1,9 +1,9 @@
 # TRaSH scoring migration validation
 
-Worktree branch: `feature/trash-builtin-scoring`, based on release commit
-`1911cb38b40c6a7b0ae10c4f3dfb06d673549426`. This includes the release's
-recoverable-scoring contract. Implementation remains in isolated host and
-plugin worktrees; release integration and publication are separate actions.
+The implementation was integrated into `release-0.20.0` at `94e9e64b3`.
+The follow-up cleanup in `feature/trash-builtin-scoring` is based on release
+commit `a96e86366`, including its recoverable-scoring contract. Publication
+remains a separate operator action.
 
 ## Final scoring contract
 
@@ -19,12 +19,52 @@ plugin worktrees; release integration and publication are separate actions.
 ## Artifact
 
 The identical host bundle and `scryer-plugins/rule_packs/trash-scoring.json`
-contain 14 templates (9 core, 5 optional locales), 610,145 bytes. SHA-256:
-`3eb2d9287ae6e783e36d2c912f78d15ef5078b793ed8b79b8cea24adbb3bc72b`.
+contain 14 templates (9 core, 5 optional locales), 611,015 bytes. SHA-256:
+`1fecd3fce839b290dc3fad3f85c459774ce737eafadb411e115632ea6552c034`.
 Upstream revision: `31a2716d03a3f554a5a2a6bd76456109d900af05`.
 The normalized source includes 830 reputation rows. Production Rust retains
-only a lexical group-prefix index for existing title anchoring; reputation
-tiers and numeric weights are test-only migration oracles.
+only a lexical group-prefix index for existing title anchoring. Reputation
+tiers, numeric weight tables, the native test oracle, and the old Rust TRaSH
+generator have been removed. Parsing retains service recognition and ordinary
+release signals. Daily scoring data updates belong to the Go pack converter;
+the parser-recognition snapshots receive ordinary code review.
+
+The 7,392 numeric golden cases remain fixed expectations. Before deleting the
+size oracle, 2,016 byte-boundary cases and 1,728 mandatory admission cases were
+captured at `a96e86366` (Nextest run `1823c7e2-f89d-470e-88b7-e6340346ac72`,
+2/2 passed). Those saved fixtures now replace the executable Rust oracle;
+behavioral scoring tests execute the actual bundled pack. The retired
+`GuideFact` type and empty fields were removed, while migration diagnostics
+continue rejecting saved sources that reference `input.release.guide_facts`.
+
+Running the former Rust-only behavioral tests through Rego exposed three
+missing translations: the AI-upscale penalty, required-language bonus, and
+configured Dolby Vision fallback penalty. The canonical pack now supplies
+these contributions. The host only adds the parser's `has_hdr_fallback` fact
+to the input contract and canonicalizes required-language aliases. DV and AI
+penalties are recoverable, and no native numeric scoring was reintroduced.
+The immutable numeric oracle is accompanied by a reviewed 48-case overlay for
+the former mandatory DV rejection becoming a −10,000 contribution. It adds
+that entry without replacing any of the original numeric expectations.
+
+## Cleanup validation
+
+- 246 profile, canonical scoring, locale, override, input, and migration checks
+  passed in run `b931ea02-836b-4abe-980d-1864629886c3`. The only failure in that
+  run was the subsequently documented DV contract difference.
+- All 385 parser, rules, and golden tests passed in run
+  `3076a09c-6805-4fe7-86b1-b57a4a6a28d9`, including all 7,392 numeric cases with
+  the explicit contract overlay. Both frozen size suites passed: 2,016 scoring
+  boundaries and 1,728 mandatory admission boundaries.
+- Focused commands used `cargo nextest run --no-fail-fast` with package/test
+  filters. Resource benchmarks were excluded from these regression sweeps.
+- `cargo check --locked -p scryer -p xtask -p xtask-release`, Rust formatting,
+  converter `go test ./...`, deterministic `go run . check`, web type checking,
+  four rule-reference tests, scoped ESLint, and the web production build passed.
+  The macOS application test linker reports the existing oversized unwind-table
+  warning; production compilation has no warnings.
+- Full workspace Nextest and Clippy remain deferred until the completed release
+  integration checkpoint; no full sweep was used during cleanup development.
 
 ## Validation evidence
 
@@ -77,10 +117,20 @@ SeaDex. Build times were approximately 49 ms, 76 ms, and 205 ms respectively;
 warm evaluations were approximately 3.8 ms, 7.7 ms, and 14.4 ms. These are
 process RSS measurements, not a compilation peak-memory bound.
 
-Latest empty baseline: 10,944,512 bytes; TRaSH plus three locales: 25,395,200
+Pre-cleanup empty baseline: 10,944,512 bytes; TRaSH plus three locales: 25,395,200
 bytes; SeaDex baseline: 28,786,688 bytes; combined: 40,861,696 bytes. The combined
 run is `22b4a377-d963-4958-b790-523deb5142f3`. Core-only measurements precede the
 locale fix; the core rules were unchanged.
+
+The cleanup artifact was remeasured with the same harness. Empty baseline:
+10,895,360 bytes; core: 19,775,488; core plus French VO/German/Asian: 25,788,416;
+SeaDex baseline: 28,327,936; combined: 40,288,256. Incremental TRaSH RSS is
+8.47 MiB core, 14.20 MiB with those locales, and 11.41 MiB alongside SeaDex,
+remaining below the 15 MiB target. Core/locale/combined build times were
+45.8/80.9/210.2 ms, with warm evaluations at 4.0/8.3/13.3 ms. Relevant runs:
+`b81345de-f7cb-44af-aee3-c4439027848f`,
+`cd1776c6-bd0f-4cd6-a8b5-04e72f8dc677`, and
+`edc5ccc9-b384-49c6-9328-7830abab2fe2`.
 
 Twelve temporary-engine build/evaluate/drop cycles with distinct policy
 revisions reached an allocator plateau: 35,635,200 bytes after cycle 6 and
@@ -88,6 +138,6 @@ revisions reached an allocator plateau: 35,635,200 bytes after cycle 6 and
 RSS did not drop on destruction, so the evidence supports bounded retained
 allocator pages, not return of every page to the OS.
 
-No deployment, release, tag, push, workflow activation, or running instance was
+No deployment, release, tag, publication, workflow activation, or running instance was
 changed. Daily workflow activation and credential provisioning remain separate
 operator actions.

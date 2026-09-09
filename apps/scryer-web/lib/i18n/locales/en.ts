@@ -1925,6 +1925,7 @@ const en: LocaleDictionary = {
   "settings.refReleaseIsDualAudio": "True when multiple audio tracks detected",
   "settings.refReleaseIsAtmos": "True when Dolby Atmos audio is present",
   "settings.refReleaseIsDV": "True when Dolby Vision metadata is detected",
+  "settings.refReleaseHasHdrFallback": "True when the release parser detects an HDR fallback layer",
   "settings.refReleaseDetectedHdr": "True when HDR is detected (non-DV)",
   "settings.refReleaseIsRemux": "True for full remux (no transcoding)",
   "settings.refReleaseIsBdDisk": "True for Blu-ray disc source",

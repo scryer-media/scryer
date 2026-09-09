@@ -120,7 +120,6 @@ struct Cli {
 enum Commands {
     Release(ReleaseArgs),
     Builtins(BuiltinsArgs),
-    TrashGuides(TrashGuidesArgs),
     Migrations(MigrationsArgs),
     MediaFixtures(media_fixtures::MediaFixturesArgs),
     BuildTestPluginFixture,
@@ -151,17 +150,6 @@ struct ReleaseArgs {
 struct BuiltinsArgs {
     #[command(subcommand)]
     command: BuiltinsCommand,
-}
-
-#[derive(Args)]
-struct TrashGuidesArgs {
-    #[command(subcommand)]
-    command: TrashGuidesCommand,
-}
-
-#[derive(Subcommand)]
-enum TrashGuidesCommand {
-    Sync,
 }
 
 #[derive(Subcommand)]
@@ -327,7 +315,6 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Release(args) => delegate_release(&ctx, &args),
         Commands::Builtins(args) => delegate_builtins(&ctx, &args),
-        Commands::TrashGuides(args) => delegate_trash_guides(&ctx, &args),
         Commands::Migrations(args) => delegate_migrations(&ctx, &args),
         Commands::MediaFixtures(args) => match args.command {
             media_fixtures::MediaFixturesCommand::Generate(args) => {
@@ -383,13 +370,6 @@ fn delegate_builtins(ctx: &TaskContext, args: &BuiltinsArgs) -> Result<()> {
         BuiltinsCommand::Materialize => vec!["builtins".to_string(), "materialize".to_string()],
     };
     delegate_to_package(ctx, "xtask-release", &forwarded)
-}
-
-fn delegate_trash_guides(ctx: &TaskContext, args: &TrashGuidesArgs) -> Result<()> {
-    let forwarded = match args.command {
-        TrashGuidesCommand::Sync => vec!["sync".to_string()],
-    };
-    delegate_to_package(ctx, "xtask-trash-guides", &forwarded)
 }
 
 fn delegate_sdk(ctx: &TaskContext, args: &SdkArgs) -> Result<()> {

@@ -140,19 +140,6 @@ fn assert_score_bearing_facts_match(
     assert_eq!(actual.audio, expected.audio, "audio codec");
     assert_eq!(actual.is_remux, expected.is_remux, "remux");
     assert_eq!(actual.year, expected.year, "year");
-    assert_eq!(
-        actual
-            .guide_facts
-            .iter()
-            .map(|fact| fact.code.as_str())
-            .collect::<Vec<_>>(),
-        expected
-            .guide_facts
-            .iter()
-            .map(|fact| fact.code.as_str())
-            .collect::<Vec<_>>(),
-        "guide facts"
-    );
 }
 
 // ── extract_parameter ─────────────────────────────────────────────────────────

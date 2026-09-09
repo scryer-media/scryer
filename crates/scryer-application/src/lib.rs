@@ -142,8 +142,6 @@ pub(crate) use quality::profile as quality_profile;
 pub(crate) use quality::release_group_db;
 pub(crate) use quality::release_parser;
 pub(crate) use quality::scoring_weights;
-#[cfg(test)]
-pub(crate) use quality::trash_scores;
 pub(crate) use rules::user_rule_input;
 
 pub use download_client_config::resolve_download_client_base_url_from_config_json;
@@ -583,8 +581,6 @@ pub use quality::release_parser::{
     parse_release_metadata_for_target,
 };
 pub use quality::scoring_weights::{ScoringOverrides, ScoringPersona};
-#[cfg(test)]
-pub use quality::scoring_weights::{ScoringWeights, build_weights, build_weights_for_category};
 pub use quality_profile::{
     BLOCK_SCORE, BUILTIN_DEFAULT_QUALITY_PROFILE_ID, QUALITY_PROFILE_CATALOG_KEY,
     QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE, QualityProfile, QualityProfileCriteria,

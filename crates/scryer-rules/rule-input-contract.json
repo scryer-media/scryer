@@ -65,6 +65,11 @@
           "descKey": "settings.refReleaseIsDV"
         },
         {
+          "field": "has_hdr_fallback",
+          "type": "bool",
+          "descKey": "settings.refReleaseHasHdrFallback"
+        },
+        {
           "field": "detected_hdr",
           "type": "bool",
           "descKey": "settings.refReleaseDetectedHdr"

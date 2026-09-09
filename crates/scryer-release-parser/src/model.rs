@@ -773,19 +773,10 @@ pub enum ParseDisposition {
     Unparseable,
 }
 
-/// Stable TRaSH Guides fact derived from a raw release title.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct GuideFact {
-    pub code: String,
-}
-
 /// Structured release parse returned by the v2 parser.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ParsedReleaseMetadata {
     pub raw_title: String,
-    /// Compatibility storage for test-only legacy fixtures. Production parsing
-    /// leaves this empty; built-in Rego owns TRaSH fact detection.
-    pub guide_facts: Vec<GuideFact>,
     /// Lexer-normalized release tokens in source order.
     pub normalized_tokens: Vec<String>,
     pub normalized_title: String,
@@ -843,7 +834,6 @@ impl ParsedReleaseMetadata {
     pub fn empty(raw: &str, parser_version: &'static str) -> Self {
         Self {
             raw_title: raw.to_string(),
-            guide_facts: Vec::new(),
             normalized_tokens: Vec::new(),
             normalized_title: String::new(),
             normalized_title_variants: Vec::new(),
@@ -1123,9 +1113,6 @@ pub struct MetadataEnrichment {
 pub struct ReleaseParseAnalysis {
     pub raw_input: String,
     pub sanitized_input: String,
-    /// Compatibility storage for test-only legacy fixtures. Production parsing
-    /// leaves this empty; built-in Rego owns TRaSH fact detection.
-    pub guide_facts: Vec<GuideFact>,
     pub parse_hints: Vec<String>,
     pub tokens: Vec<Token>,
     pub annotations: Vec<TokenAnnotations>,

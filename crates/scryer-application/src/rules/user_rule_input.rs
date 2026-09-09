@@ -81,6 +81,7 @@ pub(crate) fn build_rule_input(
             is_dual_audio: parsed.is_dual_audio,
             is_atmos: parsed.is_atmos,
             is_dolby_vision: parsed.is_dolby_vision,
+            has_hdr_fallback: parsed.has_hdr_fallback,
             detected_hdr: parsed.detected_hdr,
             is_remux: parsed.is_remux,
             is_bd_disk: parsed.is_bd_disk,
@@ -113,7 +114,6 @@ pub(crate) fn build_rule_input(
                 .map(|value| (chrono::Utc::now() - value.with_timezone(&chrono::Utc)).num_days()),
             thumbs_up: release_runtime.thumbs_up,
             thumbs_down: release_runtime.thumbs_down,
-            guide_facts: Vec::new(),
             extra: release_runtime.extra.cloned().unwrap_or_default(),
         },
         profile: ProfileDoc {
@@ -165,7 +165,9 @@ pub(crate) fn build_rule_input(
             allow_bd_disk: profile.criteria.allow_bd_disk,
             allow_upgrades: profile.criteria.allow_upgrades,
             prefer_dual_audio: profile.criteria.prefer_dual_audio,
-            required_audio_languages: profile.criteria.required_audio_languages.clone(),
+            required_audio_languages: crate::audio_requirements::normalize_required_audio_languages(
+                profile.criteria.required_audio_languages.clone(),
+            ),
             scoring_persona: match profile.criteria.resolve_persona(Some(category)) {
                 crate::ScoringPersona::Balanced => "balanced",
                 crate::ScoringPersona::Audiophile => "audiophile",

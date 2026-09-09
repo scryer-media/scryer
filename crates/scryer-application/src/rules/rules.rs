@@ -1149,6 +1149,7 @@ pub(crate) mod tests {
                 is_dual_audio: release_is_dual_audio,
                 is_atmos: false,
                 is_dolby_vision: false,
+                has_hdr_fallback: false,
                 detected_hdr: false,
                 is_remux: false,
                 is_bd_disk: false,
@@ -1178,7 +1179,6 @@ pub(crate) mod tests {
                 age_days: Some(5),
                 thumbs_up: None,
                 thumbs_down: None,
-                guide_facts: vec![],
                 extra: Default::default(),
             },
             profile: scryer_rules::ProfileDoc {

@@ -154,6 +154,7 @@ pub struct ReleaseDoc {
     pub is_dual_audio: bool,
     pub is_atmos: bool,
     pub is_dolby_vision: bool,
+    pub has_hdr_fallback: bool,
     pub detected_hdr: bool,
     pub is_remux: bool,
     pub is_bd_disk: bool,
@@ -183,9 +184,6 @@ pub struct ReleaseDoc {
     pub age_days: Option<i64>,
     pub thumbs_up: Option<i32>,
     pub thumbs_down: Option<i32>,
-    /// Legacy test fixtures only; retired from the serialized rule input.
-    #[serde(skip)]
-    pub guide_facts: Vec<String>,
     /// Arbitrary plugin-supplied metadata, accessible as `input.release.extra.*` in Rego.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
@@ -1844,6 +1842,7 @@ score_entry["internal"] := 300 if {
                 is_dual_audio: false,
                 is_atmos: false,
                 is_dolby_vision: false,
+                has_hdr_fallback: false,
                 detected_hdr: false,
                 is_remux: false,
                 is_bd_disk: false,
@@ -1873,7 +1872,6 @@ score_entry["internal"] := 300 if {
                 age_days: Some(5),
                 thumbs_up: None,
                 thumbs_down: None,
-                guide_facts: vec![],
                 extra: Default::default(),
             },
             profile: ProfileDoc {

@@ -164,6 +164,7 @@ fn test_input() -> scryer_rules::UserRuleInput {
             is_dual_audio: false,
             is_atmos: false,
             is_dolby_vision: false,
+            has_hdr_fallback: false,
             detected_hdr: false,
             is_remux: false,
             is_bd_disk: false,
@@ -193,7 +194,6 @@ fn test_input() -> scryer_rules::UserRuleInput {
             age_days: Some(2),
             thumbs_up: Some(10),
             thumbs_down: Some(1),
-            guide_facts: vec![],
             extra: Default::default(),
         },
         profile: scryer_rules::ProfileDoc {

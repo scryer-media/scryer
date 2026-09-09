@@ -18,7 +18,7 @@ pub use context::{
 pub use lex::{BracketKind, CstNode, ReleaseCst, SeparatorKind, TextSpan, Token};
 pub use model::{
     AudioCodec, CandidateZones, ContextTitleMatch, ContextTitleMatchKind, ExternalIdSource,
-    GuideFact, MetadataAst, MetadataEnrichment, ParseDisposition, ParseFamily, ParseReason,
+    MetadataAst, MetadataEnrichment, ParseDisposition, ParseFamily, ParseReason,
     ParsedEpisodeMetadata, ParsedEpisodeReleaseType, ParsedExternalId, ParsedReleaseMetadata,
     ParsedSpecialKind, ReleaseIdentity, ReleaseParseAnalysis, ReleaseParseCandidate, ReleaseSource,
     StreamingService, TargetScoredAnalysis, TargetedReleaseParseAnalysis, TitleSegment,
