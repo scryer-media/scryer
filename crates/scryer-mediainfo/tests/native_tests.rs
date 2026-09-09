@@ -882,7 +882,7 @@ fn mkv_hevc_hdr10plus_ffprobe_parity_profile() {
     )
     .unwrap();
     assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format, None);
+    assert_eq!(a.video_hdr_format.as_deref(), Some("HDR10+"));
     assert!(is_valid_video(&a));
 }
 

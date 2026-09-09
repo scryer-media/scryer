@@ -654,14 +654,14 @@ fn populate_analysis_details(raw: &mut RawContainer) {
                 track.metadata.color.provenance = Provenance::Bitstream;
             }
             track.metadata.color.transfer = bitstream_transfer.or(container_transfer);
-            if track.codec_name.as_deref() == Some("av1") && !observed_av1_sequence {
-                if let Some(private) = track
+            if track.codec_name.as_deref() == Some("av1")
+                && !observed_av1_sequence
+                && let Some(private) = track
                     .codec_private
                     .clone()
                     .filter(|bytes| bytes.len() > 4 && bytes[0] == 0x81)
-                {
-                    av1::enrich(track, &private[4..], &mut raw.details.report);
-                }
+            {
+                av1::enrich(track, &private[4..], &mut raw.details.report);
             }
             if let Some(private) = track.codec_private.clone() {
                 video_headers::enrich(track, &private, &mut raw.details.report);
@@ -712,30 +712,26 @@ fn populate_analysis_details(raw: &mut RawContainer) {
                 track.metadata.sample_format = Some(format.into());
                 track.metadata.sample_bit_depth.get_or_insert(depth);
             }
-            if track.codec_name.as_deref() == Some("aac") {
-                if let Some(config) = track
+            if track.codec_name.as_deref() == Some("aac")
+                && let Some(config) = track
                     .codec_private
                     .as_deref()
                     .and_then(codec::aac_configuration_metadata)
+            {
+                // Implicit SBR/PS may be signaled only in later payloads.
+                // Keep an explicit output rate/count when the ASC describes
+                // a compatible core without declaring the extension state.
+                if config.sbr_signaled.is_some()
+                    || track.metadata.sample_rate != config.sample_rate.checked_mul(2)
                 {
-                    // Implicit SBR/PS may be signaled only in later payloads.
-                    // Keep an explicit output rate/count when the ASC describes
-                    // a compatible core without declaring the extension state.
-                    if config.sbr_signaled.is_some()
-                        || track.metadata.sample_rate != config.sample_rate.checked_mul(2)
-                    {
-                        track.metadata.sample_rate = Some(config.sample_rate);
-                    }
-                    if let Some((channels, layout)) = config.layout {
-                        if config.ps_signaled.is_none()
-                            && channels == 1
-                            && track.channels == Some(2)
-                        {
-                            track.metadata.channel_layout = None;
-                        } else {
-                            track.channels = Some(i32::from(channels));
-                            track.metadata.channel_layout = Some(layout.into());
-                        }
+                    track.metadata.sample_rate = Some(config.sample_rate);
+                }
+                if let Some((channels, layout)) = config.layout {
+                    if config.ps_signaled.is_none() && channels == 1 && track.channels == Some(2) {
+                        track.metadata.channel_layout = None;
+                    } else {
+                        track.channels = Some(i32::from(channels));
+                        track.metadata.channel_layout = Some(layout.into());
                     }
                 }
             }

@@ -1628,11 +1628,13 @@ async fn manual_import_series_pack_maps_each_file_within_the_bound_title() {
         Some(&completed),
         vec![
             scryer_application::ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file_1.to_string_lossy().to_string(),
                 episode_id: Some(episode_1.id.clone()),
                 series_movie_link_id: None,
             },
             scryer_application::ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file_2.to_string_lossy().to_string(),
                 episode_id: Some(episode_2.id.clone()),
                 series_movie_link_id: None,
@@ -1706,6 +1708,7 @@ async fn manual_import_multi_episode_filename_keeps_the_explicit_single_episode_
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode_1.id.clone()),
             series_movie_link_id: None,
@@ -1793,11 +1796,13 @@ async fn manual_import_rejects_a_mixed_title_pack_before_moving_any_file() {
         Some(&completed),
         vec![
             scryer_application::ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file_1.to_string_lossy().to_string(),
                 episode_id: Some(bound_episode.id),
                 series_movie_link_id: None,
             },
             scryer_application::ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file_2.to_string_lossy().to_string(),
                 episode_id: Some(foreign_episode.id),
                 series_movie_link_id: None,
@@ -1819,6 +1824,7 @@ async fn manual_import_rejects_a_mixed_title_pack_before_moving_any_file() {
         &bound_title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file_1.to_string_lossy().to_string(),
             episode_id: None,
             series_movie_link_id: Some(foreign_series_movie.id),
@@ -1879,6 +1885,7 @@ async fn manual_import_series_persists_media_analysis_and_acquisition_score() {
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode.id.clone()),
             series_movie_link_id: None,
@@ -1952,6 +1959,7 @@ async fn manual_import_series_reuses_existing_title_folder_path_even_when_templa
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode.id.clone()),
             series_movie_link_id: None,
@@ -2045,6 +2053,7 @@ async fn manual_import_series_rejects_when_incumbent_covers_broader_episode_set(
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode1.id.clone()),
             series_movie_link_id: None,
@@ -2257,6 +2266,7 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
 
 fn movie_manual_mapping(path: &Path) -> scryer_application::ManualImportFileMapping {
     scryer_application::ManualImportFileMapping {
+        disc_selection: None,
         file_path: path.to_string_lossy().to_string(),
         episode_id: None,
         series_movie_link_id: None,
@@ -3130,11 +3140,13 @@ async fn manual_import_never_asks_srrdb_for_a_filename() {
         Some(&completed),
         vec![
             scryer_application::ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file_1.to_string_lossy().to_string(),
                 episode_id: Some(episode_1.id.clone()),
                 series_movie_link_id: None,
             },
             scryer_application::ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file_2.to_string_lossy().to_string(),
                 episode_id: Some(episode_2.id.clone()),
                 series_movie_link_id: None,

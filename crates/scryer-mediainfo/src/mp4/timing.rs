@@ -178,14 +178,14 @@ pub(super) fn fragments(data: &[u8]) -> FragmentTimelines {
                 return;
             }
             let mut parsed_tfhd = None;
+            let mut saw_tfhd = false;
             let mut decode_time = None;
             let mut invalid = false;
             for_each_bounded_box(payload, &header_budget, |header, payload| {
                 match &header.name {
                     b"tfhd" => {
-                        if parsed_tfhd.is_some() {
-                            invalid = true;
-                        }
+                        invalid |= saw_tfhd;
+                        saw_tfhd = true;
                         let id = u32at(payload, 4);
                         parsed_tfhd = id.and_then(|id| {
                             let declared =
@@ -499,6 +499,16 @@ mod tests {
         assert_eq!(timelines.len(), 1);
         assert_eq!(timelines.get(&1).map(|timeline| timeline.samples), Some(1));
         assert!(!timelines.contains_key(&2));
+    }
+
+    #[test]
+    fn malformed_first_track_header_cannot_hide_a_duplicate() {
+        let mut traf = mp4_box(b"tfhd", &[]);
+        traf.extend_from_slice(&tfhd_box(1));
+        let data = mp4_box(b"moof", &mp4_box(b"traf", &traf));
+        let result = fragments(&data);
+        assert!(result.timelines.get(&1).is_some_and(|value| value.invalid));
+        assert!(!result.budget_exhausted);
     }
 
     #[test]

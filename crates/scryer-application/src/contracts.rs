@@ -1063,7 +1063,7 @@ impl MediaFileAnalysis {
         );
         MediaAnalysisLabels {
             resolution: labels.quality,
-            video_codec: self.video_codec.clone(),
+            video_codec: self.video_codec,
             audio_codec: labels.audio_codec,
             audio_channels: labels.audio_channels,
         }

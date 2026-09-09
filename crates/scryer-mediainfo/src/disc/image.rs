@@ -413,7 +413,7 @@ fn validate_tag(bytes: &[u8], location: Option<u32>) -> Result<u16> {
     if udf_crc(body) != le16(bytes, 8)? {
         return Err(ImageError::Malformed("UDF descriptor CRC mismatch"));
     }
-    Ok(le16(bytes, 0)?)
+    le16(bytes, 0)
 }
 
 #[derive(Clone)]
@@ -529,7 +529,7 @@ fn udf_volume(reader: &mut Reader<'_>, mut start: u32, mut length: u32) -> Resul
     let mut visited = BTreeSet::new();
     let mut descriptor_bytes = 0_u64;
     loop {
-        if length == 0 || length % BLOCK as u32 != 0 {
+        if length == 0 || !length.is_multiple_of(BLOCK as u32) {
             return Err(ImageError::Malformed(
                 "invalid UDF descriptor sequence extent",
             ));
@@ -816,6 +816,10 @@ fn udf_file(
         range(&logical_extents, 0, length)?,
     ))
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recursive allocation traversal carries partition context, shared limits, and physical and logical outputs"
+)]
 fn allocation_descriptors(
     reader: &mut Reader<'_>,
     maps: &[Partition],
@@ -839,7 +843,7 @@ fn allocation_descriptors(
             ));
         }
     };
-    if bytes.len() % size != 0 {
+    if !bytes.len().is_multiple_of(size) {
         return Err(ImageError::Malformed("partial UDF allocation descriptor"));
     }
     for ad in bytes.chunks_exact(size) {
@@ -890,6 +894,10 @@ fn allocation_descriptors(
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "directory traversal carries partition identity, ancestry limits, and the shared file inventory"
+)]
 fn udf_directory(
     reader: &mut Reader<'_>,
     maps: &[Partition],

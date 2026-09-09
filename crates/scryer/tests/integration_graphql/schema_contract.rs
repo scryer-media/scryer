@@ -716,7 +716,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // add install, update preview, update, settings, copy, and delete actions:
     // mutation 236->243.
     assert_eq!(
-        mutation_field_count, 243,
+        mutation_field_count, 247,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -805,12 +805,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // tracked rule packs add four payload objects and one input. Together they
     // move OBJECT 408->419, INPUT_OBJECT 213->216, and public types 780->794;
     // the additions introduce no enum or scalar types.
-    assert_eq!(public_types.len(), 794);
-    assert_eq!(kind_count("OBJECT"), 419);
-    assert_eq!(kind_count("INPUT_OBJECT"), 216);
-    assert_eq!(kind_count("ENUM"), 147);
+    // Native media analysis adds 25 payload objects, two disc-selection inputs,
+    // and three enums for diagnostics and provenance: public types 794->824.
+    // Four mutations list episode targets, inspect diagnostics, select disc
+    // titles, and map episodes; query and subscription roots are unchanged.
+    assert_eq!(public_types.len(), 824);
+    assert_eq!(kind_count("OBJECT"), 444);
+    assert_eq!(kind_count("INPUT_OBJECT"), 218);
+    assert_eq!(kind_count("ENUM"), 150);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
+    assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
+    assert!(mutation_field_names.contains(&"diagnoseMediaFile"));
+    assert!(mutation_field_names.contains(&"selectMediaFileDiscTitle"));
+    assert!(mutation_field_names.contains(&"mapMediaFileDiscEpisodes"));
     assert!(query_field_names.contains(&"backupSettings"));
     assert!(query_field_names.contains(&"proxyConfigs"));
     assert!(query_field_names.contains(&"indexerDownloadClientMappingCatalog"));
@@ -2028,6 +2036,8 @@ async fn graphql_introspection_begin_manual_import_selection_uses_input_object()
             "videoWidth",
             "videoHeight",
             "durationSeconds",
+            "disc",
+            "report",
         ]
     );
 

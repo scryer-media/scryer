@@ -1337,7 +1337,9 @@ pub struct ManualImportVideoFactsPayload {
     pub video_height: Option<i32>,
     /// Detected runtime in seconds, or null when unavailable.
     pub duration_seconds: Option<i32>,
+    /// Detected disc structure and authored titles for an ISO image.
     pub disc: Option<super::MediaDiscMetadataPayload>,
+    /// Probe status, limits, and reasons for incomplete qualification.
     pub report: super::MediaProbeReportPayload,
 }
 

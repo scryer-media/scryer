@@ -323,7 +323,7 @@ export const MEDIA_DISC_FIELDS = `
         }
         hdr {
           dolbyVision
-          hdr10plus
+          hdr10plus: hdr10Plus
           hdr10
           hlg
           pq
@@ -449,7 +449,7 @@ export const MEDIA_ANALYSIS_FIELDS = `
       }
       hdr {
         dolbyVision
-        hdr10plus
+        hdr10plus: hdr10Plus
         hdr10
         hlg
         pq

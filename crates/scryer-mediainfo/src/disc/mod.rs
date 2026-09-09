@@ -282,15 +282,14 @@ fn inspect(
         for reference in navigation::dvd_titles(&vmg)? {
             let title_result = (|| {
                 let path = format!("VIDEO_TS/VTS_{:02}_0.IFO", reference.set);
-                if !vts_cache.contains_key(&reference.set) {
+                if let std::collections::btree_map::Entry::Vacant(e) =
+                    vts_cache.entry(reference.set)
+                {
                     let file = image
                         .files
                         .get(&path)
                         .ok_or(ImageError::Malformed("missing DVD title set IFO"))?;
-                    vts_cache.insert(
-                        reference.set,
-                        read_navigation(source, file, &mut navigation_budget)?,
-                    );
+                    e.insert(read_navigation(source, file, &mut navigation_budget)?);
                 }
                 let (title, cells) = navigation::dvd_title(&vts_cache[&reference.set], &reference)?;
                 let extents = dvd_vob_extents(&image, reference.set)?;
@@ -470,23 +469,23 @@ fn inspect(
                                         .map(numeric_id)
                                         .unwrap_or(u32::MAX))
                     });
-            if better_automatic_choice
-                || (!disc.automatic_selection && disc.selected_title_id.as_ref() == Some(&title.id))
+            if (better_automatic_choice
+                || (!disc.automatic_selection
+                    && disc.selected_title_id.as_ref() == Some(&title.id)))
+                && title.report.status == ProbeStatus::Complete
             {
-                if title.report.status == ProbeStatus::Complete {
-                    analysis.duration_seconds = title
-                        .duration_seconds
-                        .map(|duration| duration.round().min(f64::from(i32::MAX)) as i32);
-                    analysis.details.duration_seconds = title.duration_seconds;
-                    analysis.details.duration_provenance = Provenance::Container;
-                    analysis.details.chapters = title.chapters.clone();
-                    analysis.num_chapters = Some(title.chapters.len() as i32);
-                    // Whole-image storage rate is unrelated to this title's video bitrate.
-                    analysis.details.overall_bitrate_bps = None;
-                    analysis.details.report = title.report.clone();
-                    selected_analysis = Some(analysis);
-                    resolved_title_id = Some(title.id.clone());
-                }
+                analysis.duration_seconds = title
+                    .duration_seconds
+                    .map(|duration| duration.round().min(f64::from(i32::MAX)) as i32);
+                analysis.details.duration_seconds = title.duration_seconds;
+                analysis.details.duration_provenance = Provenance::Container;
+                analysis.details.chapters = title.chapters.clone();
+                analysis.num_chapters = Some(title.chapters.len() as i32);
+                // Whole-image storage rate is unrelated to this title's video bitrate.
+                analysis.details.overall_bitrate_bps = None;
+                analysis.details.report = title.report.clone();
+                selected_analysis = Some(analysis);
+                resolved_title_id = Some(title.id.clone());
             }
         }
         if disc.selected_title_id.as_ref() == Some(&title.id) {

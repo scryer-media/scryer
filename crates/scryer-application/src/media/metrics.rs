@@ -1,10 +1,13 @@
 //! Probe telemetry uses bounded operation/status labels, never media names or payloads.
-use metrics::{
-    Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
-};
+#[cfg(any(test, feature = "runtime-media-analysis"))]
+use metrics::histogram;
+use metrics::{Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge};
+#[cfg(any(test, feature = "runtime-media-analysis"))]
 use scryer_media_types::{ProbeReport, ProbeStatus};
+#[cfg(any(test, feature = "runtime-media-analysis"))]
 use std::time::Duration;
 
+#[cfg(any(test, feature = "runtime-media-analysis"))]
 #[derive(Clone, Copy)]
 pub(crate) enum ProbeOperation {
     Catalog,
@@ -12,6 +15,7 @@ pub(crate) enum ProbeOperation {
     Discovery,
     Diagnostics,
 }
+#[cfg(any(test, feature = "runtime-media-analysis"))]
 impl ProbeOperation {
     fn label(self) -> &'static str {
         match self {
@@ -23,6 +27,7 @@ impl ProbeOperation {
     }
 }
 
+#[cfg(any(test, feature = "runtime-media-analysis"))]
 pub(crate) fn record_probe(
     operation: ProbeOperation,
     elapsed: Duration,

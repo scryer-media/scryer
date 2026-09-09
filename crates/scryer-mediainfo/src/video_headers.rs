@@ -245,13 +245,14 @@ pub(crate) fn enrich(track: &mut RawTrack, data: &[u8], report: &mut ProbeReport
     current.sample_aspect_ratio = incoming.sample_aspect_ratio.or(current.sample_aspect_ratio);
     if let (Some(sar), Some(width), Some(height)) =
         (current.sample_aspect_ratio, track.width, track.height)
+        && width > 0
+        && height > 0
+        && sar.numerator > 0
     {
-        if width > 0 && height > 0 && sar.numerator > 0 {
-            current.display_aspect_ratio = i64::from(width)
-                .checked_mul(sar.numerator)
-                .zip((height as u64).checked_mul(sar.denominator))
-                .and_then(|(n, d)| Rational::new(n, d));
-        }
+        current.display_aspect_ratio = i64::from(width)
+            .checked_mul(sar.numerator)
+            .zip((height as u64).checked_mul(sar.denominator))
+            .and_then(|(n, d)| Rational::new(n, d));
     }
     track.frame_rate_fps = track
         .frame_rate_fps

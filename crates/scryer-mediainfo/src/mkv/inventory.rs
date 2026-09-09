@@ -49,6 +49,10 @@ fn bounded_end(header: EbmlElementHeader, end: u64) -> Result<u64, MediaInfoErro
         })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "supplemental inventory combines existing track identity and timing with shared element and byte budgets"
+)]
 fn inventory<R: Read + Seek>(
     scanner: &mut MkvRawScanner<R>,
     tracks: &mut [RawTrack],
@@ -132,11 +136,11 @@ fn inventory<R: Read + Seek>(
             });
             continue;
         }
-        if let Some(track) = index.and_then(|index| tracks.get_mut(index)) {
-            if track.bit_rate_bps.is_none() {
-                track.bit_rate_bps = bitrate;
-                track.metadata.bitrate_provenance = Provenance::Container;
-            }
+        if let Some(track) = index.and_then(|index| tracks.get_mut(index))
+            && track.bit_rate_bps.is_none()
+        {
+            track.bit_rate_bps = bitrate;
+            track.metadata.bitrate_provenance = Provenance::Container;
         }
     }
     if recover_duration && let Some((start, end)) = last_cluster {

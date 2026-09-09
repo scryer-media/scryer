@@ -871,6 +871,14 @@ Audio stream metadata for a media file.
 """
 type AudioStreamDetailPayload {
 	"""
+	Codec profile, or null when unavailable.
+	"""
+	profile: String
+	"""
+	Original container track name, or null when absent.
+	"""
+	name: String
+	"""
 	Codec name, or null when unavailable.
 	"""
 	codec: String
@@ -1965,6 +1973,10 @@ input CreateLibraryRootInput {
 Creates a maintenance rule set together with its first matcher revision.
 """
 input CreateMaintenanceRuleSetInput {
+	"""
+	Defaults to title scope when omitted.
+	"""
+	subjectKind: MaintenanceRuleSubjectKind
 	"""
 	Rule-set name.
 	"""
@@ -5573,6 +5585,10 @@ enum EpisodeMediaAvailabilityStateValue {
 	"""
 	SCAN_FAILED
 	"""
+	A saved disc selection or episode mapping requires review.
+	"""
+	REVIEW_REQUIRED
+	"""
 	No media file currently satisfies the episode requirements.
 	"""
 	MISSING
@@ -5742,6 +5758,14 @@ enum EpisodeTypeValue {
 Excludes one subject from maintenance rules.
 """
 input ExcludeMaintenanceSubjectInput {
+	"""
+	Required for episode or season scope.
+	"""
+	subjectId: ID
+	"""
+	Defaults to title scope when omitted.
+	"""
+	subjectKind: MaintenanceRuleSubjectKind
 	"""
 	Title to exclude.
 	"""
@@ -11377,6 +11401,10 @@ Static registry entry describing one maintenance action to the rule builder.
 """
 type MaintenanceActionDescriptor {
 	"""
+	Scopes for which this build implements the action.
+	"""
+	supportedRuleScopes: [MaintenanceRuleSubjectKind!]!
+	"""
 	Catalog action this descriptor describes.
 	"""
 	kind: MaintenanceActionKind!
@@ -11489,6 +11517,22 @@ One recorded action-handler attempt on one candidate, holds included.
 """
 type MaintenanceActionRun {
 	"""
+	Exact subject display label from execution evidence or the current catalog.
+	"""
+	subjectLabel: String!
+	"""
+	Persisted per-file outcomes and policy provenance.
+	"""
+	detail: String!
+	"""
+	Persisted subject scope: title, season, or episode.
+	"""
+	subjectKind: String!
+	"""
+	Persisted Scryer title, collection, or episode ID targeted by this attempt.
+	"""
+	subjectId: ID!
+	"""
 	Action-run ID.
 	"""
 	id: ID!
@@ -11598,6 +11642,26 @@ candidate never acts on anything, and only `EXECUTING`, `SUCCEEDED`, and
 `FAILED` mean an action was attempted.
 """
 type MaintenanceCandidate {
+	"""
+	Number of current subject files, or null if the subject is unavailable.
+	"""
+	fileCount: Int
+	"""
+	Current subject file size in bytes, or null if the subject is unavailable.
+	"""
+	totalSizeBytes: Int
+	"""
+	Exact subject display label, falling back to its ID if unavailable.
+	"""
+	subjectLabel: String!
+	"""
+	Subject scope: title, season, or episode.
+	"""
+	subjectKind: String!
+	"""
+	Scryer title, collection, or episode ID identifying this candidate's subject.
+	"""
+	subjectId: ID!
 	"""
 	Candidate ID.
 	"""
@@ -11847,6 +11911,18 @@ A subject a maintenance rule must never act on.
 """
 type MaintenanceExclusion {
 	"""
+	Exact excluded subject label, falling back to its ID if unavailable.
+	"""
+	subjectLabel: String!
+	"""
+	Excluded scope: title, season, or episode. Parent exclusions cover descendants.
+	"""
+	subjectKind: String!
+	"""
+	Scryer title, collection, or episode ID of the excluded subject.
+	"""
+	subjectId: ID!
+	"""
 	Exclusion ID.
 	"""
 	id: ID!
@@ -11938,7 +12014,7 @@ enum MaintenanceOutcome {
 }
 
 """
-Outcome of running one matcher against a bounded title selection. Preview
+Outcome of running one matcher against a bounded subject selection. Preview
 persists nothing.
 """
 type MaintenancePreviewPayload {
@@ -11956,17 +12032,49 @@ type MaintenancePreviewPayload {
 	"""
 	evaluatedAt: DateTime!
 	"""
-	One entry per evaluated title, in selection order.
+	One entry per evaluated subject, including its owning title.
 	"""
 	titles: [MaintenancePreviewTitle!]!
 }
 
 """
-One title's preview outcome. `outcome` is null exactly when `error` is set:
+One subject's preview outcome. `outcome` is null exactly when `error` is set:
 a rule that failed produced no decision, and a failure is never rendered as
 a no-match.
 """
 type MaintenancePreviewTitle {
+	"""
+	Whether a direct or inherited exclusion protects this subject.
+	"""
+	excluded: Boolean!
+	"""
+	Existing grace deadline, or an estimated deadline for a new match.
+	"""
+	dueAt: DateTime
+	"""
+	True when the deadline is estimated rather than persisted on a candidate.
+	"""
+	dueAtIsEstimate: Boolean!
+	"""
+	Display label for the exact title, season, or episode being evaluated.
+	"""
+	subjectLabel: String!
+	"""
+	Number of current files associated with this subject.
+	"""
+	fileCount: Int!
+	"""
+	Combined size in bytes of this subject's current files.
+	"""
+	totalSizeBytes: Int!
+	"""
+	Subject scope: title, season, or episode.
+	"""
+	subjectKind: String!
+	"""
+	Scryer title, collection, or episode ID for the selected scope.
+	"""
+	subjectId: ID!
 	"""
 	Evaluated title ID.
 	"""
@@ -11992,7 +12100,7 @@ type MaintenancePreviewTitle {
 	"""
 	reasonCodes: [String!]!
 	"""
-	Why evaluation failed for this title, or null when it succeeded.
+	Why evaluation failed for this subject, or null when it succeeded.
 	"""
 	error: String
 }
@@ -12147,6 +12255,14 @@ enum MaintenanceRuleSubjectKind {
 	The rule evaluates whole titles, both movies and shows.
 	"""
 	TITLE
+	"""
+	The rule evaluates each season independently, including specials.
+	"""
+	SEASON
+	"""
+	The rule evaluates each episode independently.
+	"""
+	EPISODE
 }
 
 """
@@ -12179,6 +12295,10 @@ input ManualImportCandidateMappingInput {
 	Series-movie link ID for a series-movie import; null for an episode or movie import.
 	"""
 	seriesMovieLinkId: ID
+	"""
+	Explicit playback title and episode mappings for one intact ISO image.
+	"""
+	discSelection: MediaDiscSelectionInput
 }
 
 """
@@ -12303,6 +12423,14 @@ type ManualImportVideoFactsPayload {
 	Detected runtime in seconds, or null when unavailable.
 	"""
 	durationSeconds: Int
+	"""
+	Detected disc structure and authored titles for an ISO image.
+	"""
+	disc: MediaDiscMetadataPayload
+	"""
+	Probe status, limits, and reasons for incomplete qualification.
+	"""
+	report: MediaProbeReportPayload!
 }
 
 """
@@ -12370,6 +12498,420 @@ input MarkTrackedDownloadFailedInput {
 }
 
 """
+Latest analysis attempt, retained separately from the last successful metadata.
+"""
+type MediaAnalysisAttemptPayload {
+	"""
+	Analysis schema revision; zero denotes legacy metadata.
+	"""
+	revision: Int!
+	"""
+	Timestamp of the analysis attempt in RFC 3339 form.
+	"""
+	attemptedAt: String!
+	"""
+	Whether this attempt published successful metadata.
+	"""
+	succeeded: Boolean!
+	"""
+	Inspection status, coverage counters, and warnings.
+	"""
+	report: MediaProbeReportPayload!
+	"""
+	Detected disc metadata, when this source is a disc image.
+	"""
+	disc: MediaDiscMetadataPayload
+}
+
+"""
+Versioned native analysis shared by imports, scans, rules, and media details.
+"""
+type MediaAnalysisDetailsPayload {
+	"""
+	Analysis schema revision; zero denotes legacy metadata.
+	"""
+	revision: Int!
+	"""
+	Playback duration in seconds, when established.
+	"""
+	durationSeconds: Float
+	"""
+	Evidence source for playback duration.
+	"""
+	durationProvenance: MediaProvenanceValue!
+	"""
+	Overall source bitrate in bits per second, distinct from video bitrate.
+	"""
+	overallBitrateBps: Long
+	"""
+	Container ID of the primary non-cover video stream.
+	"""
+	selectedVideoId: String
+	"""
+	Program used for summary and scoring facts.
+	"""
+	selectedProgramId: Int
+	"""
+	Detected streams in container order, including supplementary tracks.
+	"""
+	streams: [MediaStreamDetailPayload!]!
+	"""
+	Detected programs, including programs excluded from summary scoring.
+	"""
+	programs: [MediaProgramPayload!]!
+	"""
+	Authored chapter titles and timing.
+	"""
+	chapters: [MediaChapterPayload!]!
+	"""
+	Embedded attachment inventory without extracted payloads.
+	"""
+	attachments: [MediaAttachmentPayload!]!
+	"""
+	Caption services detected within the inspected headers.
+	"""
+	captionServices: [MediaCaptionServicePayload!]!
+	"""
+	Detected disc metadata, when this source is a disc image.
+	"""
+	disc: MediaDiscMetadataPayload
+	"""
+	Inspection status, coverage counters, and warnings.
+	"""
+	report: MediaProbeReportPayload!
+}
+
+"""
+Embedded attachment inventory without extracting the attachment.
+"""
+type MediaAttachmentPayload {
+	"""
+	Identifier within the source metadata.
+	"""
+	id: String!
+	"""
+	Name supplied by the container metadata.
+	"""
+	name: String
+	"""
+	Attachment media type, when supplied.
+	"""
+	mediaType: String
+	"""
+	Attachment size in bytes.
+	"""
+	sizeBytes: Long!
+}
+
+"""
+Caption service detected in sampled headers; no transcription is performed.
+"""
+type MediaCaptionServicePayload {
+	"""
+	Container stream ID associated with this result.
+	"""
+	streamId: String!
+	"""
+	Caption standard, such as CEA-608 or CEA-708.
+	"""
+	standard: String!
+	"""
+	Caption service number, when available.
+	"""
+	serviceNumber: Int
+	"""
+	Normalized language tag, when known.
+	"""
+	language: String
+}
+
+"""
+Chapter timing on the relevant media or selected-title timeline.
+"""
+type MediaChapterPayload {
+	"""
+	Identifier within the source metadata.
+	"""
+	id: String!
+	"""
+	Authored chapter title, when supplied.
+	"""
+	title: String
+	"""
+	Chapter start time in seconds.
+	"""
+	startSeconds: Float!
+	"""
+	Chapter end time in seconds, when known.
+	"""
+	endSeconds: Float
+}
+
+"""
+Color signaling and static HDR metadata, with evidence provenance.
+"""
+type MediaColorMetadataPayload {
+	"""
+	Numeric color primaries code.
+	"""
+	primaries: Int
+	"""
+	Numeric transfer characteristic code.
+	"""
+	transfer: Int
+	"""
+	Numeric matrix coefficients code.
+	"""
+	matrix: Int
+	"""
+	Whether full-range samples are explicitly signaled.
+	"""
+	fullRange: Boolean
+	"""
+	Evidence source used for these values.
+	"""
+	provenance: MediaProvenanceValue!
+	"""
+	Static mastering display metadata, when present.
+	"""
+	masteringDisplay: MediaMasteringDisplayPayload
+	"""
+	Static content light metadata, when present.
+	"""
+	contentLight: MediaContentLightPayload
+}
+
+"""
+Content light level metadata in candelas per square metre.
+"""
+type MediaContentLightPayload {
+	"""
+	Maximum content light level in candelas per square metre.
+	"""
+	maxCll: Int
+	"""
+	Maximum frame-average light level in candelas per square metre.
+	"""
+	maxFall: Int
+}
+
+"""
+Byte range read during structural diagnostics.
+"""
+type MediaDiagnosticCoveragePayload {
+	"""
+	Byte offset from the start of the inspected source.
+	"""
+	offset: Long!
+	"""
+	Length of this inspected range in bytes.
+	"""
+	length: Long!
+}
+
+"""
+Associate one complete authored disc title with one catalogued episode.
+"""
+input MediaDiscEpisodeMappingInput {
+	"""
+	Authored disc title or playlist ID.
+	"""
+	discTitleId: String!
+	"""
+	Catalogued episode ID.
+	"""
+	episodeId: ID!
+}
+
+"""
+Persisted association between an authored disc title and catalogued episodes.
+"""
+type MediaDiscEpisodeMappingPayload {
+	"""
+	Authored disc title or playlist ID.
+	"""
+	discTitleId: String!
+	"""
+	Catalogued episodes explicitly associated with this authored title.
+	"""
+	episodeIds: [String!]!
+}
+
+"""
+An episode eligible for explicit disc-title mapping.
+"""
+type MediaDiscEpisodeTargetPayload {
+	"""
+	Catalogued episode ID.
+	"""
+	episodeId: ID!
+	"""
+	Display label for this episode.
+	"""
+	label: String!
+	"""
+	Playback duration in seconds, when established.
+	"""
+	durationSeconds: Long
+}
+
+"""
+Detected disc structure, title inventory, and current selection.
+"""
+type MediaDiscMetadataPayload {
+	"""
+	Detected disc type, independent of the physical file extension.
+	"""
+	discType: String!
+	"""
+	Detected image filesystem.
+	"""
+	filesystem: String!
+	"""
+	Filesystem volume label, when present.
+	"""
+	volumeLabel: String
+	"""
+	Distinct authored titles retained by bounded inspection.
+	"""
+	titles: [MediaDiscTitlePayload!]!
+	"""
+	Currently resolved authored title ID; null means no valid selection.
+	"""
+	selectedTitleId: String
+	"""
+	Whether the current title was chosen automatically.
+	"""
+	automaticSelection: Boolean!
+	"""
+	Persisted override and explicit episode mappings.
+	"""
+	selection: MediaDiscSelectionPayload!
+}
+
+"""
+One ordered segment and trim range in an authored playback sequence.
+"""
+type MediaDiscSegmentPayload {
+	"""
+	Referenced media path inside the disc image.
+	"""
+	path: String!
+	"""
+	Playback trim start in seconds.
+	"""
+	inSeconds: Float!
+	"""
+	Playback trim end in seconds.
+	"""
+	outSeconds: Float!
+	"""
+	Selected authored angle number.
+	"""
+	angle: Int!
+	"""
+	Authored sequence identifier used to preserve playback ordering.
+	"""
+	sequenceId: Int
+}
+
+"""
+Disc title override and explicit episode mappings for one intact image.
+"""
+input MediaDiscSelectionInput {
+	"""
+	Manual authored title ID; null requests automatic selection.
+	"""
+	titleId: String
+	"""
+	Explicit authored-title-to-episode associations for this physical image.
+	"""
+	episodeMappings: [MediaDiscEpisodeMappingInput!]
+}
+
+"""
+Saved manual title override and episode mappings.
+"""
+type MediaDiscSelectionPayload {
+	"""
+	Manual authored title ID; null requests automatic selection.
+	"""
+	titleId: String
+	"""
+	Explicit authored-title-to-episode associations for this physical image.
+	"""
+	episodeMappings: [MediaDiscEpisodeMappingPayload!]!
+}
+
+"""
+Distinct authored playback title, its timeline, and inspected stream facts.
+"""
+type MediaDiscTitlePayload {
+	"""
+	Identifier within the source metadata.
+	"""
+	id: String!
+	"""
+	Other title IDs with the same ordered segment and trim sequence.
+	"""
+	aliases: [String!]!
+	"""
+	Playback duration in seconds, when established.
+	"""
+	durationSeconds: Float
+	"""
+	Number of authored angles reported for this title.
+	"""
+	angleCount: Int!
+	"""
+	Ordered playback segments including trims.
+	"""
+	segments: [MediaDiscSegmentPayload!]!
+	"""
+	Authored chapter titles and timing.
+	"""
+	chapters: [MediaChapterPayload!]!
+	"""
+	Detected streams in container order, including supplementary tracks.
+	"""
+	streams: [MediaStreamDetailPayload!]!
+	"""
+	Inspection status, coverage counters, and warnings.
+	"""
+	report: MediaProbeReportPayload!
+}
+
+"""
+Dolby Vision configuration reported by the container or bitstream.
+"""
+type MediaDolbyVisionPayload {
+	"""
+	Codec profile reported for this stream.
+	"""
+	profile: Int
+	"""
+	Codec-specific level identifier.
+	"""
+	level: Int
+	"""
+	Dolby Vision base layer compatibility identifier.
+	"""
+	baseLayerCompatibilityId: Int
+	"""
+	Whether Dolby Vision reference processing metadata is signaled.
+	"""
+	rpuPresent: Boolean
+	"""
+	Whether a Dolby Vision enhancement layer is signaled.
+	"""
+	enhancementLayerPresent: Boolean
+	"""
+	Whether a Dolby Vision base layer is signaled.
+	"""
+	baseLayerPresent: Boolean
+}
+
+"""
 Media facet used to distinguish movie, series, and anime catalog records.
 """
 enum MediaFacetValue {
@@ -12385,6 +12927,230 @@ enum MediaFacetValue {
 	Anime content.
 	"""
 	ANIME
+}
+
+"""
+Independent HDR capabilities; combinations are preserved and null means unknown.
+"""
+type MediaHdrCapabilitiesPayload {
+	"""
+	Whether Dolby Vision is established by the available evidence.
+	"""
+	dolbyVision: Boolean
+	"""
+	Whether HDR10+ dynamic metadata was detected.
+	"""
+	hdr10Plus: Boolean
+	"""
+	Whether the available bit-depth and color evidence establishes HDR10.
+	"""
+	hdr10: Boolean
+	"""
+	Whether Hybrid Log-Gamma transfer is signaled.
+	"""
+	hlg: Boolean
+	"""
+	Whether Perceptual Quantizer transfer is signaled; this alone does not establish HDR10.
+	"""
+	pq: Boolean
+	"""
+	Dolby Vision configuration details.
+	"""
+	dovi: MediaDolbyVisionPayload
+}
+
+"""
+Mastering display chromaticity coordinates and luminance.
+"""
+type MediaMasteringDisplayPayload {
+	"""
+	X chromaticity coordinate of the red primary.
+	"""
+	redX: Float
+	"""
+	Y chromaticity coordinate of the red primary.
+	"""
+	redY: Float
+	"""
+	X chromaticity coordinate of the green primary.
+	"""
+	greenX: Float
+	"""
+	Y chromaticity coordinate of the green primary.
+	"""
+	greenY: Float
+	"""
+	X chromaticity coordinate of the blue primary.
+	"""
+	blueX: Float
+	"""
+	Y chromaticity coordinate of the blue primary.
+	"""
+	blueY: Float
+	"""
+	X chromaticity coordinate of the white point.
+	"""
+	whiteX: Float
+	"""
+	Y chromaticity coordinate of the white point.
+	"""
+	whiteY: Float
+	"""
+	Minimum mastering display luminance in candelas per square metre.
+	"""
+	minLuminance: Float
+	"""
+	Maximum mastering display luminance in candelas per square metre.
+	"""
+	maxLuminance: Float
+}
+
+"""
+Probe coverage, resource usage, and reasons for incomplete metadata.
+"""
+type MediaProbeReportPayload {
+	"""
+	Outcome of this bounded inspection.
+	"""
+	status: MediaProbeStatusValue!
+	"""
+	Total bytes read while probing, including repeated reads.
+	"""
+	bytesRead: Long!
+	"""
+	Number of seek operations performed.
+	"""
+	seeks: Long!
+	"""
+	Elapsed probe time in milliseconds.
+	"""
+	elapsedMs: Long!
+	"""
+	Whether any configured inspection budget was exhausted.
+	"""
+	budgetExhausted: Boolean!
+	"""
+	Structured warnings explaining conflicts, unsupported features, or incomplete coverage.
+	"""
+	warnings: [MediaProbeWarningPayload!]!
+}
+
+"""
+Outcome of bounded probing; complete metadata does not guarantee complete-file integrity.
+"""
+enum MediaProbeStatusValue {
+	"""
+	No usable analysis status is available.
+	"""
+	UNKNOWN
+	"""
+	Configured metadata inspection completed; payload integrity is not guaranteed.
+	"""
+	COMPLETE
+	"""
+	Some requested facts could not be established within available coverage.
+	"""
+	INCOMPLETE
+	"""
+	Required container or filesystem features are not implemented.
+	"""
+	UNSUPPORTED
+	"""
+	Encrypted payload prevents supported inspection.
+	"""
+	ENCRYPTED
+	"""
+	Inspected structures violate the supported format.
+	"""
+	MALFORMED
+}
+
+"""
+A structured warning from bounded media inspection.
+"""
+type MediaProbeWarningPayload {
+	"""
+	Stable warning code.
+	"""
+	code: String!
+	"""
+	Human-readable warning details.
+	"""
+	message: String!
+	"""
+	Container stream ID associated with this result.
+	"""
+	streamId: String
+	"""
+	Byte offset from the start of the inspected source.
+	"""
+	offset: Long
+}
+
+"""
+Container program and its member streams.
+"""
+type MediaProgramPayload {
+	"""
+	Identifier within the source metadata.
+	"""
+	id: Int!
+	"""
+	Name supplied by the container metadata.
+	"""
+	name: String
+	"""
+	Container stream IDs belonging to this program.
+	"""
+	streamIds: [String!]!
+	"""
+	Playback duration in seconds, when established.
+	"""
+	durationSeconds: Float
+}
+
+"""
+Evidence source for a probed media fact.
+"""
+enum MediaProvenanceValue {
+	"""
+	Evidence source is unknown.
+	"""
+	UNKNOWN
+	"""
+	Read from container metadata.
+	"""
+	CONTAINER
+	"""
+	Read from encoded media headers.
+	"""
+	BITSTREAM
+	"""
+	Derived from bounded observations.
+	"""
+	OBSERVED
+	"""
+	Estimated from a bounded sample.
+	"""
+	ESTIMATED
+	"""
+	Historical value with unverified provenance.
+	"""
+	LEGACY
+}
+
+"""
+Exact rational value with a nonzero denominator.
+"""
+type MediaRationalPayload {
+	"""
+	Signed numerator.
+	"""
+	numerator: Long!
+	"""
+	Positive denominator.
+	"""
+	denominator: Long!
 }
 
 """
@@ -13412,6 +14178,248 @@ type MediaSettingsPayload {
 	Chown group, or null when unset.
 	"""
 	chownGroup: String
+}
+
+"""
+One detected stream, including supplementary streams excluded from scoring.
+"""
+type MediaStreamDetailPayload {
+	"""
+	Video, audio, or subtitle stream kind.
+	"""
+	kind: MediaStreamKindValue!
+	"""
+	Normalized codec name.
+	"""
+	codec: String
+	"""
+	Video width in pixels.
+	"""
+	width: Int
+	"""
+	Video height in pixels.
+	"""
+	height: Int
+	"""
+	Number of audio channels; this does not imply a speaker layout.
+	"""
+	channels: Int
+	"""
+	Normalized language tag, when known.
+	"""
+	language: String
+	"""
+	Name supplied by the container metadata.
+	"""
+	name: String
+	"""
+	Precise stream properties and evidence.
+	"""
+	metadata: MediaStreamMetadataPayload!
+}
+
+"""
+Declared stream roles; null means the role is unknown.
+"""
+type MediaStreamDispositionPayload {
+	"""
+	Whether the container marks this stream as the default.
+	"""
+	default: Boolean
+	"""
+	Whether the container marks this stream as forced.
+	"""
+	forced: Boolean
+	"""
+	Whether the container marks this as the original track.
+	"""
+	original: Boolean
+	"""
+	Whether this track is explicitly marked as commentary.
+	"""
+	commentary: Boolean
+	"""
+	Whether this track is marked for viewers with hearing impairments.
+	"""
+	hearingImpaired: Boolean
+	"""
+	Whether this track is marked as audio description.
+	"""
+	visualImpaired: Boolean
+	"""
+	Whether this stream is an attached cover picture.
+	"""
+	attachedPicture: Boolean
+	"""
+	Whether this stream is explicitly marked as a still image.
+	"""
+	stillImage: Boolean
+}
+
+"""
+Media carried by a container stream.
+"""
+enum MediaStreamKindValue {
+	"""
+	Video stream.
+	"""
+	VIDEO
+	"""
+	Audio stream.
+	"""
+	AUDIO
+	"""
+	Subtitle stream.
+	"""
+	SUBTITLE
+}
+
+"""
+Precise properties of one stream; missing values remain unknown.
+"""
+type MediaStreamMetadataPayload {
+	"""
+	Identifier within the source metadata.
+	"""
+	id: String
+	"""
+	Program containing this stream, when known.
+	"""
+	programId: Int
+	"""
+	Original container language tag before normalization.
+	"""
+	originalLanguage: String
+	"""
+	Evidence source for the language tag.
+	"""
+	languageProvenance: MediaProvenanceValue!
+	"""
+	Declared stream roles and accessibility flags.
+	"""
+	disposition: MediaStreamDispositionPayload!
+	"""
+	Playback duration in seconds, when established.
+	"""
+	durationSeconds: Float
+	"""
+	Declared or completely accounted stream bitrate in bits per second.
+	"""
+	bitrateBps: Long
+	"""
+	Evidence source for the stream bitrate.
+	"""
+	bitrateProvenance: MediaProvenanceValue!
+	"""
+	Bounded stream bitrate estimate in bits per second, separate from measured bitrate.
+	"""
+	estimatedBitrateBps: Long
+	"""
+	Audio sample rate in samples per second.
+	"""
+	sampleRate: Int
+	"""
+	Encoded sample representation, when known; no decoder output format is inferred.
+	"""
+	sampleFormat: String
+	"""
+	Encoded audio sample precision in bits.
+	"""
+	sampleBitDepth: Int
+	"""
+	Declared speaker layout; unknown layouts remain null.
+	"""
+	channelLayout: String
+	"""
+	Video pixel sampling and component representation.
+	"""
+	pixelFormat: String
+	"""
+	Codec profile reported for this stream.
+	"""
+	profile: String
+	"""
+	Codec-specific level identifier.
+	"""
+	level: Int
+	"""
+	Video component precision in bits.
+	"""
+	bitDepth: Int
+	"""
+	Declared or observed field order.
+	"""
+	fieldOrder: String
+	"""
+	Pixel width-to-height ratio.
+	"""
+	sampleAspectRatio: MediaRationalPayload
+	"""
+	Displayed image width-to-height ratio.
+	"""
+	displayAspectRatio: MediaRationalPayload
+	"""
+	Display rotation in degrees.
+	"""
+	rotationDegrees: Float
+	"""
+	Container or bitstream frame-rate declaration in frames per second.
+	"""
+	declaredFrameRate: MediaRationalPayload
+	"""
+	Rational frame rate from bounded timestamp observations.
+	"""
+	observedFrameRate: MediaRationalPayload
+	"""
+	Whether bounded timing observations establish variable frame rate; null is inconclusive.
+	"""
+	variableFrameRate: Boolean
+	"""
+	Color signaling and static HDR metadata.
+	"""
+	color: MediaColorMetadataPayload!
+	"""
+	Independent HDR capability evidence.
+	"""
+	hdr: MediaHdrCapabilitiesPayload!
+}
+
+"""
+Opt-in packet and frame-header sampling without decoding media.
+"""
+type MediaStructuralDiagnosticsPayload {
+	"""
+	Inspection status, coverage counters, and warnings.
+	"""
+	report: MediaProbeReportPayload!
+	"""
+	Length of the complete physical source in bytes.
+	"""
+	sourceLength: Long!
+	"""
+	Recorded byte ranges read during diagnostics.
+	"""
+	coverage: [MediaDiagnosticCoveragePayload!]!
+	"""
+	Whether the bounded coverage inventory omitted additional ranges.
+	"""
+	coverageTruncated: Boolean!
+	"""
+	Whether additional diagnostic warnings exceeded the inventory limit.
+	"""
+	warningsTruncated: Boolean!
+	"""
+	Number of packet headers inspected.
+	"""
+	packetsSampled: Long!
+	"""
+	Number of elementary frame headers inspected.
+	"""
+	frameHeadersSampled: Long!
+	"""
+	Names of structural checks performed.
+	"""
+	checks: [String!]!
 }
 
 """
@@ -15217,6 +16225,50 @@ type MutationRoot {
 		"""
 		input: MediaRenameApplyInput!
 	): MediaRenameApplyPayload! @deprecated(reason: "use renameTitles, which runs the work as a job")
+	"""
+	List catalogued episodes eligible for explicit mapping to this registered disc image.
+	"""
+	mediaFileDiscEpisodeTargets(
+		"""
+		Registered physical media file ID.
+		"""
+		fileId: ID!
+	): [MediaDiscEpisodeTargetPayload!]!
+	"""
+	Save explicit disc-title-to-episode associations on the existing physical image.
+	"""
+	mapMediaFileDiscEpisodes(
+		"""
+		Registered physical media file ID.
+		"""
+		fileId: ID!,
+		"""
+		Complete replacement set of authored-title-to-episode associations.
+		"""
+		mappings: [MediaDiscEpisodeMappingInput!]!
+	): TitleMediaFilePayload!
+	"""
+	Opt-in bounded header diagnostics; this does not change import acceptance or stored analysis.
+	"""
+	diagnoseMediaFile(
+		"""
+		Registered physical media file ID to inspect.
+		"""
+		fileId: ID!
+	): MediaStructuralDiagnosticsPayload!
+	"""
+	Select a playback title in a registered ISO; null restores automatic selection.
+	"""
+	selectMediaFileDiscTitle(
+		"""
+		Registered physical media file ID.
+		"""
+		fileId: ID!,
+		"""
+		Authored title ID; null restores automatic selection.
+		"""
+		discTitleId: String
+	): TitleMediaFilePayload!
 	"""
 	Accept a background job to delete a media file, optionally removing it from disk.
 	"""
@@ -17717,6 +18769,14 @@ Supply either `ruleSetId` to preview a stored rule set, or `regoSource` with
 """
 input PreviewMaintenanceRuleInput {
 	"""
+	Selected libraries for an unsaved matcher; empty means all libraries.
+	"""
+	libraryIds: [String!]
+	"""
+	Defaults to title scope when omitted.
+	"""
+	subjectKind: MaintenanceRuleSubjectKind
+	"""
 	Stored rule set to preview at its current revision.
 	"""
 	ruleSetId: ID
@@ -17732,6 +18792,10 @@ input PreviewMaintenanceRuleInput {
 	Grace period for the unsaved draft; defaults to zero.
 	"""
 	graceDays: Int
+	"""
+	Optional exact subjects, requiring their owning `titleIds`.
+	"""
+	subjectIds: [ID!]
 	"""
 	Evaluate exactly these titles.
 	"""
@@ -24212,6 +25276,14 @@ enum TitleMatchTypeValue {
 A title media file with raw scan data and parsed acquisition metadata.
 """
 type TitleMediaFilePayload {
+	"""
+	Versioned analysis retained from the last successful inspection.
+	"""
+	analysis: MediaAnalysisDetailsPayload!
+	"""
+	Latest probe attempt, including failures that did not replace successful metadata.
+	"""
+	analysisAttempt: MediaAnalysisAttemptPayload
 	"""
 	Stable media file identifier.
 	"""

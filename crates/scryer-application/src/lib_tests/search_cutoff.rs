@@ -1466,6 +1466,15 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
     let (app, user, _) =
         bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
 
+    // Soundtrack weights are supplied by the bundled rules in production.
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
+
     let title = app
         .add_title(
             &user,

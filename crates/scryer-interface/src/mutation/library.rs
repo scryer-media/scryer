@@ -371,10 +371,11 @@ impl LibraryMutations {
         Ok(from_media_rename_apply(result))
     }
 
+    /// List catalogued episodes eligible for explicit mapping to this registered disc image.
     async fn media_file_disc_episode_targets(
         &self,
         ctx: &Context<'_>,
-        file_id: ID,
+        #[graphql(desc = "Registered physical media file ID.")] file_id: ID,
     ) -> GqlResult<Vec<crate::types::MediaDiscEpisodeTargetPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -407,7 +408,8 @@ impl LibraryMutations {
     async fn map_media_file_disc_episodes(
         &self,
         ctx: &Context<'_>,
-        file_id: ID,
+        #[graphql(desc = "Registered physical media file ID.")] file_id: ID,
+        #[graphql(desc = "Complete replacement set of authored-title-to-episode associations.")]
         mappings: Vec<crate::types::MediaDiscEpisodeMappingInput>,
     ) -> GqlResult<TitleMediaFilePayload> {
         let app = app_from_ctx(ctx)?;
@@ -427,7 +429,7 @@ impl LibraryMutations {
     async fn diagnose_media_file(
         &self,
         ctx: &Context<'_>,
-        file_id: ID,
+        #[graphql(desc = "Registered physical media file ID to inspect.")] file_id: ID,
     ) -> GqlResult<crate::types::MediaStructuralDiagnosticsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -441,7 +443,8 @@ impl LibraryMutations {
     async fn select_media_file_disc_title(
         &self,
         ctx: &Context<'_>,
-        file_id: ID,
+        #[graphql(desc = "Registered physical media file ID.")] file_id: ID,
+        #[graphql(desc = "Authored title ID; null restores automatic selection.")]
         disc_title_id: Option<String>,
     ) -> GqlResult<TitleMediaFilePayload> {
         let app = app_from_ctx(ctx)?;

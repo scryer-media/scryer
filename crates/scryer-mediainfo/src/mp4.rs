@@ -715,15 +715,16 @@ fn build_mp4_tracks(
                 .and_then(|header| matrix_rotation(&header.matrix));
             if let (Some(width), Some(height), Some(sar)) =
                 (raw.width, raw.height, raw.metadata.sample_aspect_ratio)
+                && width > 0
+                && height > 0
+                && sar.numerator > 0
             {
-                if width > 0 && height > 0 && sar.numerator > 0 {
-                    raw.metadata.display_aspect_ratio = i64::from(width)
-                        .checked_mul(sar.numerator)
-                        .zip((height as u64).checked_mul(sar.denominator))
-                        .and_then(|(numerator, denominator)| {
-                            scryer_media_types::Rational::new(numerator, denominator)
-                        });
-                }
+                raw.metadata.display_aspect_ratio = i64::from(width)
+                    .checked_mul(sar.numerator)
+                    .zip((height as u64).checked_mul(sar.denominator))
+                    .and_then(|(numerator, denominator)| {
+                        scryer_media_types::Rational::new(numerator, denominator)
+                    });
             }
         }
 

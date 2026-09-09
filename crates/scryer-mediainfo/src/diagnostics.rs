@@ -93,10 +93,9 @@ pub fn diagnose_source(
                         .id
                         .as_deref()
                         .and_then(|id| id.parse::<u16>().ok())
+                        && let Some(codec) = &stream.codec
                     {
-                        if let Some(codec) = &stream.codec {
-                            codecs.insert(pid, codec.clone());
-                        }
+                        codecs.insert(pid, codec.clone());
                     }
                 }
                 analysis.details.report
@@ -117,7 +116,6 @@ pub fn diagnose_source(
         }
     };
     let header_budget_exhausted = headers.exhausted || header_report.budget_exhausted;
-    drop(headers);
     // A parser failure after a read limit is inconclusive, even if wrapped as a parse error.
     if !header_budget_exhausted
         && matches!(
@@ -131,22 +129,22 @@ pub fn diagnose_source(
         push_warning(&mut result, warning);
     }
     result.report.budget_exhausted = header_budget_exhausted;
-    if !extension.eq_ignore_ascii_case("iso") {
-        if let Err(error) = sample_transport(
+    if !extension.eq_ignore_ascii_case("iso")
+        && let Err(error) = sample_transport(
             &mut trace,
             budget,
             options.sample_windows.clamp(1, 8),
             &codecs,
             &mut result,
-        ) {
-            warn(
-                &mut result,
-                "sampling_incomplete",
-                &error.to_string(),
-                None,
-                None,
-            );
-        }
+        )
+    {
+        warn(
+            &mut result,
+            "sampling_incomplete",
+            &error.to_string(),
+            None,
+            None,
+        );
     }
     result.report.bytes_read = trace.inner.bytes_read;
     result.report.seeks = trace.inner.seeks;
@@ -322,7 +320,7 @@ fn sample_transport<R: MediaSource>(
         inspect_packets(&bytes, size, sync, offset, codecs, result);
         previous_end = first + count;
     }
-    if source.len() % size as u64 != 0 {
+    if !source.len().is_multiple_of(size as u64) {
         warn(
             result,
             "transport_truncation",
@@ -540,18 +538,18 @@ fn inspect_program_packets(
                 id,
                 at,
             );
-        } else if let Some(timestamp) = timestamp {
-            if let Some(old) = timestamps.insert(id, timestamp) {
-                let backward = (old + (1_u64 << 33) - timestamp) % (1_u64 << 33);
-                if backward > 90_000 && backward < (1_u64 << 32) {
-                    program_warning(
-                        result,
-                        "presentation_timestamp_regression",
-                        "Presentation timestamp moves backward by over one second within a sampled window",
-                        id,
-                        at,
-                    );
-                }
+        } else if let Some(timestamp) = timestamp
+            && let Some(old) = timestamps.insert(id, timestamp)
+        {
+            let backward = (old + (1_u64 << 33) - timestamp) % (1_u64 << 33);
+            if backward > 90_000 && backward < (1_u64 << 32) {
+                program_warning(
+                    result,
+                    "presentation_timestamp_regression",
+                    "Presentation timestamp moves backward by over one second within a sampled window",
+                    id,
+                    at,
+                );
             }
         }
         if (0xe0..=0xef).contains(&stream) {

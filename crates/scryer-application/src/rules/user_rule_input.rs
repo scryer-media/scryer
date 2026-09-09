@@ -453,7 +453,10 @@ mod tests {
         assert_eq!(value["release"]["normalized_tokens"][0], "TEST");
         assert_eq!(value["profile"]["scoring_persona"], "balanced");
         assert!(value["profile"]["scoring_overrides"]["block_upscaled"].is_null());
-        assert_eq!(value["file"]["num_chapters"], 0);
+        assert!(
+            value["file"]["num_chapters"].is_null(),
+            "lightweight probing leaves chapter inventory unknown"
+        );
         assert_eq!(value["file"]["audio_profile"], "LC");
         assert_eq!(value["file"]["audio_streams"][0]["codec"], "aac");
         assert_eq!(value["file"]["audio_streams"][0]["profile"], "LC");

@@ -670,7 +670,7 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         Ok(analysis) => analysis,
         Err(error) => {
             warn!(error = %error, path = %path.display(), "media analysis failed");
-            if scryer_domain::is_disc_image(&path) {
+            if scryer_domain::is_disc_image(path) {
                 return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
                     "disc inspection could not complete: {error}; the source image has been preserved"
                 )));
@@ -713,12 +713,10 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 "episodic disc imports require explicit disc-title-to-episode mappings",
             ));
         }
-        if let Some(disc) = &mut analysis.details.disc {
-            if let Err(error) = app.validate_disc_episode_mappings(title, disc).await {
-                return ImportedFileGateDecision::Rejected(disc_review_rejection(
-                    error.to_string(),
-                ));
-            }
+        if let Some(disc) = &mut analysis.details.disc
+            && let Err(error) = app.validate_disc_episode_mappings(title, disc).await
+        {
+            return ImportedFileGateDecision::Rejected(disc_review_rejection(error.to_string()));
         }
     }
 
@@ -1022,7 +1020,7 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
     _runtime_sample_validation: RuntimeSampleValidation,
     _disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> ImportedFileGateDecision {
-    if scryer_domain::is_disc_image(&path) {
+    if scryer_domain::is_disc_image(path) {
         return ImportedFileGateDecision::Rejected(disc_review_rejection(
             "native disc inspection is not available in this build; the image requires review",
         ));
@@ -1170,7 +1168,7 @@ pub(crate) async fn prepare_import_candidate_with_disc_selection(
     runtime_sample_validation: RuntimeSampleValidation,
     disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> Result<PreparedImportCandidate, ImportedFileRejection> {
-    if disc_selection.is_some() && !scryer_domain::is_disc_image(&path) {
+    if disc_selection.is_some() && !scryer_domain::is_disc_image(path) {
         return Err(disc_review_rejection(
             "disc selection requires an ISO image",
         ));

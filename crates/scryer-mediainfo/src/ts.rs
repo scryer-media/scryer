@@ -2166,16 +2166,16 @@ fn find_pts_near<T: Read + Seek>(
         let pid = ts_pid(pkt);
         if pes_pid_lookup[usize::from(pid)] && (pkt[1] & 0x40) != 0 {
             let payload = ts_payload(pkt);
-            if let Some(pts) = extract_pts_from_pes(payload) {
-                if result.is_none_or(|previous| {
+            if let Some(pts) = extract_pts_from_pes(payload)
+                && result.is_none_or(|previous| {
                     if first_match {
                         pts_after(previous, pts)
                     } else {
                         pts_after(pts, previous)
                     }
-                }) {
-                    result = Some(pts);
-                }
+                })
+            {
+                result = Some(pts);
             }
         }
 

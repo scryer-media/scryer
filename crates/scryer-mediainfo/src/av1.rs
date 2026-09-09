@@ -108,12 +108,12 @@ fn sequence(data: &[u8]) -> Option<StreamMetadata> {
             if level > 7 {
                 bits.flag()?;
             }
-            if let Some(width) = delay_bits {
-                if bits.flag()? {
-                    bits.read(width)?;
-                    bits.read(width)?;
-                    bits.flag()?;
-                }
+            if let Some(width) = delay_bits
+                && bits.flag()?
+            {
+                bits.read(width)?;
+                bits.read(width)?;
+                bits.flag()?;
             }
             if display_delay && bits.flag()? {
                 bits.read(4)?;

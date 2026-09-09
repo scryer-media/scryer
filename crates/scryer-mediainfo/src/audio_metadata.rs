@@ -25,8 +25,10 @@ pub(crate) fn pcm_codec(tag: u16, bits: u16) -> Option<&'static str> {
 }
 
 pub(crate) fn wave_format(data: &[u8]) -> StreamMetadata {
-    let mut metadata = StreamMetadata::default();
-    metadata.sample_rate = u32le(data, 4).filter(|rate| *rate > 0);
+    let mut metadata = StreamMetadata {
+        sample_rate: u32le(data, 4).filter(|rate| *rate > 0),
+        ..Default::default()
+    };
     let channels = u16le(data, 2).unwrap_or(0);
     let Some(mut tag) = u16le(data, 0) else {
         return metadata;

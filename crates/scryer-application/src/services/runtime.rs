@@ -1366,7 +1366,7 @@ impl ImportExecutionCoordinator {
         let stored_destination = crate::stored_paths::path_to_stored_string(destination);
         let key = crate::stored_paths::path_identity_key(&stored_destination)
             .unwrap_or(stored_destination);
-        let permit = {
+        {
             let mut permits = self.destination_permits.lock().await;
             permits.retain(|_, permit| permit.strong_count() > 0);
             if let Some(permit) = permits.get(&key).and_then(std::sync::Weak::upgrade) {
@@ -1376,8 +1376,7 @@ impl ImportExecutionCoordinator {
                 permits.insert(key, Arc::downgrade(&permit));
                 permit
             }
-        };
-        permit
+        }
     }
 
     pub(crate) async fn acquire_preparation(&self) -> tokio::sync::OwnedSemaphorePermit {

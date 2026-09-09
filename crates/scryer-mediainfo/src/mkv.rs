@@ -1668,8 +1668,8 @@ impl<R: Read + Seek> MkvRawScanner<R> {
                     )?,
                 EBML_ID_SIMPLE_BLOCK | EBML_ID_BLOCK => {
                     let size = child_end.saturating_sub(self.position()?);
-                    if let Some(block) = self.read_block_header(size, 32768)? {
-                        if let Some(track) = tracks.iter_mut().find(|track| {
+                    if let Some(block) = self.read_block_header(size, 32768)?
+                        && let Some(track) = tracks.iter_mut().find(|track| {
                             track
                                 .metadata
                                 .id
@@ -1691,48 +1691,44 @@ impl<R: Read + Seek> MkvRawScanner<R> {
                                             | "mjpeg"
                                     )
                                 )
-                        }) {
-                            if let Some((_, length)) = parse_first_laced_frame_from_reader(
-                                self,
-                                block.payload_size,
-                                block.lacing_type,
-                            )? {
-                                let bytes = self.read_bytes(length.min(64 * 1024))?;
-                                match track.codec_name.as_deref() {
-                                    Some("av1") => crate::av1::enrich(track, &bytes, report),
-                                    Some("h264" | "hevc") => {
-                                        let length_size =
-                                            if track.codec_name.as_deref() == Some("h264") {
-                                                track
-                                                    .codec_private
-                                                    .as_deref()
-                                                    .and_then(|bytes| bytes.get(4))
-                                                    .map_or(4, |byte| usize::from(byte & 3) + 1)
-                                            } else {
-                                                track
-                                                    .codec_private
-                                                    .as_deref()
-                                                    .map(crate::codec::hevc_nal_length_size)
-                                                    .unwrap_or(4)
-                                            };
-                                        crate::video_metadata::length_prefixed(
-                                            &bytes,
-                                            length_size,
-                                            track,
-                                            report,
-                                            captions,
-                                        );
-                                    }
-                                    _ => {
-                                        crate::legacy_video::enrich(track, &bytes);
-                                        crate::video_metadata::annex_b(
-                                            &bytes, track, report, captions,
-                                        );
-                                    }
-                                }
-                                *samples_left -= 1;
+                        })
+                        && let Some((_, length)) = parse_first_laced_frame_from_reader(
+                            self,
+                            block.payload_size,
+                            block.lacing_type,
+                        )?
+                    {
+                        let bytes = self.read_bytes(length.min(64 * 1024))?;
+                        match track.codec_name.as_deref() {
+                            Some("av1") => crate::av1::enrich(track, &bytes, report),
+                            Some("h264" | "hevc") => {
+                                let length_size = if track.codec_name.as_deref() == Some("h264") {
+                                    track
+                                        .codec_private
+                                        .as_deref()
+                                        .and_then(|bytes| bytes.get(4))
+                                        .map_or(4, |byte| usize::from(byte & 3) + 1)
+                                } else {
+                                    track
+                                        .codec_private
+                                        .as_deref()
+                                        .map(crate::codec::hevc_nal_length_size)
+                                        .unwrap_or(4)
+                                };
+                                crate::video_metadata::length_prefixed(
+                                    &bytes,
+                                    length_size,
+                                    track,
+                                    report,
+                                    captions,
+                                );
+                            }
+                            _ => {
+                                crate::legacy_video::enrich(track, &bytes);
+                                crate::video_metadata::annex_b(&bytes, track, report, captions);
                             }
                         }
+                        *samples_left -= 1;
                     }
                 }
                 _ => {}

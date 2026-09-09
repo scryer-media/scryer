@@ -4717,7 +4717,8 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].quality_label.as_deref(), Some("720p"));
-        assert_eq!(files[0].resolution.as_deref(), Some("720p"));
+        // Successful analysis replaces the parsed resolution with the measured tier.
+        assert_eq!(files[0].resolution.as_deref(), Some("1080p"));
         assert_eq!(files[0].source_type.as_deref(), Some("WEB-DL"));
         assert_eq!(
             files[0].audio_profile.as_deref(),

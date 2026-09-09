@@ -7,6 +7,10 @@ pub(crate) struct ResolvedAnalysisReleaseLabels {
     pub is_atmos: bool,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "label projection combines legacy summary fields with complete stream metadata"
+)]
 pub(crate) fn resolve_release_labels_from_analysis(
     video_width: Option<i32>,
     video_height: Option<i32>,
