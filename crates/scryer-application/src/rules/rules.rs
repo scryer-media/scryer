@@ -310,13 +310,13 @@ impl AppUseCase {
             ));
         }
 
-        if enabled && !rule_set.enabled {
-            if !retired_release_input_fields(&rule_set.rego_source)
+        if enabled
+            && !rule_set.enabled
+            && !retired_release_input_fields(&rule_set.rego_source)
                 .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?
                 .is_empty()
-            {
-                return Err(AppError::Validation(RETIRED_GUIDE_FACTS_REASON.to_string()));
-            }
+        {
+            return Err(AppError::Validation(RETIRED_GUIDE_FACTS_REASON.to_string()));
         }
 
         rule_set.enabled = enabled;
@@ -354,6 +354,11 @@ impl AppUseCase {
         // Rewrite the package declaration so validation works regardless of
         // what the user typed.
         let rewritten = scryer_rules::rewrite_package_declaration(rego_source, rule_set_id);
+        let validation = validate_user_rule(&rewritten, rule_set_id)
+            .map_err(|e| AppError::Validation(format!("rule validation error: {e}")))?;
+        if !validation.valid {
+            return Ok(validation);
+        }
         let retired = retired_release_input_fields(&rewritten)
             .map_err(|error| AppError::Validation(format!("rule validation error: {error}")))?;
         if !retired.is_empty() {
@@ -361,11 +366,6 @@ impl AppUseCase {
                 "uses retired release input field(s): {}",
                 retired.join(", ")
             )));
-        }
-        let validation = validate_user_rule(&rewritten, rule_set_id)
-            .map_err(|e| AppError::Validation(format!("rule validation error: {e}")))?;
-        if !validation.valid {
-            return Ok(validation);
         }
         let Some(rule_set) = self
             .services

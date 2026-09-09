@@ -533,6 +533,13 @@ async fn search_indexers_anime_required_original_and_english_accepts_dual_audio_
         "Anime.Show.S01E01.1080p.WEB-DL.DUAL.H.265",
     ));
     let (app, user) = bootstrap_with_search_settings_and_indexer(settings, indexer_client);
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
 
     app.create_download_client_config(
         &user,
@@ -1594,6 +1601,13 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
 #[tokio::test]
 async fn a_queued_releases_announced_size_is_part_of_its_score() {
     let (app, user) = bootstrap();
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
     let title = app
         .add_title(
             &user,

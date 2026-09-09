@@ -159,6 +159,10 @@ mod tests {
     #[test]
     fn bundled_pack_checksum_matches_embedded_artifact() {
         let digest = Sha256::digest(include_bytes!("builtin_trash.json"));
-        assert_eq!(format!("{digest:x}"), BUILTIN_TRASH_SHA256);
+        let checksum = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(checksum, BUILTIN_TRASH_SHA256);
     }
 }

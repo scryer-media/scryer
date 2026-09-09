@@ -1,9 +1,9 @@
 # TRaSH scoring migration validation
 
 The implementation was integrated into `release-0.20.0` at `94e9e64b3`.
-The follow-up cleanup in `feature/trash-builtin-scoring` is based on release
-commit `a96e86366`, including its recoverable-scoring contract. Publication
-remains a separate operator action.
+The follow-up cleanup, based on release commit `a96e86366` and its recoverable
+scoring contract, was integrated at `78e60897c`. The canonical pack corrections
+are in plugins PR #71 at `93fa84c`. Publication remains a separate operator action.
 
 ## Final scoring contract
 
@@ -63,8 +63,55 @@ that entry without replacing any of the original numeric expectations.
   four rule-reference tests, scoped ESLint, and the web production build passed.
   The macOS application test linker reports the existing oversized unwind-table
   warning; production compilation has no warnings.
-- Full workspace Nextest and Clippy remain deferred until the completed release
-  integration checkpoint; no full sweep was used during cleanup development.
+- Full workspace Nextest and Clippy were deferred during cleanup development;
+  integration checkpoint results are recorded below.
+
+## Cleanup integration checkpoint
+
+Validation targets merge `78e60897c` plus the follow-up test compilation and
+migration readability fixes in this report's commit. Concurrent release changes
+made after that merge are outside this validated tree.
+
+- Nine focused bundled-checksum, locale-adoption, and plugin API-key rejection
+  tests passed in run `a157828b-8e9e-4f7e-a5d3-c65d2d166ace`. The checksum test
+  now formats digest bytes explicitly; the plugin error assertion avoids an
+  unnecessary `Debug` bound on the success type. No production behavior changed.
+- Both import persistence tests passed in run
+  `3c1a8dcc-fb4c-4d83-b831-8edbb961318b`. The child test module was moved under
+  `tests/import/` without changing its contents, preventing Cargo from also
+  compiling it as an invalid standalone integration test.
+- Full sweep command: `cargo nextest run --locked --workspace --no-fail-fast
+  --test-threads 4 --status-level fail --final-status-level fail`. Run
+  `3ef73ef3-98b0-42fd-8c9d-1c595bdaa6b7` completed in 434.261 seconds:
+  **8,279 passed, 16 failed, 14 skipped**. This was the pre-fix tree: syntax
+  validation ran retired-field inspection too early, and three older numeric
+  tests omitted the now-required bundled scoring engine. Their original score
+  assertions were retained while their fixtures were corrected.
+- All **18 focused regressions passed** after those four fixes, run
+  `8739a714-0109-4d2a-84e1-4c785c977c1a`: rule validation, retired-field checks,
+  post-download scoring, queued-size scoring, and required dual-audio scoring.
+  Command: `cargo nextest run --locked --workspace -E 'test(rego_validate) |
+  test(retired) | test(post_download_score_uses_rescored_quality) |
+  test(a_queued_releases_announced_size) |
+  test(search_indexers_anime_required_original)' --no-fail-fast --test-threads 4`.
+  Only selected tests executed; the workspace selector retained the full run's
+  feature graph. Rust formatting and `git diff --check` also passed.
+- Twelve other release failures remain unresolved by this cleanup:
+  UI theme persistence (1), import failure diagnostics losing the contributing
+  rule code (2), maintenance rule mutations returning internal errors (2),
+  indexer error-clearing expectations (2), pending RSS status selection (1),
+  adoption cleanup validation (1), backup setting-row count (1), expired
+  lifecycle-claim fixture (1), and request retention without a title (1).
+  These failures were not suppressed or rewritten. Their relationship to other
+  concurrent release work has not been established. Full output is retained
+  locally at `/private/tmp/trash-cleanup-workspace-complete.log`.
+- Clippy found two migration readability issues, now fixed. A focused rerun
+  (`cargo clippy --locked -p scryer-application -- -D warnings`) reports only
+  four unrelated existing findings: `too_many_arguments` in
+  `acquisition/workflow/task_runner.rs:784` and `maintenance_rules/facts.rs:281`,
+  `large_enum_variant` in `catalog/interactive_release_search.rs:233`, and
+  `collapsible_if` in `plugins/runtime/component_upgrade.rs:35`. These were not
+  suppressed or changed. Clippy is not clean at this checkpoint.
 
 ## Validation evidence
 
