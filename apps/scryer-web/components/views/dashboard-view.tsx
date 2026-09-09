@@ -1,8 +1,10 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
   ActivitySquare,
   ArrowUp,
+  CalendarClock,
   CircleAlert,
   Database,
   Download,
@@ -52,6 +54,7 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useAuth } from "@/lib/hooks/use-auth";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { facetById } from "@/lib/facets/registry";
 import type {
   DashboardImportedItem,
@@ -86,6 +89,7 @@ import {
   usageTone,
 } from "@/lib/utils/dashboard";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { artworkFallbackStyle } from "@/lib/utils/artwork-fallback";
 import { buildViewPath } from "@/lib/utils/routing";
 
 /** Rows visible before the top panels start scrolling. */
@@ -772,54 +776,213 @@ function ImportActivityRow({
 
 // ── Recently imported ───────────────────────────────────────────────────────
 
+type RecentlyImportedHoverPreview = {
+  item: DashboardImportedItem;
+  anchor: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+};
+
+function RecentlyImportedHoverCard({
+  preview,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  preview: RecentlyImportedHoverPreview;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  const t = useTranslate();
+  const { item, anchor } = preview;
+  const [failedPosterUrl, setFailedPosterUrl] = React.useState<string | null>(null);
+
+  if (typeof document === "undefined") return null;
+
+  const facet = normalizeFacet(item.facet);
+  const gap = 12;
+  const viewportPadding = 12;
+  const width = Math.min(360, window.innerWidth - viewportPadding * 2);
+  const estimatedHeight = 240;
+  const fitsOnRight = anchor.right + gap + width <= window.innerWidth - viewportPadding;
+  const unclampedLeft = fitsOnRight ? anchor.right + gap : anchor.left - gap - width;
+  const left = Math.max(
+    viewportPadding,
+    Math.min(unclampedLeft, window.innerWidth - width - viewportPadding),
+  );
+  const top = Math.max(
+    viewportPadding,
+    Math.min(
+      anchor.top + (anchor.bottom - anchor.top - estimatedHeight) / 2,
+      window.innerHeight - estimatedHeight - viewportPadding,
+    ),
+  );
+
+  return createPortal(
+    <aside
+      role="dialog"
+      aria-label={`${t("dashboard.recentlyImported")} ${item.titleName ?? item.titleId}`}
+      className="fc-scryer-hover-card is-movie"
+      style={{ left, top, width }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div
+        className="fc-scryer-hover-card-image-wrap"
+        style={artworkFallbackStyle(item.id || item.titleId, facet ?? "SERIES")}
+      >
+        {item.posterUrl && failedPosterUrl !== item.posterUrl ? (
+          <img
+            src={item.posterUrl}
+            alt=""
+            className="fc-scryer-hover-card-image"
+            onError={() => setFailedPosterUrl(item.posterUrl)}
+          />
+        ) : null}
+      </div>
+      <div className="fc-scryer-hover-card-copy">
+        <div className="fc-scryer-hover-card-badges">
+          {facet ? (
+            <span className="fc-scryer-hover-card-meta-badge">{facet}</span>
+          ) : null}
+          <span className="fc-scryer-hover-card-meta-badge">
+            {item.eventType === "FILE_UPGRADED"
+              ? t("dashboard.upgradeBadge")
+              : t("dashboard.recentlyImported")}
+          </span>
+          {item.quality ? (
+            <span className="fc-scryer-hover-card-meta-badge">{item.quality}</span>
+          ) : null}
+        </div>
+        <h3 className="fc-scryer-hover-card-title">{item.titleName ?? item.titleId}</h3>
+        <p className="fc-scryer-hover-card-overview">
+          {formatBytes(item.sizeBytes)}
+        </p>
+        <div className="fc-scryer-hover-card-footer">
+          <span>
+            <CalendarClock aria-hidden="true" />
+            {formatCompactAge(item.occurredAt) ?? "—"}
+          </span>
+          {item.libraryId ? <span>{item.libraryId}</span> : null}
+        </div>
+      </div>
+    </aside>,
+    document.body,
+  );
+}
+
 function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
+  const [hoverPreview, setHoverPreview] =
+    React.useState<RecentlyImportedHoverPreview | null>(null);
+  const hoverTimerRef = React.useRef<number | null>(null);
+
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleHoverPreviewClose = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoverPreview(null);
+      hoverTimerRef.current = null;
+    }, 180);
+  }, [clearHoverTimer]);
+
+  const handleRowMouseEnter = React.useCallback(
+    (item: DashboardImportedItem, target: HTMLElement) => {
+      if (isMobile) return;
+      clearHoverTimer();
+      const rect = target.getBoundingClientRect();
+      setHoverPreview({
+        item,
+        anchor: {
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          left: rect.left,
+        },
+      });
+    },
+    [clearHoverTimer, isMobile],
+  );
+
+  React.useEffect(() => () => clearHoverTimer(), [clearHoverTimer]);
+
+  React.useEffect(() => {
+    if (!hoverPreview) return;
+    const closePreview = () => setHoverPreview(null);
+    window.addEventListener("resize", closePreview);
+    window.addEventListener("scroll", closePreview, true);
+    return () => {
+      window.removeEventListener("resize", closePreview);
+      window.removeEventListener("scroll", closePreview, true);
+    };
+  }, [hoverPreview]);
 
   return (
-    <DashboardPanel
-      icon={Download}
-      title={t("dashboard.recentlyImported")}
-      linkTo={buildViewPath("activity", undefined, undefined, undefined, undefined, "history")}
-      linkLabel={t("dashboard.viewAll")}
-      bodyClassName={PREVIEW_PANE_CLASS}
-    >
-      {items.length === 0 ? (
-        <DashboardPanelEmpty message={t("dashboard.emptyImported")} />
-      ) : (
-        <ul>
-          {items.map((item) => {
-            const facet = normalizeFacet(item.facet);
-            return (
-              <li
-                key={item.id}
-                className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-[7px] last:border-b-0"
-              >
-                <RowPoster posterUrl={item.posterUrl} facet={facet} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-[12px] font-medium text-[var(--scry-ink2)]">
-                    {item.titleName ?? item.titleId}
+    <>
+      <DashboardPanel
+        icon={Download}
+        title={t("dashboard.recentlyImported")}
+        linkTo={buildViewPath("activity", undefined, undefined, undefined, undefined, "history")}
+        linkLabel={t("dashboard.viewAll")}
+        bodyClassName={PREVIEW_PANE_CLASS}
+      >
+        {items.length === 0 ? (
+          <DashboardPanelEmpty message={t("dashboard.emptyImported")} />
+        ) : (
+          <ul>
+            {items.map((item) => {
+              const facet = normalizeFacet(item.facet);
+              return (
+                <li
+                  key={item.id}
+                  className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-[7px] last:border-b-0"
+                  onMouseEnter={(event) => handleRowMouseEnter(item, event.currentTarget)}
+                  onMouseLeave={scheduleHoverPreviewClose}
+                >
+                  <RowPoster posterUrl={item.posterUrl} facet={facet} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[12px] font-medium text-[var(--scry-ink2)]">
+                      {item.titleName ?? item.titleId}
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--scry-muted2)]">
+                      {facet ? <FacetChip facet={facet} /> : null}
+                      {item.quality ? (
+                        <span className="truncate">{item.quality}</span>
+                      ) : null}
+                      <span className="tabular-nums">{formatBytes(item.sizeBytes)}</span>
+                    </span>
                   </span>
-                  <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--scry-muted2)]">
-                    {facet ? <FacetChip facet={facet} /> : null}
-                    {item.quality ? (
-                      <span className="truncate">{item.quality}</span>
-                    ) : null}
-                    <span className="tabular-nums">{formatBytes(item.sizeBytes)}</span>
-                  </span>
-                </span>
-                {item.eventType === "FILE_UPGRADED" ? (
-                  <Badge tone="info" className="shrink-0 px-1 py-0 text-[10px]">
-                    <ArrowUp className="h-2.5 w-2.5" aria-hidden="true" />
-                    {t("dashboard.upgradeBadge")}
-                  </Badge>
-                ) : null}
-                <AgeLabel isoDate={item.occurredAt} />
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </DashboardPanel>
+                  {item.eventType === "FILE_UPGRADED" ? (
+                    <Badge tone="info" className="shrink-0 px-1 py-0 text-[10px]">
+                      <ArrowUp className="h-2.5 w-2.5" aria-hidden="true" />
+                      {t("dashboard.upgradeBadge")}
+                    </Badge>
+                  ) : null}
+                  <AgeLabel isoDate={item.occurredAt} />
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </DashboardPanel>
+      {!isMobile && hoverPreview ? (
+        <RecentlyImportedHoverCard
+          key={hoverPreview.item.id}
+          preview={hoverPreview}
+          onMouseEnter={clearHoverTimer}
+          onMouseLeave={scheduleHoverPreviewClose}
+        />
+      ) : null}
+    </>
   );
 }
 
