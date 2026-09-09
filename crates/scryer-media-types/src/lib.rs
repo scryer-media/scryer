@@ -92,6 +92,38 @@ pub struct Rational {
 }
 
 impl Rational {
+    /// Preserve a declared binary floating-point value exactly, when it fits.
+    pub fn from_f64(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
+        }
+        if value == 0.0 {
+            return Self::new(0, 1);
+        }
+        let bits = value.to_bits();
+        let encoded_exponent = ((bits >> 52) & 0x7ff) as i32;
+        let mut significand = bits & ((1_u64 << 52) - 1);
+        let mut exponent = if encoded_exponent == 0 {
+            -1074
+        } else {
+            significand |= 1_u64 << 52;
+            encoded_exponent - 1023 - 52
+        };
+        let zeros = significand.trailing_zeros();
+        significand >>= zeros;
+        exponent += zeros as i32;
+        let (magnitude, denominator) = if exponent >= 0 {
+            (
+                significand.checked_mul(1_u64.checked_shl(exponent as u32)?)?,
+                1,
+            )
+        } else {
+            (significand, 1_u64.checked_shl((-exponent) as u32)?)
+        };
+        let numerator = i128::from(magnitude) * if value.is_sign_negative() { -1 } else { 1 };
+        Self::new(i64::try_from(numerator).ok()?, denominator)
+    }
+
     pub fn new(numerator: i64, denominator: u64) -> Option<Self> {
         if denominator == 0 {
             return None;
@@ -341,6 +373,33 @@ pub struct AnalysisDetails {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rational_preserves_binary_declarations_without_rounding_or_overflow() {
+        for value in [
+            0.0,
+            -0.0,
+            25.0,
+            23.976,
+            30_000.0 / 1001.0,
+            -90.5,
+            i64::MIN as f64,
+        ] {
+            assert_eq!(Rational::from_f64(value).unwrap().as_f64(), Some(value));
+        }
+        assert_eq!(Rational::from_f64(25.0), Rational::new(25, 1));
+        assert_eq!(Rational::from_f64(-90.5), Rational::new(-181, 2));
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            i64::MAX as f64,
+        ] {
+            assert!(Rational::from_f64(value).is_none());
+        }
+    }
 
     #[test]
     fn rational_normalizes_without_overflow() {

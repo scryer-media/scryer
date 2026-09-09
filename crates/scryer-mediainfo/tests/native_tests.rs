@@ -107,6 +107,74 @@ fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
 }
 
 #[test]
+fn flv_declared_frame_rates_do_not_claim_observed_timing() {
+    for (name, fps) in [
+        ("flv_flv1_video_only.flv", 24),
+        ("flv_flv1_adpcm_swf.flv", 15),
+        ("flv_flv1_aac_mono.flv", 25),
+    ] {
+        let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
+        let video = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+            .unwrap();
+        assert_eq!(
+            video.metadata.declared_frame_rate,
+            scryer_media_types::Rational::new(fps, 1),
+            "{name}"
+        );
+        assert!(video.metadata.observed_frame_rate.is_none());
+        assert!(video.metadata.variable_frame_rate.is_none());
+        assert_eq!(video.metadata.bit_depth, Some(8));
+        assert_eq!(video.metadata.pixel_format.as_deref(), Some("yuv420p"));
+    }
+}
+
+#[test]
+fn flv_audio_headers_reach_the_canonical_contract() {
+    for (name, codec, rate, layout, depth) in [
+        ("flv_flv1_adpcm_swf.flv", "adpcm_swf", 44_100, "mono", None),
+        ("flv_flv1_mp3.flv", "mp3", 48_000, "stereo", None),
+        (
+            "flv_flv1_nellymoser.flv",
+            "nellymoser",
+            16_000,
+            "mono",
+            None,
+        ),
+        ("flv_flv1_pcm_mulaw.flv", "pcm_mulaw", 8_000, "mono", None),
+        (
+            "flv_flv1_pcm_s16le.flv",
+            "pcm_s16le",
+            44_100,
+            "stereo",
+            Some(16),
+        ),
+        ("flv_flv1_pcm_u8.flv", "pcm_u8", 44_100, "mono", Some(8)),
+        ("flv_flv1_speex.flv", "speex", 16_000, "mono", None),
+        ("flv_h264_mp3.flv", "mp3", 48_000, "mono", None),
+        ("flv_h264_pcm_alaw.flv", "pcm_alaw", 8_000, "mono", None),
+    ] {
+        let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.codec.as_deref() == Some(codec))
+            .unwrap();
+        assert_eq!(audio.metadata.sample_rate, Some(rate), "{name}");
+        assert_eq!(
+            audio.metadata.channel_layout.as_deref(),
+            Some(layout),
+            "{name}"
+        );
+        assert_eq!(audio.metadata.sample_bit_depth, depth, "{name}");
+    }
+}
+
+#[test]
 fn mpeg_dts_and_extensible_aac_preserve_audio_header_properties() {
     for (name, codec, channels, layout) in [
         ("matrix_mkv_001.mkv", "mp3", 2, "stereo"),
