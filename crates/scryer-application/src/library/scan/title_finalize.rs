@@ -194,7 +194,18 @@ async fn persist_scanned_media_analysis_outcome(
     let persisted = match inspected.outcome {
         MediaAnalysisOutcome::Valid(mut analysis) => {
             if let Some(disc) = &mut analysis.details.disc {
-                if let Err(error) = app.validate_disc_episode_mappings(title, disc).await {
+                let mapping_result = app.validate_disc_episode_mappings(title, disc).await;
+                // Mapping validation awaits catalogue reads; the image may have
+                // been replaced while those reads were in flight.
+                if !crate::media::discs::MediaSourceVersion::read(&stored_path_to_path_buf(
+                    &current.file_path,
+                ))
+                .await
+                .is_ok_and(|source| source == inspected.source)
+                {
+                    return (db_started.elapsed(), false);
+                }
+                if let Err(error) = mapping_result {
                     analysis.details.report.status = scryer_media_types::ProbeStatus::Incomplete;
                     analysis
                         .details

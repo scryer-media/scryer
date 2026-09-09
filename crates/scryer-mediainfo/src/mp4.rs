@@ -99,12 +99,13 @@ pub(crate) fn parse_mp4_source(
         sonarr_mp4_duration_seconds(&ctx, &metadata_by_track, format_duration_seconds);
 
     let (mut tracks, seen_track_ids) = build_mp4_tracks(&ctx, &metadata_by_track);
-    let fragment_timelines = timing::fragments(&prepared.metadata);
+    let fragment_result = timing::fragments(&prepared.metadata);
     for track in &mut tracks {
         let Some(id) = track.track_id else {
             continue;
         };
-        let Some(timeline) = fragment_timelines
+        let Some(timeline) = fragment_result
+            .timelines
             .get(&id)
             .filter(|timeline| !timeline.invalid)
         else {
@@ -147,6 +148,7 @@ pub(crate) fn parse_mp4_source(
         .filter(|duration| *duration > 0.0)
         .map(|duration| (prepared.file_len_hint as f64 * 8.0 / duration) as u64);
     let mut report = scryer_media_types::ProbeReport::default();
+    report_fragment_budget(&mut report, fragment_result.budget_exhausted);
     for parsed in &tracks {
         if parsed.raw.kind == TrackKind::Video
             && ctx
@@ -262,6 +264,20 @@ pub(crate) fn parse_mp4_source(
         num_chapters,
         tracks: tracks.into_iter().map(|track| track.raw).collect(),
     })
+}
+
+fn report_fragment_budget(report: &mut scryer_media_types::ProbeReport, exhausted: bool) {
+    if !exhausted {
+        return;
+    }
+    report.status = scryer_media_types::ProbeStatus::Incomplete;
+    report.budget_exhausted = true;
+    report.warnings.push(scryer_media_types::ProbeWarning {
+        code: "mp4_fragment_inventory_budget".into(),
+        message: "Fragment timing metadata exceeds the bounded header, track, or sample inventory"
+            .into(),
+        ..Default::default()
+    });
 }
 
 fn mp4_format_duration_seconds(ctx: &MediaContext) -> Option<f64> {
@@ -2454,6 +2470,28 @@ mod tests {
             .unwrap();
         assert_eq!(sample_timing_facts(&bounded), (Rational::new(25, 1), None));
         assert_eq!(sample_timing_facts(&timing_track(&[(4, 0)])), (None, None));
+    }
+
+    #[test]
+    fn fragment_budget_exhaustion_is_visible_in_outer_report() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/hevc_hdr10plus.mp4");
+        let mut bytes = std::fs::read(path).unwrap();
+        let mut tfhd = vec![0; 4];
+        tfhd.extend_from_slice(&1_u32.to_be_bytes());
+        let mut trun = vec![0; 4];
+        trun.extend_from_slice(&4_000_001_u32.to_be_bytes());
+        let mut traf = make_box(b"tfhd", &tfhd);
+        traf.extend_from_slice(&make_box(b"trun", &trun));
+        bytes.extend_from_slice(&make_box(b"moof", &make_box(b"traf", &traf)));
+
+        let container =
+            parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
+        let report = container.details.report;
+        assert_eq!(report.status, scryer_media_types::ProbeStatus::Incomplete);
+        assert!(report.budget_exhausted);
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.warnings[0].code, "mp4_fragment_inventory_budget");
     }
 
     fn sample_track() -> mp4parse::Track {

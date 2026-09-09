@@ -76,9 +76,8 @@ fn disc_scoring_uses_each_mapped_title_and_ignores_whole_image_size() {
         actual_size_bytes: 50 * GIB,
     };
     let profile = movie_profile();
-    let weights = balanced_weights();
     let tags = Vec::new();
-    let context = ctx(&profile, &weights, &tags);
+    let context = ctx(&profile, &tags);
     let announced = ReleaseEvidence::announced(
         parse_release_metadata("Series.S01.2160p.BluRay.HEVC"),
         Some(50 * GIB),

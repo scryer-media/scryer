@@ -1,6 +1,10 @@
 //! Fragment presentation timelines. Payload bytes are never needed for timing.
-use super::{for_each_mp4_box, read_be_u32};
-use std::collections::HashMap;
+use super::{Mp4BoxHeader, for_each_mp4_box, read_be_u32, read_box_header_from_bytes};
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+
+const MAX_FRAGMENT_HEADERS: usize = 65_536;
+const MAX_FRAGMENT_TRACKS: usize = 1_024;
 
 fn read_be_u64(data: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(data.try_into().ok()?))
@@ -20,6 +24,10 @@ pub(super) struct Timeline {
     pub invalid: bool,
     decode: u64,
 }
+pub(super) struct FragmentTimelines {
+    pub timelines: HashMap<u32, Timeline>,
+    pub budget_exhausted: bool,
+}
 fn u32at(data: &[u8], at: usize) -> Option<u32> {
     read_be_u32(data.get(at..at + 4)?)
 }
@@ -27,108 +35,209 @@ fn flags(data: &[u8]) -> Option<u32> {
     Some(u32at(data, 0)? & 0x00ff_ffff)
 }
 
-pub(super) fn fragments(data: &[u8]) -> HashMap<u32, Timeline> {
+struct HeaderBudget {
+    remaining: Cell<usize>,
+    exhausted: Cell<bool>,
+}
+impl HeaderBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            remaining: Cell::new(limit),
+            exhausted: Cell::new(false),
+        }
+    }
+    fn spend(&self) -> bool {
+        let Some(next) = self.remaining.get().checked_sub(1) else {
+            self.exhausted.set(true);
+            return false;
+        };
+        self.remaining.set(next);
+        true
+    }
+}
+
+fn for_each_bounded_box(
+    mut data: &[u8],
+    budget: &HeaderBudget,
+    mut visit: impl FnMut(Mp4BoxHeader, &[u8]),
+) {
+    while !data.is_empty() {
+        if !budget.spend() {
+            break;
+        }
+        let Some(header) = read_box_header_from_bytes(data) else {
+            break;
+        };
+        let Ok(size) = usize::try_from(header.size) else {
+            break;
+        };
+        if size < header.header_size || size > data.len() {
+            break;
+        }
+        visit(header, &data[header.header_size..size]);
+        if budget.exhausted.get() {
+            break;
+        }
+        data = &data[size..];
+    }
+}
+
+fn insert_track(tracks: &mut HashSet<u32>, id: u32, exhausted: &mut bool) -> bool {
+    if id == 0 {
+        return false;
+    }
+    if tracks.contains(&id) {
+        return true;
+    }
+    if tracks.len() >= MAX_FRAGMENT_TRACKS {
+        *exhausted = true;
+        return false;
+    }
+    tracks.insert(id);
+    true
+}
+
+fn tfhd(data: &[u8], mut defaults: Defaults) -> Option<(u32, Defaults)> {
+    let flags = flags(data)?;
+    let id = u32at(data, 4)?;
+    let mut at = 8;
+    if flags & 1 != 0 {
+        at += 8;
+    }
+    if flags & 2 != 0 {
+        at += 4;
+    }
+    if flags & 8 != 0 {
+        defaults.duration = u32at(data, at).filter(|value| *value > 0);
+        at += 4;
+    }
+    if flags & 16 != 0 {
+        defaults.size = u32at(data, at).filter(|value| *value > 0);
+        at += 4;
+    }
+    if flags & 32 != 0 {
+        at += 4;
+    }
+    data.get(..at)?;
+    Some((id, defaults))
+}
+
+pub(super) fn fragments(data: &[u8]) -> FragmentTimelines {
     let mut defaults = HashMap::new();
-    for_each_mp4_box(data, |header, payload| {
+    let mut declared_tracks = HashSet::new();
+    let header_budget = HeaderBudget::new(MAX_FRAGMENT_HEADERS);
+    let mut exhausted = false;
+    for_each_bounded_box(data, &header_budget, |header, payload| {
         if &header.name != b"moov" {
             return;
         }
-        for_each_mp4_box(payload, |header, payload| {
-            if &header.name != b"mvex" {
-                return;
+        for_each_bounded_box(payload, &header_budget, |header, payload| {
+            match &header.name {
+                b"trak" => for_each_bounded_box(payload, &header_budget, |header, payload| {
+                    if &header.name == b"tkhd"
+                        && let Some(id) =
+                            u32at(payload, if payload.first() == Some(&1) { 20 } else { 12 })
+                    {
+                        insert_track(&mut declared_tracks, id, &mut exhausted);
+                    }
+                }),
+                b"mvex" => for_each_bounded_box(payload, &header_budget, |header, payload| {
+                    if &header.name == b"trex"
+                        && let Some(id) = u32at(payload, 4)
+                        && insert_track(&mut declared_tracks, id, &mut exhausted)
+                    {
+                        defaults.insert(
+                            id,
+                            Defaults {
+                                duration: u32at(payload, 12).filter(|value| *value > 0),
+                                size: u32at(payload, 16).filter(|value| *value > 0),
+                            },
+                        );
+                    }
+                }),
+                _ => {}
             }
-            for_each_mp4_box(payload, |header, payload| {
-                if &header.name == b"trex"
-                    && let Some(id) = u32at(payload, 4)
-                {
-                    defaults.insert(
-                        id,
-                        Defaults {
-                            duration: u32at(payload, 12).filter(|value| *value > 0),
-                            size: u32at(payload, 16).filter(|value| *value > 0),
-                        },
-                    );
-                }
-            });
         });
     });
+    if exhausted || header_budget.exhausted.get() {
+        return FragmentTimelines {
+            timelines: HashMap::new(),
+            budget_exhausted: true,
+        };
+    }
     let mut timelines = HashMap::new();
+    let mut observed_tracks = declared_tracks.clone();
     let mut sample_budget = 4_000_000_u64;
-    for_each_mp4_box(data, |header, payload| {
+    let mut sample_budget_exhausted = false;
+    for_each_bounded_box(data, &header_budget, |header, payload| {
         if &header.name != b"moof" {
             return;
         }
-        for_each_mp4_box(payload, |header, payload| {
+        for_each_bounded_box(payload, &header_budget, |header, payload| {
             if &header.name != b"traf" {
                 return;
             }
-            let mut id = None;
-            let mut tfhd = None;
+            let mut parsed_tfhd = None;
             let mut decode_time = None;
             let mut invalid = false;
-            for_each_mp4_box(payload, |header, payload| match &header.name {
-                b"tfhd" => {
-                    if tfhd.is_some() {
-                        invalid = true;
+            for_each_bounded_box(payload, &header_budget, |header, payload| {
+                match &header.name {
+                    b"tfhd" => {
+                        if parsed_tfhd.is_some() {
+                            invalid = true;
+                        }
+                        let id = u32at(payload, 4);
+                        parsed_tfhd = id.and_then(|id| {
+                            let declared =
+                                declared_tracks.is_empty() || declared_tracks.contains(&id);
+                            (declared && insert_track(&mut observed_tracks, id, &mut exhausted))
+                                .then(|| {
+                                    tfhd(payload, defaults.get(&id).copied().unwrap_or_default())
+                                })
+                                .flatten()
+                        });
                     }
-                    id = u32at(payload, 4);
-                    tfhd = Some(payload.to_vec());
+                    b"tfdt" => {
+                        decode_time = match payload.first() {
+                            Some(0) => u32at(payload, 4).map(u64::from),
+                            Some(1) => payload.get(4..12).and_then(read_be_u64),
+                            _ => None,
+                        };
+                        invalid |= decode_time.is_none();
+                    }
+                    _ => {}
                 }
-                b"tfdt" => {
-                    decode_time = match payload.first() {
-                        Some(0) => u32at(payload, 4).map(u64::from),
-                        Some(1) => payload.get(4..12).and_then(read_be_u64),
-                        _ => None,
-                    };
-                    invalid |= decode_time.is_none();
-                }
-                _ => {}
             });
-            let Some(id) = id else {
+            let Some((id, defaults)) = parsed_tfhd else {
                 return;
             };
             let timeline = timelines.entry(id).or_insert_with(Timeline::default);
-            let mut defaults = defaults.get(&id).copied().unwrap_or_default();
-            let valid_header = (|| {
-                let data = tfhd.as_deref()?;
-                let flags = flags(data)?;
-                let mut at = 8;
-                if flags & 1 != 0 {
-                    at += 8;
-                }
-                if flags & 2 != 0 {
-                    at += 4;
-                }
-                if flags & 8 != 0 {
-                    defaults.duration = u32at(data, at).filter(|value| *value > 0);
-                    at += 4;
-                }
-                if flags & 16 != 0 {
-                    defaults.size = u32at(data, at).filter(|value| *value > 0);
-                    at += 4;
-                }
-                if flags & 32 != 0 {
-                    at += 4;
-                }
-                data.get(..at)?;
-                Some(())
-            })()
-            .is_some();
-            timeline.invalid |= invalid || !valid_header;
+            timeline.invalid |= invalid;
             if let Some(decode) = decode_time {
                 timeline.decode = decode;
             }
-            for_each_mp4_box(payload, |header, payload| {
+            for_each_bounded_box(payload, &header_budget, |header, payload| {
                 if &header.name != b"trun" {
                     return;
                 }
+                sample_budget_exhausted |=
+                    u32at(payload, 4).is_some_and(|count| u64::from(count) > sample_budget);
                 if run(payload, defaults, timeline, &mut sample_budget).is_none() {
                     timeline.invalid = true;
                 }
             });
         });
     });
-    timelines
+    let budget_exhausted = exhausted || header_budget.exhausted.get() || sample_budget_exhausted;
+    if exhausted || header_budget.exhausted.get() {
+        for timeline in timelines.values_mut() {
+            timeline.invalid = true;
+        }
+    }
+    FragmentTimelines {
+        timelines,
+        budget_exhausted,
+    }
 }
 #[derive(Clone, Copy)]
 pub(super) struct Edit {
@@ -353,6 +462,99 @@ fn run(data: &[u8], defaults: Defaults, timeline: &mut Timeline, budget: &mut u6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mp4_box(name: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(payload.len() + 8);
+        bytes.extend_from_slice(&u32::try_from(payload.len() + 8).unwrap().to_be_bytes());
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn tfhd_box(id: u32) -> Vec<u8> {
+        let mut payload = vec![0; 4];
+        payload.extend_from_slice(&id.to_be_bytes());
+        mp4_box(b"tfhd", &payload)
+    }
+
+    fn fragment(id: u32) -> Vec<u8> {
+        let mut traf = tfhd_box(id);
+        let mut run = vec![0, 0, 1, 0];
+        run.extend_from_slice(&1_u32.to_be_bytes());
+        run.extend_from_slice(&90_000_u32.to_be_bytes());
+        traf.extend_from_slice(&mp4_box(b"trun", &run));
+        mp4_box(b"moof", &mp4_box(b"traf", &traf))
+    }
+
+    #[test]
+    fn fragment_inventory_rejects_undeclared_tracks() {
+        let mut tkhd = vec![0; 16];
+        tkhd[12..16].copy_from_slice(&1_u32.to_be_bytes());
+        let moov = mp4_box(b"moov", &mp4_box(b"trak", &mp4_box(b"tkhd", &tkhd)));
+        let mut data = moov;
+        data.extend_from_slice(&fragment(1));
+        data.extend_from_slice(&fragment(2));
+
+        let timelines = fragments(&data).timelines;
+        assert_eq!(timelines.len(), 1);
+        assert_eq!(timelines.get(&1).map(|timeline| timeline.samples), Some(1));
+        assert!(!timelines.contains_key(&2));
+    }
+
+    #[test]
+    fn fragment_header_budget_returns_inconclusive_inventory() {
+        let mut data = Vec::new();
+        for _ in 0..=MAX_FRAGMENT_HEADERS {
+            data.extend_from_slice(&mp4_box(b"free", &[]));
+        }
+        let result = fragments(&data);
+        assert!(result.budget_exhausted);
+        assert!(result.timelines.is_empty());
+    }
+
+    #[test]
+    fn bounded_box_walker_stops_visiting_at_limit() {
+        let mut data = Vec::new();
+        for _ in 0..10 {
+            data.extend_from_slice(&mp4_box(b"free", &[]));
+        }
+        let budget = HeaderBudget::new(3);
+        let visits = Cell::new(0);
+        for_each_bounded_box(&data, &budget, |_, _| visits.set(visits.get() + 1));
+        assert_eq!(visits.get(), 3);
+        assert!(budget.exhausted.get());
+    }
+
+    #[test]
+    fn fragment_sample_budget_is_reported_as_exhausted() {
+        let mut traf = tfhd_box(1);
+        let mut run = vec![0, 0, 0, 0];
+        run.extend_from_slice(&4_000_001_u32.to_be_bytes());
+        traf.extend_from_slice(&mp4_box(b"trun", &run));
+        let data = mp4_box(b"moof", &mp4_box(b"traf", &traf));
+        let result = fragments(&data);
+        assert!(result.budget_exhausted);
+        assert!(
+            result
+                .timelines
+                .get(&1)
+                .is_some_and(|timeline| timeline.invalid)
+        );
+    }
+
+    #[test]
+    fn fragment_track_budget_marks_retained_timelines_inconclusive() {
+        let mut data = Vec::new();
+        for id in 1..=u32::try_from(MAX_FRAGMENT_TRACKS + 1).unwrap() {
+            data.extend_from_slice(&mp4_box(b"moof", &mp4_box(b"traf", &tfhd_box(id))));
+        }
+        let result = fragments(&data);
+        assert!(result.budget_exhausted);
+        let timelines = result.timelines;
+        assert_eq!(timelines.len(), MAX_FRAGMENT_TRACKS);
+        assert!(timelines.values().all(|timeline| timeline.invalid));
+    }
+
     #[test]
     fn composition_offsets_and_decode_offsets_preserve_presentation_timeline() {
         let mut run_bytes = vec![1, 0, 9, 0]; // duration + signed composition offset

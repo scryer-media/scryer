@@ -1,4 +1,4 @@
-import { MEDIA_ANALYSIS_FIELDS, MEDIA_DISC_FIELDS } from "@/lib/types/media-analysis";
+import { MEDIA_ANALYSIS_FIELDS, MEDIA_DISC_FIELDS } from "../types/media-analysis.ts";
 
 export const DISCOVERY_ITEM_FIELDS = `
     id

@@ -64,6 +64,12 @@ At this checkpoint, 103 focused checks passed both with acceleration enabled and
 
 The DVD navigation fixture now contains a valid MPEG-2 sequence marker and extension. Its two complete-title assertions also failed at the pre-optimization commit with the previous placeholder sequence. The authored timelines and assertions remain intact.
 
+## Ingest review checkpoint
+
+The September 9, 2026 review found that fragment timing's sample limit did not bound its header traversal or track maps, and `tfhd` parsing copied the complete payload. Fragment timing now borrows that payload, shares a 65,536-header budget across traversal passes, and caps track inventory at 1,024. Exhaustion invalidates incomplete timing and produces an explicit incomplete report. Regressions cover declared track membership, header visits, track limits, aggregate sample limits, and propagation through the real MP4 parser. These bounds supplement the existing metadata byte limits; they do not establish complete-file integrity or audit third-party parsers.
+
+The application review also added a source-version check after asynchronous disc episode validation during scan persistence. Release integration retains physical-image size verification separately from title-specific scoring, incorporates final rule scores for each mapped title, and assigns the analysis migration version 229 after the release's migrations 227 and 228.
+
 ## Differential checks
 
 Run the opt-in reference check explicitly:
