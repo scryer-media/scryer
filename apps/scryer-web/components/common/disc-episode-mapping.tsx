@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { TITLE_MEDIA_FILE_FIELDS } from "@/lib/graphql/queries";
@@ -24,29 +24,37 @@ export function DiscEpisodeMapping({ fileId, analysis, onChanged, inventory = an
   const [mappings, setMappings] = useState<Record<string, string>>(() => discEpisodeSelections(analysis.disc, inventory));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestVersion = useRef(0);
+  useEffect(() => () => { requestVersion.current += 1; }, [fileId]);
   useEffect(() => { setMappings(discEpisodeSelections(analysis.disc, inventory)); }, [analysis.disc, inventory]);
   async function load() {
+    const version = ++requestVersion.current;
     setBusy(true); setError(null);
     try {
       const result = await client.mutation<{ mediaFileDiscEpisodeTargets: Target[] }>(targetsMutation, { fileId }).toPromise();
+      if (version !== requestVersion.current) return;
       if (result.error) throw result.error;
       if (!result.data) throw new Error(t("mediaFile.discMappingFailed"));
       setTargets(result.data.mediaFileDiscEpisodeTargets);
-    } catch (error) { setError(error instanceof Error ? error.message : t("mediaFile.discMappingFailed")); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (version === requestVersion.current) setError(error instanceof Error ? error.message : t("mediaFile.discMappingFailed"));
+    } finally { if (version === requestVersion.current) setBusy(false); }
   }
   async function save() {
+    const version = ++requestVersion.current;
     setBusy(true); setError(null);
     try {
       const result = await client.mutation<{ mapMediaFileDiscEpisodes: TitleMediaFileRecord }>(mappingMutation, {
         fileId, mappings: Object.entries(mappings).filter(([, episodeId]) => episodeId).map(([discTitleId, episodeId]) => ({ discTitleId, episodeId })),
       }, { additionalTypenames: ["TitlePayload", "EpisodePayload", "CollectionPayload", "EpisodeMediaAvailabilityPayload"] }).toPromise();
+      if (version !== requestVersion.current) return;
       if (result.error) throw result.error;
       const next = result.data?.mapMediaFileDiscEpisodes.analysis;
       if (!next) throw new Error(t("mediaFile.discMappingFailed"));
       onChanged(next);
-    } catch (error) { setError(error instanceof Error ? error.message : t("mediaFile.discMappingFailed")); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (version === requestVersion.current) setError(error instanceof Error ? error.message : t("mediaFile.discMappingFailed"));
+    } finally { if (version === requestVersion.current) setBusy(false); }
   }
   const titleIds = [...new Set([...(inventory?.titles.map((title) => title.id) ?? []), ...Object.keys(mappings)])];
   return <div className="my-2 space-y-2">

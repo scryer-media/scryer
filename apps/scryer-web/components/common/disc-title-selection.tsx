@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { TITLE_MEDIA_FILE_FIELDS } from "@/lib/graphql/queries";
@@ -28,10 +28,13 @@ export function DiscTitleSelection({ fileId, analysis, onChanged, requiresReview
   const [selected, setSelected] = useState(savedTitle);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestVersion = useRef(0);
+  useEffect(() => () => { requestVersion.current += 1; }, [fileId]);
   useEffect(() => { setSelected(savedTitle); }, [savedTitle]);
   if (!inventory) return null;
 
   async function save() {
+    const version = ++requestVersion.current;
     setSaving(true);
     setError(null);
     try {
@@ -39,14 +42,16 @@ export function DiscTitleSelection({ fileId, analysis, onChanged, requiresReview
         selectDiscTitleMutation, { fileId, discTitleId: selected || null },
         { additionalTypenames: ["TitlePayload", "EpisodePayload", "CollectionPayload", "EpisodeMediaAvailabilityPayload"] },
       ).toPromise();
+      if (version !== requestVersion.current) return;
       if (result.error) throw result.error;
       const next = result.data?.selectMediaFileDiscTitle.analysis;
       if (!next) throw new Error(t("mediaFile.discSelectionFailed"));
       onChanged(next);
     } catch (error) {
+      if (version !== requestVersion.current) return;
       setError(error instanceof Error ? error.message : t("mediaFile.discSelectionFailed"));
     } finally {
-      setSaving(false);
+      if (version === requestVersion.current) setSaving(false);
     }
   }
 

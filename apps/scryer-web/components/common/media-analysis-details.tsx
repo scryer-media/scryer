@@ -103,7 +103,7 @@ export function MediaAnalysisDetailsPopover({ analysis: storedAnalysis, attempt:
         <p className="font-medium">{disc.discType.toUpperCase()} · {disc.filesystem} {disc.volumeLabel ?? ""}</p>
         {disc !== analysis.disc ? <p className="text-amber-500">{t("mediaFile.discReviewInventory")}</p> : null}
         <p>{analysis.disc?.automaticSelection ? "Automatic longest-title selection" : "Saved title selection"}: {analysis.disc?.selectedTitleId ?? "Requires review"}</p>
-        {fileId ? <DiscTitleSelection fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} requiresReview={attempt != null && !attempt.succeeded} /> : null}
+        {fileId ? <DiscTitleSelection key={fileId} fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} requiresReview={attempt != null && !attempt.succeeded} /> : null}
         {fileId ? <DiscEpisodeMapping key={fileId} fileId={fileId} analysis={analysis} inventory={disc} onChanged={onSelectionChanged} /> : null}
         {disc.titles.map((title) => <DiscTitleDetails key={title.id} title={title} />)}
       </div> : null}
