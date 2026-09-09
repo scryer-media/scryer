@@ -130,6 +130,20 @@ const FALLBACK_PROVIDER_OPTIONS = [
   { value: "newznab", label: "Newznab Indexer" },
 ];
 
+function providerDefaultName(
+  providerType: string,
+  provider?: ProviderTypeInfo,
+): string {
+  const normalizedProviderType = providerType.trim().toLowerCase();
+  return (
+    provider?.name ??
+    FALLBACK_PROVIDER_OPTIONS.find(
+      (option) => option.value === normalizedProviderType,
+    )?.label ??
+    providerType
+  );
+}
+
 function formatIndexerProviderTypeLabel(
   providerType: string,
   t: ReturnType<typeof useTranslate>,
@@ -914,7 +928,7 @@ export function SettingsIndexersSection({
         );
         const shouldAutofillName =
           prev.name.trim().length === 0 ||
-          prev.name === (previousProvider?.name ?? prev.providerType);
+          prev.name === providerDefaultName(prev.providerType, previousProvider);
         const nextConfigValues: Record<string, string> = {};
         for (const field of nextProvider?.configFields ?? []) {
           if (field.valueSource === "HOST_BINDING") {
@@ -926,7 +940,9 @@ export function SettingsIndexersSection({
         return {
           ...prev,
           providerType: nextProviderType,
-          name: shouldAutofillName ? (nextProvider?.name ?? prev.name) : prev.name,
+          name: shouldAutofillName
+            ? providerDefaultName(nextProviderType, nextProvider)
+            : prev.name,
           downloadClientId:
             nextMappingCompatibility?.supportsMapping === false
               ? null
@@ -1381,16 +1397,15 @@ export function SettingsIndexersSection({
                 onRetry={refreshIndexerDownloadClientMappingCatalog}
               />
             )}
-            {indexerDownloadClientMappingCatalogResource.catalog ? (
+            {indexerDownloadClientMappingCatalogResource.catalog &&
+            !isManagedSyncProvider &&
+            supportsSeedingProfileAssignment(draftProtocolFamilies) ? (
               <IndexerSeedingProfileSelect
                 selectId="settings-indexer-seeding-profile-form"
                 label={t("settings.seedingProfileColumn")}
                 value={indexerDraft.seedingProfileId}
                 options={seedingProfileOptions}
-                supported={
-                  !isManagedSyncProvider &&
-                  supportsSeedingProfileAssignment(draftProtocolFamilies)
-                }
+                supported
                 isPending={mutatingIndexerId !== null}
                 showLabel
                 onChange={(seedingProfileId) =>

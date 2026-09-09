@@ -3,7 +3,6 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -279,10 +278,6 @@ export function SettingsIndexersContainer({
   const [pendingDeleteIndexer, setPendingDeleteIndexer] =
     useState<IndexerRecord | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const defaultProxyConfigId = useMemo(
-    () => proxyConfigs.find((proxy) => proxy.isEnabled)?.id ?? null,
-    [proxyConfigs],
-  );
   const [providerTypes, setProviderTypes] = useState<ProviderTypeInfo[]>([]);
   const [pluginsTarget, setPluginsTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
@@ -303,14 +298,23 @@ export function SettingsIndexersContainer({
   const providerCatalogVersionRef = useRef(providerCatalogVersion);
 
   const resetIndexerDraft = useCallback(() => {
+    const newznabProvider =
+      providerTypes.find(
+        (providerType) =>
+          providerType.providerType.trim().toLowerCase() === "newznab",
+      ) ?? null;
     setEditingIndexerId(null);
     setIndexerDraft(() =>
       cloneIndexerDraft({
         ...INDEXER_INITIAL_DRAFT,
-        proxyConfigId: defaultProxyConfigId,
+        providerType: newznabProvider?.providerType ?? "newznab",
+        name: newznabProvider?.name ?? "Newznab Indexer",
+        configValues: newznabProvider
+          ? buildDraftConfigValues(newznabProvider.configFields, {})
+          : {},
       }),
     );
-  }, [defaultProxyConfigId]);
+  }, [providerTypes]);
 
   useEffect(() => {
     if (!awaitingBaselineSync) {
@@ -429,7 +433,14 @@ export function SettingsIndexersContainer({
         providerTypes.find(
           (providerType) => providerType.providerType === prev.providerType,
         ) ?? null;
-      const nextProvider = configuredProvider ?? providerTypes[0] ?? null;
+      const nextProvider =
+        configuredProvider ??
+        providerTypes.find(
+          (providerType) =>
+            providerType.providerType.trim().toLowerCase() === "newznab",
+        ) ??
+        providerTypes[0] ??
+        null;
       if (!nextProvider) {
         return prev;
       }
@@ -442,7 +453,16 @@ export function SettingsIndexersContainer({
         : nextProvider.providerType;
       const nextName = shouldAutofillName ? nextProvider.name : prev.name;
 
-      if (nextProviderType === prev.providerType && nextName === prev.name) {
+      const shouldInitializeConfig =
+        nextProviderType === prev.providerType &&
+        Object.keys(prev.configValues).length === 0 &&
+        nextProvider.configFields.length > 0;
+
+      if (
+        nextProviderType === prev.providerType &&
+        nextName === prev.name &&
+        !shouldInitializeConfig
+      ) {
         return prev;
       }
 
@@ -451,7 +471,7 @@ export function SettingsIndexersContainer({
         providerType: nextProviderType,
         name: nextName,
         configValues:
-          nextProviderType === prev.providerType
+          nextProviderType === prev.providerType && !shouldInitializeConfig
             ? prev.configValues
             : buildDraftConfigValues(nextProvider.configFields, {}),
       };
