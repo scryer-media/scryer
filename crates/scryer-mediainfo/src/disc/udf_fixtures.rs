@@ -301,6 +301,64 @@ fn udf_continuation_bounds_and_crc_coverage_are_enforced() {
 }
 
 #[test]
+fn udf_directory_tag_locations_follow_logical_extents() {
+    for (recorded_location, implementation_length) in
+        [(60, BLOCK - 56), (80, BLOCK - 56), (60, BLOCK - 54)]
+    {
+        let mut bytes = authored_udf(false);
+        // A parent record places the next FID across two disjoint blocks. The
+        // next FID's tag names its starting block, not the block where it ends.
+        let mut directory = vec![0; BLOCK - 16];
+        directory[18] = 8;
+        u16_at(&mut directory, 16, 1);
+        u16_at(&mut directory, 36, implementation_length as u16);
+        tag(&mut directory, 257, 60, BLOCK - 16);
+        directory.extend(fid("BDMV", 2, 0, true, recorded_location));
+        let mut extents = [0; 16];
+        u32_at(&mut extents, 0, BLOCK as u32);
+        u32_at(&mut extents, 4, 60);
+        u32_at(&mut extents, 8, (directory.len() - BLOCK) as u32);
+        u32_at(&mut extents, 12, 80);
+        put(
+            &mut bytes,
+            301,
+            &fe(4, 1, directory.len() as u64, 0, &extents),
+        );
+        put(&mut bytes, 360, &directory[..BLOCK]);
+        put(&mut bytes, 380, &directory[BLOCK..]);
+        let result = image::open(&mut Cursor::new(bytes));
+        if implementation_length % 4 != 0 {
+            assert!(matches!(
+                result,
+                Err(ImageError::Malformed(
+                    "unaligned UDF file identifier implementation data"
+                ))
+            ));
+        } else if recorded_location == 60 {
+            let image = result.unwrap();
+            assert!(image.files.contains_key("BDMV/STREAM/00001.M2TS"));
+            assert!(image.bytes_read < 32 * BLOCK as u64);
+        } else {
+            assert!(matches!(
+                result,
+                Err(ImageError::Malformed("UDF descriptor location mismatch"))
+            ));
+        }
+    }
+    // Metadata-partition inline FIDs use the logical block of their ICB, even
+    // though that ICB resides at a different physical image address.
+    let mut bytes = authored_udf(true);
+    let root = &mut bytes[309 * BLOCK..310 * BLOCK];
+    let length = u32::from_le_bytes(root[172..176].try_into().unwrap()) as usize;
+    tag(&mut root[176..176 + length], 257, 309, length);
+    tag(root, 261, 1, 176 + length);
+    assert!(matches!(
+        image::open(&mut Cursor::new(bytes)),
+        Err(ImageError::Malformed("UDF descriptor location mismatch"))
+    ));
+}
+
+#[test]
 fn udf_file_entry_strategies_and_transformations_are_explicit() {
     for extended in [false, true] {
         let mut bytes = authored_udf(true);

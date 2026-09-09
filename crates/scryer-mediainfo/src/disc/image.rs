@@ -646,17 +646,18 @@ fn udf_volume(reader: &mut Reader<'_>, mut start: u32, mut length: u32) -> Resul
         return Err(ImageError::Malformed("trailing UDF partition map data"));
     }
     for (index, location, mirror) in metadata_maps {
-        let primary = udf_file(reader, &maps, index as u16, location).and_then(|(file, kind)| {
-            if kind == 250 {
-                Ok(file)
-            } else {
-                Err(ImageError::Malformed("invalid UDF metadata file type"))
-            }
-        });
+        let primary =
+            udf_file(reader, &maps, index as u16, location).and_then(|(file, kind, _)| {
+                if kind == 250 {
+                    Ok(file)
+                } else {
+                    Err(ImageError::Malformed("invalid UDF metadata file type"))
+                }
+            });
         let file = match primary {
             Ok(file) => file,
             Err(error) if mirror != u32::MAX && !matches!(error, ImageError::Budget) => {
-                let (file, kind) = udf_file(reader, &maps, index as u16, mirror)?;
+                let (file, kind, _) = udf_file(reader, &maps, index as u16, mirror)?;
                 if kind != 251 {
                     return Err(ImageError::Malformed(
                         "invalid UDF metadata mirror file type",
@@ -705,7 +706,7 @@ fn udf_file(
     maps: &[Partition],
     partition: u16,
     block: u32,
-) -> Result<(ImageFile, u8)> {
+) -> Result<(ImageFile, u8, Vec<Extent>)> {
     let bytes = mapped_read(reader, maps, partition, block, BLOCK)?;
     let tag = validate_tag(&bytes, Some(block))?;
     let (ea_at, ad_at, data_at) = match tag {
@@ -743,10 +744,17 @@ fn udf_file(
         .filter(|end| *end <= bytes.len())
         .ok_or(ImageError::Malformed("UDF allocation descriptor bounds"))?;
     let mode = le16(&bytes, 34)? & 7;
+    // Keep partition-relative byte positions until directory tags are checked.
+    // Physical image addresses cannot recover these after metadata mapping.
+    let mut logical_extents = Vec::new();
     let extents = if mode == 3 {
         if length > (end - start) as u64 {
             return Err(ImageError::Malformed("short inline UDF file"));
         }
+        logical_extents.push(Extent {
+            offset: u64::from(block) * BLOCK + start as u64,
+            length,
+        });
         range(
             &mapped(maps, partition, block, BLOCK)?,
             start as u64,
@@ -763,10 +771,15 @@ fn udf_file(
             0,
             &mut BTreeSet::new(),
             &mut extents,
+            &mut logical_extents,
         )?;
         range(&extents, 0, length)?
     };
-    Ok((ImageFile { length, extents }, kind))
+    Ok((
+        ImageFile { length, extents },
+        kind,
+        range(&logical_extents, 0, length)?,
+    ))
 }
 fn allocation_descriptors(
     reader: &mut Reader<'_>,
@@ -777,6 +790,7 @@ fn allocation_descriptors(
     depth: usize,
     visited: &mut BTreeSet<(u16, u32)>,
     extents: &mut Vec<Extent>,
+    logical_extents: &mut Vec<Extent>,
 ) -> Result<()> {
     if depth > 16 {
         return Err(ImageError::Budget);
@@ -802,7 +816,13 @@ fn allocation_descriptors(
         let block = le32(ad, 4)?;
         let part = if mode == 1 { le16(ad, 8)? } else { partition };
         match raw >> 30 {
-            0 => extents.extend(mapped(maps, part, block, length)?),
+            0 => {
+                extents.extend(mapped(maps, part, block, length)?);
+                logical_extents.push(Extent {
+                    offset: u64::from(block) * BLOCK,
+                    length,
+                });
+            }
             3 => {
                 if !visited.insert((part, block)) {
                     return Err(ImageError::Malformed("cyclic UDF allocation extent"));
@@ -824,6 +844,7 @@ fn allocation_descriptors(
                     depth + 1,
                     visited,
                     extents,
+                    logical_extents,
                 )?;
             }
             _ => return Err(ImageError::Unsupported("sparse or unrecorded UDF data")),
@@ -848,7 +869,7 @@ fn udf_directory(
     if !visited.insert((partition, block)) {
         return Err(ImageError::Malformed("cyclic UDF directory"));
     }
-    let (directory, kind) = udf_file(reader, maps, partition, block)?;
+    let (directory, kind, logical_extents) = udf_file(reader, maps, partition, block)?;
     if kind != 4 {
         return Err(ImageError::Malformed(
             "UDF directory points to ordinary file",
@@ -863,12 +884,22 @@ fn udf_directory(
             .filter(|bytes| bytes.len() >= 38)
             .ok_or(ImageError::Malformed("short UDF file identifier"))?;
         let name_length = usize::from(fid[19]);
-        let name_at = 38 + usize::from(le16(fid, 36)?);
+        let implementation_length = usize::from(le16(fid, 36)?);
+        if implementation_length % 4 != 0 {
+            return Err(ImageError::Malformed(
+                "unaligned UDF file identifier implementation data",
+            ));
+        }
+        let name_at = 38 + implementation_length;
         let record_length = (name_at + name_length + 3) & !3;
         let fid = fid
             .get(..record_length)
             .ok_or(ImageError::Malformed("UDF file identifier bounds"))?;
-        if validate_tag(fid, None)? != 257 {
+        let position = range(&logical_extents, at as u64, 1)?[0].offset / BLOCK;
+        let location = u32::try_from(position).map_err(|_| {
+            ImageError::Unsupported("UDF directory tag address exceeds descriptor range")
+        })?;
+        if validate_tag(fid, Some(location))? != 257 {
             return Err(ImageError::Malformed("invalid UDF file identifier"));
         }
         at += record_length;
@@ -900,7 +931,7 @@ fn udf_directory(
         if fid[18] & 2 != 0 {
             udf_directory(reader, maps, part, child, &key, depth + 1, visited, files)?;
         } else {
-            let (file, kind) = udf_file(reader, maps, part, child)?;
+            let (file, kind, _) = udf_file(reader, maps, part, child)?;
             if kind != 5 {
                 return Err(ImageError::Malformed("UDF regular file has invalid type"));
             }
