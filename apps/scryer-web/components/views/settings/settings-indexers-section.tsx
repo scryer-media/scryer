@@ -130,18 +130,19 @@ const FALLBACK_PROVIDER_OPTIONS = [
   { value: "newznab", label: "Newznab Indexer" },
 ];
 
-function providerDefaultName(
-  providerType: string,
-  provider?: ProviderTypeInfo,
-): string {
-  const normalizedProviderType = providerType.trim().toLowerCase();
-  return (
-    provider?.name ??
-    FALLBACK_PROVIDER_OPTIONS.find(
-      (option) => option.value === normalizedProviderType,
-    )?.label ??
-    providerType
-  );
+function selectedIndexerPresetName(
+  fields: ConfigFieldDef[],
+  key: string,
+  value: string,
+): string | null {
+  const selectedOption = fields
+    .find((field) => field.key === key)
+    ?.options.find((option) => option.value === value);
+  return selectedOption?.configOverrides?.some(
+    (override) => override.key === "base_url",
+  )
+    ? selectedOption.label
+    : null;
 }
 
 function formatIndexerProviderTypeLabel(
@@ -895,20 +896,48 @@ export function SettingsIndexersSection({
           ),
         ),
       [indexerDraft.configValues, selectedProviderFields],
-    );
+  );
   const [advancedConfigOpen, setAdvancedConfigOpen] = React.useState(false);
   const [hasCustomizedName, setHasCustomizedName] = React.useState(false);
+  const wasEditorOpen = React.useRef(false);
 
   React.useEffect(() => {
-    if (!isEditorOpen) {
+    if (isEditorOpen && !wasEditorOpen.current) {
+      const currentPresetName = selectedProviderFields
+        .map((field) =>
+          selectedIndexerPresetName(
+            selectedProviderFields,
+            field.key,
+            indexerDraft.configValues[field.key] ?? field.defaultValue ?? "",
+          ),
+        )
+        .find((name): name is string => name !== null);
+      setHasCustomizedName(
+        editorMode === "edit" && currentPresetName !== indexerDraft.name,
+      );
+    } else if (!isEditorOpen) {
       setHasCustomizedName(false);
     }
-  }, [isEditorOpen]);
+    wasEditorOpen.current = isEditorOpen;
+  }, [
+    editorMode,
+    indexerDraft.configValues,
+    indexerDraft.name,
+    isEditorOpen,
+    selectedProviderFields,
+  ]);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
+      const presetName = selectedIndexerPresetName(
+        selectedProviderFields,
+        key,
+        value,
+      );
       setIndexerDraft((prev) => ({
         ...prev,
+        name:
+          !hasCustomizedName && presetName !== null ? presetName : prev.name,
         configValues: applyIndexerConfigOption(
           selectedProviderFields,
           prev.configValues,
@@ -917,7 +946,7 @@ export function SettingsIndexersSection({
         ),
       }));
     },
-    [selectedProviderFields, setIndexerDraft],
+    [hasCustomizedName, selectedProviderFields, setIndexerDraft],
   );
 
   const handleProviderTypeChange = React.useCallback(
@@ -928,15 +957,8 @@ export function SettingsIndexersSection({
       const nextMappingCompatibility =
         indexerDownloadClientMappingCatalogResource.catalog?.providerCompatibility.find(
           (provider) => provider.providerType === nextProviderType,
-        );
+      );
       setIndexerDraft((prev: IndexerDraft) => {
-        const previousProvider = providerTypes.find(
-          (providerType) => providerType.providerType === prev.providerType,
-        );
-        const shouldAutofillName = isEditing
-          ? prev.name.trim().length === 0 ||
-            prev.name === providerDefaultName(prev.providerType, previousProvider)
-          : !hasCustomizedName;
         const nextConfigValues: Record<string, string> = {};
         for (const field of nextProvider?.configFields ?? []) {
           if (field.valueSource === "HOST_BINDING") {
@@ -948,9 +970,6 @@ export function SettingsIndexersSection({
         return {
           ...prev,
           providerType: nextProviderType,
-          name: shouldAutofillName
-            ? providerDefaultName(nextProviderType, nextProvider)
-            : prev.name,
           downloadClientId:
             nextMappingCompatibility?.supportsMapping === false
               ? null
@@ -967,8 +986,6 @@ export function SettingsIndexersSection({
     },
     [
       indexerDownloadClientMappingCatalogResource.catalog,
-      hasCustomizedName,
-      isEditing,
       providerTypes,
       setIndexerDraft,
     ],
@@ -1347,15 +1364,13 @@ export function SettingsIndexersSection({
                 <Input
                   id="settings-indexer-name"
                   value={indexerDraft.name}
-                  onChange={(event) =>
-                    {
-                      setHasCustomizedName(true);
-                      setIndexerDraft((prev: IndexerDraft) => ({
-                        ...prev,
-                        name: event.target.value,
-                      }));
-                    }
-                  }
+                  onChange={(event) => {
+                    setHasCustomizedName(true);
+                    setIndexerDraft((prev: IndexerDraft) => ({
+                      ...prev,
+                      name: event.target.value,
+                    }));
+                  }}
                   required
                   placeholder={t("form.indexerNamePlaceholder")}
                 />
