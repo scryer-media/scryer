@@ -336,14 +336,14 @@ fn encrypt_credential(
     key: Option<&EncryptionKey>,
     value: Option<&String>,
 ) -> AppResult<Option<String>> {
-    encrypt_optional_value(key, value, PROXY_CREDENTIAL_LABEL, false)
+    encrypt_optional_value(key, value, PROXY_CREDENTIAL_LABEL, true)
 }
 
 fn decrypt_credential(
     key: Option<&EncryptionKey>,
     value: Option<String>,
 ) -> AppResult<Option<String>> {
-    decrypt_optional_value(key, value, PROXY_CREDENTIAL_LABEL, false)
+    decrypt_optional_value(key, value, PROXY_CREDENTIAL_LABEL, true)
 }
 
 /// Tunnel key material follows the same at-rest convention as the credentials:
@@ -352,28 +352,28 @@ fn encrypt_private_key(
     key: Option<&EncryptionKey>,
     value: Option<&String>,
 ) -> AppResult<Option<String>> {
-    encrypt_optional_value(key, value, PROXY_PRIVATE_KEY_LABEL, false)
+    encrypt_optional_value(key, value, PROXY_PRIVATE_KEY_LABEL, true)
 }
 
 fn decrypt_private_key(
     key: Option<&EncryptionKey>,
     value: Option<String>,
 ) -> AppResult<Option<String>> {
-    decrypt_optional_value(key, value, PROXY_PRIVATE_KEY_LABEL, false)
+    decrypt_optional_value(key, value, PROXY_PRIVATE_KEY_LABEL, true)
 }
 
 fn encrypt_preshared_key(
     key: Option<&EncryptionKey>,
     value: Option<&String>,
 ) -> AppResult<Option<String>> {
-    encrypt_optional_value(key, value, PROXY_PRESHARED_KEY_LABEL, false)
+    encrypt_optional_value(key, value, PROXY_PRESHARED_KEY_LABEL, true)
 }
 
 fn decrypt_preshared_key(
     key: Option<&EncryptionKey>,
     value: Option<String>,
 ) -> AppResult<Option<String>> {
-    decrypt_optional_value(key, value, PROXY_PRESHARED_KEY_LABEL, false)
+    decrypt_optional_value(key, value, PROXY_PRESHARED_KEY_LABEL, true)
 }
 
 /// Store an address or DNS list as the comma-separated text the column holds.
@@ -671,7 +671,7 @@ mod tests {
                 pool: pool.clone(),
                 writer_gate: Arc::new(tokio::sync::Mutex::new(())),
             },
-            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(Some(EncryptionKey::from_bytes([7; 32])))),
         );
         (store, pool)
     }
@@ -709,6 +709,115 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    #[tokio::test]
+    async fn every_proxy_secret_requires_a_key_and_failed_writes_preserve_storage() {
+        use sqlx::Row;
+
+        for column in [
+            "username_encrypted",
+            "password_encrypted",
+            "private_key_encrypted",
+            "private_key_passphrase_encrypted",
+            "preshared_key_encrypted",
+        ] {
+            let (store, pool) = proxy_store().await;
+            let mut config = tunnel_config();
+            config.username_encrypted = None;
+            config.password_encrypted = None;
+            config.private_key_encrypted = None;
+            config.private_key_passphrase_encrypted = None;
+            config.preshared_key_encrypted = None;
+            let secret = "storage-regression-secret".to_string();
+            match column {
+                "username_encrypted" => config.username_encrypted = Some(secret.clone()),
+                "password_encrypted" => config.password_encrypted = Some(secret.clone()),
+                "private_key_encrypted" => config.private_key_encrypted = Some(secret.clone()),
+                "private_key_passphrase_encrypted" => {
+                    config.private_key_passphrase_encrypted = Some(secret.clone());
+                }
+                "preshared_key_encrypted" => config.preshared_key_encrypted = Some(secret.clone()),
+                _ => unreachable!(),
+            }
+
+            *store.encryption_key.write().unwrap() = None;
+            let error = store.create(config.clone()).await.unwrap_err().to_string();
+            assert!(
+                error.contains("requires encryption key"),
+                "{column}: {error}"
+            );
+            assert!(!error.contains(&secret));
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM proxy_configs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 0, "failed create persisted {column}");
+
+            let key = EncryptionKey::from_bytes([7; 32]);
+            *store.encryption_key.write().unwrap() = Some(key.clone());
+            store.create(config.clone()).await.unwrap();
+            let row = sqlx::query("SELECT * FROM proxy_configs WHERE id = 'tunnel-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let ciphertext: String = row.get(column);
+            assert!(crate::encryption::is_encrypted(&ciphertext), "{column}");
+            assert_eq!(
+                crate::encryption::decrypt_value(&key, &ciphertext).unwrap(),
+                secret
+            );
+
+            // Updates must encrypt secrets just as inserts do.
+            config.name = "Updated with key".into();
+            store.update(config.clone()).await.unwrap();
+            let row = sqlx::query("SELECT * FROM proxy_configs WHERE id = 'tunnel-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let ciphertext: String = row.get(column);
+            assert!(crate::encryption::is_encrypted(&ciphertext), "{column}");
+            assert_eq!(
+                crate::encryption::decrypt_value(&key, &ciphertext).unwrap(),
+                secret
+            );
+
+            *store.encryption_key.write().unwrap() = None;
+            config.name = "Must not persist".into();
+            let error = store.update(config).await.unwrap_err().to_string();
+            assert!(
+                error.contains("requires encryption key"),
+                "{column}: {error}"
+            );
+            assert!(!error.contains(&secret));
+            let row = sqlx::query("SELECT * FROM proxy_configs WHERE id = 'tunnel-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(row.get::<String, _>(column), ciphertext);
+            assert_eq!(row.get::<String, _>("name"), "Updated with key");
+            assert!(store.get_for_edit("tunnel-1").await.is_err(), "{column}");
+            assert!(store.list(None).await.is_err(), "{column}");
+        }
+    }
+
+    #[tokio::test]
+    async fn credentialless_proxies_can_be_saved_without_an_encryption_key() {
+        let (store, _pool) = proxy_store().await;
+        *store.encryption_key.write().unwrap() = None;
+        let mut config = tunnel_config();
+        config.provider_type = ProxyProviderType::Http;
+        config.base_url = "http://proxy.test:8080".into();
+        config.username_encrypted = None;
+        config.private_key_encrypted = None;
+        config.private_key_passphrase_encrypted = None;
+        store.create(config.clone()).await.unwrap();
+        config.name = "No credentials".into();
+        store.update(config).await.unwrap();
+        assert_eq!(
+            store.get_by_id("tunnel-1").await.unwrap().unwrap().name,
+            "No credentials"
+        );
     }
 
     #[tokio::test]
@@ -1057,11 +1166,8 @@ mod tests {
         // Zero is "keepalive off", which must not read back as "unset".
         assert_eq!(loaded.tunnel_keepalive_seconds, Some(0));
 
-        // Both public keys are stored in the clear, because an operator has to
-        // read them to compare them against their server. The two secrets are
-        // not — and with no encryption key configured this store writes them
-        // through, so the check that matters is which *column* holds which
-        // value, not the ciphertext.
+        // Public keys and addresses remain readable for operator comparison.
+        // Secret-column encryption has separate regression coverage.
         let stored: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
             "SELECT peer_public_key, tunnel_public_key, tunnel_addresses
                FROM proxy_configs WHERE id = 'wireguard-1'",
