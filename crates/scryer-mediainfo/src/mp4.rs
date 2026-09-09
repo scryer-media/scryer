@@ -689,6 +689,7 @@ fn build_mp4_tracks(
         raw.metadata.duration_seconds =
             track_duration_seconds(track).filter(|duration| *duration > 0.0);
         if kind == TrackKind::Video {
+            raw.metadata.declared_frame_rate = uniform_sample_frame_rate(track);
             let (rate, variable) = sample_timing_facts(track);
             raw.metadata.observed_frame_rate = rate;
             raw.metadata.variable_frame_rate = variable;
@@ -1771,6 +1772,21 @@ fn matrix_rotation(matrix: &mp4parse::Matrix) -> Option<f64> {
     Some(-b.atan2(a).to_degrees())
 }
 
+fn uniform_sample_frame_rate(track: &mp4parse::Track) -> Option<scryer_media_types::Rational> {
+    let scale = track.timescale?.0;
+    let samples = &track.stts.as_ref()?.samples;
+    let delta = samples.first()?.sample_delta;
+    if scale == 0
+        || delta == 0
+        || samples
+            .iter()
+            .any(|sample| sample.sample_count == 0 || sample.sample_delta != delta)
+    {
+        return None;
+    }
+    scryer_media_types::Rational::new(i64::try_from(scale).ok()?, u64::from(delta))
+}
+
 fn sample_timing_facts(
     track: &mp4parse::Track,
 ) -> (Option<scryer_media_types::Rational>, Option<bool>) {
@@ -2351,6 +2367,43 @@ mod tests {
             })
             .unwrap();
         assert_eq!(accounted_track_bitrate(&track), None);
+    }
+
+    #[test]
+    fn uniform_sample_timing_retains_declarations_without_claiming_observations() {
+        use scryer_media_types::Rational;
+        assert_eq!(
+            uniform_sample_frame_rate(&timing_track(&[(1, 1000)])),
+            Rational::new(1, 1)
+        );
+        assert_eq!(
+            sample_timing_facts(&timing_track(&[(1, 1000)])),
+            (None, None)
+        );
+        assert_eq!(
+            uniform_sample_frame_rate(&timing_track(&[(3, 40), (2, 40)])),
+            Rational::new(25, 1)
+        );
+        for entries in [
+            &[][..],
+            &[(0, 40)][..],
+            &[(1, 0)][..],
+            &[(1, 40), (1, 60)][..],
+        ] {
+            assert!(uniform_sample_frame_rate(&timing_track(entries)).is_none());
+        }
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/hevc_hdr10plus.mp4");
+        let analysis = crate::analyze_catalog_file(&path).unwrap();
+        let video = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+            .unwrap();
+        assert_eq!(video.metadata.declared_frame_rate, Rational::new(1, 1));
+        assert!(video.metadata.observed_frame_rate.is_none());
+        assert!(video.metadata.variable_frame_rate.is_none());
     }
 
     #[test]
