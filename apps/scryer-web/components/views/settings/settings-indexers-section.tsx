@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Link } from "react-router";
 import {
   ChevronRight,
   Edit,
@@ -9,7 +8,6 @@ import {
   Power,
   PowerOff,
   RefreshCw,
-  ScanSearch,
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
@@ -48,7 +46,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { visibleIndexerConfigFields } from "@/lib/types";
 import type {
   IndexerRecord,
@@ -64,7 +61,6 @@ import {
   resolveConfigFieldsForValues,
   splitAdvancedConfigFields,
 } from "@/lib/utils/provider-config-fields";
-import { buildIndexerSettingsPath } from "@/lib/utils/routing";
 import { applyIndexerConfigOption } from "@/lib/utils/indexer-setup";
 import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
@@ -800,9 +796,6 @@ export function SettingsIndexersSection({
   startCreateIndexer,
 }: SettingsIndexersSectionProps) {
   const t = useTranslate();
-  // The search pane this jumps to exists only while experimental features are
-  // on, so the row action comes and goes with it.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [errorHistoryIndexer, setErrorHistoryIndexer] =
     React.useState<IndexerErrorHistoryScope | null>(null);
   const normalizedProviderType = indexerDraft.providerType.trim().toLowerCase();
@@ -1204,26 +1197,6 @@ export function SettingsIndexersSection({
                       >
                         <Logs className="h-4 w-4" />
                       </IndexerActionButton>
-                      {experimentalFeaturesEnabled &&
-                      indexer.isEnabled &&
-                      indexer.enableInteractiveSearch &&
-                      !indexer.supportsManagedChildrenSync ? (
-                        <IndexerActionButton
-                          asChild
-                          id={selectorId(
-                            "settings-indexer-search-with",
-                            indexer.name,
-                          )}
-                          tone="search"
-                          label={t("indexerSearch.searchWithThisIndexer")}
-                        >
-                          <Link
-                            to={`${buildIndexerSettingsPath("search")}?indexer=${encodeURIComponent(indexer.id)}`}
-                          >
-                            <ScanSearch className="h-4 w-4" />
-                          </Link>
-                        </IndexerActionButton>
-                      ) : null}
                       {!indexer.isManaged && indexer.supportsManagedChildrenSync ? (
                         <IndexerActionButton
                           id={selectorId("settings-indexer-sync", indexer.name)}
