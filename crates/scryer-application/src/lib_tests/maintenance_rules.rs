@@ -362,7 +362,9 @@ fn draft(rego_source: &str) -> MaintenanceRuleDraft {
         name: "Stale movies".to_string(),
         description: "Unwatched for a long time".to_string(),
         rego_source: rego_source.to_string(),
-        action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        ),
         grace_days: 7,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -477,7 +479,9 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
             &created.rule_set.id,
             MaintenanceMatcherDraft {
                 rego_source: NEVER_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                ),
                 grace_days: 30,
                 storage_root_id: None,
             },
@@ -533,8 +537,8 @@ async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_
             &created.rule_set.id,
             MaintenanceMatcherDraft {
                 rego_source: NEVER_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
                 ),
                 grace_days: 7,
                 storage_root_id: None,
@@ -553,8 +557,8 @@ async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_
             &created.rule_set.id,
             MaintenanceMatcherDraft {
                 rego_source: NEVER_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
                 ),
                 grace_days: 7,
                 storage_root_id: Some(None),
@@ -865,8 +869,8 @@ async fn an_action_that_supports_neither_movies_nor_shows_is_rejected() {
             &user,
             MaintenanceRuleDraft {
                 // Season/episode only, so it can never run on a title-scoped rule.
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeDeleteFiles),
                 ),
                 ..draft(MONITORED_MATCHER)
             },
@@ -893,8 +897,10 @@ async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time()
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(
+                        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                    ),
                 ),
                 ..draft(MONITORED_MATCHER)
             },
@@ -921,8 +927,10 @@ async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time()
             &created.rule_set.id,
             MaintenanceMatcherDraft {
                 rego_source: MONITORED_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(
+                        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                    ),
                 ),
                 grace_days: 7,
                 storage_root_id: None,
@@ -993,8 +1001,8 @@ async fn the_grace_period_is_bounded_at_ten_years() {
             &accepted.rule_set.id,
             MaintenanceMatcherDraft {
                 rego_source: MONITORED_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
                 ),
                 grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
                 storage_root_id: None,
@@ -1065,9 +1073,12 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: MONITORED_MATCHER.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1154,9 +1165,12 @@ async fn preview_holds_when_selected_root_membership_cannot_be_proved() {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: MONITORED_MATCHER.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: Some(scryer_domain::root_folder_id_for_path("/data/movies")),
                 },
@@ -1192,9 +1206,12 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: NEEDS_UPGRADE_HISTORY_MATCHER.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1231,8 +1248,8 @@ async fn an_inline_preview_persists_nothing() {
                 library_ids: vec![],
                 subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                 rego_source: MONITORED_MATCHER.to_string(),
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
                 ),
                 grace_days: 0,
                 storage_root_id: None,
@@ -1261,9 +1278,12 @@ async fn preview_refuses_a_selection_above_the_cap() {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: MONITORED_MATCHER.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1337,9 +1357,12 @@ async fn file_facts_distinguish_having_files_from_having_none() {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: matcher.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1382,9 +1405,12 @@ async fn episode_counts_are_absent_for_movies() {
                          \tnot input.facts.episode_count\n\
                          }\n"
                     .to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1466,9 +1492,12 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: matcher.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },

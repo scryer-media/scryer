@@ -1,6 +1,11 @@
 import type {
   MaintenanceActionDescriptor,
   MaintenanceActionKind,
+  MaintenanceActionSequence,
+  MaintenanceActionSpec,
+  MaintenanceActionStep,
+  MaintenanceActionStepKind,
+  MaintenanceActionStepProgress,
   MaintenanceCandidate,
   MaintenanceCandidateState,
   MaintenanceEffectArming,
@@ -43,6 +48,107 @@ reasons contains "unmonitored_with_files" if {
 `;
 
 const DEFAULT_ACTION_KIND: MaintenanceActionKind = "DO_NOTHING";
+const MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION = 2;
+
+export function maintenanceActionSequenceStepId(
+  randomUuid: (() => string) | null | undefined =
+    globalThis.crypto?.randomUUID?.bind(globalThis.crypto),
+  now: () => number = Date.now,
+  random: () => number = Math.random,
+): string {
+  const uuid = randomUuid?.();
+  if (uuid) return uuid;
+  return `step-${now()}-${random().toString(36).slice(2) || "0"}`;
+}
+
+function sequenceStep(
+  id: string,
+  kind: MaintenanceActionStepKind,
+  parameters: MaintenanceActionStep["parameters"],
+): MaintenanceActionStep {
+  return { id, kind, parameters };
+}
+
+function noStepParameters(): MaintenanceActionStep["parameters"] {
+  return {
+    includeDescendants: null,
+    targetQualityProfileId: null,
+    searchCondition: null,
+    tags: [],
+  };
+}
+
+/// The editor never writes this projection by merely reading a legacy rule.
+/// It only becomes persisted when a later save submits the schema-2 sequence.
+export function maintenanceActionSequenceFromLegacySpec(
+  spec: MaintenanceActionSpec,
+  subjectKind: MaintenanceRuleScope,
+): MaintenanceActionSequence {
+  const empty = noStepParameters();
+  const unmonitor = (id: string, includeDescendants: boolean) =>
+    sequenceStep(id, "UNMONITOR", { ...empty, includeDescendants });
+  const deleteFiles = (id: string) => sequenceStep(id, "DELETE_FILES", empty);
+  switch (spec.kind) {
+    case "DO_NOTHING":
+      return { schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION, steps: [] };
+    case "UNMONITOR_SCOPE_KEEP_FILES":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [unmonitor("legacy-unmonitor", subjectKind !== "TITLE")],
+      };
+    case "DELETE_TITLE_AND_FILES":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [sequenceStep("legacy-delete-title", "DELETE_TITLE_AND_FILES", empty)],
+      };
+    case "UNMONITOR_TITLE_DELETE_ALL_FILES":
+    case "UNMONITOR_SHOW_DELETE_EXISTING_FILES":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [unmonitor("legacy-unmonitor", true), deleteFiles("legacy-delete-files")],
+      };
+    case "UNMONITOR_SCOPE_DELETE_FILES":
+    case "UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [
+          unmonitor("legacy-unmonitor", subjectKind !== "TITLE"),
+          deleteFiles("legacy-delete-files"),
+        ],
+      };
+    case "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [unmonitor("legacy-unmonitor", true)],
+      };
+    case "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [
+          sequenceStep("legacy-change-profile", "CHANGE_QUALITY_PROFILE", {
+            ...empty,
+            targetQualityProfileId: spec.targetQualityProfileId,
+          }),
+          sequenceStep("legacy-search", "SEARCH", {
+            ...empty,
+            searchCondition: "PREVIOUS_PROFILE_CHANGED",
+          }),
+        ],
+      };
+    case "ADD_TAGS":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [sequenceStep("legacy-add-tags", "ADD_TAGS", { ...empty, tags: spec.tags })],
+      };
+    case "REMOVE_TAGS":
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [sequenceStep("legacy-remove-tags", "REMOVE_TAGS", { ...empty, tags: spec.tags })],
+      };
+    case "ACTION_SEQUENCE":
+      return { schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION, steps: [] };
+  }
+}
 
 export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
   return {
@@ -53,6 +159,10 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     actionKind: DEFAULT_ACTION_KIND,
     targetQualityProfileId: "",
     tags: [],
+    actionSequence: {
+      schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+      steps: [],
+    },
     graceDays: 0,
     storageRootId: "",
     libraryIds: [],
@@ -70,6 +180,12 @@ export function maintenanceRuleDraftFromDetail(
     actionKind: detail.actionSpec.kind,
     targetQualityProfileId: detail.actionSpec.targetQualityProfileId ?? "",
     tags: [...(detail.actionSpec.tags ?? [])],
+    actionSequence:
+      detail.actionSequence ??
+      maintenanceActionSequenceFromLegacySpec(
+        detail.actionSpec,
+        detail.ruleSet.subjectKind,
+      ),
     graceDays: detail.revision.graceDays,
     storageRootId: detail.revision.storageRootId ?? "",
     libraryIds: [...detail.ruleSet.libraryIds],
@@ -117,16 +233,44 @@ export function normalizedActionTags(tags: readonly string[]): string[] {
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
 }
 
+/// Maps the editor's full parameter object onto the closed GraphQL input shape.
+/// Omitted fields are meaningful: the server rejects a parameter for the wrong
+/// primitive instead of quietly carrying stale data to another step.
+export function maintenanceActionSequenceInput(sequence: MaintenanceActionSequence) {
+  return {
+    schemaVersion: sequence.schemaVersion,
+    steps: sequence.steps.map((step) => {
+      const parameters = (() => {
+        switch (step.kind) {
+          case "UNMONITOR":
+            return { includeDescendants: Boolean(step.parameters.includeDescendants) };
+          case "CHANGE_QUALITY_PROFILE":
+            return { targetQualityProfileId: step.parameters.targetQualityProfileId || undefined };
+          case "SEARCH":
+            return { searchCondition: step.parameters.searchCondition || undefined };
+          case "ADD_TAGS":
+          case "REMOVE_TAGS":
+            return { tags: normalizedActionTags(step.parameters.tags) };
+          case "DELETE_FILES":
+          case "DELETE_TITLE_AND_FILES":
+            return {};
+        }
+      })();
+      return { id: step.id, kind: step.kind, parameters };
+    }),
+  };
+}
+
 export function createMaintenanceRuleSetInput(
   draft: MaintenanceRuleSetDraft,
-  descriptors: MaintenanceActionDescriptor[],
+  _descriptors?: MaintenanceActionDescriptor[],
 ) {
   return {
     subjectKind: draft.subjectKind,
     name: draft.name.trim(),
     description: draft.description.trim() || undefined,
     regoSource: draft.regoSource,
-    action: maintenanceActionInput(draft, descriptors),
+    actionSequence: maintenanceActionSequenceInput(draft.actionSequence),
     graceDays: draft.graceDays,
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
@@ -136,12 +280,12 @@ export function createMaintenanceRuleSetInput(
 export function updateMaintenanceRuleMatcherInput(
   id: string,
   draft: MaintenanceRuleSetDraft,
-  descriptors: MaintenanceActionDescriptor[],
+  _descriptors?: MaintenanceActionDescriptor[],
 ) {
   return {
     id,
     regoSource: draft.regoSource,
-    action: maintenanceActionInput(draft, descriptors),
+    actionSequence: maintenanceActionSequenceInput(draft.actionSequence),
     graceDays: draft.graceDays,
     // Always send the explicit editor value. Old clients omit this field and
     // preserve a root they cannot render; this client may intentionally clear it.
@@ -233,7 +377,7 @@ type MaintenancePreviewInputOptions = {
 export function maintenancePreviewInput({
   ruleSetId,
   draft,
-  descriptors = [],
+  descriptors: _descriptors = [],
   libraryId,
   limit,
   titleIds,
@@ -246,7 +390,7 @@ export function maintenancePreviewInput({
           subjectKind: draft.subjectKind,
           libraryIds: [...draft.libraryIds],
           regoSource: draft.regoSource,
-          action: maintenanceActionInput(draft, descriptors),
+          actionSequence: maintenanceActionSequenceInput(draft.actionSequence),
           graceDays: draft.graceDays,
           storageRootId: draft.storageRootId || undefined,
         }
@@ -312,12 +456,27 @@ const ACTION_KIND_LABEL_KEYS: Record<MaintenanceActionKind, string> = {
     "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged",
   ADD_TAGS: "settings.maintenanceActionAddTags",
   REMOVE_TAGS: "settings.maintenanceActionRemoveTags",
+  ACTION_SEQUENCE: "settings.maintenanceActionSequence",
 };
 
 /// Translation key for an action kind, or null when the API sends a kind this
 /// build does not know. Callers render the raw kind rather than an empty cell.
 export function actionKindLabelKey(kind: string): string | null {
   return ACTION_KIND_LABEL_KEYS[kind as MaintenanceActionKind] ?? null;
+}
+
+const ACTION_STEP_KIND_LABEL_KEYS: Record<MaintenanceActionStepKind, string> = {
+  UNMONITOR: "settings.maintenanceSequenceStepUnmonitor",
+  DELETE_FILES: "settings.maintenanceSequenceStepDeleteFiles",
+  CHANGE_QUALITY_PROFILE: "settings.maintenanceSequenceStepChangeQualityProfile",
+  SEARCH: "settings.maintenanceSequenceStepSearch",
+  ADD_TAGS: "settings.maintenanceSequenceStepAddTags",
+  REMOVE_TAGS: "settings.maintenanceSequenceStepRemoveTags",
+  DELETE_TITLE_AND_FILES: "settings.maintenanceSequenceStepDeleteTitleAndFiles",
+};
+
+export function actionStepKindLabelKey(kind: string): string | null {
+  return ACTION_STEP_KIND_LABEL_KEYS[kind as MaintenanceActionStepKind] ?? null;
 }
 
 const RISK_CLASS_LABEL_KEYS: Record<MaintenanceRiskClass, string> = {
@@ -678,6 +837,22 @@ export function runStatusBadgeTone(
     default:
       return "neutral";
   }
+}
+
+/// Search is only recorded as requested when its durable receipt was accepted.
+/// A configured but unstarted step stays waiting, and a conditional search can
+/// truthfully remain skipped without being mistaken for a dispatched job.
+export function maintenanceSearchHistoryState(
+  progress: MaintenanceActionStepProgress | undefined,
+): string {
+  if (
+    progress?.receipts.some(
+      (receipt) => receipt.state === "accepted" || receipt.state === "completed",
+    )
+  ) {
+    return "accepted";
+  }
+  return progress?.run?.state.toLowerCase() ?? "waiting";
 }
 
 /// The server rejects a destructive arming whose acknowledged count no longer

@@ -14,6 +14,14 @@ fn grace_days(input: Option<i32>) -> i64 {
     i64::from(input.unwrap_or(0))
 }
 
+fn action_definition(
+    action: Option<MaintenanceActionInput>,
+    action_sequence: Option<MaintenanceActionSequenceInput>,
+) -> GqlResult<scryer_application::maintenance_rules::MaintenanceActionDefinition> {
+    crate::mappers::maintenance_action_definition_from_inputs(action, action_sequence)
+        .map_err(|error| to_gql_error(AppError::Validation(error)))
+}
+
 /// Resolve the matcher a preview should run.
 ///
 /// The two forms are mutually exclusive by construction: previewing a stored
@@ -26,31 +34,32 @@ fn preview_matcher(
     let rule_set_id = input.rule_set_id.take();
     let rego_source = input.rego_source.take();
     let action = input.action.take();
+    let action_sequence = input.action_sequence.take();
 
-    match (rule_set_id, rego_source, action) {
-        (Some(rule_set_id), None, None) => Ok(MaintenancePreviewMatcher::Stored {
+    match (rule_set_id, rego_source, action, action_sequence) {
+        (Some(rule_set_id), None, None, None) => Ok(MaintenancePreviewMatcher::Stored {
             rule_set_id: String::from(rule_set_id),
         }),
-        (None, Some(rego_source), Some(action)) => Ok(MaintenancePreviewMatcher::Inline {
-            library_ids: input.library_ids.take().unwrap_or_default(),
-            subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
-                input.subject_kind,
-            ),
-            rego_source,
-            action_spec: crate::mappers::maintenance_action_spec_from_input(action),
-            grace_days: grace_days(input.grace_days),
-            storage_root_id: input.storage_root_id.take(),
-        }),
-        (None, Some(_), None) => Err(to_gql_error(AppError::Validation(
-            "previewing an unsaved matcher requires 'action'".to_string(),
+        (None, Some(rego_source), action, action_sequence) => {
+            Ok(MaintenancePreviewMatcher::Inline {
+                library_ids: input.library_ids.take().unwrap_or_default(),
+                subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
+                    input.subject_kind,
+                ),
+                rego_source,
+                action_definition: action_definition(action, action_sequence)?,
+                grace_days: grace_days(input.grace_days),
+                storage_root_id: input.storage_root_id.take(),
+            })
+        }
+        (None, None, Some(_), _) | (None, None, _, Some(_)) => Err(to_gql_error(
+            AppError::Validation("previewing an unsaved matcher requires 'regoSource'".to_string()),
+        )),
+        (None, None, None, None) => Err(to_gql_error(AppError::Validation(
+            "preview requires either 'ruleSetId' or 'regoSource' with an action definition"
+                .to_string(),
         ))),
-        (None, None, Some(_)) => Err(to_gql_error(AppError::Validation(
-            "previewing an unsaved matcher requires 'regoSource'".to_string(),
-        ))),
-        (None, None, None) => Err(to_gql_error(AppError::Validation(
-            "preview requires either 'ruleSetId' or 'regoSource' with 'action'".to_string(),
-        ))),
-        (Some(_), _, _) => Err(to_gql_error(AppError::Validation(
+        (Some(_), _, _, _) => Err(to_gql_error(AppError::Validation(
             "preview accepts either 'ruleSetId' or an unsaved matcher, not both".to_string(),
         ))),
     }
@@ -114,6 +123,7 @@ impl MaintenanceRuleMutations {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let action_definition = action_definition(input.action, input.action_sequence)?;
 
         let detail = app
             .create_maintenance_rule_set(
@@ -125,7 +135,7 @@ impl MaintenanceRuleMutations {
                     name: input.name,
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
-                    action_spec: crate::mappers::maintenance_action_spec_from_input(input.action),
+                    action_definition,
                     grace_days: grace_days(input.grace_days),
                     storage_root_id: input.storage_root_id,
                     library_ids: input.library_ids.unwrap_or_default(),
@@ -152,6 +162,7 @@ impl MaintenanceRuleMutations {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        let action_definition = action_definition(input.action, input.action_sequence)?;
 
         let detail = app
             .update_maintenance_rule_matcher(
@@ -159,7 +170,7 @@ impl MaintenanceRuleMutations {
                 input.id.as_ref(),
                 MaintenanceMatcherDraft {
                     rego_source: input.rego_source,
-                    action_spec: crate::mappers::maintenance_action_spec_from_input(input.action),
+                    action_definition,
                     grace_days: grace_days(input.grace_days),
                     storage_root_id: match input.storage_root_id {
                         async_graphql::MaybeUndefined::Undefined => None,

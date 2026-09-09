@@ -688,9 +688,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // public types 779->780. Root-field, input-object, and enum counts are
     // unchanged.
     // Title-aware rule-editor previews add the `ruleSet` read and tracked rule
-    // packs add `trackedRulePacks`: query 161->163.
+    // packs add `trackedRulePacks`: query 161->163. Schema-2 maintenance
+    // sequences add the `maintenanceActionStepDescriptors` catalog read:
+    // query 163->164.
     assert_eq!(
-        query_field_count, 163,
+        query_field_count, 164,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -809,10 +811,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // and three enums for diagnostics and provenance: public types 794->824.
     // Four mutations list episode targets, inspect diagnostics, select disc
     // titles, and map episodes; query and subscription roots are unchanged.
-    assert_eq!(public_types.len(), 824);
-    assert_eq!(kind_count("OBJECT"), 444);
-    assert_eq!(kind_count("INPUT_OBJECT"), 218);
-    assert_eq!(kind_count("ENUM"), 150);
+    // Schema-2 maintenance sequences add seven objects (the sequence, its
+    // steps, descriptors, progress, checkpoints, and job receipts), three
+    // input objects, and two enums for step kind and search condition:
+    // public types 824->836, OBJECT 444->451, INPUT_OBJECT 218->221, and
+    // ENUM 150->152.
+    assert_eq!(public_types.len(), 836);
+    assert_eq!(kind_count("OBJECT"), 451);
+    assert_eq!(kind_count("INPUT_OBJECT"), 221);
+    assert_eq!(kind_count("ENUM"), 152);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
@@ -836,6 +843,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
     assert!(query_field_names.contains(&"ruleSet"));
     assert!(query_field_names.contains(&"trackedRulePacks"));
+    assert!(query_field_names.contains(&"maintenanceActionStepDescriptors"));
+    assert!(public_type_names.contains(&"MaintenanceActionSequence"));
+    assert!(public_type_names.contains(&"MaintenanceActionSequenceInput"));
+    assert!(public_type_names.contains(&"MaintenanceActionStepDescriptor"));
     assert!(mutation_field_names.contains(&"testRuleSet"));
     assert!(mutation_field_names.contains(&"installTrackedRulePack"));
     assert!(mutation_field_names.contains(&"previewTrackedRulePackUpdate"));

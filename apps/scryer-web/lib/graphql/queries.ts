@@ -3534,6 +3534,19 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
       targetQualityProfileId
       tags
     }
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }
     createdAt
     updatedAt`;
 
@@ -3570,6 +3583,19 @@ export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
       schemaVersion
       targetQualityProfileId
       tags
+    }
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
     }`;
 
 export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
@@ -3594,6 +3620,22 @@ export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescrip
     requiresTargetQualityProfile
     requiresTags
     supportsStorageScope
+  }
+}`;
+
+export const maintenanceActionStepDescriptorsQuery = `query MaintenanceActionStepDescriptors {
+  maintenanceActionStepDescriptors {
+    id
+    kind
+    label
+    supportedSubjects
+    parameterSchema
+    effectClasses
+    riskClass
+    requires
+    terminal
+    completionPolicy
+    storageRootAllowed
   }
 }`;
 
@@ -3622,6 +3664,50 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     stateReason
     reasonCodes
     actionKind
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }
+    sequenceSteps {
+      step {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+      run {
+        stepId
+        stepKind
+        state
+        attempt
+        holdReason
+        error
+        createdAt
+        updatedAt
+        finishedAt
+      }
+      receipts {
+        dispatchAttempt
+        logicalRequestKey
+        jobRunId
+        state
+        createdAt
+        updatedAt
+      }
+    }
     graceDays
     matchGeneration
     firstMatchedAt
@@ -3662,6 +3748,50 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
     titleId
     titleName
     actionKind
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }
+    sequenceSteps {
+      step {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+      run {
+        stepId
+        stepKind
+        state
+        attempt
+        holdReason
+        error
+        createdAt
+        updatedAt
+        finishedAt
+      }
+      receipts {
+        dispatchAttempt
+        logicalRequestKey
+        jobRunId
+        state
+        createdAt
+        updatedAt
+      }
+    }
     matchGeneration
     attempt
     status

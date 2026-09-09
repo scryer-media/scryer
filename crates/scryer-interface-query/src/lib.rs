@@ -3361,6 +3361,17 @@ impl AcquisitionQueries {
         Ok(crate::mappers::maintenance_action_descriptors())
     }
 
+    /// List the backend-owned schema-2 action-sequence catalog. Authoring
+    /// clients use its parameter and dependency descriptors directly rather
+    /// than maintaining a parallel effect matrix.
+    async fn maintenance_action_step_descriptors(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<MaintenanceActionStepDescriptor>> {
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::maintenance_action_step_descriptors())
+    }
+
     /// List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
     ///
     /// Two independent things hide rows, and they are not the same thing. A

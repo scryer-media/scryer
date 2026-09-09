@@ -21,8 +21,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
-import { TitleTagsPicker } from "@/components/common/title-tags-picker";
-import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
+import { MaintenanceActionSequenceEditor } from "@/components/views/settings/maintenance-action-sequence-editor";
 import { SingleSelectField } from "@/components/ui/select";
 import {
   Table,
@@ -44,13 +43,15 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   MaintenanceActionDescriptor,
-  MaintenanceActionKind,
+  MaintenanceActionSequence,
+  MaintenanceActionStepDescriptor,
   MaintenanceEffectArming,
   MaintenanceEvaluationMode,
   MaintenanceInstanceGates,
   MaintenancePreviewResult,
   MaintenancePreviewSource,
   MaintenancePreviewTitle,
+  MaintenanceRiskClass,
   MaintenanceRuleScope,
   MaintenanceTestSubject,
   MaintenanceRuleSetDraft,
@@ -60,8 +61,7 @@ import type {
 import {
   MAINTENANCE_PREVIEW_LIMIT_MAX,
   actionKindLabelKey,
-  actionRequiresTags,
-  actionRequiresTargetQualityProfile,
+  actionStepKindLabelKey,
   armingOptionsFor,
   descriptorForActionKind,
   effectArmingBadgeTone,
@@ -74,7 +74,6 @@ import {
   previewOutcomeLabelKey,
   riskClassBadgeTone,
   riskClassLabelKey,
-  storageScopedActionDescriptors,
 } from "@/lib/utils/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
 
@@ -106,6 +105,8 @@ type SettingsMaintenanceRulesSectionProps = {
   applyTemplate: (template: MaintenanceRuleTemplate) => void;
   ruleSetRecords: MaintenanceRuleSetRecord[];
   actionDescriptors: MaintenanceActionDescriptor[];
+  actionStepDescriptors: MaintenanceActionStepDescriptor[];
+  actionStepDescriptorsLoaded: boolean;
   libraries: MaintenanceLibraryOption[];
   storageRoots: MaintenanceStorageRootOption[];
   qualityProfiles: MaintenanceQualityProfileOption[];
@@ -204,6 +205,104 @@ function ActionLabel({ kind }: { kind: string }) {
   const t = useTranslate();
   const labelKey = actionKindLabelKey(kind);
   return <>{labelKey ? t(labelKey) : kind}</>;
+}
+
+const RISK_ORDER: Record<MaintenanceRiskClass, number> = {
+  NONE: 0,
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+};
+
+function aggregateSequenceRisk(
+  record: MaintenanceRuleSetRecord,
+  descriptors: MaintenanceActionStepDescriptor[],
+): MaintenanceRiskClass | null {
+  if (!record.actionSequence) return null;
+  let risk: MaintenanceRiskClass = "NONE";
+  for (const step of record.actionSequence.steps) {
+    const descriptor = descriptors.find((item) => item.kind === step.kind);
+    if (!descriptor) return null;
+    if (RISK_ORDER[descriptor.riskClass] > RISK_ORDER[risk]) {
+      risk = descriptor.riskClass;
+    }
+  }
+  return risk;
+}
+
+function ActionSummary({
+  record,
+}: {
+  record: MaintenanceRuleSetRecord;
+}) {
+  const t = useTranslate();
+  if (!record.actionSequence) {
+    return <ActionLabel kind={record.actionSpec.kind} />;
+  }
+  if (record.actionSequence.steps.length === 0) {
+    return <>{t("settings.maintenanceSequenceObserveOnly")}</>;
+  }
+  const labels = record.actionSequence.steps
+    .map((step) => {
+      const key = actionStepKindLabelKey(step.kind);
+      return key ? t(key) : step.kind;
+    })
+    .join(" → ");
+  return (
+    <span className="block max-w-[260px] truncate" title={labels}>
+      {labels}
+    </span>
+  );
+}
+
+function ActionSequencePreview({
+  sequence,
+}: {
+  sequence: MaintenanceActionSequence;
+}) {
+  const t = useTranslate();
+  return (
+    <div
+      id="settings-maintenance-preview-action-sequence"
+      className="rounded border border-border bg-muted/30 px-3 py-2"
+    >
+      <p className="text-xs font-medium">
+        {t("settings.maintenanceSequencePreviewPlan")}
+      </p>
+      {sequence.steps.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("settings.maintenanceSequenceObserveOnly")}
+        </p>
+      ) : (
+        <ol className="mt-1 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+          {sequence.steps.map((step) => {
+            const key = actionStepKindLabelKey(step.kind);
+            let parameters: string | null = null;
+            if (step.kind === "UNMONITOR") {
+              parameters = step.parameters.includeDescendants
+                ? t("settings.maintenanceSequencePreviewDescendants")
+                : t("settings.maintenanceSequencePreviewMatchedScope");
+            } else if (step.kind === "CHANGE_QUALITY_PROFILE") {
+              parameters = step.parameters.targetQualityProfileId ?? "—";
+            } else if (step.kind === "SEARCH") {
+              parameters =
+                step.parameters.searchCondition === "PREVIOUS_PROFILE_CHANGED"
+                  ? t("settings.maintenanceSequenceSearchPreviousProfileChanged")
+                  : t("settings.maintenanceSequenceSearchUnconditional");
+            } else if (step.kind === "ADD_TAGS" || step.kind === "REMOVE_TAGS") {
+              parameters = step.parameters.tags.join(", ") || "—";
+            }
+            return (
+              <li key={step.id}>
+                {key ? t(key) : step.kind}
+                {parameters ? ` · ${parameters}` : ""}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
 }
 
 function RefFieldTable({ section }: { section: RefSectionDef }) {
@@ -451,6 +550,7 @@ function MaintenancePreviewPanel({
   isEditorOpen,
   draftName,
   draftScope,
+  draftActionSequence,
   ruleSetRecords,
   libraries,
   previewSource,
@@ -465,7 +565,11 @@ function MaintenancePreviewPanel({
   previewing,
   previewResult,
   previewError,
-}: { draftName: string; draftScope: MaintenanceRuleScope } & Pick<
+}: {
+  draftName: string;
+  draftScope: MaintenanceRuleScope;
+  draftActionSequence: MaintenanceActionSequence;
+} & Pick<
   SettingsMaintenanceRulesSectionProps,
   | "isEditorOpen"
   | "ruleSetRecords"
@@ -485,7 +589,9 @@ function MaintenancePreviewPanel({
 >) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const scope = previewSource === "draft" ? draftScope : ruleSetRecords.find((rule) => rule.id === previewRuleSetId)?.subjectKind ?? "TITLE";
+  const storedRule = ruleSetRecords.find((rule) => rule.id === previewRuleSetId);
+  const scope = previewSource === "draft" ? draftScope : storedRule?.subjectKind ?? "TITLE";
+  const sequence = previewSource === "draft" ? draftActionSequence : storedRule?.actionSequence;
   const [selectedSubject, setSelectedSubject] = React.useState<MaintenanceTestSubject | undefined>();
   const [targetPending, setTargetPending] = React.useState(false);
   const [manualTarget, setManualTarget] = React.useState(false);
@@ -582,6 +688,8 @@ function MaintenancePreviewPanel({
             </p>
           </label>
         </div>
+
+        {sequence ? <ActionSequencePreview sequence={sequence} /> : null}
 
         <MaintenanceSubjectPicker key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
           scope={scope} onChange={(subject, pending, active) => { setSelectedSubject(subject); setTargetPending(pending); setManualTarget(active); }} />
@@ -721,6 +829,8 @@ export function SettingsMaintenanceRulesSection({
   applyTemplate,
   ruleSetRecords,
   actionDescriptors,
+  actionStepDescriptors,
+  actionStepDescriptorsLoaded,
   libraries,
   storageRoots,
   qualityProfiles,
@@ -738,29 +848,6 @@ export function SettingsMaintenanceRulesSection({
   ...previewProps
 }: SettingsMaintenanceRulesSectionProps) {
   const t = useTranslate();
-  const offerableDescriptors = React.useMemo(
-    () =>
-      storageScopedActionDescriptors(
-        actionDescriptors,
-        ruleSetDraft.subjectKind,
-        ruleSetDraft.storageRootId,
-      ),
-    [actionDescriptors, ruleSetDraft.subjectKind, ruleSetDraft.storageRootId],
-  );
-  const needsTargetProfile = actionRequiresTargetQualityProfile(
-    actionDescriptors,
-    ruleSetDraft.actionKind,
-  );
-  // The tag actions are the second parameterized pair. Which labels exist is an
-  // administrator's decision, so the control is the same registry-backed picker
-  // the title surfaces use rather than a free-text field.
-  const needsTags = actionRequiresTags(actionDescriptors, ruleSetDraft.actionKind);
-  const { definitions: tagDefinitions, loading: tagDefinitionsLoading } =
-    useTitleTagDefinitions({ enabled: needsTags });
-  const selectedDescriptor = descriptorForActionKind(
-    actionDescriptors,
-    ruleSetDraft.actionKind,
-  );
 
   // Candidates, history and gates are one panel each. They keep the status
   // banner, because what the instance is allowed to do explains every row they
@@ -824,11 +911,17 @@ export function SettingsMaintenanceRulesSection({
                         actionDescriptors,
                         record.actionSpec.kind,
                       );
-                      const modeHelpKey = evaluationModeHelpKey(record.evaluationMode);
-                      const armingOptions = armingOptionsFor(
-                        actionDescriptors,
-                        record.actionSpec.kind,
+                      const sequenceRisk = aggregateSequenceRisk(
+                        record,
+                        actionStepDescriptors,
                       );
+                      const actionRisk = sequenceRisk ?? descriptor?.riskClass;
+                      const modeHelpKey = evaluationModeHelpKey(record.evaluationMode);
+                      const armingOptions = record.actionSequence
+                        ? actionRisk === "HIGH"
+                          ? ["NONE", "REVERSIBLE", "DESTRUCTIVE"]
+                          : ["NONE", "REVERSIBLE"]
+                        : armingOptionsFor(actionDescriptors, record.actionSpec.kind);
                       return (
                         <TableRow
                           data-ui="settings-table-row"
@@ -850,11 +943,11 @@ export function SettingsMaintenanceRulesSection({
                             {record.description || "—"}
                           </TableCell>
                           <TableCell>
-                            <ActionLabel kind={record.actionSpec.kind} />
+                            <ActionSummary record={record} />
                           </TableCell>
                           <TableCell>
-                            {descriptor ? (
-                              <RiskBadge risk={descriptor.riskClass} />
+                            {actionRisk ? (
+                              <RiskBadge risk={actionRisk} />
                             ) : (
                               "—"
                             )}
@@ -1043,7 +1136,8 @@ export function SettingsMaintenanceRulesSection({
                       value={ruleSetDraft.subjectKind}
                       disabled={Boolean(editingRuleSetId)}
                       onValueChange={(value) => setRuleSetDraft((prev) => ({
-                        ...prev, subjectKind: value as MaintenanceRuleSetDraft["subjectKind"], actionKind: "DO_NOTHING",
+                        ...prev,
+                        subjectKind: value as MaintenanceRuleSetDraft["subjectKind"],
                       }))}
                       options={[
                         { value: "TITLE", label: t("label.title") },
@@ -1051,76 +1145,47 @@ export function SettingsMaintenanceRulesSection({
                         { value: "EPISODE", label: t("settings.maintenanceScopeEpisode") },
                       ]}
                     />
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div>
-                        {offerableDescriptors.length > 0 ? (
-                          <SingleSelectField
-                            id="settings-maintenance-rule-action"
-                            label={t("settings.maintenanceRuleAction")}
-                            placeholder={t(
-                              "settings.maintenanceRuleActionPlaceholder",
-                            )}
-                            value={ruleSetDraft.actionKind}
-                            onValueChange={(value) =>
-                              setRuleSetDraft((prev) => ({
-                                ...prev,
-                                actionKind: value as MaintenanceActionKind,
-                              }))
-                            }
-                            options={offerableDescriptors.map((descriptor) => ({
-                              value: descriptor.kind,
-                              ariaLabel: descriptor.kind,
-                              label: (
-                                <span className="flex min-w-0 items-center gap-2">
-                                  <span className="truncate">
-                                    <ActionLabel kind={descriptor.kind} />
-                                  </span>
-                                  <RiskBadge risk={descriptor.riskClass} />
-                                </span>
-                              ),
-                            }))}
-                          />
-                        ) : (
-                          <p
-                            id="settings-maintenance-rule-no-actions"
-                            className="text-xs text-muted-foreground"
-                          >
-                            {t("settings.maintenanceRuleNoActions")}
-                          </p>
-                        )}
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settings.maintenanceRuleActionHelp")}
-                        </p>
-                        {selectedDescriptor &&
-                        selectedDescriptor.riskClass === "HIGH" ? (
-                          <p className="mt-1 text-xs text-[var(--scry-danger-text)]">
-                            {t("settings.maintenanceRiskHigh")}
-                          </p>
-                        ) : null}
-                      </div>
-                      <label>
-                        <Label className="mb-2 block">
-                          {t("settings.maintenanceRuleGraceDays")}
-                        </Label>
-                        <Input
-                          id="settings-maintenance-rule-grace-days"
-                          {...integerInputProps}
-                          min={0}
-                          value={ruleSetDraft.graceDays}
-                          onChange={(event) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              graceDays:
-                                Number(sanitizeDigits(event.target.value)) || 0,
-                            }))
-                          }
-                          placeholder="0"
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settings.maintenanceRuleGraceDaysHelp")}
-                        </p>
-                      </label>
-                    </div>
+                    {!actionStepDescriptorsLoaded ? (
+                      <p
+                        id="settings-maintenance-sequence-catalog-unavailable"
+                        className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-xs text-[var(--scry-warning-text)]"
+                      >
+                        {t("settings.maintenanceSequenceCatalogUnavailable")}
+                      </p>
+                    ) : null}
+                    <MaintenanceActionSequenceEditor
+                      sequence={ruleSetDraft.actionSequence}
+                      descriptors={actionStepDescriptors}
+                      subjectKind={ruleSetDraft.subjectKind}
+                      storageRootId={ruleSetDraft.storageRootId}
+                      qualityProfiles={qualityProfiles}
+                      onChange={(actionSequence) =>
+                        setRuleSetDraft((prev) => ({ ...prev, actionSequence }))
+                      }
+                    />
+
+                    <label className="block md:max-w-[50%]">
+                      <Label className="mb-2 block">
+                        {t("settings.maintenanceRuleGraceDays")}
+                      </Label>
+                      <Input
+                        id="settings-maintenance-rule-grace-days"
+                        {...integerInputProps}
+                        min={0}
+                        value={ruleSetDraft.graceDays}
+                        onChange={(event) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            graceDays:
+                              Number(sanitizeDigits(event.target.value)) || 0,
+                          }))
+                        }
+                        placeholder="0"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t("settings.maintenanceRuleGraceDaysHelp")}
+                      </p>
+                    </label>
 
                     <div>
                       <SingleSelectField
@@ -1129,20 +1194,7 @@ export function SettingsMaintenanceRulesSection({
                         placeholder={t("settings.maintenanceRuleStorageRootNone")}
                         value={ruleSetDraft.storageRootId}
                         onValueChange={(storageRootId) =>
-                          setRuleSetDraft((prev) => {
-                            const current = descriptorForActionKind(
-                              actionDescriptors,
-                              prev.actionKind,
-                            );
-                            return {
-                              ...prev,
-                              storageRootId,
-                              actionKind:
-                                storageRootId && !current?.supportsStorageScope
-                                  ? "DO_NOTHING"
-                                  : prev.actionKind,
-                            };
-                          })
+                          setRuleSetDraft((prev) => ({ ...prev, storageRootId }))
                         }
                         options={storageRoots.map((root) => ({
                           value: root.id,
@@ -1174,74 +1226,6 @@ export function SettingsMaintenanceRulesSection({
                         </div>
                       ) : null}
                     </div>
-
-                    {needsTags ? (
-                      <div className="md:max-w-[50%]">
-                        <Label className="mb-2 block">
-                          {t("settings.maintenanceRuleTags")}
-                        </Label>
-                        <TitleTagsPicker
-                          value={ruleSetDraft.tags}
-                          onChange={(labels) =>
-                            setRuleSetDraft((prev) => ({ ...prev, tags: labels }))
-                          }
-                          definitions={tagDefinitions}
-                          loading={tagDefinitionsLoading}
-                          idPrefix="settings-maintenance-rule"
-                          emptyValueText={t("settings.maintenanceRuleTagsNone")}
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settings.maintenanceRuleTagsHelp")}
-                        </p>
-                      </div>
-                    ) : null}
-
-                    {needsTargetProfile ? (
-                      <div className="md:max-w-[50%]">
-                        {qualityProfiles.length > 0 ? (
-                          <SingleSelectField
-                            id="settings-maintenance-rule-target-profile"
-                            label={t("settings.maintenanceRuleTargetProfile")}
-                            placeholder={t(
-                              "settings.maintenanceRuleTargetProfileHelp",
-                            )}
-                            value={ruleSetDraft.targetQualityProfileId}
-                            onValueChange={(value) =>
-                              setRuleSetDraft((prev) => ({
-                                ...prev,
-                                targetQualityProfileId: value,
-                              }))
-                            }
-                            options={qualityProfiles.map((profile) => ({
-                              value: profile.id,
-                              label: profile.name,
-                            }))}
-                          />
-                        ) : (
-                          <label>
-                            <Label className="mb-2 block">
-                              {t("settings.maintenanceRuleTargetProfile")}
-                            </Label>
-                            <Input
-                              id="settings-maintenance-rule-target-profile-id"
-                              value={ruleSetDraft.targetQualityProfileId}
-                              onChange={(event) =>
-                                setRuleSetDraft((prev) => ({
-                                  ...prev,
-                                  targetQualityProfileId: event.target.value,
-                                }))
-                              }
-                            />
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {t("settings.maintenanceRuleTargetProfileIdHelp")}
-                            </p>
-                          </label>
-                        )}
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settings.maintenanceRuleTargetProfileHelp")}
-                        </p>
-                      </div>
-                    ) : null}
 
                     <div>
                       <Label className="mb-2 block">
@@ -1384,6 +1368,7 @@ export function SettingsMaintenanceRulesSection({
               isEditorOpen={isEditorOpen}
               draftName={ruleSetDraft.name}
               draftScope={ruleSetDraft.subjectKind}
+              draftActionSequence={ruleSetDraft.actionSequence}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               {...previewProps}

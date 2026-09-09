@@ -14,6 +14,7 @@ import {
   type MaintenanceQualityProfileOption,
   type MaintenanceStorageRootOption,
 } from "@/components/views/settings/settings-maintenance-rules-section";
+import { sequenceHasUnresolvedSteps } from "@/components/views/settings/maintenance-action-sequence-editor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +24,7 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   MaintenanceActionDescriptor,
+  MaintenanceActionStepDescriptor,
   MaintenanceActionRun,
   MaintenanceCandidate,
   MaintenanceEffectArming,
@@ -50,6 +52,7 @@ import {
   initialMaintenanceRuleDraft,
   isNonTerminalCandidateState,
   maintenanceFilterArgument,
+  maintenanceActionSequenceFromLegacySpec,
   maintenancePreviewInput,
   maintenanceRuleDraftFromDetail,
   parseAcknowledgedCandidateCountMismatch,
@@ -60,6 +63,7 @@ import {
 import {
   librariesQuery,
   maintenanceActionDescriptorsQuery,
+  maintenanceActionStepDescriptorsQuery,
   maintenanceActionRunsQuery,
   maintenanceCandidatesQuery,
   maintenanceEvaluationRunsQuery,
@@ -138,6 +142,10 @@ export function SettingsMaintenanceRulesContainer({
   const [actionDescriptors, setActionDescriptors] = useState<
     MaintenanceActionDescriptor[]
   >([]);
+  const [actionStepDescriptors, setActionStepDescriptors] = useState<
+    MaintenanceActionStepDescriptor[]
+  >([]);
+  const [actionStepDescriptorsLoaded, setActionStepDescriptorsLoaded] = useState(false);
   const [libraries, setLibraries] = useState<MaintenanceLibraryOption[]>([]);
   const [storageRoots, setStorageRoots] = useState<MaintenanceStorageRootOption[]>([]);
   const [qualityProfiles, setQualityProfiles] = useState<
@@ -211,6 +219,9 @@ export function SettingsMaintenanceRulesContainer({
 
   const isDraftDirty =
     JSON.stringify(ruleSetDraft) !== JSON.stringify(ruleSetDraftBaseline);
+  const sequenceCatalogResolved =
+    actionStepDescriptorsLoaded &&
+    !sequenceHasUnresolvedSteps(ruleSetDraft.actionSequence, actionStepDescriptors);
 
   const closeEditor = useCallback(() => {
     const next = initialMaintenanceRuleDraft();
@@ -300,6 +311,15 @@ export function SettingsMaintenanceRulesContainer({
         subjectKind: template.subjectKind ?? "TITLE",
         targetQualityProfileId: template.targetQualityProfileId ?? "",
         tags: [...(template.tags ?? [])],
+        actionSequence: maintenanceActionSequenceFromLegacySpec(
+          {
+            kind: template.actionKind,
+            schemaVersion: 1,
+            targetQualityProfileId: template.targetQualityProfileId ?? null,
+            tags: [...(template.tags ?? [])],
+          },
+          template.subjectKind ?? "TITLE",
+        ),
         graceDays: template.graceDays,
       };
       setEditingRuleSetId(null);
@@ -383,13 +403,22 @@ export function SettingsMaintenanceRulesContainer({
 
   const refreshCatalogs = useCallback(async () => {
     try {
-      const [descriptors, libraryList, profiles] = await Promise.all([
+      const [descriptors, stepDescriptors, libraryList, profiles] = await Promise.all([
         client.query(maintenanceActionDescriptorsQuery, {}).toPromise(),
+        client.query(maintenanceActionStepDescriptorsQuery, {}).toPromise(),
         client.query(librariesQuery, {}).toPromise(),
         client.query(qualityProfileOptionsQuery, {}).toPromise(),
       ]);
       if (!descriptors.error) {
         setActionDescriptors(descriptors.data?.maintenanceActionDescriptors ?? []);
+      }
+      if (!stepDescriptors.error) {
+        setActionStepDescriptors(
+          stepDescriptors.data?.maintenanceActionStepDescriptors ?? [],
+        );
+        setActionStepDescriptorsLoaded(true);
+      } else {
+        setActionStepDescriptorsLoaded(false);
       }
       if (!libraryList.error) {
         const catalogLibraries = libraryList.data?.libraries ?? [];
@@ -664,6 +693,13 @@ export function SettingsMaintenanceRulesContainer({
       });
       return;
     }
+    if (!sequenceCatalogResolved) {
+      setValidationResult({
+        valid: false,
+        errors: [t("settings.maintenanceSequenceCatalogUnavailable")],
+      });
+      return;
+    }
 
     const validation = await validateDraft();
     if (!validation?.valid) {
@@ -713,6 +749,11 @@ export function SettingsMaintenanceRulesContainer({
   };
 
   const runPreview = useCallback(async (subject?: MaintenanceTestSubject) => {
+    if (previewSource === "draft" && !sequenceCatalogResolved) {
+      setPreviewResult(null);
+      setPreviewError(t("settings.maintenanceSequenceCatalogUnavailable"));
+      return;
+    }
     const request = ++previewRequest.current;
     setPreviewing(true);
     setPreviewError(null);
@@ -744,6 +785,7 @@ export function SettingsMaintenanceRulesContainer({
     }
   }, [
     actionDescriptors,
+    sequenceCatalogResolved,
     client,
     previewLibraryId,
     previewLimit,
@@ -1137,6 +1179,8 @@ export function SettingsMaintenanceRulesContainer({
         applyTemplate={requestApplyTemplate}
         ruleSetRecords={ruleSetRecords}
         actionDescriptors={actionDescriptors}
+        actionStepDescriptors={actionStepDescriptors}
+        actionStepDescriptorsLoaded={actionStepDescriptorsLoaded}
         libraries={libraries}
         storageRoots={storageRoots}
         qualityProfiles={qualityProfiles}

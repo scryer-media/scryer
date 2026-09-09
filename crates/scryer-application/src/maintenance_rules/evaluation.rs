@@ -40,6 +40,7 @@ use serde::Serialize;
 use tracing::{debug, warn};
 
 use crate::jobs::{JobKey, JobTriggerSource};
+use crate::maintenance_rules::action_sequence::MaintenanceActionDefinition;
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
     MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness,
@@ -61,6 +62,13 @@ use crate::{AppError, AppResult, AppUseCase};
 /// background job, not a latency path, so the chunk exists to bound peak memory
 /// and query size rather than to go fast.
 pub const MAINTENANCE_EVALUATION_TITLE_CHUNK: usize = 200;
+
+/// One bounded reconciliation page for storage-root sequence memberships.
+/// A completed deletion removes the last selected-root file, so its subject is
+/// deliberately omitted from the normal subject loop below. The page releases
+/// only those exact, completed deletion markers after the root absence is
+/// confirmed again.
+const MAINTENANCE_SEQUENCE_COMPLETION_RECONCILIATION_LIMIT: usize = 100;
 
 /// Per-pass read-through state. Inventories are capped to a title page so a
 /// long evaluation cannot retain its entire catalog, while repeated rules can
@@ -153,9 +161,23 @@ pub struct MaintenanceCandidateView {
     pub subject_label: String,
     pub file_count: Option<i64>,
     pub total_size_bytes: Option<i64>,
+    /// Files owned by this subject on the root selected by the candidate's
+    /// pinned rule revision. `None` means that revision has no root or exact
+    /// root ownership cannot be established.
+    pub storage_root_file_count: Option<i64>,
+    /// Bytes owned by this subject on the root selected by the candidate's
+    /// pinned rule revision. The same unknown conditions apply to both totals.
+    pub storage_root_total_size_bytes: Option<i64>,
     pub candidate: LifecycleCandidate,
     pub rule_name: String,
     pub title_name: String,
+    /// The immutable action definition for the revision that opened this
+    /// candidate. It remains available after the rule advances to a later
+    /// revision, so history renders the action this candidate can actually run.
+    pub action_definition: Option<MaintenanceActionDefinition>,
+    /// Ordered v2 step evidence for this candidate generation.
+    pub sequence_steps:
+        Vec<crate::maintenance_rules::action_execution::MaintenanceActionStepProgressView>,
 }
 
 #[derive(Clone, Debug)]
@@ -558,6 +580,20 @@ impl AppUseCase {
                     .map(|row| (row.subject_kind.clone(), row.title_id.clone())),
             )
             .await?;
+        let storage_root_summaries = self.maintenance_candidate_root_summaries(&visible).await?;
+        let coordinates: Vec<_> = visible
+            .iter()
+            .map(
+                |candidate| crate::maintenance_rules::action_execution::MaintenanceSequenceProjectionCoordinate {
+                    candidate_id: candidate.id.clone(),
+                    rule_set_id: candidate.rule_set_id.clone(),
+                    match_generation: candidate.match_generation,
+                    revision_number: candidate.revision_number,
+                },
+            )
+            .collect();
+        let (definitions, sequence_steps) =
+            self.maintenance_sequence_projection(&coordinates).await?;
         Ok(visible
             .into_iter()
             .map(|candidate| MaintenanceCandidateView {
@@ -571,14 +607,111 @@ impl AppUseCase {
                 total_size_bytes: summaries
                     .get(&(candidate.subject_kind.clone(), candidate.subject_id.clone()))
                     .map(|summary| summary.2),
+                storage_root_file_count: storage_root_summaries
+                    .get(&candidate.id)
+                    .and_then(|summary| summary.file_count),
+                storage_root_total_size_bytes: storage_root_summaries
+                    .get(&candidate.id)
+                    .and_then(|summary| summary.total_size_bytes),
                 rule_name: rules_by_id
                     .get(&candidate.rule_set_id)
                     .map(|rule_set| rule_set.name.clone())
                     .unwrap_or_default(),
                 title_name: maintenance_title_name(&names, &candidate.title_id),
+                action_definition: definitions.get(&candidate.id).cloned().flatten(),
+                sequence_steps: sequence_steps
+                    .get(&candidate.id)
+                    .cloned()
+                    .unwrap_or_default(),
                 candidate,
             })
             .collect())
+    }
+
+    /// Computes selected-root totals from a candidate's immutable revision and
+    /// current, exact subject ownership. A missing revision, root, subject, or
+    /// physical-root proof stays unknown rather than falling back to the
+    /// title's configured destination or all subject files.
+    async fn maintenance_candidate_root_summaries(
+        &self,
+        candidates: &[LifecycleCandidate],
+    ) -> AppResult<HashMap<String, MaintenanceRootFileSummary>> {
+        let mut root_by_revision: HashMap<(String, i64), Option<String>> = HashMap::new();
+        for candidate in candidates {
+            let revision_key = (candidate.rule_set_id.clone(), candidate.revision_number);
+            if root_by_revision.contains_key(&revision_key) {
+                continue;
+            }
+            let storage_root_id = self
+                .services
+                .customization
+                .maintenance_rule_sets
+                .get_revision(&candidate.rule_set_id, candidate.revision_number)
+                .await?
+                .and_then(|revision| revision.storage_root_id);
+            root_by_revision.insert(revision_key, storage_root_id);
+        }
+
+        let title_ids: Vec<String> = candidates
+            .iter()
+            .map(|candidate| candidate.title_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let titles = self.services.catalog.titles.get_by_ids(&title_ids).await?;
+        let titles_by_id: HashMap<String, Title> = titles
+            .iter()
+            .cloned()
+            .map(|title| (title.id.clone(), title))
+            .collect();
+        let files_by_title = self.maintenance_files_for_titles(&titles).await?;
+
+        let mut summaries = HashMap::new();
+        for candidate in candidates {
+            let revision_key = (candidate.rule_set_id.clone(), candidate.revision_number);
+            let Some(storage_root_id) = root_by_revision
+                .get(&revision_key)
+                .and_then(Option::as_deref)
+            else {
+                continue;
+            };
+            let Some(title) = titles_by_id.get(&candidate.title_id) else {
+                continue;
+            };
+            let files = files_by_title
+                .get(&title.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let subject = match self
+                .maintenance_resolve_subject(
+                    &candidate.subject_kind,
+                    &candidate.subject_id,
+                    title,
+                    files,
+                )
+                .await
+            {
+                Ok(subject) => subject,
+                Err(AppError::NotFound(_) | AppError::Validation(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            let root_summary = if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title {
+                match self.maintenance_title_deletion_files(title).await {
+                    Ok(files) => {
+                        self.maintenance_root_file_summary(&files, Some(storage_root_id))
+                            .await?
+                    }
+                    Err(_) => MaintenanceRootFileSummary::default(),
+                }
+            } else if subject.ambiguous_files {
+                MaintenanceRootFileSummary::default()
+            } else {
+                self.maintenance_root_file_summary(&subject.files, Some(storage_root_id))
+                    .await?
+            };
+            summaries.insert(candidate.id.clone(), root_summary);
+        }
+        Ok(summaries)
     }
 
     /// Evaluation runs carry counts and timing, never subjects, so they are not
@@ -1112,6 +1245,9 @@ impl AppUseCase {
             }
         }
 
+        self.reconcile_storage_sequence_terminal_memberships(detail, evaluation_time)
+            .await?;
+
         self.cancel_out_of_scope_maintenance_candidates(
             &rule_set.id,
             &in_scope,
@@ -1121,6 +1257,256 @@ impl AppUseCase {
         .await?;
 
         Ok(counts)
+    }
+
+    /// Reconcile terminal sequence memberships that storage-root filtering
+    /// omitted from the ordinary per-subject pass. A completed deletion or an
+    /// external cleanup can make the exact subject have zero selected-root
+    /// files; this is a confirmed out-of-scope result, so release its marker
+    /// and allow a later import to begin a fresh grace period. Every ambiguous
+    /// ownership or unavailable root path retains the marker.
+    async fn reconcile_storage_sequence_terminal_memberships(
+        &self,
+        detail: &MaintenanceRuleSetDetail,
+        evaluation_time: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let MaintenanceActionDefinition::Sequence(sequence) = &detail.action_definition else {
+            return Ok(());
+        };
+        let Some(storage_root_id) = detail.revision.storage_root_id.as_deref() else {
+            return Ok(());
+        };
+        let sequence_hash = sequence
+            .content_hash()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let expected_step_ids: Vec<_> = sequence.steps.iter().map(|step| step.id.clone()).collect();
+        let candidates = &self.services.customization.maintenance_evaluation;
+        let mut after_id = None;
+        loop {
+            let memberships = candidates
+                .list_active_sequence_completions(
+                    &detail.rule_set.id,
+                    detail.revision.revision_number,
+                    after_id.as_deref(),
+                    MAINTENANCE_SEQUENCE_COMPLETION_RECONCILIATION_LIMIT,
+                )
+                .await?;
+            let Some(next_after_id) = memberships.last().map(|membership| membership.id.clone())
+            else {
+                break;
+            };
+            after_id = Some(next_after_id);
+
+            for membership in memberships {
+                let completed_prefix_is_valid = membership.completed_step_ids.len()
+                    <= expected_step_ids.len()
+                    && expected_step_ids
+                        .iter()
+                        .zip(&membership.completed_step_ids)
+                        .all(|(expected, completed)| expected == completed);
+                let terminal_evidence_is_valid = match membership.outcome {
+                    scryer_domain::MaintenanceSequenceTerminalOutcome::Succeeded => {
+                        membership.completed_step_ids == expected_step_ids
+                            && membership.terminal_step_id.is_none()
+                    }
+                    scryer_domain::MaintenanceSequenceTerminalOutcome::Failed => {
+                        !membership.completed_step_ids.is_empty()
+                            && completed_prefix_is_valid
+                            && membership.terminal_step_id.as_deref()
+                                == membership.completed_step_ids.last().map(String::as_str)
+                    }
+                };
+                let immutable_identity_matches = membership.sequence_content_hash == sequence_hash
+                    && membership.matcher_content_hash == detail.revision.matcher_content_hash
+                    && membership.subject_kind == detail.rule_set.subject_kind.as_storage_str()
+                    && membership.expected_step_ids == expected_step_ids
+                    && terminal_evidence_is_valid;
+                if !immutable_identity_matches {
+                    continue;
+                }
+
+                let title = match self
+                    .services
+                    .catalog
+                    .titles
+                    .get_by_id(&membership.title_id)
+                    .await
+                {
+                    Ok(Some(title)) => title,
+                    Ok(None) => {
+                        self.release_storage_sequence_completion_if_capacity_available(
+                            &membership,
+                            storage_root_id,
+                            evaluation_time,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    Err(error) => {
+                        warn!(
+                            rule_set_id = membership.rule_set_id.as_str(),
+                            title_id = membership.title_id.as_str(),
+                            error = %error,
+                            "could not resolve a storage sequence terminal membership; retaining it"
+                        );
+                        continue;
+                    }
+                };
+
+                if !detail.rule_set.library_ids.is_empty()
+                    && !detail.rule_set.library_ids.contains(&title.library_id)
+                {
+                    self.release_storage_sequence_completion_if_capacity_available(
+                        &membership,
+                        storage_root_id,
+                        evaluation_time,
+                    )
+                    .await?;
+                    continue;
+                }
+
+                let title_files = match self
+                    .services
+                    .library
+                    .media_files
+                    .list_media_files_for_title(&title.id)
+                    .await
+                {
+                    Ok(files) => files,
+                    Err(error) => {
+                        warn!(
+                            rule_set_id = membership.rule_set_id.as_str(),
+                            title_id = title.id.as_str(),
+                            error = %error,
+                            "could not resolve storage sequence file ownership; retaining its membership"
+                        );
+                        continue;
+                    }
+                };
+                let subject = match self
+                    .maintenance_resolve_subject(
+                        &membership.subject_kind,
+                        &membership.subject_id,
+                        &title,
+                        &title_files,
+                    )
+                    .await
+                {
+                    Ok(subject) => subject,
+                    Err(AppError::NotFound(_)) => {
+                        self.release_storage_sequence_completion_if_capacity_available(
+                            &membership,
+                            storage_root_id,
+                            evaluation_time,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    Err(error) => {
+                        warn!(
+                            rule_set_id = membership.rule_set_id.as_str(),
+                            title_id = title.id.as_str(),
+                            subject_id = membership.subject_id.as_str(),
+                            error = %error,
+                            "could not resolve an exact storage sequence subject; retaining its membership"
+                        );
+                        continue;
+                    }
+                };
+                let root_files = if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title
+                {
+                    match self.maintenance_title_deletion_files(&title).await {
+                        Ok(files) => {
+                            self.maintenance_root_file_summary(&files, Some(storage_root_id))
+                                .await
+                        }
+                        Err(error) => {
+                            warn!(
+                                rule_set_id = membership.rule_set_id.as_str(),
+                                title_id = title.id.as_str(),
+                                error = %error,
+                                "could not resolve title deletion ownership; retaining storage sequence membership"
+                            );
+                            continue;
+                        }
+                    }
+                } else if subject.ambiguous_files {
+                    Ok(MaintenanceRootFileSummary::default())
+                } else {
+                    self.maintenance_root_file_summary(&subject.files, Some(storage_root_id))
+                        .await
+                };
+                match root_files {
+                    Ok(MaintenanceRootFileSummary {
+                        file_count: Some(0),
+                        ..
+                    }) => {
+                        self.release_storage_sequence_completion_if_capacity_available(
+                            &membership,
+                            storage_root_id,
+                            evaluation_time,
+                        )
+                        .await?;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        warn!(
+                            rule_set_id = membership.rule_set_id.as_str(),
+                            title_id = title.id.as_str(),
+                            subject_id = membership.subject_id.as_str(),
+                            error = %error,
+                            "could not resolve the selected root for a storage sequence membership; retaining it"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A zero-file root summary is authoritative only while the selected root
+    /// also yields a fresh capacity observation. A failed probe is an unknown
+    /// evaluation fact, so it retains the terminal membership.
+    async fn release_storage_sequence_completion_if_capacity_available(
+        &self,
+        membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
+        storage_root_id: &str,
+        evaluation_time: DateTime<Utc>,
+    ) -> AppResult<()> {
+        match self
+            .maintenance_storage_capacity_is_available(Some(storage_root_id))
+            .await
+        {
+            Ok(true) => {
+                self.services
+                    .customization
+                    .maintenance_evaluation
+                    .release_sequence_completion_on_confirmed_non_match(
+                        &membership.rule_set_id,
+                        membership.revision_number,
+                        &membership.subject_kind,
+                        &membership.subject_id,
+                        evaluation_time,
+                    )
+                    .await?;
+            }
+            Ok(false) => {
+                debug!(
+                    rule_set_id = membership.rule_set_id.as_str(),
+                    subject_id = membership.subject_id.as_str(),
+                    "selected-root capacity is unavailable; retaining storage sequence membership"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    rule_set_id = membership.rule_set_id.as_str(),
+                    subject_id = membership.subject_id.as_str(),
+                    error = %error,
+                    "could not read selected-root capacity; retaining storage sequence membership"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Close the rule's live candidates whose subject is no longer in its
@@ -1196,6 +1582,10 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let rule_set_id = detail.rule_set.id.as_str();
         let candidates = &self.services.customization.maintenance_evaluation;
+        let sequence = match &detail.action_definition {
+            MaintenanceActionDefinition::Sequence(sequence) => Some(sequence),
+            MaintenanceActionDefinition::Legacy(_) => None,
+        };
 
         let mut active = candidates
             .get_active_subject_candidate(rule_set_id, subject.kind.as_storage_str(), &subject.id)
@@ -1368,6 +1758,25 @@ impl AppUseCase {
                             .await?;
                     }
                     None => {
+                        // A terminal sequence membership is distinct from an
+                        // active candidate: a completed or exhausted sequence
+                        // has no live candidate row, but a continuous match
+                        // must never manufacture a new generation and reset
+                        // its step budgets. Only the confirmed no-match arm
+                        // below releases this marker.
+                        if sequence.is_some()
+                            && candidates
+                                .get_active_sequence_completion(
+                                    rule_set_id,
+                                    detail.rule_set.current_revision_number,
+                                    subject.kind.as_storage_str(),
+                                    &subject.id,
+                                )
+                                .await?
+                                .is_some()
+                        {
+                            return Ok(());
+                        }
                         let generation = candidates
                             .max_subject_match_generation(
                                 rule_set_id,
@@ -1396,7 +1805,7 @@ impl AppUseCase {
                                 state: MaintenanceCandidateState::Observing,
                                 state_reason: candidate_reason::FIRST_MATCH.to_string(),
                                 reason_codes: decision.reason_codes.clone(),
-                                action_kind: detail.action_spec.kind.as_wire_str().to_string(),
+                                action_kind: detail.action_definition.action_kind().to_string(),
                                 grace_days,
                                 first_matched_at: evaluation_time,
                                 last_matched_at: evaluation_time,
@@ -1416,6 +1825,21 @@ impl AppUseCase {
             }
             MaintenanceOutcome::NoMatch => {
                 counts.no_match += 1;
+                // The latch represents continuous membership, not a permanent
+                // ban. A raw confirmed no-match is the only evidence that
+                // starts a fresh generation; unknown and hold paths never
+                // reach this branch.
+                if sequence.is_some() {
+                    candidates
+                        .release_sequence_completion_on_confirmed_non_match(
+                            rule_set_id,
+                            detail.rule_set.current_revision_number,
+                            subject.kind.as_storage_str(),
+                            &subject.id,
+                            evaluation_time,
+                        )
+                        .await?;
+                }
                 if let Some(candidate) = active
                     && candidates
                         .transition_candidate_state(

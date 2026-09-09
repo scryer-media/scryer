@@ -46,6 +46,10 @@ pub enum MaintenanceEffectArming {
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum MaintenanceActionKind {
+    /// This revision contains an ordered action sequence. Read
+    /// `actionSequence` for the authoritative steps; it is never a legacy
+    /// action input value.
+    ActionSequence,
     /// Track membership only, and mutate no media.
     DoNothing,
     /// Unmonitor the matched scope and keep its files.
@@ -178,6 +182,9 @@ pub struct MaintenanceRuleSet {
     pub grace_days: i32,
     /// Action the revision currently in force authorizes.
     pub action_spec: MaintenanceActionSpec,
+    /// Ordered schema-2 actions for the revision currently in force. Legacy
+    /// rows expose their unchanged action spec and leave this null.
+    pub action_sequence: Option<MaintenanceActionSequence>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
@@ -225,6 +232,102 @@ pub struct MaintenanceActionSpec {
     pub tags: Vec<String>,
 }
 
+/// One typed parameter set for a sequence step. The action catalog decides
+/// which fields are meaningful for each `kind`; the application rejects every
+/// other shape before the sequence can be stored.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionStepParameters {
+    /// Whether a title-level unmonitor step also unmonitors its seasons and
+    /// episodes. This is required before a title file-deletion step can cover
+    /// a show completely.
+    pub include_descendants: Option<bool>,
+    /// Target profile for a quality-profile step.
+    pub target_quality_profile_id: Option<String>,
+    /// Dispatch condition for a search step.
+    pub search_condition: Option<MaintenanceSearchCondition>,
+    /// Tags written by an add-tags or remove-tags step.
+    pub tags: Vec<String>,
+}
+
+/// The closed catalog of sequence step kinds. These kinds are intentionally
+/// separate from the legacy maintenance-action catalog: a sequence never
+/// serializes as a synthetic legacy action.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MaintenanceActionStepKind {
+    /// Stop monitoring the selected scope and, when configured, its descendants.
+    Unmonitor,
+    /// Delete only the selected scope's authorized media files.
+    DeleteFiles,
+    /// Change the selected title's quality profile.
+    ChangeQualityProfile,
+    /// Request an acquisition search for the selected title.
+    Search,
+    /// Add configured tags to the selected title.
+    AddTags,
+    /// Remove configured tags from the selected title.
+    RemoveTags,
+    /// Delete the selected title record and its authorized files.
+    DeleteTitleAndFiles,
+}
+
+/// The explicit condition a search step applies before requesting work.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MaintenanceSearchCondition {
+    /// Always request the search when the step executes.
+    Unconditional,
+    /// Request the search only when the preceding profile step changed a profile.
+    PreviousProfileChanged,
+}
+
+/// One ordered action in a revision-bound sequence.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionStep {
+    /// Stable identifier used by durable execution receipts and history.
+    pub id: ID,
+    /// Catalog primitive this ordered step executes.
+    pub kind: MaintenanceActionStepKind,
+    /// Typed parameters accepted by this step's catalog primitive.
+    pub parameters: MaintenanceActionStepParameters,
+}
+
+/// The authoritative, schema-versioned sequence a revision authorizes.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionSequence {
+    /// Schema version that defines the accepted step representation.
+    pub schema_version: i32,
+    /// Ordered steps that make up the revision's action sequence.
+    pub steps: Vec<MaintenanceActionStep>,
+}
+
+/// Backend-owned capabilities for one schema-2 primitive.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionStepDescriptor {
+    /// Stable catalog identifier for this primitive.
+    pub id: String,
+    /// Primitive represented by this descriptor.
+    pub kind: MaintenanceActionStepKind,
+    /// Operator-facing label for the primitive.
+    pub label: String,
+    /// Subjects that may use this primitive.
+    pub supported_subjects: Vec<MaintenanceActionSubject>,
+    /// Name of the typed parameter shape accepted by this primitive.
+    pub parameter_schema: String,
+    /// Effects used when arbitrating conflicts with other steps.
+    pub effect_classes: Vec<String>,
+    /// Risk class that determines the required arming level.
+    pub risk_class: MaintenanceRiskClass,
+    /// Preconditions this primitive requires before it can execute.
+    pub requires: Vec<String>,
+    /// Whether this primitive ends the sequence when it succeeds.
+    pub terminal: bool,
+    /// How completion for this primitive is determined.
+    pub completion_policy: String,
+    /// Whether this primitive is permitted for a storage-root-scoped rule.
+    pub storage_root_allowed: bool,
+}
+
 /// A rule set together with the revision currently in force.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceRuleSetDetail {
@@ -234,6 +337,9 @@ pub struct MaintenanceRuleSetDetail {
     pub revision: MaintenanceRuleRevision,
     /// The action that revision authorizes, already decoded.
     pub action_spec: MaintenanceActionSpec,
+    /// Ordered actions for a schema-2 revision. Legacy revisions keep this
+    /// null and continue to expose their original `actionSpec` unchanged.
+    pub action_sequence: Option<MaintenanceActionSequence>,
 }
 
 /// Static registry entry describing one maintenance action to the rule builder.
@@ -349,6 +455,14 @@ pub struct MaintenanceCandidate {
     pub file_count: Option<i32>,
     /// Current subject file size in bytes, or null if the subject is unavailable.
     pub total_size_bytes: Option<i64>,
+    /// Number of unambiguously owned current subject files on the root selected
+    /// by this candidate's pinned revision, or null when no root is selected or
+    /// exact root ownership cannot be established.
+    pub storage_root_file_count: Option<i32>,
+    /// Total bytes of unambiguously owned current subject files on the root
+    /// selected by this candidate's pinned revision. It is null under the same
+    /// conditions as `storageRootFileCount`.
+    pub storage_root_total_size_bytes: Option<i64>,
     /// Exact subject display label, falling back to its ID if unavailable.
     pub subject_label: String,
     /// Subject scope: title, season, or episode.
@@ -381,6 +495,12 @@ pub struct MaintenanceCandidate {
     /// this candidate becomes due while the rule is in `OBSERVE` mode, armed for
     /// the action's risk class, and its instance effect gate is on.
     pub action_kind: MaintenanceActionKind,
+    /// The immutable schema-2 sequence that opened this candidate. Legacy
+    /// candidates retain their original `actionKind` and leave this null.
+    pub action_sequence: Option<MaintenanceActionSequence>,
+    /// Ordered latest evidence for each schema-2 step. An empty sequence is an
+    /// observe-only candidate rather than a missing action.
+    pub sequence_steps: Vec<MaintenanceActionStepProgress>,
     /// Days the subject must match continuously before the action is due.
     pub grace_days: i32,
     /// Increments each time a fresh candidate is opened for this subject, so a
@@ -397,6 +517,57 @@ pub struct MaintenanceCandidate {
     pub held_since: Option<DateTime<Utc>>,
     /// UTC last-update time.
     pub updated_at: DateTime<Utc>,
+}
+
+/// The latest durable checkpoint for one ordered schema-2 step.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionStepRun {
+    /// Stable identifier of the sequence step this checkpoint belongs to.
+    pub step_id: ID,
+    /// Stored catalog kind for the step checkpoint.
+    pub step_kind: String,
+    /// Latest durable state for this step.
+    pub state: String,
+    /// Number of durable attempts made for this step.
+    pub attempt: i32,
+    /// Reason execution is waiting, when the step is held.
+    pub hold_reason: Option<String>,
+    /// Failure message for the latest step attempt, when any.
+    pub error: Option<String>,
+    /// UTC time the step checkpoint was created.
+    pub created_at: DateTime<Utc>,
+    /// UTC time the step checkpoint was last updated.
+    pub updated_at: DateTime<Utc>,
+    /// UTC time the latest step attempt finished, or null while active.
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// Durable receipt for an external job requested by a schema-2 action step.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionJobReceipt {
+    /// Dispatch ordinal for this durable external-job request.
+    pub dispatch_attempt: i32,
+    /// Idempotent key identifying the requested external job.
+    pub logical_request_key: String,
+    /// External job-run identifier after the request is accepted.
+    pub job_run_id: Option<ID>,
+    /// Latest reconciliation state of the external job request.
+    pub state: String,
+    /// UTC time this receipt was created.
+    pub created_at: DateTime<Utc>,
+    /// UTC time this receipt was last reconciled.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One configured step with the latest outcome and any durable job receipts.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionStepProgress {
+    /// Immutable step definition from the sequence revision.
+    pub step: MaintenanceActionStep,
+    /// Latest durable checkpoint for this step, or null before execution starts.
+    pub run: Option<MaintenanceActionStepRun>,
+    /// Durable external-job receipts associated with this step.
+    pub receipts: Vec<MaintenanceActionJobReceipt>,
 }
 
 /// One rule set's pass through one evaluation run.
@@ -518,6 +689,11 @@ pub struct MaintenanceActionRun {
     pub title_name: String,
     /// Action the attempt performed or refused.
     pub action_kind: MaintenanceActionKind,
+    /// The immutable schema-2 sequence this attempt executed. Legacy attempts
+    /// retain their original `actionKind` and leave this null.
+    pub action_sequence: Option<MaintenanceActionSequence>,
+    /// Ordered latest evidence for every step in the immutable sequence.
+    pub sequence_steps: Vec<MaintenanceActionStepProgress>,
     /// Match generation of the candidate at attempt time.
     pub match_generation: i32,
     /// Attempt number for this candidate generation, starting at one.
@@ -560,6 +736,42 @@ pub struct MaintenanceActionInput {
     pub tags: Option<Vec<String>>,
 }
 
+/// Parameters for one input sequence step. The selected `kind` determines the
+/// accepted subset. Keeping this input closed and validated by the server
+/// prevents Rego or the web client from inventing effects.
+#[derive(InputObject, Clone)]
+pub struct MaintenanceActionStepParametersInput {
+    /// Include monitored descendants when unmonitoring a whole title.
+    pub include_descendants: Option<bool>,
+    /// Quality-profile identifier for a change-quality-profile step.
+    pub target_quality_profile_id: Option<String>,
+    /// Condition that controls whether a search step requests work.
+    pub search_condition: Option<MaintenanceSearchCondition>,
+    /// Tags to add or remove for a tag step.
+    pub tags: Option<Vec<String>>,
+}
+
+/// One ordered input action with a caller-stable identifier.
+#[derive(InputObject, Clone)]
+pub struct MaintenanceActionStepInput {
+    /// Caller-stable identifier used for durable step receipts and history.
+    pub id: ID,
+    /// Catalog primitive this input step configures.
+    pub kind: MaintenanceActionStepKind,
+    /// Typed parameters accepted by the selected primitive.
+    pub parameters: MaintenanceActionStepParametersInput,
+}
+
+/// A versioned ordered sequence. An empty sequence is a valid observe-only
+/// rule and is not represented with a placeholder action.
+#[derive(InputObject, Clone)]
+pub struct MaintenanceActionSequenceInput {
+    /// Schema version that defines this sequence input representation.
+    pub schema_version: i32,
+    /// Ordered steps to store in the new immutable revision.
+    pub steps: Vec<MaintenanceActionStepInput>,
+}
+
 /// Creates a maintenance rule set together with its first matcher revision.
 #[derive(InputObject)]
 pub struct CreateMaintenanceRuleSetInput {
@@ -572,8 +784,12 @@ pub struct CreateMaintenanceRuleSetInput {
     /// Matcher source as written in the editor. The package declaration is
     /// applied by the server.
     pub rego_source: String,
-    /// Action the first revision authorizes.
-    pub action: MaintenanceActionInput,
+    /// Legacy action the first revision authorizes. Supply this or
+    /// `actionSequence`, never both.
+    pub action: Option<MaintenanceActionInput>,
+    /// Ordered actions the first revision authorizes. Supply this or `action`,
+    /// never both.
+    pub action_sequence: Option<MaintenanceActionSequenceInput>,
     /// Days a subject must match continuously before the action becomes due;
     /// defaults to zero.
     pub grace_days: Option<i32>,
@@ -591,8 +807,12 @@ pub struct UpdateMaintenanceRuleMatcherInput {
     pub id: ID,
     /// Replacement matcher source as written in the editor.
     pub rego_source: String,
-    /// Action the new revision authorizes.
-    pub action: MaintenanceActionInput,
+    /// Legacy action the new revision authorizes. Supply this or
+    /// `actionSequence`, never both.
+    pub action: Option<MaintenanceActionInput>,
+    /// Ordered actions the new revision authorizes. Supply this or `action`,
+    /// never both.
+    pub action_sequence: Option<MaintenanceActionSequenceInput>,
     /// Days a subject must match continuously before the action becomes due;
     /// defaults to zero.
     pub grace_days: Option<i32>,
@@ -681,8 +901,9 @@ pub struct ValidateMaintenanceRuleInput {
 /// Runs one matcher against a bounded title selection without saving anything.
 ///
 /// Supply either `ruleSetId` to preview a stored rule set, or `regoSource` with
-/// `action` to preview an unsaved draft, never both. Select titles with either
-/// `titleIds` or `libraryId`, never both.
+/// exactly one action definition (`action` or `actionSequence`) to preview an
+/// unsaved draft, never both. Select titles with either `titleIds` or
+/// `libraryId`, never both.
 #[derive(InputObject)]
 pub struct PreviewMaintenanceRuleInput {
     /// Selected libraries for an unsaved matcher; empty means all libraries.
@@ -693,8 +914,12 @@ pub struct PreviewMaintenanceRuleInput {
     pub rule_set_id: Option<ID>,
     /// Unsaved matcher source to preview, as written in the editor.
     pub rego_source: Option<String>,
-    /// Action for the unsaved draft; required with `regoSource`.
+    /// Legacy action for the unsaved draft. Supply this or `actionSequence`,
+    /// never both.
     pub action: Option<MaintenanceActionInput>,
+    /// Ordered actions for the unsaved draft. Supply this or `action`, never
+    /// both.
+    pub action_sequence: Option<MaintenanceActionSequenceInput>,
     /// Grace period for the unsaved draft; defaults to zero.
     pub grace_days: Option<i32>,
     /// Configured library root for an unsaved matcher. Required when its

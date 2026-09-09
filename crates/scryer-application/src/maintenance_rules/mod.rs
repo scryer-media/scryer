@@ -32,10 +32,13 @@
 
 pub mod action_catalog;
 pub mod action_execution;
+pub mod action_sequence;
 pub mod evaluation;
 pub mod facts;
 pub mod safety;
 pub(crate) mod scoped_deletion;
+pub(crate) mod sequence_execution;
+pub(crate) mod sequence_history;
 pub mod service;
 pub(crate) mod storage;
 pub(crate) mod subjects;
@@ -45,6 +48,14 @@ pub use action_catalog::{
     MaintenanceActionParameters, MaintenanceActionSpec, MaintenanceActionSpecError,
     MaintenanceEffectClass, MaintenanceRepeatMode, MaintenanceRiskClass, MaintenanceSubjectKind,
     MaintenanceTimingMode, action_catalog, descriptor_for,
+};
+pub use action_sequence::{
+    ACTION_SEQUENCE_KIND, MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+    MAINTENANCE_MAX_ACTION_SEQUENCE_STEPS, MaintenanceActionCompletionPolicy,
+    MaintenanceActionDefinition, MaintenanceActionSequence, MaintenanceActionSequenceError,
+    MaintenanceActionStep, MaintenanceActionStepDescriptor, MaintenanceActionStepKind,
+    MaintenanceActionStepParameters, MaintenanceActionStepRequirement, MaintenanceSearchCondition,
+    action_definition_from_persisted_json, action_sequence_catalog, action_sequence_descriptor_for,
 };
 // ── Scheduled dark evaluation (RFC 137 tracks C1/C2, WP-F) ──────────────────
 pub use evaluation::{

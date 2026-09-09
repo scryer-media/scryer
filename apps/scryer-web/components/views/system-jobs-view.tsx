@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +34,7 @@ type SystemJobsViewState = {
   activeRuns: JobRun[];
   recentRuns: JobRun[];
   selectedJobKey: JobKey | null;
+  selectedJobRunId: string | null;
   selectedJobHistory: JobRun[];
   jobHistoryLoading: boolean;
   triggeringKeys: Partial<Record<JobKey, boolean>>;
@@ -335,6 +336,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     activeRuns,
     recentRuns,
     selectedJobKey,
+    selectedJobRunId,
     selectedJobHistory,
     jobHistoryLoading,
     triggeringKeys,
@@ -346,6 +348,17 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     () => jobs.find((job) => job.key === selectedJobKey) ?? null,
     [jobs, selectedJobKey],
   );
+
+  useEffect(() => {
+    if (!selectedJobRunId || jobHistoryLoading) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`job-run-${selectedJobRunId}`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }, [jobHistoryLoading, selectedJobHistory, selectedJobRunId]);
 
   const activeRunsByJob = useMemo(
     () => Object.fromEntries(activeRuns.map((run) => [run.jobKey, run])),
@@ -781,7 +794,16 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                         const healthCheckIssues = parseHealthCheckIssues(run);
 
                         return (
-                          <div key={run.id} className={`${JOBS_INSET_CLASS} p-3`}>
+                          <div
+                            key={run.id}
+                            id={`job-run-${run.id}`}
+                            className={cn(
+                              JOBS_INSET_CLASS,
+                              "p-3",
+                              run.id === selectedJobRunId &&
+                                "ring-1 ring-[var(--scry-accent)]",
+                            )}
+                          >
                             <div className="flex items-start justify-between gap-3">
                               <div className="space-y-1">
                                 <p className={runStatusTone(run.status)}>

@@ -145,6 +145,28 @@ impl AppUseCase {
         .flatten())
     }
 
+    /// Confirm that the selected root still has a usable capacity observation.
+    /// Root membership alone is insufficient to release a storage sequence
+    /// membership: an unavailable capacity probe is an unknown evaluation fact.
+    pub(crate) async fn maintenance_storage_capacity_is_available(
+        &self,
+        storage_root_id: Option<&str>,
+    ) -> AppResult<bool> {
+        let Some(root) = self.maintenance_storage_root(storage_root_id).await? else {
+            return Ok(false);
+        };
+        let path = root.path;
+        let capacity = tokio::time::timeout(
+            ROOT_STAT_TIMEOUT,
+            tokio::task::spawn_blocking(move || storage_capacity_probe(&path)),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+        Ok(storage_capacity_values(capacity).is_some())
+    }
+
     /// Populate only the root-scoped facts. Callers deliberately build all
     /// ordinary subject facts first, because root selection neither changes
     /// title ownership nor changes the normal file facts a rule can inspect.

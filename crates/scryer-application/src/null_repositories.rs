@@ -1652,6 +1652,18 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
             MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
         ))
     }
+    async fn finish_leased_candidate(
+        &self,
+        _id: &str,
+        _expected_lease_updated_at: DateTime<Utc>,
+        _state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _finished_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
     async fn cancel_active_candidates_for_rule(
         &self,
         _rule_set_id: &str,
@@ -1732,6 +1744,177 @@ impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRep
         _limit: Option<usize>,
     ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
         Ok(vec![])
+    }
+    async fn list_sequence_history_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
+        Ok(vec![])
+    }
+    async fn list_non_sequence_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
+        Ok(vec![])
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceActionStepRepository for NullMaintenanceEvaluationRepository {
+    async fn get_action_step(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionStepRun>> {
+        Ok(None)
+    }
+
+    async fn claim_action_step(
+        &self,
+        _step: &scryer_domain::MaintenanceActionStepRun,
+        _stale_before: DateTime<Utc>,
+        _lease_id: &str,
+        _leased_at: DateTime<Utc>,
+    ) -> AppResult<crate::ports::MaintenanceActionStepClaim> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn checkpoint_action_step(
+        &self,
+        _step: &scryer_domain::MaintenanceActionStepRun,
+        _expected_lease_id: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn finish_action_step(
+        &self,
+        _step: &scryer_domain::MaintenanceActionStepRun,
+        _expected_lease_id: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn list_action_steps(
+        &self,
+        _candidate_id: &str,
+        _match_generation: i64,
+        _revision_number: i64,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>> {
+        Ok(vec![])
+    }
+
+    async fn list_action_steps_for_candidates(
+        &self,
+        _candidates: &[crate::ports::MaintenanceActionStepCandidateKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>> {
+        Ok(vec![])
+    }
+
+    async fn list_action_step_attempts(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>> {
+        Ok(vec![])
+    }
+
+    async fn get_action_job_receipt(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+        _dispatch_attempt: i64,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionJobReceipt>> {
+        Ok(None)
+    }
+
+    async fn list_action_job_receipts(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>> {
+        Ok(vec![])
+    }
+
+    async fn list_action_job_receipts_for_steps(
+        &self,
+        _steps: &[scryer_domain::MaintenanceActionStepKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>> {
+        Ok(vec![])
+    }
+
+    async fn claim_action_job_dispatch(
+        &self,
+        _receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<crate::ports::MaintenanceActionJobReceiptClaim> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn transition_action_job_receipt(
+        &self,
+        _transition: &crate::ports::MaintenanceActionJobReceiptTransition,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceSequenceCompletionRepository for NullMaintenanceEvaluationRepository {
+    async fn get_active_sequence_completion(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+        _subject_kind: &str,
+        _subject_id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceSequenceTerminalMembership>> {
+        Ok(None)
+    }
+
+    async fn list_active_sequence_completions(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+        _after_id: Option<&str>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceSequenceTerminalMembership>> {
+        Ok(vec![])
+    }
+
+    async fn finish_sequence_terminal_membership_and_candidate(
+        &self,
+        _membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
+        _expected_candidate_state: scryer_domain::MaintenanceCandidateState,
+        _expected_candidate_updated_at: DateTime<Utc>,
+        _terminal_candidate_state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _finished_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn release_sequence_completion_on_confirmed_non_match(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+        _subject_kind: &str,
+        _subject_id: &str,
+        _released_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
     }
 }
 

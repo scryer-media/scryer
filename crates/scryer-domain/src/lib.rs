@@ -4869,6 +4869,320 @@ pub struct LifecycleActionRun {
     pub created_at: DateTime<Utc>,
 }
 
+/// One stable step coordinate inside a versioned maintenance action sequence.
+///
+/// A candidate generation and revision identify the rule decision; `step_id`
+/// identifies one user-authored operation within that immutable decision. The
+/// key intentionally does not contain an attempt number: retries update the
+/// same durable intent and increment its attempt counter rather than creating
+/// another logical request.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct MaintenanceActionStepKey {
+    pub candidate_id: String,
+    pub match_generation: i64,
+    pub revision_number: i64,
+    pub step_id: String,
+}
+
+impl MaintenanceActionStepKey {
+    /// Stable logical identity shared by a step and any durable job receipt it
+    /// creates. It is deliberately human-inspectable while the content hash
+    /// remains a separate revision-bound verification value.
+    pub fn logical_request_key(&self) -> String {
+        format!(
+            "maintenance-sequence:{}:{}:{}:{}",
+            self.candidate_id, self.match_generation, self.revision_number, self.step_id
+        )
+    }
+}
+
+/// State of the durable intent for one maintenance sequence step.
+///
+/// `Held` is not a failed attempt and must never consume retry budget. A
+/// `Skipped` step has reached its policy-defined no-op postcondition, such as a
+/// conditional search after an unchanged quality profile.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceActionStepState {
+    #[default]
+    Pending,
+    Running,
+    Succeeded,
+    AlreadySatisfied,
+    Skipped,
+    Held,
+    Failed,
+}
+
+impl MaintenanceActionStepState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::AlreadySatisfied => "already_satisfied",
+            Self::Skipped => "skipped",
+            Self::Held => "held",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "already_satisfied" => Some(Self::AlreadySatisfied),
+            "skipped" => Some(Self::Skipped),
+            "held" => Some(Self::Held),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
+    pub const fn is_success_class(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::AlreadySatisfied | Self::Skipped
+        )
+    }
+
+    /// A completed sequence may advance past only these states. Holds and
+    /// failures remain resumable at the step level until executor policy
+    /// reaches a terminal candidate outcome.
+    pub const fn is_completion_success(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::AlreadySatisfied | Self::Skipped
+        )
+    }
+
+    /// The current attempt has returned a result. This differs from sequence
+    /// completion: a held or failed attempt may be retried with a new attempt
+    /// record under the same stable step key.
+    pub const fn is_attempt_finished(self) -> bool {
+        self.is_completion_success() || matches!(self, Self::Held | Self::Failed)
+    }
+}
+
+/// Persisted, mutation-safe evidence for one sequence step.
+///
+/// The JSON fields are versioned evidence, never configuration parameters:
+/// configuration is the closed typed sequence stored on the revision. Writing
+/// this evidence before a mutation lets recovery reason about the exact target,
+/// observed before-state, and provenance without reconstructing either from a
+/// later catalog read.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceActionStepRun {
+    pub key: MaintenanceActionStepKey,
+    pub rule_set_id: String,
+    pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub sequence_content_hash: String,
+    pub step_kind: String,
+    pub intent_json: String,
+    pub before_state_json: String,
+    pub target_identity_json: String,
+    pub provenance_json: String,
+    pub state: MaintenanceActionStepState,
+    /// Reservation count for mutations. Holds do not advance it.
+    pub attempt: i64,
+    pub lease_id: Option<String>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// Immutable evidence for one attempt beneath a stable sequence step.
+///
+/// The mutable [`MaintenanceActionStepRun`] is the coordinator's current
+/// checkpoint. This row preserves failed and reconciled job attempts so a
+/// later retry cannot overwrite the evidence that led to it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceActionStepAttempt {
+    pub id: String,
+    pub key: MaintenanceActionStepKey,
+    pub attempt: i64,
+    pub state: MaintenanceActionStepState,
+    pub intent_json: String,
+    pub before_state_json: String,
+    pub target_identity_json: String,
+    pub provenance_json: String,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A versioned receipt for an operation that outlives the action worker.
+///
+/// `Accepted` means a real durable job was created for `job_run_id`; it is not
+/// a speculative dispatch intent. The receipt intentionally has no foreign key
+/// to job history because action evidence must survive ordinary job pruning.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceActionJobReceiptState {
+    #[default]
+    Dispatching,
+    Accepted,
+    Completed,
+    Failed,
+    /// Reconciliation cannot prove whether an external job completed. Workers
+    /// hold here and never submit another request blindly.
+    Unknown,
+}
+
+impl MaintenanceActionJobReceiptState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Dispatching => "dispatching",
+            Self::Accepted => "accepted",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "dispatching" => Some(Self::Dispatching),
+            "accepted" => Some(Self::Accepted),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
+pub const MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceActionJobReceipt {
+    pub schema_version: u32,
+    pub key: MaintenanceActionStepKey,
+    /// Retryable completed-job policies use a new dispatch attempt while
+    /// retaining this step key as their logical identity.
+    pub dispatch_attempt: i64,
+    pub logical_request_key: String,
+    pub request_hash: String,
+    pub job_run_id: Option<String>,
+    pub state: MaintenanceActionJobReceiptState,
+    pub reconciliation_evidence_json: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MaintenanceActionJobReceipt {
+    pub fn validate_schema(&self) -> Result<(), MaintenanceActionJobReceiptError> {
+        if self.schema_version != MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION {
+            return Err(MaintenanceActionJobReceiptError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+                expected: MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION,
+            });
+        }
+        if self.dispatch_attempt <= 0 {
+            return Err(MaintenanceActionJobReceiptError::InvalidDispatchAttempt);
+        }
+        if self.logical_request_key != self.key.logical_request_key() {
+            return Err(MaintenanceActionJobReceiptError::LogicalRequestKeyMismatch);
+        }
+        if self.request_hash.trim().is_empty() {
+            return Err(MaintenanceActionJobReceiptError::MissingRequestHash);
+        }
+        if matches!(
+            self.state,
+            MaintenanceActionJobReceiptState::Accepted
+                | MaintenanceActionJobReceiptState::Completed
+        ) && self
+            .job_run_id
+            .as_deref()
+            .is_none_or(|job_run_id| job_run_id.trim().is_empty())
+        {
+            return Err(MaintenanceActionJobReceiptError::AcceptedWithoutJobRun);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MaintenanceActionJobReceiptError {
+    #[error(
+        "maintenance action job receipt schema version {found} is unsupported; expected {expected}"
+    )]
+    UnsupportedSchemaVersion { found: u32, expected: u32 },
+    #[error("maintenance action job receipt dispatch attempt must be positive")]
+    InvalidDispatchAttempt,
+    #[error("maintenance action job receipt logical request key does not match its step key")]
+    LogicalRequestKeyMismatch,
+    #[error("maintenance action job receipt request hash is missing")]
+    MissingRequestHash,
+    #[error("an accepted maintenance action job receipt must name a real job run")]
+    AcceptedWithoutJobRun,
+}
+
+/// The terminal outcome that latches a continuous sequence membership.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceSequenceTerminalOutcome {
+    Succeeded,
+    Failed,
+}
+
+impl MaintenanceSequenceTerminalOutcome {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Durable terminal-membership evidence for a v2 action sequence.
+///
+/// A candidate can become terminal while its rule still matches. This marker
+/// keeps that continuous membership from being admitted again until a raw,
+/// confirmed no-match releases it. Failed markers are intentional: otherwise a
+/// permanently failing sequence would reset its retry budget by creating a new
+/// generation on every evaluator pass.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceSequenceTerminalMembership {
+    pub id: String,
+    pub candidate_id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub matcher_content_hash: String,
+    pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub match_generation: i64,
+    pub sequence_content_hash: String,
+    pub outcome: MaintenanceSequenceTerminalOutcome,
+    /// The complete ordered step-id list of the immutable sequence.
+    pub expected_step_ids: Vec<String>,
+    /// Completed step ids up to the terminal outcome, including a failed final
+    /// step when `outcome` is `Failed`.
+    pub completed_step_ids: Vec<String>,
+    pub terminal_step_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    /// `None` means the same continuous membership remains latched.
+    pub released_at: Option<DateTime<Utc>>,
+}
+
 /// How far a request rule set is allowed to act (spec 0003 FR-013).
 ///
 /// The whole enum is pinned here, storage strings included, even though the

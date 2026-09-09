@@ -1991,9 +1991,15 @@ input CreateMaintenanceRuleSetInput {
 	"""
 	regoSource: String!
 	"""
-	Action the first revision authorizes.
+	Legacy action the first revision authorizes. Supply this or
+	`actionSequence`, never both.
 	"""
-	action: MaintenanceActionInput!
+	action: MaintenanceActionInput
+	"""
+	Ordered actions the first revision authorizes. Supply this or `action`,
+	never both.
+	"""
+	actionSequence: MaintenanceActionSequenceInput
 	"""
 	Days a subject must match continuously before the action becomes due;
 	defaults to zero.
@@ -11470,9 +11476,45 @@ input MaintenanceActionInput {
 }
 
 """
+Durable receipt for an external job requested by a schema-2 action step.
+"""
+type MaintenanceActionJobReceipt {
+	"""
+	Dispatch ordinal for this durable external-job request.
+	"""
+	dispatchAttempt: Int!
+	"""
+	Idempotent key identifying the requested external job.
+	"""
+	logicalRequestKey: String!
+	"""
+	External job-run identifier after the request is accepted.
+	"""
+	jobRunId: ID
+	"""
+	Latest reconciliation state of the external job request.
+	"""
+	state: String!
+	"""
+	UTC time this receipt was created.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC time this receipt was last reconciled.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
 The closed catalog of actions a maintenance rule revision can authorize.
 """
 enum MaintenanceActionKind {
+	"""
+	This revision contains an ordered action sequence. Read
+	`actionSequence` for the authoritative steps; it is never a legacy
+	action input value.
+	"""
+	ACTION_SEQUENCE
 	"""
 	Track membership only, and mutate no media.
 	"""
@@ -11567,6 +11609,15 @@ type MaintenanceActionRun {
 	"""
 	actionKind: MaintenanceActionKind!
 	"""
+	The immutable schema-2 sequence this attempt executed. Legacy attempts
+	retain their original `actionKind` and leave this null.
+	"""
+	actionSequence: MaintenanceActionSequence
+	"""
+	Ordered latest evidence for every step in the immutable sequence.
+	"""
+	sequenceSteps: [MaintenanceActionStepProgress!]!
+	"""
 	Match generation of the candidate at attempt time.
 	"""
 	matchGeneration: Int!
@@ -11597,6 +11648,35 @@ type MaintenanceActionRun {
 }
 
 """
+The authoritative, schema-versioned sequence a revision authorizes.
+"""
+type MaintenanceActionSequence {
+	"""
+	Schema version that defines the accepted step representation.
+	"""
+	schemaVersion: Int!
+	"""
+	Ordered steps that make up the revision's action sequence.
+	"""
+	steps: [MaintenanceActionStep!]!
+}
+
+"""
+A versioned ordered sequence. An empty sequence is a valid observe-only
+rule and is not represented with a placeholder action.
+"""
+input MaintenanceActionSequenceInput {
+	"""
+	Schema version that defines this sequence input representation.
+	"""
+	schemaVersion: Int!
+	"""
+	Ordered steps to store in the new immutable revision.
+	"""
+	steps: [MaintenanceActionStepInput!]!
+}
+
+"""
 The closed, schema-versioned action configuration a rule revision stores.
 """
 type MaintenanceActionSpec {
@@ -11618,6 +11698,238 @@ type MaintenanceActionSpec {
 	other kind. Labels are registry-defined and stored lowercase.
 	"""
 	tags: [String!]!
+}
+
+"""
+One ordered action in a revision-bound sequence.
+"""
+type MaintenanceActionStep {
+	"""
+	Stable identifier used by durable execution receipts and history.
+	"""
+	id: ID!
+	"""
+	Catalog primitive this ordered step executes.
+	"""
+	kind: MaintenanceActionStepKind!
+	"""
+	Typed parameters accepted by this step's catalog primitive.
+	"""
+	parameters: MaintenanceActionStepParameters!
+}
+
+"""
+Backend-owned capabilities for one schema-2 primitive.
+"""
+type MaintenanceActionStepDescriptor {
+	"""
+	Stable catalog identifier for this primitive.
+	"""
+	id: String!
+	"""
+	Primitive represented by this descriptor.
+	"""
+	kind: MaintenanceActionStepKind!
+	"""
+	Operator-facing label for the primitive.
+	"""
+	label: String!
+	"""
+	Subjects that may use this primitive.
+	"""
+	supportedSubjects: [MaintenanceActionSubject!]!
+	"""
+	Name of the typed parameter shape accepted by this primitive.
+	"""
+	parameterSchema: String!
+	"""
+	Effects used when arbitrating conflicts with other steps.
+	"""
+	effectClasses: [String!]!
+	"""
+	Risk class that determines the required arming level.
+	"""
+	riskClass: MaintenanceRiskClass!
+	"""
+	Preconditions this primitive requires before it can execute.
+	"""
+	requires: [String!]!
+	"""
+	Whether this primitive ends the sequence when it succeeds.
+	"""
+	terminal: Boolean!
+	"""
+	How completion for this primitive is determined.
+	"""
+	completionPolicy: String!
+	"""
+	Whether this primitive is permitted for a storage-root-scoped rule.
+	"""
+	storageRootAllowed: Boolean!
+}
+
+"""
+One ordered input action with a caller-stable identifier.
+"""
+input MaintenanceActionStepInput {
+	"""
+	Caller-stable identifier used for durable step receipts and history.
+	"""
+	id: ID!
+	"""
+	Catalog primitive this input step configures.
+	"""
+	kind: MaintenanceActionStepKind!
+	"""
+	Typed parameters accepted by the selected primitive.
+	"""
+	parameters: MaintenanceActionStepParametersInput!
+}
+
+"""
+The closed catalog of sequence step kinds. These kinds are intentionally
+separate from the legacy maintenance-action catalog: a sequence never
+serializes as a synthetic legacy action.
+"""
+enum MaintenanceActionStepKind {
+	"""
+	Stop monitoring the selected scope and, when configured, its descendants.
+	"""
+	UNMONITOR
+	"""
+	Delete only the selected scope's authorized media files.
+	"""
+	DELETE_FILES
+	"""
+	Change the selected title's quality profile.
+	"""
+	CHANGE_QUALITY_PROFILE
+	"""
+	Request an acquisition search for the selected title.
+	"""
+	SEARCH
+	"""
+	Add configured tags to the selected title.
+	"""
+	ADD_TAGS
+	"""
+	Remove configured tags from the selected title.
+	"""
+	REMOVE_TAGS
+	"""
+	Delete the selected title record and its authorized files.
+	"""
+	DELETE_TITLE_AND_FILES
+}
+
+"""
+One typed parameter set for a sequence step. The action catalog decides
+which fields are meaningful for each `kind`; the application rejects every
+other shape before the sequence can be stored.
+"""
+type MaintenanceActionStepParameters {
+	"""
+	Whether a title-level unmonitor step also unmonitors its seasons and
+	episodes. This is required before a title file-deletion step can cover
+	a show completely.
+	"""
+	includeDescendants: Boolean
+	"""
+	Target profile for a quality-profile step.
+	"""
+	targetQualityProfileId: String
+	"""
+	Dispatch condition for a search step.
+	"""
+	searchCondition: MaintenanceSearchCondition
+	"""
+	Tags written by an add-tags or remove-tags step.
+	"""
+	tags: [String!]!
+}
+
+"""
+Parameters for one input sequence step. The selected `kind` determines the
+accepted subset. Keeping this input closed and validated by the server
+prevents Rego or the web client from inventing effects.
+"""
+input MaintenanceActionStepParametersInput {
+	"""
+	Include monitored descendants when unmonitoring a whole title.
+	"""
+	includeDescendants: Boolean
+	"""
+	Quality-profile identifier for a change-quality-profile step.
+	"""
+	targetQualityProfileId: String
+	"""
+	Condition that controls whether a search step requests work.
+	"""
+	searchCondition: MaintenanceSearchCondition
+	"""
+	Tags to add or remove for a tag step.
+	"""
+	tags: [String!]
+}
+
+"""
+One configured step with the latest outcome and any durable job receipts.
+"""
+type MaintenanceActionStepProgress {
+	"""
+	Immutable step definition from the sequence revision.
+	"""
+	step: MaintenanceActionStep!
+	"""
+	Latest durable checkpoint for this step, or null before execution starts.
+	"""
+	run: MaintenanceActionStepRun
+	"""
+	Durable external-job receipts associated with this step.
+	"""
+	receipts: [MaintenanceActionJobReceipt!]!
+}
+
+"""
+The latest durable checkpoint for one ordered schema-2 step.
+"""
+type MaintenanceActionStepRun {
+	"""
+	Stable identifier of the sequence step this checkpoint belongs to.
+	"""
+	stepId: ID!
+	"""
+	Stored catalog kind for the step checkpoint.
+	"""
+	stepKind: String!
+	"""
+	Latest durable state for this step.
+	"""
+	state: String!
+	"""
+	Number of durable attempts made for this step.
+	"""
+	attempt: Int!
+	"""
+	Reason execution is waiting, when the step is held.
+	"""
+	holdReason: String
+	"""
+	Failure message for the latest step attempt, when any.
+	"""
+	error: String
+	"""
+	UTC time the step checkpoint was created.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC time the step checkpoint was last updated.
+	"""
+	updatedAt: DateTime!
+	"""
+	UTC time the latest step attempt finished, or null while active.
+	"""
+	finishedAt: DateTime
 }
 
 """
@@ -11660,6 +11972,18 @@ type MaintenanceCandidate {
 	Current subject file size in bytes, or null if the subject is unavailable.
 	"""
 	totalSizeBytes: Int
+	"""
+	Number of unambiguously owned current subject files on the root selected
+	by this candidate's pinned revision, or null when no root is selected or
+	exact root ownership cannot be established.
+	"""
+	storageRootFileCount: Int
+	"""
+	Total bytes of unambiguously owned current subject files on the root
+	selected by this candidate's pinned revision. It is null under the same
+	conditions as `storageRootFileCount`.
+	"""
+	storageRootTotalSizeBytes: Int
 	"""
 	Exact subject display label, falling back to its ID if unavailable.
 	"""
@@ -11722,6 +12046,16 @@ type MaintenanceCandidate {
 	the action's risk class, and its instance effect gate is on.
 	"""
 	actionKind: MaintenanceActionKind!
+	"""
+	The immutable schema-2 sequence that opened this candidate. Legacy
+	candidates retain their original `actionKind` and leave this null.
+	"""
+	actionSequence: MaintenanceActionSequence
+	"""
+	Ordered latest evidence for each schema-2 step. An empty sequence is an
+	observe-only candidate rather than a missing action.
+	"""
+	sequenceSteps: [MaintenanceActionStepProgress!]!
 	"""
 	Days the subject must match continuously before the action is due.
 	"""
@@ -12250,6 +12584,11 @@ type MaintenanceRuleSet {
 	"""
 	actionSpec: MaintenanceActionSpec!
 	"""
+	Ordered schema-2 actions for the revision currently in force. Legacy
+	rows expose their unchanged action spec and leave this null.
+	"""
+	actionSequence: MaintenanceActionSequence
+	"""
 	UTC creation time.
 	"""
 	createdAt: DateTime!
@@ -12275,6 +12614,11 @@ type MaintenanceRuleSetDetail {
 	The action that revision authorizes, already decoded.
 	"""
 	actionSpec: MaintenanceActionSpec!
+	"""
+	Ordered actions for a schema-2 revision. Legacy revisions keep this
+	null and continue to expose their original `actionSpec` unchanged.
+	"""
+	actionSequence: MaintenanceActionSequence
 }
 
 """
@@ -12307,6 +12651,20 @@ type MaintenanceRuleValidationPayload {
 	Validation errors; empty when valid.
 	"""
 	errors: [String!]!
+}
+
+"""
+The explicit condition a search step applies before requesting work.
+"""
+enum MaintenanceSearchCondition {
+	"""
+	Always request the search when the step executes.
+	"""
+	UNCONDITIONAL
+	"""
+	Request the search only when the preceding profile step changed a profile.
+	"""
+	PREVIOUS_PROFILE_CHANGED
 }
 
 """
@@ -18794,8 +19152,9 @@ input PreviewExternalImportInput {
 Runs one matcher against a bounded title selection without saving anything.
 
 Supply either `ruleSetId` to preview a stored rule set, or `regoSource` with
-`action` to preview an unsaved draft, never both. Select titles with either
-`titleIds` or `libraryId`, never both.
+exactly one action definition (`action` or `actionSequence`) to preview an
+unsaved draft, never both. Select titles with either `titleIds` or
+`libraryId`, never both.
 """
 input PreviewMaintenanceRuleInput {
 	"""
@@ -18815,9 +19174,15 @@ input PreviewMaintenanceRuleInput {
 	"""
 	regoSource: String
 	"""
-	Action for the unsaved draft; required with `regoSource`.
+	Legacy action for the unsaved draft. Supply this or `actionSequence`,
+	never both.
 	"""
 	action: MaintenanceActionInput
+	"""
+	Ordered actions for the unsaved draft. Supply this or `action`, never
+	both.
+	"""
+	actionSequence: MaintenanceActionSequenceInput
 	"""
 	Grace period for the unsaved draft; defaults to zero.
 	"""
@@ -20622,6 +20987,12 @@ type QueryRoot {
 	List the static maintenance action catalog the rule builder chooses from.
 	"""
 	maintenanceActionDescriptors: [MaintenanceActionDescriptor!]!
+	"""
+	List the backend-owned schema-2 action-sequence catalog. Authoring
+	clients use its parameter and dependency descriptors directly rather
+	than maintaining a parallel effect matrix.
+	"""
+	maintenanceActionStepDescriptors: [MaintenanceActionStepDescriptor!]!
 	"""
 	List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
 	
@@ -26934,9 +27305,15 @@ input UpdateMaintenanceRuleMatcherInput {
 	"""
 	regoSource: String!
 	"""
-	Action the new revision authorizes.
+	Legacy action the new revision authorizes. Supply this or
+	`actionSequence`, never both.
 	"""
-	action: MaintenanceActionInput!
+	action: MaintenanceActionInput
+	"""
+	Ordered actions the new revision authorizes. Supply this or `action`,
+	never both.
+	"""
+	actionSequence: MaintenanceActionSequenceInput
 	"""
 	Days a subject must match continuously before the action becomes due;
 	defaults to zero.

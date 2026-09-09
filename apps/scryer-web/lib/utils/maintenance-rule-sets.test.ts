@@ -5,6 +5,7 @@ import maintenanceInputContract from "../contracts/maintenance-input-contract.js
 import en from "../i18n/locales/en.ts";
 import type {
   MaintenanceActionDescriptor,
+  MaintenanceActionStepProgress,
   MaintenanceCandidateState,
   MaintenanceEffectArming,
   MaintenanceInstanceGates,
@@ -36,8 +37,11 @@ import {
   initialMaintenanceRuleDraft,
   isNonTerminalCandidateState,
   maintenanceCountdown,
+  maintenanceActionSequenceInput,
+  maintenanceActionSequenceStepId,
   maintenanceFilterArgument,
   maintenancePreviewInput,
+  maintenanceSearchHistoryState,
   maintenanceRuleDraftFromDetail,
   maintenanceStatusBanner,
   maintenanceStatusBannerKeys,
@@ -144,6 +148,7 @@ const detail: MaintenanceRuleSetDetail = {
     targetQualityProfileId: "profile-7",
     tags: [],
   },
+  actionSequence: null,
 };
 
 test("a new draft starts from the starter matcher with no package or import line", () => {
@@ -153,8 +158,16 @@ test("a new draft starts from the starter matcher with no package or import line
   assert.equal(draft.regoSource.includes("package "), false);
   assert.equal(draft.regoSource.includes("import rego.v1"), false);
   assert.equal(draft.actionKind, "DO_NOTHING");
+  assert.deepEqual(draft.actionSequence.steps, []);
   assert.equal(draft.graceDays, 0);
   assert.deepEqual(draft.libraryIds, []);
+});
+
+test("sequence step IDs remain valid when randomUUID is unavailable", () => {
+  const id = maintenanceActionSequenceStepId(null, () => 1234, () => 0.5);
+
+  assert.equal(id, "step-1234-i");
+  assert.match(id, /^[A-Za-z0-9_-]+$/);
 });
 
 test("a draft loaded from a rule set round-trips its revision and action", () => {
@@ -167,6 +180,11 @@ test("a draft loaded from a rule set round-trips its revision and action", () =>
   assert.equal(draft.targetQualityProfileId, "profile-7");
   assert.deepEqual(draft.libraryIds, ["lib-movies", "lib-series"]);
   assert.notEqual(draft.libraryIds, detail.ruleSet.libraryIds);
+  assert.equal(detail.actionSequence, null);
+  assert.deepEqual(
+    draft.actionSequence.steps.map((step) => step.kind),
+    ["CHANGE_QUALITY_PROFILE", "SEARCH"],
+  );
 });
 
 test("copying a rule set renames the draft and keeps nothing that identifies the original", () => {
@@ -178,7 +196,7 @@ test("copying a rule set renames the draft and keeps nothing that identifies the
   assert.equal(Object.hasOwn(draft, "evaluationMode"), false);
 });
 
-test("create input carries the action and drops empty optional fields", () => {
+test("create input saves a full sequence and never sends a legacy action", () => {
   const input = createMaintenanceRuleSetInput(
     { ...maintenanceRuleDraftFromDetail(detail), description: "  ", libraryIds: [] },
     descriptors,
@@ -187,27 +205,55 @@ test("create input carries the action and drops empty optional fields", () => {
   assert.equal(input.name, "Stale unmonitored titles");
   assert.equal(input.description, undefined);
   assert.equal(input.libraryIds, undefined);
-  assert.deepEqual(input.action, {
-    kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-    targetQualityProfileId: "profile-7",
-    tags: undefined,
+  assert.deepEqual(input.actionSequence, {
+    schemaVersion: 2,
+    steps: [
+      {
+        id: "legacy-change-profile",
+        kind: "CHANGE_QUALITY_PROFILE",
+        parameters: { targetQualityProfileId: "profile-7" },
+      },
+      {
+        id: "legacy-search",
+        kind: "SEARCH",
+        parameters: { searchCondition: "PREVIOUS_PROFILE_CHANGED" },
+      },
+    ],
   });
+  assert.equal(Object.hasOwn(input, "action"), false);
   assert.equal(input.graceDays, 14);
   assert.equal(Object.hasOwn(input, "enabled"), false);
 });
 
-test("an action that does not take a profile never sends a stale profile id", () => {
-  const draft = { ...maintenanceRuleDraftFromDetail(detail), actionKind: "DELETE_TITLE_AND_FILES" as const };
+test("a parameterless step never sends a stale profile id", () => {
+  const draft = {
+    ...maintenanceRuleDraftFromDetail(detail),
+    actionSequence: {
+      schemaVersion: 2,
+      steps: [
+        {
+          id: "delete",
+          kind: "DELETE_TITLE_AND_FILES" as const,
+          parameters: {
+            includeDescendants: null,
+            targetQualityProfileId: "profile-uhd",
+            searchCondition: null,
+            tags: [],
+          },
+        },
+      ],
+    },
+  };
   const input = createMaintenanceRuleSetInput(draft, descriptors);
 
-  assert.deepEqual(input.action, {
+  assert.deepEqual(input.actionSequence.steps[0], {
+    id: "delete",
     kind: "DELETE_TITLE_AND_FILES",
-    targetQualityProfileId: undefined,
-    tags: undefined,
+    parameters: {},
   });
 });
 
-test("a tag action sends normalized, deduplicated labels and nothing else", () => {
+test("a tag step sends normalized, deduplicated labels and nothing else", () => {
   const tagDescriptors: MaintenanceActionDescriptor[] = [
     ...descriptors,
     {
@@ -225,28 +271,38 @@ test("a tag action sends normalized, deduplicated labels and nothing else", () =
   ];
   const draft = {
     ...maintenanceRuleDraftFromDetail(detail),
-    actionKind: "ADD_TAGS" as const,
-    tags: ["  Needs   Review ", "keep", "needs review", "scryer:monitor-type:all"],
+    actionSequence: {
+      schemaVersion: 2,
+      steps: [
+        {
+          id: "add-tags",
+          kind: "ADD_TAGS" as const,
+          parameters: {
+            includeDescendants: null,
+            targetQualityProfileId: "profile-uhd",
+            searchCondition: null,
+            tags: ["  Needs   Review ", "keep", "needs review", "scryer:monitor-type:all"],
+          },
+        },
+      ],
+    },
   };
 
-  assert.deepEqual(createMaintenanceRuleSetInput(draft, tagDescriptors).action, {
-    kind: "ADD_TAGS",
-    // The profile the draft still carries from the previous action is dropped.
-    targetQualityProfileId: undefined,
-    tags: ["keep", "needs review"],
+  assert.deepEqual(createMaintenanceRuleSetInput(draft, tagDescriptors).actionSequence, {
+    schemaVersion: 2,
+    steps: [{ id: "add-tags", kind: "ADD_TAGS", parameters: { tags: ["keep", "needs review"] } }],
   });
 
-  // Switching back to an action that takes no tags drops them the same way.
+  // Replacing the step drops every old parameter with it.
   assert.deepEqual(
-    createMaintenanceRuleSetInput(
-      { ...draft, actionKind: "DELETE_TITLE_AND_FILES" as const },
-      tagDescriptors,
-    ).action,
-    {
-      kind: "DELETE_TITLE_AND_FILES",
-      targetQualityProfileId: undefined,
-      tags: undefined,
-    },
+    maintenanceActionSequenceInput({
+      schemaVersion: 2,
+      steps: [{
+        ...draft.actionSequence.steps[0],
+        kind: "DELETE_TITLE_AND_FILES",
+      }],
+    }).steps[0].parameters,
+    {},
   );
   assert.equal(actionRequiresTags(tagDescriptors, "ADD_TAGS"), true);
   assert.equal(actionRequiresTags(tagDescriptors, "DELETE_TITLE_AND_FILES"), false);
@@ -282,7 +338,7 @@ test("matcher and metadata updates split along the API's versioned and unversion
   const metadata = updateMaintenanceRuleMetadataInput("rule-1", draft);
 
   assert.deepEqual(Object.keys(matcher).sort(), [
-    "action",
+    "actionSequence",
     "graceDays",
     "id",
     "regoSource",
@@ -816,6 +872,63 @@ test("run statuses fall back to the raw value the API sent", () => {
   assert.equal(runStatusBadgeTone("failed"), "negative");
   assert.equal(runStatusBadgeTone("already_satisfied"), "warning");
   assert.equal(runStatusBadgeTone("some_future_status"), "neutral");
+});
+
+test("search history stays waiting or skipped until a durable receipt is accepted", () => {
+  assert.equal(maintenanceSearchHistoryState(undefined), "waiting");
+  assert.equal(
+    maintenanceSearchHistoryState({
+      step: {
+        id: "search",
+        kind: "SEARCH",
+        parameters: {
+          includeDescendants: null,
+          targetQualityProfileId: null,
+          searchCondition: "UNCONDITIONAL",
+          tags: [],
+        },
+      },
+      run: {
+        stepId: "search",
+        stepKind: "search",
+        state: "skipped",
+        attempt: 0,
+        holdReason: null,
+        error: null,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+        finishedAt: "2026-01-01T00:00:00Z",
+      },
+      receipts: [],
+    } satisfies MaintenanceActionStepProgress),
+    "skipped",
+  );
+  assert.equal(
+    maintenanceSearchHistoryState({
+      step: {
+        id: "search",
+        kind: "SEARCH",
+        parameters: {
+          includeDescendants: null,
+          targetQualityProfileId: null,
+          searchCondition: "UNCONDITIONAL",
+          tags: [],
+        },
+      },
+      run: null,
+      receipts: [
+        {
+          dispatchAttempt: 1,
+          logicalRequestKey: "request",
+          jobRunId: "job-1",
+          state: "accepted",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    } satisfies MaintenanceActionStepProgress),
+    "accepted",
+  );
 });
 
 test("the all-filter sentinel never reaches the API as a rule or library id", () => {

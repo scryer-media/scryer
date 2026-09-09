@@ -2156,3 +2156,20 @@ kind = "sql"
 file = "postgres/migrations/0230_maintenance_storage_roots.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 231
+description = "maintenance action sequence persistence"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0231_maintenance_action_sequences.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0231_maintenance_action_sequences.sql"
+engine = "postgres"
+scope = "all"

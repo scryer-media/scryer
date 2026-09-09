@@ -15,8 +15,11 @@ export type MaintenanceFileResults = {
 };
 
 /// Read the versioned scoped-deletion checkpoint embedded in an action-run
-/// detail payload. Older checkpoints omit `storage_root_id`; they retain their
-/// original file and grace-deadline rendering with a null root.
+/// detail payload. A sequence summary keeps its child delete journal in
+/// `deletion_outcomes`, so it is unwrapped here rather than displaying the
+/// internal journal as a second action-history row. Older checkpoints omit
+/// `storage_root_id`; they retain their original file and grace-deadline
+/// rendering with a null root.
 export function parseMaintenanceFileResults(detail: string): MaintenanceFileResults | null {
   let value: unknown;
   try {
@@ -24,6 +27,24 @@ export function parseMaintenanceFileResults(detail: string): MaintenanceFileResu
   } catch {
     return null;
   }
+  const direct = parseMaintenanceFileCheckpoint(value);
+  if (direct) return direct;
+  if (!isRecord(value) || !Array.isArray(value.deletion_outcomes)) {
+    return null;
+  }
+  const outcomes = value.deletion_outcomes.flatMap((outcome): MaintenanceFileResults[] => {
+    if (!isRecord(outcome) || typeof outcome.detail !== "string") return [];
+    try {
+      const checkpoint = parseMaintenanceFileCheckpoint(JSON.parse(outcome.detail));
+      return checkpoint ? [checkpoint] : [];
+    } catch {
+      return [];
+    }
+  });
+  return combineMaintenanceFileResults(outcomes);
+}
+
+function parseMaintenanceFileCheckpoint(value: unknown): MaintenanceFileResults | null {
   if (!isRecord(value) || !Array.isArray(value.files)) {
     return null;
   }
@@ -56,6 +77,35 @@ export function parseMaintenanceFileResults(detail: string): MaintenanceFileResu
         : null,
     graceDeadline: typeof value.grace_deadline === "string" ? value.grace_deadline : null,
     storageRootId: typeof value.storage_root_id === "string" ? value.storage_root_id : null,
+    completedFileCount,
+    remainingFileCount: files.length - completedFileCount,
+  };
+}
+
+function combineMaintenanceFileResults(
+  outcomes: MaintenanceFileResults[],
+): MaintenanceFileResults | null {
+  const files = outcomes.flatMap((outcome) => outcome.files);
+  if (files.length === 0) return null;
+  const storageRootIds = new Set(
+    outcomes
+      .map((outcome) => outcome.storageRootId)
+      .filter((rootId): rootId is string => rootId !== null),
+  );
+  const graceDeadlines = new Set(
+    outcomes
+      .map((outcome) => outcome.graceDeadline)
+      .filter((deadline): deadline is string => deadline !== null),
+  );
+  const totalSizeBytes = outcomes.every((outcome) => outcome.totalSizeBytes !== null)
+    ? outcomes.reduce((total, outcome) => total + (outcome.totalSizeBytes ?? 0), 0)
+    : null;
+  const completedFileCount = files.filter((file) => file.completed).length;
+  return {
+    files,
+    totalSizeBytes,
+    graceDeadline: graceDeadlines.size === 1 ? [...graceDeadlines][0] ?? null : null,
+    storageRootId: storageRootIds.size === 1 ? [...storageRootIds][0] ?? null : null,
     completedFileCount,
     remainingFileCount: files.length - completedFileCount,
   };

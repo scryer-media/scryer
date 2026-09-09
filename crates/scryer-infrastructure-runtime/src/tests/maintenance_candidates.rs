@@ -3,15 +3,21 @@
 //! candidate per (rule, title), and one global exclusion per title.
 
 use super::*;
+use crate::workflow::stores::WorkflowOperationStore;
 use scryer_application::{
-    LifecycleActionRunRepository, MaintenanceCandidateQuery, MaintenanceCandidateRepository,
-    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
-    MaintenanceRuleSetRepository,
+    JobKey, JobRunRecord, JobRunRepository, JobRunStatus, JobTriggerSource,
+    LifecycleActionRunRepository, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
+    MaintenanceCandidateRepository, MaintenanceEvaluationRunRepository,
+    MaintenanceExclusionRepository, MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
+    MaintenanceSequenceCompletionRepository,
 };
 use scryer_domain::{
-    LifecycleCandidate, MaintenanceCandidateState, MaintenanceEvaluationMode,
-    MaintenanceEvaluationRun, MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion,
-    MaintenanceRuleRevision, MaintenanceRuleSet, MaintenanceRuleSubjectKind,
+    LifecycleCandidate, MaintenanceActionJobReceipt, MaintenanceActionJobReceiptState,
+    MaintenanceActionStepKey, MaintenanceActionStepRun, MaintenanceActionStepState,
+    MaintenanceCandidateState, MaintenanceEvaluationMode, MaintenanceEvaluationRun,
+    MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion, MaintenanceRuleRevision,
+    MaintenanceRuleSet, MaintenanceRuleSubjectKind, MaintenanceSequenceTerminalMembership,
+    MaintenanceSequenceTerminalOutcome,
 };
 
 fn evaluation_store(services: &SqliteServices) -> crate::MaintenanceEvaluationStore {
@@ -82,6 +88,50 @@ fn candidate(id: &str, rule_set_id: &str, title_id: &str, generation: i64) -> Li
         action_attempts: 0,
         created_at: now,
         updated_at: now,
+    }
+}
+
+fn sequence_step_run(candidate: &LifecycleCandidate, attempt: i64) -> MaintenanceActionStepRun {
+    let now = Utc::now();
+    MaintenanceActionStepRun {
+        key: MaintenanceActionStepKey {
+            candidate_id: candidate.id.clone(),
+            match_generation: candidate.match_generation,
+            revision_number: candidate.revision_number,
+            step_id: "search".to_string(),
+        },
+        rule_set_id: candidate.rule_set_id.clone(),
+        title_id: candidate.title_id.clone(),
+        subject_kind: candidate.subject_kind.clone(),
+        subject_id: candidate.subject_id.clone(),
+        sequence_content_hash: "sequence-hash".to_string(),
+        step_kind: "search".to_string(),
+        intent_json: r#"{"schema_version":2,"effective_request":"missing:title-1"}"#.to_string(),
+        before_state_json: r#"{"schema_version":1,"monitored":true}"#.to_string(),
+        target_identity_json: serde_json::json!({
+            "schema_version": 1,
+            "rule_set_id": candidate.rule_set_id,
+            "candidate_id": candidate.id,
+            "match_generation": candidate.match_generation,
+            "revision_number": candidate.revision_number,
+            "title_id": candidate.title_id,
+            "subject_kind": candidate.subject_kind,
+            "subject_id": candidate.subject_id,
+            "step_id": "search",
+            "step_kind": "search",
+            "sequence_content_hash": "sequence-hash",
+        })
+        .to_string(),
+        provenance_json: r#"{"schema_version":1,"request":"saved"}"#.to_string(),
+        state: MaintenanceActionStepState::Running,
+        attempt,
+        lease_id: None,
+        lease_expires_at: Some(now + chrono::Duration::minutes(5)),
+        hold_reason: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+        finished_at: None,
     }
 }
 
@@ -162,6 +212,648 @@ async fn a_rule_set_may_hold_only_one_active_candidate_per_title() {
             .expect("max generation"),
         2,
         "generations count terminal rows too"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn sequence_step_journal_and_terminal_marker_block_readmission_until_confirmed_no_match() {
+    let (services, db) = temp_services("scryer_maintenance_sequence_latch").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let mut first = candidate("sequence-candidate-1", "rule-a", "title-1", 1);
+    first.action_kind = "action_sequence".to_string();
+    store
+        .create_candidate(&first)
+        .await
+        .expect("create sequence candidate");
+
+    let leased_at = Utc::now();
+    assert!(
+        store
+            .transition_candidate_state(
+                &first.id,
+                MaintenanceCandidateState::Executing,
+                "execution_leased",
+                &[MaintenanceCandidateState::Observing],
+                leased_at,
+            )
+            .await
+            .expect("lease candidate")
+    );
+    let original = sequence_step_run(&first, 0);
+    let claimed = match store
+        .claim_action_step(
+            &original,
+            leased_at - chrono::Duration::minutes(1),
+            "step-lease-1",
+            leased_at,
+        )
+        .await
+        .expect("claim step")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected step claim: {other:?}"),
+    };
+    let finished_at = leased_at + chrono::Duration::seconds(1);
+    let mut completed = claimed.clone();
+    completed.state = MaintenanceActionStepState::Succeeded;
+    completed.updated_at = finished_at;
+    completed.finished_at = Some(finished_at);
+    assert!(
+        store
+            .finish_action_step(&completed, "step-lease-1")
+            .await
+            .expect("finish step")
+    );
+    let membership = MaintenanceSequenceTerminalMembership {
+        id: "sequence-membership-1".to_string(),
+        candidate_id: first.id.clone(),
+        rule_set_id: first.rule_set_id.clone(),
+        revision_number: first.revision_number,
+        matcher_content_hash: first.matcher_content_hash.clone(),
+        title_id: first.title_id.clone(),
+        subject_kind: first.subject_kind.clone(),
+        subject_id: first.subject_id.clone(),
+        match_generation: first.match_generation,
+        sequence_content_hash: "sequence-hash".to_string(),
+        outcome: MaintenanceSequenceTerminalOutcome::Succeeded,
+        expected_step_ids: vec!["search".to_string()],
+        completed_step_ids: vec!["search".to_string()],
+        terminal_step_id: None,
+        created_at: finished_at,
+        released_at: None,
+    };
+    assert!(
+        store
+            .finish_sequence_terminal_membership_and_candidate(
+                &membership,
+                MaintenanceCandidateState::Executing,
+                leased_at,
+                MaintenanceCandidateState::Succeeded,
+                "action_succeeded",
+                finished_at,
+            )
+            .await
+            .expect("atomically finish sequence")
+    );
+
+    let mut second = candidate("sequence-candidate-2", "rule-a", "title-1", 2);
+    second.action_kind = "action_sequence".to_string();
+    assert!(store.create_candidate(&second).await.is_err());
+    assert!(
+        store
+            .release_sequence_completion_on_confirmed_non_match(
+                "rule-a",
+                1,
+                "title",
+                "title-1",
+                finished_at + chrono::Duration::seconds(1),
+            )
+            .await
+            .expect("confirmed no-match releases exact latch")
+    );
+    store
+        .create_candidate(&second)
+        .await
+        .expect("new generation after confirmed no-match");
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn failed_terminal_sequence_membership_preserves_the_exhausted_generation() {
+    let (services, db) = temp_services("scryer_maintenance_sequence_failed_latch").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let mut first = candidate("sequence-failed-1", "rule-a", "title-failed", 1);
+    first.action_kind = "action_sequence".to_string();
+    store
+        .create_candidate(&first)
+        .await
+        .expect("create sequence candidate");
+    let leased_at = Utc::now();
+    store
+        .transition_candidate_state(
+            &first.id,
+            MaintenanceCandidateState::Executing,
+            "execution_leased",
+            &[MaintenanceCandidateState::Observing],
+            leased_at,
+        )
+        .await
+        .expect("lease candidate");
+    let claimed = match store
+        .claim_action_step(
+            &sequence_step_run(&first, 2),
+            leased_at - chrono::Duration::minutes(1),
+            "failed-step-lease",
+            leased_at,
+        )
+        .await
+        .expect("claim exhausted step")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected claim: {other:?}"),
+    };
+    let finished_at = leased_at + chrono::Duration::seconds(1);
+    let mut failed = claimed;
+    failed.state = MaintenanceActionStepState::Failed;
+    failed.error = Some("retry budget exhausted".to_string());
+    failed.updated_at = finished_at;
+    failed.finished_at = Some(finished_at);
+    assert!(
+        store
+            .finish_action_step(&failed, "failed-step-lease")
+            .await
+            .expect("persist terminal failure")
+    );
+    let membership = MaintenanceSequenceTerminalMembership {
+        id: "sequence-failed-membership".to_string(),
+        candidate_id: first.id.clone(),
+        rule_set_id: first.rule_set_id.clone(),
+        revision_number: first.revision_number,
+        matcher_content_hash: first.matcher_content_hash.clone(),
+        title_id: first.title_id.clone(),
+        subject_kind: first.subject_kind.clone(),
+        subject_id: first.subject_id.clone(),
+        match_generation: first.match_generation,
+        sequence_content_hash: "sequence-hash".to_string(),
+        outcome: MaintenanceSequenceTerminalOutcome::Failed,
+        expected_step_ids: vec!["search".to_string()],
+        completed_step_ids: vec!["search".to_string()],
+        terminal_step_id: Some("search".to_string()),
+        created_at: finished_at,
+        released_at: None,
+    };
+    assert!(
+        store
+            .finish_sequence_terminal_membership_and_candidate(
+                &membership,
+                MaintenanceCandidateState::Executing,
+                leased_at,
+                MaintenanceCandidateState::Failed,
+                "retry_budget_exhausted",
+                finished_at,
+            )
+            .await
+            .expect("finish failed sequence")
+    );
+    let mut next = candidate("sequence-failed-2", "rule-a", "title-failed", 2);
+    next.action_kind = "action_sequence".to_string();
+    assert!(store.create_candidate(&next).await.is_err());
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn stale_candidate_lease_cannot_commit_a_terminal_sequence_membership() {
+    let (services, db) = temp_services("scryer_maintenance_sequence_stale_terminal").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let mut candidate = candidate("sequence-stale-1", "rule-a", "title-stale", 1);
+    candidate.action_kind = "action_sequence".to_string();
+    store
+        .create_candidate(&candidate)
+        .await
+        .expect("create candidate");
+    let leased_at = Utc::now();
+    store
+        .transition_candidate_state(
+            &candidate.id,
+            MaintenanceCandidateState::Executing,
+            "execution_leased",
+            &[MaintenanceCandidateState::Observing],
+            leased_at,
+        )
+        .await
+        .expect("lease candidate");
+    let claimed = match store
+        .claim_action_step(
+            &sequence_step_run(&candidate, 0),
+            leased_at - chrono::Duration::minutes(1),
+            "stale-step-lease",
+            leased_at,
+        )
+        .await
+        .expect("claim step")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected claim: {other:?}"),
+    };
+    let finished_at = leased_at + chrono::Duration::seconds(1);
+    let mut completed = claimed;
+    completed.state = MaintenanceActionStepState::Succeeded;
+    completed.updated_at = finished_at;
+    completed.finished_at = Some(finished_at);
+    store
+        .finish_action_step(&completed, "stale-step-lease")
+        .await
+        .expect("finish step");
+    let reclaimed_at = finished_at + chrono::Duration::seconds(1);
+    store
+        .record_candidate_match(&candidate.id, reclaimed_at, &[], reclaimed_at)
+        .await
+        .expect("simulate a newer candidate lease write");
+    let membership = MaintenanceSequenceTerminalMembership {
+        id: "stale-membership".to_string(),
+        candidate_id: candidate.id.clone(),
+        rule_set_id: candidate.rule_set_id.clone(),
+        revision_number: candidate.revision_number,
+        matcher_content_hash: candidate.matcher_content_hash.clone(),
+        title_id: candidate.title_id.clone(),
+        subject_kind: candidate.subject_kind.clone(),
+        subject_id: candidate.subject_id.clone(),
+        match_generation: candidate.match_generation,
+        sequence_content_hash: "sequence-hash".to_string(),
+        outcome: MaintenanceSequenceTerminalOutcome::Succeeded,
+        expected_step_ids: vec!["search".to_string()],
+        completed_step_ids: vec!["search".to_string()],
+        terminal_step_id: None,
+        created_at: finished_at,
+        released_at: None,
+    };
+    assert!(
+        store
+            .finish_sequence_terminal_membership_and_candidate(
+                &membership,
+                MaintenanceCandidateState::Executing,
+                leased_at,
+                MaintenanceCandidateState::Succeeded,
+                "action_succeeded",
+                finished_at,
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .get_active_sequence_completion("rule-a", 1, "title", "title-stale")
+            .await
+            .expect("membership reload")
+            .is_none()
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn held_and_failed_step_retries_keep_the_first_intent_and_before_state() {
+    let (services, db) = temp_services("scryer_maintenance_sequence_retry_journal").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let candidate = candidate("sequence-retry-1", "rule-a", "title-2", 1);
+    store
+        .create_candidate(&candidate)
+        .await
+        .expect("create candidate");
+    let original = sequence_step_run(&candidate, 0);
+    let leased_at = Utc::now();
+    let claimed = match store
+        .claim_action_step(
+            &original,
+            leased_at - chrono::Duration::minutes(1),
+            "step-lease-1",
+            leased_at,
+        )
+        .await
+        .expect("claim first attempt")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected step claim: {other:?}"),
+    };
+    let mut held = claimed.clone();
+    held.state = MaintenanceActionStepState::Held;
+    held.hold_reason = Some("search provider unavailable".to_string());
+    held.updated_at = leased_at + chrono::Duration::seconds(1);
+    held.finished_at = Some(held.updated_at);
+    assert!(
+        store
+            .finish_action_step(&held, "step-lease-1")
+            .await
+            .expect("hold first attempt")
+    );
+
+    let mut reconstructed = sequence_step_run(&candidate, 0);
+    reconstructed.intent_json = r#"{"different":"must-not-replace-saved-request"}"#.to_string();
+    reconstructed.before_state_json = r#"{"different":"must-not-replace-before"}"#.to_string();
+    reconstructed.provenance_json = r#"{"different":"must-not-replace-provenance"}"#.to_string();
+    let resumed = match store
+        .claim_action_step(
+            &reconstructed,
+            held.updated_at,
+            "step-lease-2",
+            held.updated_at + chrono::Duration::seconds(1),
+        )
+        .await
+        .expect("resume held attempt")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected held resume: {other:?}"),
+    };
+    assert_eq!(resumed.attempt, 0, "a hold does not spend failure budget");
+    assert_eq!(resumed.intent_json, original.intent_json);
+    assert_eq!(resumed.before_state_json, original.before_state_json);
+    assert_eq!(resumed.provenance_json, original.provenance_json);
+
+    let mut failed = resumed.clone();
+    failed.state = MaintenanceActionStepState::Failed;
+    failed.error = Some("transient failure".to_string());
+    failed.updated_at += chrono::Duration::seconds(1);
+    failed.finished_at = Some(failed.updated_at);
+    assert!(
+        store
+            .finish_action_step(&failed, "step-lease-2")
+            .await
+            .expect("finish failed attempt")
+    );
+    reconstructed.attempt = 1;
+    let retried = match store
+        .claim_action_step(
+            &reconstructed,
+            failed.updated_at,
+            "step-lease-3",
+            failed.updated_at + chrono::Duration::seconds(1),
+        )
+        .await
+        .expect("retry failed attempt")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected failed retry: {other:?}"),
+    };
+    assert_eq!(retried.attempt, 1);
+    assert_eq!(retried.intent_json, original.intent_json);
+    assert_eq!(retried.before_state_json, original.before_state_json);
+    assert_eq!(retried.provenance_json, original.provenance_json);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn independent_stores_race_a_step_claim_without_creating_two_attempts() {
+    let (services, db) = temp_services("scryer_maintenance_sequence_claim_race").await;
+    seed_rule_set(&services, "rule-a").await;
+    let setup = evaluation_store(&services);
+    let candidate = candidate("sequence-race-1", "rule-a", "title-5", 1);
+    setup
+        .create_candidate(&candidate)
+        .await
+        .expect("create candidate");
+    let step = sequence_step_run(&candidate, 0);
+    let mut corrupt = step.clone();
+    corrupt.target_identity_json = r#"{"schema_version":99}"#.to_string();
+    assert!(
+        setup
+            .claim_action_step(
+                &corrupt,
+                Utc::now() - chrono::Duration::minutes(1),
+                "corrupt-lease",
+                Utc::now(),
+            )
+            .await
+            .is_err()
+    );
+    let first = crate::MaintenanceEvaluationStore::new(services.datastore());
+    let second = crate::MaintenanceEvaluationStore::new(services.datastore());
+    let now = Utc::now();
+    let (left, right) = tokio::join!(
+        first.claim_action_step(
+            &step,
+            now - chrono::Duration::minutes(1),
+            "race-lease-a",
+            now,
+        ),
+        second.claim_action_step(
+            &step,
+            now - chrono::Duration::minutes(1),
+            "race-lease-b",
+            now,
+        )
+    );
+    let claims = [left.expect("left claim"), right.expect("right claim")];
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|claim| matches!(
+                claim,
+                scryer_application::MaintenanceActionStepClaim::Claimed(_)
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|claim| matches!(claim, scryer_application::MaintenanceActionStepClaim::Busy))
+            .count(),
+        1
+    );
+    assert_eq!(
+        setup
+            .list_action_step_attempts(&step.key)
+            .await
+            .expect("read immutable attempts")
+            .len(),
+        1
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn accepted_search_receipt_is_atomic_and_reused_across_a_later_dispatch_attempt() {
+    let (services, db) = temp_services("scryer_maintenance_search_receipt_atomic").await;
+    seed_rule_set(&services, "rule-a").await;
+    let evaluation = evaluation_store(&services);
+    let sequence_candidate = candidate("sequence-search-1", "rule-a", "title-3", 1);
+    evaluation
+        .create_candidate(&sequence_candidate)
+        .await
+        .expect("create candidate");
+    let step = sequence_step_run(&sequence_candidate, 0);
+    let claimed = match evaluation
+        .claim_action_step(
+            &step,
+            Utc::now() - chrono::Duration::minutes(1),
+            "search-step-lease",
+            Utc::now(),
+        )
+        .await
+        .expect("persist Search step")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected claim: {other:?}"),
+    };
+    let jobs = WorkflowOperationStore::new(services.datastore());
+    let now = Utc::now();
+    let initial_receipt = MaintenanceActionJobReceipt {
+        schema_version: 1,
+        key: claimed.key.clone(),
+        dispatch_attempt: 1,
+        logical_request_key: claimed.key.logical_request_key(),
+        request_hash: "stable-effective-request-hash".to_string(),
+        job_run_id: Some("search-job-1".to_string()),
+        state: MaintenanceActionJobReceiptState::Accepted,
+        reconciliation_evidence_json: r#"{"accepted":true}"#.to_string(),
+        created_at: now,
+        updated_at: now,
+    };
+    let run = JobRunRecord {
+        id: "search-job-1".to_string(),
+        job_key: JobKey::AcquisitionSearch,
+        operation_type: "maintenance_acquisition_search:missing:1".to_string(),
+        status: JobRunStatus::Running,
+        trigger_source: JobTriggerSource::SystemInternal,
+        actor_user_id: None,
+        progress_json: Some(r#"{"state":"running"}"#.to_string()),
+        summary_json: None,
+        summary_text: None,
+        error_text: None,
+        started_at: now,
+        completed_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let mut unsupported_receipt = initial_receipt.clone();
+    unsupported_receipt.schema_version = 99;
+    assert!(
+        jobs.create_maintenance_search_job_run(&run, &unsupported_receipt)
+            .await
+            .is_err()
+    );
+    assert!(
+        evaluation
+            .list_action_job_receipts(&claimed.key)
+            .await
+            .expect("unsupported receipt leaves no durable state")
+            .is_empty()
+    );
+
+    let competing_jobs = WorkflowOperationStore::new(services.datastore());
+    let (left, right) = tokio::join!(
+        jobs.create_maintenance_search_job_run(&run, &initial_receipt),
+        competing_jobs.create_maintenance_search_job_run(&run, &initial_receipt)
+    );
+    let creations = [
+        left.expect("first dispatch resolves"),
+        right.expect("second dispatch resolves"),
+    ];
+    assert_eq!(
+        creations
+            .iter()
+            .filter(|creation| matches!(creation, MaintenanceSearchJobRunCreation::Created { .. }))
+            .count(),
+        1,
+        "only one concurrent transaction creates the durable job"
+    );
+    assert_eq!(
+        creations
+            .iter()
+            .filter(|creation| matches!(creation, MaintenanceSearchJobRunCreation::Existing { .. }))
+            .count(),
+        1,
+        "the loser receives the accepted receipt rather than a duplicate job"
+    );
+
+    let retry_receipt = MaintenanceActionJobReceipt {
+        dispatch_attempt: 2,
+        job_run_id: Some("search-job-2".to_string()),
+        updated_at: now + chrono::Duration::seconds(1),
+        ..initial_receipt.clone()
+    };
+    let retry_run = JobRunRecord {
+        id: "search-job-2".to_string(),
+        updated_at: now + chrono::Duration::seconds(1),
+        ..run.clone()
+    };
+    match jobs
+        .create_maintenance_search_job_run(&retry_run, &retry_receipt)
+        .await
+        .expect("return accepted logical receipt")
+    {
+        MaintenanceSearchJobRunCreation::Existing { receipt } => {
+            assert_eq!(receipt.job_run_id.as_deref(), Some("search-job-1"));
+        }
+        other => panic!("later dispatch attempt created duplicate job: {other:?}"),
+    }
+    assert!(
+        jobs.get_job_run("search-job-2")
+            .await
+            .expect("read job history")
+            .is_none()
+    );
+    assert_eq!(
+        evaluation
+            .list_action_job_receipts(&claimed.key)
+            .await
+            .expect("read receipt")
+            .len(),
+        1
+    );
+    sqlx::query("DELETE FROM workflow_operations WHERE id = ?")
+        .bind("search-job-1")
+        .execute(services.pool())
+        .await
+        .expect("prune job history without deleting accepted receipt");
+    let pruned_retry = MaintenanceActionJobReceipt {
+        dispatch_attempt: 3,
+        job_run_id: Some("search-job-3".to_string()),
+        updated_at: now + chrono::Duration::seconds(2),
+        ..initial_receipt.clone()
+    };
+    let pruned_run = JobRunRecord {
+        id: "search-job-3".to_string(),
+        updated_at: now + chrono::Duration::seconds(2),
+        ..run.clone()
+    };
+    assert!(matches!(
+        jobs.create_maintenance_search_job_run(&pruned_run, &pruned_retry)
+            .await
+            .expect("accepted receipt survives pruned job history"),
+        MaintenanceSearchJobRunCreation::Existing { .. }
+    ));
+    assert!(
+        jobs.get_job_run("search-job-3")
+            .await
+            .expect("read job history")
+            .is_none()
+    );
+
+    let rollback_candidate = candidate("sequence-search-rollback", "rule-a", "title-4", 1);
+    evaluation
+        .create_candidate(&rollback_candidate)
+        .await
+        .expect("create independent candidate");
+    let rollback_claim = match evaluation
+        .claim_action_step(
+            &sequence_step_run(&rollback_candidate, 0),
+            Utc::now() - chrono::Duration::minutes(1),
+            "rollback-step-lease",
+            Utc::now(),
+        )
+        .await
+        .expect("persist independent step")
+    {
+        scryer_application::MaintenanceActionStepClaim::Claimed(step) => step,
+        other => panic!("unexpected claim: {other:?}"),
+    };
+    let rollback_receipt = MaintenanceActionJobReceipt {
+        key: rollback_claim.key.clone(),
+        request_hash: "different-request-hash".to_string(),
+        ..initial_receipt.clone()
+    };
+    assert!(
+        jobs.create_maintenance_search_job_run(&run, &rollback_receipt)
+            .await
+            .is_err()
+    );
+    assert!(
+        evaluation
+            .list_action_job_receipts(&rollback_claim.key)
+            .await
+            .expect("receipt rollback check")
+            .is_empty()
     );
 
     let _ = std::fs::remove_file(db);
@@ -845,6 +1537,62 @@ async fn a_candidate_transition_lands_only_from_a_state_the_caller_expected() {
 }
 
 #[tokio::test]
+async fn stale_sequence_worker_cannot_finish_a_newer_execution_lease() {
+    let (services, db) = temp_services("scryer_maintenance_sequence_finish_lease_cas").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let mut row = candidate("sequence-finish-lease", "rule-a", "title-lease", 1);
+    row.action_kind = "action_sequence".to_string();
+    row.state = MaintenanceCandidateState::Due;
+    store
+        .create_candidate(&row)
+        .await
+        .expect("create candidate");
+
+    let first_lease_at = Utc::now();
+    assert!(
+        store
+            .lease_candidate_for_execution(
+                &row.id,
+                first_lease_at - chrono::Duration::minutes(1),
+                first_lease_at,
+            )
+            .await
+            .expect("take first lease")
+    );
+    let replacement_lease_at = first_lease_at + chrono::Duration::seconds(1);
+    assert!(
+        store
+            .lease_candidate_for_execution(&row.id, replacement_lease_at, replacement_lease_at,)
+            .await
+            .expect("reclaim stale execution lease")
+    );
+
+    assert!(
+        !store
+            .finish_leased_candidate(
+                &row.id,
+                first_lease_at,
+                MaintenanceCandidateState::Blocked,
+                "unknown_at_execution",
+                replacement_lease_at + chrono::Duration::seconds(1),
+            )
+            .await
+            .expect("stale sequence finisher is a compare-and-set miss"),
+        "the first worker must not overwrite the newer executing lease"
+    );
+    let current = store
+        .get_active_candidate("rule-a", "title-lease")
+        .await
+        .expect("reload candidate")
+        .expect("candidate remains active");
+    assert_eq!(current.state, MaintenanceCandidateState::Executing);
+    assert_eq!(current.updated_at, replacement_lease_at);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn action_runs_append_finish_and_enforce_attempt_uniqueness() {
     let (services, db) = temp_services("scryer_maintenance_action_runs").await;
     seed_rule_set(&services, "rule-a").await;
@@ -1267,7 +2015,7 @@ async fn maintenance_scope_candidates_and_exclusions_have_independent_subject_id
 }
 
 #[tokio::test]
-async fn maintenance_scope_migration_preserves_grace_arming_and_history() {
+async fn action_sequence_migration_preserves_pre_0231_in_flight_legacy_rows() {
     crate::spellfix::register_spellfix_auto_extension().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("legacy.db");
@@ -1276,14 +2024,14 @@ async fn maintenance_scope_migration_preserves_grace_arming_and_history() {
         .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
         .await
         .unwrap();
-    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(227), true)
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(230), true)
         .await
         .unwrap();
     run_embedded_migration(&pool, r#"
         INSERT INTO maintenance_rule_sets (id, name, enabled, evaluation_mode, effect_arming) VALUES ('rule', 'legacy', 1, 'observe', 'destructive');
-        INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, title_id, match_generation, first_matched_at, due_at, action_attempts) VALUES ('candidate', 'rule', 3, 'title', 7, '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z', 2);
-        INSERT INTO maintenance_rule_exclusions (id, title_id, reason) VALUES ('exclusion', 'title', 'keep');
-        INSERT INTO lifecycle_action_runs (id, candidate_id, rule_set_id, revision_number, title_id, action_kind, match_generation, idempotency_key, attempt, status, detail, started_at) VALUES ('run', 'candidate', 'rule', 3, 'title', 'unmonitor_scope_keep_files', 7, 'legacy-key', 2, 'failed', '{"evidence":true}', '2026-01-02T00:00:00Z');
+        INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, title_id, subject_kind, subject_id, match_generation, first_matched_at, due_at, action_attempts) VALUES ('candidate', 'rule', 3, 'title', 'title', 'title', 7, '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z', 2);
+        INSERT INTO maintenance_rule_exclusions (id, title_id, subject_kind, subject_id, reason) VALUES ('exclusion', 'title', 'title', 'title', 'keep');
+        INSERT INTO lifecycle_action_runs (id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id, action_kind, match_generation, idempotency_key, attempt, status, detail, started_at) VALUES ('run', 'candidate', 'rule', 3, 'title', 'title', 'title', 'unmonitor_scope_keep_files', 7, 'legacy-key', 2, 'failed', '{"evidence":true}', '2026-01-02T00:00:00Z');
     "#).await;
     crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
         .await

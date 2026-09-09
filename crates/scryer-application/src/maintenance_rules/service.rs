@@ -33,7 +33,8 @@ use crate::maintenance_rules::facts::{
 };
 use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
 use crate::maintenance_rules::{
-    MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
+    MaintenanceActionDefinition, MaintenanceActionSpec,
+    MaintenanceSubjectKind as ActionSubjectKind, action_definition_from_persisted_json,
 };
 use crate::{AppError, AppResult, AppUseCase};
 
@@ -75,7 +76,7 @@ pub struct MaintenanceRuleDraft {
     pub name: String,
     pub description: String,
     pub rego_source: String,
-    pub action_spec: MaintenanceActionSpec,
+    pub action_definition: MaintenanceActionDefinition,
     pub grace_days: i64,
     /// Configured root for storage-capacity facts and root-filtered deletion.
     pub storage_root_id: Option<String>,
@@ -90,7 +91,7 @@ pub struct MaintenanceRuleDraft {
 #[derive(Clone, Debug)]
 pub struct MaintenanceMatcherDraft {
     pub rego_source: String,
-    pub action_spec: MaintenanceActionSpec,
+    pub action_definition: MaintenanceActionDefinition,
     pub grace_days: i64,
     /// `None` preserves the stored root for older GraphQL clients. `Some(None)`
     /// explicitly clears it, and `Some(Some(_))` replaces it.
@@ -107,7 +108,7 @@ pub enum MaintenancePreviewMatcher {
         library_ids: Vec<String>,
         subject_kind: MaintenanceRuleSubjectKind,
         rego_source: String,
-        action_spec: MaintenanceActionSpec,
+        action_definition: MaintenanceActionDefinition,
         grace_days: i64,
         storage_root_id: Option<String>,
     },
@@ -138,13 +139,13 @@ pub struct MaintenancePreviewRequest {
 
 // ── Read models ─────────────────────────────────────────────────────────────
 
-/// A rule set with the revision currently in force, action spec already
-/// decoded so no caller downstream handles the stored JSON.
+/// A rule set with the revision currently in force and its action definition
+/// decoded so no caller downstream handles the persisted JSON shape.
 #[derive(Clone, Debug)]
 pub struct MaintenanceRuleSetDetail {
     pub rule_set: MaintenanceRuleSet,
     pub revision: MaintenanceRuleRevision,
-    pub action_spec: MaintenanceActionSpec,
+    pub action_definition: MaintenanceActionDefinition,
 }
 
 #[derive(Clone, Debug)]
@@ -269,10 +270,10 @@ impl AppUseCase {
             &id,
             draft.subject_kind,
             &draft.rego_source,
-            &draft.action_spec,
+            &draft.action_definition,
             draft.grace_days,
         )?;
-        self.require_registered_action_tags(&draft.action_spec)
+        self.require_registered_action_tags(&draft.action_definition)
             .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
@@ -280,7 +281,8 @@ impl AppUseCase {
             &prepared.rego_source,
             &id,
             storage_root_id.as_deref(),
-            &draft.action_spec,
+            draft.subject_kind,
+            &draft.action_definition,
         )
         .await?;
 
@@ -321,7 +323,7 @@ impl AppUseCase {
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_spec: draft.action_spec,
+            action_definition: draft.action_definition,
         })
     }
 
@@ -372,10 +374,10 @@ impl AppUseCase {
             &rule_set.id,
             rule_set.subject_kind,
             &draft.rego_source,
-            &draft.action_spec,
+            &draft.action_definition,
             draft.grace_days,
         )?;
-        self.require_registered_action_tags(&draft.action_spec)
+        self.require_registered_action_tags(&draft.action_definition)
             .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
@@ -383,7 +385,8 @@ impl AppUseCase {
             &prepared.rego_source,
             &rule_set.id,
             storage_root_id.as_deref(),
-            &draft.action_spec,
+            rule_set.subject_kind,
+            &draft.action_definition,
         )
         .await?;
 
@@ -414,7 +417,7 @@ impl AppUseCase {
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_spec: draft.action_spec,
+            action_definition: draft.action_definition,
         })
     }
 
@@ -903,7 +906,8 @@ impl AppUseCase {
         rego_source: &str,
         rule_set_id: &str,
         storage_root_id: Option<&str>,
-        action_spec: &MaintenanceActionSpec,
+        subject_kind: MaintenanceRuleSubjectKind,
+        action_definition: &MaintenanceActionDefinition,
     ) -> AppResult<()> {
         let referenced = maintenance_referenced_facts(rego_source, rule_set_id)
             .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?;
@@ -918,11 +922,7 @@ impl AppUseCase {
         let Some(storage_root_id) = storage_root_id else {
             return Ok(());
         };
-        if !super::action_execution::supports_storage_scope(action_spec.kind) {
-            return Err(AppError::Validation(
-                "this action is not supported for a storage-root-scoped maintenance rule".into(),
-            ));
-        }
+        validate_action_definition_for_scope(subject_kind, action_definition, true)?;
         let roots = self.services.catalog.libraries.list(None).await?;
         if roots
             .iter()
@@ -965,11 +965,11 @@ impl AppUseCase {
                     rule_set.id, rule_set.current_revision_number
                 ))
             })?;
-        let action_spec = decode_action_spec(&revision)?;
+        let action_definition = decode_action_definition(&revision)?;
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_spec,
+            action_definition,
         })
     }
 
@@ -991,7 +991,8 @@ impl AppUseCase {
                     &detail.revision.rego_source,
                     &detail.rule_set.id,
                     detail.revision.storage_root_id.as_deref(),
-                    &detail.action_spec,
+                    detail.rule_set.subject_kind,
+                    &detail.action_definition,
                 )
                 .await?;
                 Ok((
@@ -1010,7 +1011,7 @@ impl AppUseCase {
                 library_ids,
                 subject_kind,
                 rego_source,
-                action_spec,
+                action_definition,
                 grace_days,
                 storage_root_id,
             } => {
@@ -1019,14 +1020,15 @@ impl AppUseCase {
                     &scratch_id,
                     subject_kind,
                     &rego_source,
-                    &action_spec,
+                    &action_definition,
                     grace_days,
                 )?;
                 self.require_storage_root_for_matcher(
                     &prepared.rego_source,
                     &scratch_id,
                     storage_root_id.as_deref(),
-                    &action_spec,
+                    subject_kind,
+                    &action_definition,
                 )
                 .await?;
                 Ok((
@@ -1117,22 +1119,26 @@ impl AppUseCase {
 impl AppUseCase {
     /// The registry half of tag-action validation.
     ///
-    /// `MaintenanceActionSpec::validate` is static — shape, normalization, and
-    /// the per-title ceiling — because a stored spec is re-validated on every
-    /// read and must not need a database to be readable. Whether a label is
-    /// *defined* is a live question, so it is asked here, once, when a revision
-    /// is written, and asked again by the executor before it acts: a tag
-    /// deleted in between holds the candidate rather than writing a label the
-    /// assignment path would itself refuse.
+    /// Action-definition validation is static, while whether a tag label is
+    /// currently registered is a live question. Check every tag-writing step
+    /// here when a revision is authored; the executor repeats the check before
+    /// it mutates a title.
     async fn require_registered_action_tags(
         &self,
-        action_spec: &MaintenanceActionSpec,
+        action_definition: &MaintenanceActionDefinition,
     ) -> AppResult<()> {
-        let labels = action_spec.parameters.tag_labels();
+        let labels = match action_definition {
+            MaintenanceActionDefinition::Legacy(spec) => spec.parameters.tag_labels().to_vec(),
+            MaintenanceActionDefinition::Sequence(sequence) => sequence
+                .steps
+                .iter()
+                .flat_map(|step| step.parameters.tag_labels().iter().cloned())
+                .collect(),
+        };
         if labels.is_empty() {
             return Ok(());
         }
-        self.require_registered_title_tags(labels).await
+        self.require_registered_title_tags(&labels).await
     }
 }
 
@@ -1153,7 +1159,7 @@ fn prepare_matcher(
     rule_id: &str,
     subject_kind: MaintenanceRuleSubjectKind,
     rego_source: &str,
-    action_spec: &MaintenanceActionSpec,
+    action_definition: &MaintenanceActionDefinition,
     grace_days: i64,
 ) -> AppResult<PreparedMatcher> {
     if grace_days < 0 {
@@ -1166,7 +1172,7 @@ fn prepare_matcher(
             "grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"
         )));
     }
-    validate_scope_action(subject_kind, action_spec)?;
+    validate_action_definition_for_scope(subject_kind, action_definition, false)?;
 
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
     let validation = validate_maintenance_rule(&rewritten, rule_id)
@@ -1177,7 +1183,8 @@ fn prepare_matcher(
         )));
     }
 
-    let action_spec_json = serde_json::to_string(action_spec)
+    let action_spec_json = action_definition
+        .to_persisted_json()
         .map_err(|e| AppError::Validation(format!("maintenance action is not storable: {e}")))?;
 
     Ok(PreparedMatcher {
@@ -1187,10 +1194,56 @@ fn prepare_matcher(
     })
 }
 
-/// A title-scoped rule set spans both movie and show libraries, so its action
-/// need only be legal for one of them. Which one applies to a given candidate
-/// is decided per title from its facet at evaluation time; rejecting an action
-/// here because it is movie-only would make it unusable in movie libraries.
+/// Validate either persisted action shape for a rule scope. Legacy specs retain
+/// their executor-specific authoring gate; sequences validate only through the
+/// closed schema-2 catalog and are dispatched by the sequence executor.
+fn validate_action_definition_for_scope(
+    scope: MaintenanceRuleSubjectKind,
+    definition: &MaintenanceActionDefinition,
+    storage_root_selected: bool,
+) -> AppResult<()> {
+    match definition {
+        MaintenanceActionDefinition::Legacy(spec) => {
+            validate_scope_action(scope, spec)?;
+            if storage_root_selected && !super::action_execution::supports_storage_scope(spec.kind)
+            {
+                return Err(AppError::Validation(
+                    "this action is not supported for a storage-root-scoped maintenance rule"
+                        .into(),
+                ));
+            }
+            Ok(())
+        }
+        MaintenanceActionDefinition::Sequence(sequence) => {
+            let validate_subject = |subject| {
+                if storage_root_selected {
+                    sequence.validate_for_storage_root(subject)
+                } else {
+                    sequence.validate(subject)
+                }
+                .map_err(|error| AppError::Validation(error.to_string()))
+            };
+            match scope {
+                MaintenanceRuleSubjectKind::Title => {
+                    let movie = validate_subject(ActionSubjectKind::Movie);
+                    if movie.is_ok() || validate_subject(ActionSubjectKind::Show).is_ok() {
+                        Ok(())
+                    } else {
+                        movie
+                    }
+                }
+                MaintenanceRuleSubjectKind::Season => validate_subject(ActionSubjectKind::Season),
+                MaintenanceRuleSubjectKind::Episode => validate_subject(ActionSubjectKind::Episode),
+            }
+        }
+    }
+}
+
+/// A title-scoped legacy rule set spans both movie and show libraries, so its
+/// action need only be legal for one of them. Which one applies to a given
+/// candidate is decided per title from its facet at evaluation time; rejecting
+/// an action here because it is movie-only would make it unusable in movie
+/// libraries.
 ///
 /// Passing the descriptor's subject check is necessary but not sufficient: the
 /// action also has to be one the title executor dispatches. The show-subject
@@ -1297,10 +1350,12 @@ fn build_revision(
 /// Read the stored action back through the closed catalog. Stored JSON that no
 /// longer deserializes is a repository fault, not a validation failure: it
 /// means a spec was written by a build whose catalog this one does not have.
-fn decode_action_spec(revision: &MaintenanceRuleRevision) -> AppResult<MaintenanceActionSpec> {
-    serde_json::from_str(&revision.action_spec_json).map_err(|e| {
+fn decode_action_definition(
+    revision: &MaintenanceRuleRevision,
+) -> AppResult<MaintenanceActionDefinition> {
+    action_definition_from_persisted_json(&revision.action_spec_json).map_err(|error| {
         AppError::Repository(format!(
-            "maintenance rule revision {} has an unreadable action spec: {e}",
+            "maintenance rule revision {} has an unreadable action definition: {error}",
             revision.id
         ))
     })

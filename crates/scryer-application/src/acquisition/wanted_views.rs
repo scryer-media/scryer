@@ -24,6 +24,7 @@ use super::*;
 use crate::acquisition::convergence::convergence_scope_key;
 use crate::acquisition::targets::AcquisitionTarget;
 use crate::contracts::{QueueDownloadOutcome, SubmissionConflictPolicy, SubmissionScope};
+use crate::ports::MaintenanceSearchJobRunCreation;
 
 /// Convergence state of a scope for the UI. Mirrors the GraphQL
 /// `ConvergenceStateValue`; the interface maps this 1:1.
@@ -1077,6 +1078,194 @@ impl AppUseCase {
         });
 
         Ok(run_payload)
+    }
+
+    /// Dispatch a policy-owned Search through the same acquisition worker as an
+    /// interactive search. The accepted receipt and the job row commit together
+    /// before this method returns or spawns; an existing receipt deliberately
+    /// returns without starting another worker.
+    pub async fn start_maintenance_acquisition_search_job(
+        &self,
+        actor: &User,
+        request: AcquisitionSearchRequest,
+        receipt: scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<scryer_domain::MaintenanceActionJobReceipt> {
+        receipt
+            .validate_schema()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        let Some(job_run_id) = receipt.job_run_id.clone() else {
+            return Err(AppError::Validation(
+                "maintenance Search dispatch requires a preallocated job run id".into(),
+            ));
+        };
+        if receipt.state != scryer_domain::MaintenanceActionJobReceiptState::Accepted {
+            return Err(AppError::Validation(
+                "maintenance Search dispatch requires an accepted receipt intent".into(),
+            ));
+        }
+
+        if let Some(existing) = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_action_job_receipts(&receipt.key)
+            .await?
+            .into_iter()
+            .find(|existing| {
+                existing.request_hash == receipt.request_hash
+                    && existing.logical_request_key == receipt.logical_request_key
+                    && matches!(
+                        existing.state,
+                        scryer_domain::MaintenanceActionJobReceiptState::Accepted
+                            | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                    )
+            })
+        {
+            return Ok(existing);
+        }
+
+        self.authorize_acquisition_search(actor, &request).await?;
+        let scopes = self
+            .resolve_acquisition_search_scopes(actor, &request)
+            .await?;
+        let plan = self.acquisition_search_plan(&request, scopes).await?;
+        let search_guard = match self
+            .runtime
+            .jobs
+            .acquisition_search_lock
+            .clone()
+            .try_lock_owned()
+        {
+            Ok(guard) => guard,
+            Err(_) => {
+                if let Some(existing) = self
+                    .services
+                    .customization
+                    .maintenance_evaluation
+                    .list_action_job_receipts(&receipt.key)
+                    .await?
+                    .into_iter()
+                    .find(|existing| {
+                        existing.request_hash == receipt.request_hash
+                            && existing.logical_request_key == receipt.logical_request_key
+                            && matches!(
+                                existing.state,
+                                scryer_domain::MaintenanceActionJobReceiptState::Accepted
+                                    | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                            )
+                    })
+                {
+                    return Ok(existing);
+                }
+                return Err(AppError::Validation(
+                    "an acquisition search job is already running".into(),
+                ));
+            }
+        };
+        if self
+            .runtime
+            .jobs
+            .job_run_tracker
+            .has_active_job(JobKey::AcquisitionSearch)
+            .await
+        {
+            return Err(AppError::Validation(
+                "an acquisition search job is already running".into(),
+            ));
+        }
+
+        let now = chrono::Utc::now();
+        let run = JobRunRecord {
+            id: job_run_id,
+            job_key: JobKey::AcquisitionSearch,
+            operation_type: format!(
+                "maintenance_acquisition_search:{}:{}",
+                request.wanted_kind.as_str(),
+                plan.scope_count()
+            ),
+            status: JobRunStatus::Running,
+            trigger_source: JobTriggerSource::SystemInternal,
+            actor_user_id: Some(actor.id.clone()),
+            progress_json: serde_json::to_string(&AcquisitionSearchProgress {
+                state: "running".to_string(),
+                total: plan.scope_count(),
+                processed: 0,
+                grabbed_count: 0,
+                failed_count: 0,
+                current_title: None,
+            })
+            .ok(),
+            summary_json: Some(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "maintenance_action_request": {
+                        "wanted_kind": request.wanted_kind.as_str(),
+                        "facet": request.facet.map(|facet| facet.as_str()),
+                        "library_ids": request.library_ids,
+                        "title_id": request.title_id,
+                        "season_number": request.season_number,
+                        "wanted_item_id": request.wanted_item_id,
+                    }
+                })
+                .to_string(),
+            ),
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let (run, receipt) = match self
+            .services
+            .events
+            .job_runs
+            .create_maintenance_search_job_run(&run, &receipt)
+            .await?
+        {
+            MaintenanceSearchJobRunCreation::Existing { receipt } => return Ok(receipt),
+            MaintenanceSearchJobRunCreation::Created { run, receipt } => (*run, receipt),
+        };
+
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(JobRun::from_record(&run, None))
+            .await;
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        self.runtime
+            .acquisition
+            .acquisition_search_cancellation_tokens
+            .lock()
+            .await
+            .insert(run.id.clone(), cancellation.clone());
+        let actor_event = DomainEventActor::from(actor);
+        let _ = self
+            .append_domain_event(crate::domain_events::new_job_run_domain_event(
+                actor_event.clone(),
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
+            .await;
+        let app = self.clone();
+        let actor = actor.clone();
+        tokio::spawn(async move {
+            app.run_acquisition_search_job(
+                run,
+                actor,
+                actor_event,
+                plan,
+                cancellation,
+                search_guard,
+            )
+            .await;
+        });
+        Ok(receipt)
     }
 
     /// Which of the two shapes an acquisition-search request runs as.

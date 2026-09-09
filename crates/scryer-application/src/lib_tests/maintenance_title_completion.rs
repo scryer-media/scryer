@@ -192,7 +192,9 @@ async fn create_destructive_rule(
                 name: "Completion acceptance".into(),
                 description: String::new(),
                 rego_source: rego_source.to_string(),
-                action_spec: MaintenanceActionSpec::new(action_kind),
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(action_kind),
+                ),
                 grace_days: 0,
                 storage_root_id: None,
                 library_ids: vec![],
@@ -616,9 +618,12 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
                     library_ids: vec![],
                     subject_kind: MaintenanceRuleSubjectKind::Episode,
                     rego_source: RETAIN_NEWEST_EPISODE.to_string(),
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeDeleteFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                            ),
+                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -765,8 +770,8 @@ async fn preview_whole_show_completion(
                 library_ids: vec![],
                 subject_kind: MaintenanceRuleSubjectKind::Title,
                 rego_source: COMPLETE_SHOW_WATCH.to_string(),
-                action_spec: MaintenanceActionSpec::new(
-                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
                 ),
                 grace_days: 0,
                 storage_root_id: None,

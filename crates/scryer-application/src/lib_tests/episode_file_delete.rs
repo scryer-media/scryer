@@ -710,9 +710,12 @@ impl ScopedMaintenanceFixture {
                     name: "Scoped deletion".into(),
                     description: String::new(),
                     rego_source: matcher,
-                    action_spec: MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorScopeDeleteFiles,
-                    ),
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                            ),
+                        ),
                     grace_days: grace,
                     storage_root_id: None,
                     library_ids: vec![],
