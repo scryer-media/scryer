@@ -565,15 +565,12 @@ export function SettingsProxiesSection({
                     </div>
                   </div>
                 ) : null}
-                {showProxyDetails &&
-                (isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3") ? (
+                {showProxyDetails && (isTunnelDraft || isWireguardDraft) ? (
                   <p
                     id="settings-indexer-proxy-endpoint-help"
                     className="text-xs text-muted-foreground"
                   >
-                    {proxyDraft.providerType === "http3"
-                      ? t("settings.proxyEndpointHelpHttp3")
-                      : isWireguardDraft
+                    {isWireguardDraft
                       ? t("settings.proxyEndpointHelpWireguard")
                       : t("settings.proxyEndpointHelp")}
                   </p>
