@@ -2122,3 +2122,20 @@ kind = "sql"
 file = "postgres/migrations/0228_maintenance_subjects.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 229
+description = "media analysis revision and attempts"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0229_media_analysis_revision.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0229_media_analysis_revision.sql"
+engine = "postgres"
+scope = "all"

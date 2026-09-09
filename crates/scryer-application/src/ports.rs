@@ -5707,7 +5707,28 @@ pub trait FileImporter: Send + Sync {
 
 #[async_trait]
 pub trait MediaAnalyzer: Send + Sync {
+    async fn diagnose_file(
+        &self,
+        _path: PathBuf,
+        _selection: scryer_media_types::DiscSelection,
+    ) -> AppResult<scryer_media_types::StructuralDiagnostics> {
+        Err(crate::AppError::Validation(
+            "structural diagnostics are unsupported by this analyzer".into(),
+        ))
+    }
     async fn analyze_file(&self, path: PathBuf) -> AppResult<MediaAnalysisOutcome>;
+    async fn analyze_file_with_selection(
+        &self,
+        path: PathBuf,
+        selection: scryer_media_types::DiscSelection,
+    ) -> AppResult<MediaAnalysisOutcome> {
+        if selection.title_id.is_some() || !selection.episode_mappings.is_empty() {
+            return Err(crate::AppError::Validation(
+                "disc title selection is unsupported by this analyzer".into(),
+            ));
+        }
+        self.analyze_file(path).await
+    }
 }
 
 /// One row off the full-hash backfill queue (FR-047).
@@ -5849,6 +5870,38 @@ pub trait MediaFileRepository: Send + Sync {
         file_id: &str,
         analysis: MediaFileAnalysis,
     ) -> AppResult<()>;
+
+    /// Publish only while the source row and previous analysis still match.
+    async fn update_media_file_analysis_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let _ = (expected, analysis);
+        Ok(false)
+    }
+
+    /// Keep an unsuccessful attempt separate from the last successful analysis.
+    async fn list_media_files_needing_analysis(
+        &self,
+        library_id: &str,
+        revision: u32,
+        retry_before: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<TitleMediaFile>> {
+        let _ = (library_id, revision, retry_before, limit);
+        Ok(Vec::new())
+    }
+
+    /// Retain an unsuccessful attempt only while its source and saved selection match.
+    async fn record_media_analysis_attempt(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: &MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let _ = (expected, analysis);
+        Ok(false)
+    }
 
     async fn update_media_file_source_signature(
         &self,

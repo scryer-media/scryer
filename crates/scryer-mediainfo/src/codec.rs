@@ -1,4 +1,5 @@
 use crate::scan;
+#[cfg(test)]
 use crate::types::RawTrack;
 
 /// Codec profile and bit-depth information extracted from bitstream headers.
@@ -43,6 +44,8 @@ pub(crate) fn normalize_codec_name(codec_id: &str) -> Option<String> {
         "A_OPUS" => "opus",
         "A_VORBIS" => "vorbis",
         "A_MPEG/L3" => "mp3",
+        "A_MPEG/L2" => "mp2",
+        "A_MPEG/L1" => "mp1",
 
         // --- MKV subtitle ---
         "S_TEXT/UTF8" => "subrip",
@@ -188,7 +191,7 @@ pub(crate) fn audio_profile_probe_spec(codec_name: Option<&str>) -> AudioProfile
             prefix_bytes: 512,
             suffix_bytes: 0,
         },
-        Some("eac3") => AudioProfileProbeSpec {
+        Some("ac3" | "eac3") => AudioProfileProbeSpec {
             prefix_bytes: 64,
             suffix_bytes: 0,
         },
@@ -227,6 +230,13 @@ pub(crate) fn detect_audio_profile_from_payload(
     codec_name: Option<&str>,
     payload: &[u8],
 ) -> Option<String> {
+    if matches!(codec_name, Some("eac3" | "truehd")) {
+        return detect_audio_profile_from_probe_bytes(
+            codec_name,
+            &payload[..payload.len().min(64 * 1024)],
+            None,
+        );
+    }
     let spec = audio_profile_probe_spec(codec_name);
     if spec.prefix_bytes == 0 {
         return None;
@@ -251,8 +261,8 @@ pub(crate) fn detect_audio_profile_from_probe_bytes(
 ) -> Option<String> {
     match codec_name {
         Some("aac") | Some("aac_latm") => detect_aac_profile_from_payload(prefix),
-        Some("eac3") => detect_eac3_profile_from_payload(prefix),
-        Some("truehd") => detect_truehd_profile_from_payload(prefix),
+        Some("eac3") => detect_eac3_profile_samples(prefix),
+        Some("truehd") => detect_truehd_profile_samples(prefix),
         Some("dts") => detect_dts_profile_from_probe_bytes(prefix, suffix),
         _ => None,
     }
@@ -340,6 +350,94 @@ fn detect_aac_profile_from_codec_private(codec_private: Option<&[u8]>) -> Option
 
 fn detect_aac_profile_from_payload(payload: &[u8]) -> Option<String> {
     detect_adts_aac_profile(payload).or_else(|| detect_latm_aac_profile(payload))
+}
+
+pub(crate) fn pcm_sample_representation(codec: &str) -> Option<(&str, u32)> {
+    let format = codec.strip_prefix("pcm_")?;
+    let depth = match format {
+        "s8" | "u8" => 8,
+        "s16le" | "s16be" | "u16le" | "u16be" => 16,
+        "s24le" | "s24be" | "u24le" | "u24be" => 24,
+        "s32le" | "s32be" | "u32le" | "u32be" | "f32le" | "f32be" => 32,
+        "s64le" | "s64be" | "f64le" | "f64be" => 64,
+        _ => return None,
+    };
+    Some((format, depth))
+}
+
+pub(crate) fn aac_channel_configuration(config: u8) -> Option<(u8, &'static str)> {
+    Some(match config {
+        1 => (1, "mono"),
+        2 => (2, "stereo"),
+        3 => (3, "3.0"),
+        4 => (4, "4.0"),
+        5 => (5, "5.0"),
+        6 => (6, "5.1"),
+        7 => (8, "7.1(wide)"),
+        11 => (7, "6.1(back)"),
+        12 => (8, "7.1"),
+        _ => return None,
+    })
+}
+
+pub(crate) struct AacConfiguration {
+    pub sample_rate: u32,
+    pub layout: Option<(u8, &'static str)>,
+    pub sbr_signaled: Option<bool>,
+    pub ps_signaled: Option<bool>,
+}
+
+pub(crate) fn aac_configuration_metadata(data: &[u8]) -> Option<AacConfiguration> {
+    let mut bits = AudioBitReader::new(data.get(..data.len().min(512))?);
+    let object_type = bits.read_aac_audio_object_type()?;
+    if !matches!(object_type, 1..=5 | 17 | 19..=23 | 29 | 39) {
+        return None;
+    }
+    let mut rate = bits.read_aac_sample_rate()?;
+    let mut config = bits.read_bits(4)? as u8;
+    let mut parametric_stereo = object_type == 29;
+    let mut sbr_signaled = None;
+    let mut ps_signaled = (object_type == 29).then_some(true);
+    if matches!(object_type, 5 | 29) {
+        sbr_signaled = Some(true);
+        rate = bits.read_aac_sample_rate()?;
+        if bits.read_aac_audio_object_type()? == 22 {
+            config = bits.read_bits(4)? as u8;
+        }
+    } else {
+        while bits.bits_left() > 15 {
+            if bits.peek_bits(11)? == 0x2b7 {
+                bits.read_bits(11)?;
+                if bits.read_aac_audio_object_type()? == 5 {
+                    let sbr = bits.read_bit()? == 1;
+                    sbr_signaled = Some(sbr);
+                    if sbr {
+                        rate = bits.read_aac_sample_rate()?;
+                    }
+                    if bits.bits_left() > 11 && bits.read_bits(11)? == 0x548 {
+                        parametric_stereo = bits.read_bit()? == 1;
+                        ps_signaled = Some(parametric_stereo);
+                    }
+                }
+                break;
+            }
+            bits.read_bit()?;
+        }
+    }
+    if rate == 0 {
+        return None;
+    }
+    let layout = if parametric_stereo && config == 1 {
+        Some((2, "stereo"))
+    } else {
+        aac_channel_configuration(config)
+    };
+    Some(AacConfiguration {
+        sample_rate: rate,
+        layout,
+        sbr_signaled,
+        ps_signaled,
+    })
 }
 
 fn parse_aac_audio_object_profile(data: &[u8]) -> Option<String> {
@@ -471,6 +569,48 @@ fn detect_latm_aac_profile(data: &[u8]) -> Option<String> {
     None
 }
 
+fn detect_eac3_profile_samples(data: &[u8]) -> Option<String> {
+    let data = &data[..data.len().min(64 * 1024)];
+    let mut cursor = 0;
+    for _ in 0..32 {
+        let offset = crate::scan::find_pair_from(data, cursor, 0x0b, 0xff, 0x77)?;
+        let header = data.get(offset..offset + 7)?;
+        let frame_size = (usize::from(u16::from_be_bytes([header[2] & 7, header[3]])) + 1) * 2;
+        if !(11..=16).contains(&(header[5] >> 3)) || header[2] >> 6 == 3 || frame_size < 7 {
+            cursor = offset + 2;
+            continue;
+        }
+        let end = (offset + frame_size).min(data.len());
+        if let Some(profile) = detect_eac3_profile_from_payload(&data[offset..end]) {
+            return Some(profile);
+        }
+        cursor = offset + frame_size;
+    }
+    None
+}
+
+fn detect_truehd_profile_samples(data: &[u8]) -> Option<String> {
+    let data = &data[..data.len().min(64 * 1024)];
+    let mut cursor = 0;
+    let mut profile = None;
+    for _ in 0..32 {
+        let Some(offset) =
+            crate::scan::find_syncword(data, u32::from_be_bytes(TRUEHD_MAJOR_SYNCWORD), cursor)
+        else {
+            break;
+        };
+        merge_audio_profile(
+            &mut profile,
+            detect_truehd_profile_from_payload(&data[offset..data.len().min(offset + 64)]),
+        );
+        if profile.as_deref() == Some("Dolby TrueHD + Dolby Atmos") {
+            break;
+        }
+        cursor = offset + 4;
+    }
+    profile
+}
+
 fn detect_eac3_profile_from_payload(data: &[u8]) -> Option<String> {
     if data.len() < 7 || data[0] != 0x0B || data[1] != 0x77 {
         return None;
@@ -481,7 +621,9 @@ fn detect_eac3_profile_from_payload(data: &[u8]) -> Option<String> {
     if frame_type != 0 {
         return None;
     }
-    let _substream_id = bits.read_bits(3)?;
+    if bits.read_bits(3)? != 0 {
+        return None;
+    }
     let _frame_size = bits.read_bits(11)?;
 
     let fscod = bits.read_bits(2)?;
@@ -684,9 +826,11 @@ fn truehd_major_sync_size(payload: &[u8]) -> Option<usize> {
 fn detect_dts_profile_from_probe_bytes(prefix: &[u8], suffix: Option<&[u8]>) -> Option<String> {
     let core = parse_dts_core_header(prefix);
     let has_core = core.is_some();
-    let has_xch =
-        contains_syncword(prefix, DTS_SYNCWORD_XCH) || contains_syncword(prefix, DTS_SYNCWORD_XXCH);
-    let has_x96 = contains_syncword(prefix, DTS_SYNCWORD_X96);
+    let [has_xch, has_xxch, has_x96] = crate::scan::syncword_presence(
+        prefix,
+        [DTS_SYNCWORD_XCH, DTS_SYNCWORD_XXCH, DTS_SYNCWORD_X96],
+    );
+    let has_xch = has_xch || has_xxch;
     if let Some(exss) = parse_dts_exss_asset(prefix) {
         let exss_follows_core = core
             .map(|core| exss.exss_start >= core.frame_size)
@@ -727,11 +871,6 @@ fn detect_dts_profile_from_probe_bytes(prefix: &[u8], suffix: Option<&[u8]>) -> 
         return Some("DTS".into());
     }
     None
-}
-
-fn contains_syncword(data: &[u8], syncword: u32) -> bool {
-    data.windows(4)
-        .any(|window| u32::from_be_bytes(window.try_into().expect("window length")) == syncword)
 }
 
 fn contains_aligned_syncword(data: &[u8], syncword: u32) -> bool {
@@ -1634,6 +1773,10 @@ pub(crate) fn extract_av1_info(codec_private: &[u8]) -> CodecInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct DoviConfigInfo {
     pub profile: u8,
+    pub level: u8,
+    pub rpu_present: bool,
+    pub enhancement_layer_present: bool,
+    pub base_layer_present: bool,
     pub bl_signal_compatibility_id: u8,
 }
 
@@ -1653,29 +1796,24 @@ pub(crate) fn parse_dovi_config(data: &[u8]) -> Option<DoviConfigInfo> {
     let bl_compat = (data[4] >> 4) & 0x0F;
     Some(DoviConfigInfo {
         profile: dv_profile,
+        level: ((data[2] & 1) << 5) | (data[3] >> 3),
+        rpu_present: data[3] & 4 != 0,
+        enhancement_layer_present: data[3] & 2 != 0,
+        base_layer_present: data[3] & 1 != 0,
         bl_signal_compatibility_id: bl_compat,
     })
 }
 
-/// Determines the HDR format of a video track using a priority cascade:
-///
-/// 1. Dolby Vision configuration present -> `"Dolby Vision"`
-/// 2. HDR10+ dynamic metadata found -> `"HDR10+"`
-/// 3. color_transfer == 16 (SMPTE ST 2084 / PQ) -> `"HDR10"`
-/// 4. color_transfer == 18 (ARIB STD-B67 / HLG) -> `"HLG"`
-/// 5. Otherwise -> `None`
-pub(crate) fn detect_hdr_format(track: &RawTrack) -> Option<String> {
-    if track.dovi_config.is_some() {
-        return Some("Dolby Vision".into());
-    }
-    if track.has_hdr10plus {
-        return Some("HDR10+".into());
-    }
-    match track.color_transfer {
-        Some(16) => Some("HDR10".into()),
-        Some(18) => Some("HLG".into()),
-        _ => None,
-    }
+#[cfg(test)]
+fn detect_hdr_format(track: &RawTrack) -> Option<String> {
+    crate::build_analysis(crate::types::RawContainer {
+        format_name: "fixture".into(),
+        duration_seconds: None,
+        num_chapters: None,
+        tracks: vec![track.clone()],
+        details: Default::default(),
+    })
+    .video_hdr_format
 }
 
 /// Extract the NAL unit length prefix size from an HEVCDecoderConfigurationRecord.
@@ -1830,6 +1968,44 @@ fn map_h265_profile(profile_idc: u8) -> Option<String> {
 mod tests {
     use super::*;
     use crate::types::TrackKind;
+
+    #[test]
+    fn aac_configurations_preserve_explicit_layout_and_extension_rate() {
+        let properties = |bytes: &[u8]| {
+            aac_configuration_metadata(bytes).map(|value| (value.sample_rate, value.layout))
+        };
+        assert_eq!(
+            properties(&[0x12, 0x10]),
+            Some((44100, Some((2, "stereo"))))
+        );
+        assert_eq!(properties(&[0x11, 0xb0]), Some((48000, Some((6, "5.1")))));
+        assert_eq!(
+            properties(&[0x11, 0xb8]),
+            Some((48000, Some((8, "7.1(wide)"))))
+        );
+        assert_eq!(
+            properties(&[0x12, 0x00]),
+            Some((44100, None)),
+            "PCE layout stays unknown until parsed"
+        );
+        assert!(aac_configuration_metadata(&[0x12]).is_none());
+        let core = aac_configuration_metadata(&[0x12, 0x08]).unwrap();
+        assert_eq!((core.sbr_signaled, core.ps_signaled), (None, None));
+        let mut bits = TestBitWriter::new();
+        for (value, count) in [(29, 5), (7, 4), (1, 4), (4, 4), (2, 5)] {
+            bits.write_bits(value, count);
+        }
+        assert_eq!(
+            properties(&bits.bytes),
+            Some((44100, Some((2, "stereo")))),
+            "explicit parametric stereo expands the mono core"
+        );
+        let output = aac_configuration_metadata(&bits.bytes).unwrap();
+        assert_eq!(
+            (output.sbr_signaled, output.ps_signaled),
+            (Some(true), Some(true))
+        );
+    }
 
     struct TestBitWriter {
         bytes: Vec<u8>,
@@ -2068,6 +2244,22 @@ mod tests {
             detect_audio_profile_from_payload(Some("truehd"), &payload).as_deref(),
             Some("Dolby TrueHD + Dolby Atmos")
         );
+        let mut plain = payload.clone();
+        plain[17] = 0;
+        assert!(detect_audio_profile_from_payload(Some("truehd"), &plain).is_none());
+        let mut later = plain.clone();
+        later.resize(256, 0);
+        later.extend(&payload);
+        assert_eq!(
+            detect_audio_profile_from_payload(Some("truehd"), &later).as_deref(),
+            Some("Dolby TrueHD + Dolby Atmos")
+        );
+        let mut too_many = plain.repeat(32);
+        too_many.extend(&payload);
+        assert!(detect_audio_profile_from_payload(Some("truehd"), &too_many).is_none());
+        let mut beyond_budget = vec![0; 64 * 1024];
+        beyond_budget.extend(payload);
+        assert!(detect_audio_profile_from_payload(Some("truehd"), &beyond_budget).is_none());
     }
 
     #[test]
@@ -2096,6 +2288,25 @@ mod tests {
             detect_audio_profile_from_payload(Some("eac3"), &payload).as_deref(),
             Some("Dolby Digital Plus + Dolby Atmos")
         );
+        let mut plain = payload.clone();
+        *plain.last_mut().unwrap() = 0;
+        plain.resize(258, 0);
+        assert!(detect_audio_profile_from_payload(Some("eac3"), &plain).is_none());
+        let mut later = plain.clone();
+        later.extend(&payload);
+        assert_eq!(
+            detect_audio_profile_from_payload(Some("eac3"), &later).as_deref(),
+            Some("Dolby Digital Plus + Dolby Atmos")
+        );
+        let mut too_many = plain.repeat(32);
+        too_many.extend(&payload);
+        assert!(detect_audio_profile_from_payload(Some("eac3"), &too_many).is_none());
+        let mut alternate = payload.clone();
+        alternate[2] |= 1 << 3;
+        assert!(detect_audio_profile_from_payload(Some("eac3"), &alternate).is_none());
+        let mut beyond_budget = vec![0; 64 * 1024];
+        beyond_budget.extend(payload);
+        assert!(detect_audio_profile_from_payload(Some("eac3"), &beyond_budget).is_none());
     }
 
     #[test]
@@ -2177,6 +2388,7 @@ mod tests {
     #[test]
     fn detect_hdr_dolby_vision() {
         let track = RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Video,
             codec_id: "V_MPEGH/ISO/HEVC".into(),
             codec_name: Some("hevc".into()),
@@ -2189,7 +2401,7 @@ mod tests {
             language: None,
             frame_rate_fps: None,
             color_transfer: Some(16),
-            dovi_config: Some(vec![0x01]),
+            dovi_config: Some(vec![1, 0, 0x10, 0x0d, 0x10]),
             has_hdr10plus: false,
             name: None,
             forced: false,
@@ -2202,6 +2414,7 @@ mod tests {
     #[test]
     fn detect_hdr_hdr10() {
         let track = RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Video,
             codec_id: "hvc1".into(),
             codec_name: Some("hevc".into()),
@@ -2220,12 +2433,21 @@ mod tests {
             forced: false,
             default_track: false,
         };
+        assert_eq!(
+            detect_hdr_format(&track),
+            None,
+            "PQ alone does not establish HDR10"
+        );
+        let mut track = track;
+        track.metadata.bit_depth = Some(10);
+        track.metadata.color.primaries = Some(9);
         assert_eq!(detect_hdr_format(&track).as_deref(), Some("HDR10"));
     }
 
     #[test]
     fn detect_hdr_hdr10plus() {
         let track = RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Video,
             codec_id: "hvc1".into(),
             codec_name: Some("hevc".into()),
@@ -2251,6 +2473,7 @@ mod tests {
     #[test]
     fn detect_hdr_hlg() {
         let track = RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Video,
             codec_id: "hvc1".into(),
             codec_name: Some("hevc".into()),
@@ -2275,6 +2498,7 @@ mod tests {
     #[test]
     fn detect_hdr_sdr() {
         let track = RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Video,
             codec_id: "avc1".into(),
             codec_name: Some("h264".into()),

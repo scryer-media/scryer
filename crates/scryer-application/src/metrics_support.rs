@@ -70,6 +70,7 @@ pub(crate) fn job_completion_gauge_values(
 /// been recorded, so the scrape surface is self-describing even while a family
 /// is still empty.
 pub fn describe_freshness_and_health_metrics() {
+    crate::media::metrics::describe();
     describe_gauge!(
         TASK_LAST_RUN_TIMESTAMP_SECONDS,
         Unit::Seconds,

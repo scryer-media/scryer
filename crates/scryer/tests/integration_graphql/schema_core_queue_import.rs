@@ -1808,6 +1808,7 @@ async fn graphql_traverses_core_graph_relationships() {
         &ctx.media_files,
         &file_id,
         scryer_application::MediaFileAnalysis {
+            details: Default::default(),
             video_codec: None,
             video_width: Some(1920),
             video_height: Some(1080),

@@ -1,3 +1,13 @@
+import type { MediaDiscMetadata } from "../types/media-analysis";
+
+export type ManualDiscSelection = {
+  titleId: string | null;
+  episodeMappings: { discTitleId: string; episodeId: string }[];
+};
+
+export type ManualDiscInventory = Pick<MediaDiscMetadata,
+  "discType" | "selectedTitleId" | "automaticSelection" | "titles">;
+
 export type ManualImportVideoFacts = {
   containerFormat: string | null;
   videoCodec: string | null;
@@ -5,6 +15,8 @@ export type ManualImportVideoFacts = {
   videoWidth: number | null;
   videoHeight: number | null;
   durationSeconds: number | null;
+  disc?: ManualDiscInventory | null;
+  report?: { status: string; warnings: { code: string; message: string }[] };
 };
 
 function formatCodec(value: string): string {

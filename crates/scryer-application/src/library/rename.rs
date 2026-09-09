@@ -2414,6 +2414,7 @@ fn resolved_analysis_labels_for_media_file(
         media_file.audio_profile.as_deref(),
         media_file.audio_channels,
         &media_file.audio_streams,
+        &media_file.analysis_details,
     )
 }
 

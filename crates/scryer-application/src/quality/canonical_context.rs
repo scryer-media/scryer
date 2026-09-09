@@ -412,7 +412,17 @@ impl AppUseCase {
                 context.default_runtime_minutes(),
             )
             .or_runtime(runtime_minutes);
-            let bar = self.incumbent_bar(file, context, incumbent_basis);
+            let scoring_episodes = covers
+                .iter()
+                .filter(|id| match scope {
+                    SubmissionScope::Episode { episode_id } => *id == episode_id,
+                    SubmissionScope::EpisodeSet { episode_ids } => episode_ids.contains(id),
+                    _ => true,
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let bar =
+                self.incumbent_bar_for_episodes(file, context, incumbent_basis, &scoring_episodes);
             (
                 Incumbent {
                     tier_index: bar.tier_index,
@@ -460,9 +470,12 @@ impl AppUseCase {
 
                 let subject = AdmissionSubject::new(
                     AdmissionScope::Episodes(episode_ids),
-                    incumbents.iter().map(|incumbent| {
-                        to_incumbent(&incumbent.media_file, primary_span(incumbent))
-                    }),
+                    incumbents
+                        .iter()
+                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .map(|incumbent| {
+                            to_incumbent(&incumbent.media_file, primary_span(incumbent))
+                        }),
                 );
                 if is_pack_grab {
                     subject.per_member().with_unaired_members(unaired_members)
@@ -489,6 +502,7 @@ impl AppUseCase {
                                 .iter()
                                 .any(|link_id| link_id == series_movie_link_id)
                         })
+                        .filter(|file| file.scan_status != "review_required")
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -509,6 +523,7 @@ impl AppUseCase {
                         .filter(|file| {
                             file.episode_id.is_none() && file.series_movie_link_ids.is_empty()
                         })
+                        .filter(|file| file.scan_status != "review_required")
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -557,9 +572,12 @@ impl AppUseCase {
 
                 AdmissionSubject::new(
                     AdmissionScope::Episodes(episode_ids),
-                    incumbents.iter().map(|incumbent| {
-                        to_incumbent(&incumbent.media_file, primary_span(incumbent))
-                    }),
+                    incumbents
+                        .iter()
+                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .map(|incumbent| {
+                            to_incumbent(&incumbent.media_file, primary_span(incumbent))
+                        }),
                 )
                 .per_member()
                 .with_unaired_members(unaired_members)
@@ -878,8 +896,22 @@ impl AppUseCase {
         context: &ResolvedScoringContext,
         size_basis: CoverageSizeBasis,
     ) -> IncumbentFacts {
+        self.incumbent_bar_for_episodes(file, context, size_basis, &[])
+    }
+
+    pub(crate) fn incumbent_bar_for_episodes(
+        &self,
+        file: &crate::TitleMediaFile,
+        context: &ResolvedScoringContext,
+        size_basis: CoverageSizeBasis,
+        episode_ids: &[String],
+    ) -> IncumbentFacts {
         let view = context.view(size_basis, false);
-        let scored = crate::canonical_scoring::score_media_file(file, &view);
+        let scored = if episode_ids.is_empty() {
+            crate::canonical_scoring::score_media_file(file, &view)
+        } else {
+            crate::canonical_scoring::score_media_file_for_episodes(file, episode_ids, &view)
+        };
         let tier_index = crate::quality_profile::quality_tier_index(
             &context.profile().criteria,
             scored

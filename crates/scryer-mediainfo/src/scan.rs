@@ -107,6 +107,62 @@ pub(crate) fn find_annexb_start_code(data: &[u8], start: usize) -> Option<Range<
     scalar::find_annexb_start_code_from(data, start)
 }
 
+/// Locate the exact three-byte prefix, including inside a four-byte Annex-B prefix.
+/// Keeping that offset preserves the boundaries used by metadata and PES walkers.
+pub(crate) fn find_start_code_prefix(data: &[u8], start: usize) -> Option<usize> {
+    data.get(start..)?;
+    find_annexb_start_code(data, start).map(|range| range.end - 3)
+}
+
+pub(crate) fn find_program_start_code(data: &[u8], start: usize) -> Option<usize> {
+    let mut at = start;
+    while let Some(found) = find_start_code_prefix(data, at) {
+        if *data.get(found + 3)? >= 0xb9 {
+            return Some(found);
+        }
+        at = found + 3;
+    }
+    None
+}
+
+pub(crate) fn find_syncword(data: &[u8], word: u32, start: usize) -> Option<usize> {
+    let word = word.to_be_bytes();
+    let mut at = start;
+    while let Some(found) = find_byte_from(data, word[0], at) {
+        let suffix = &data[found..];
+        if suffix.len() < 4 {
+            return None;
+        }
+        if suffix[..4] == word {
+            return Some(found);
+        }
+        at = found + 1;
+    }
+    None
+}
+
+/// Collect several fixed signatures in one pass, validating only SIMD candidates.
+pub(crate) fn syncword_presence<const N: usize>(data: &[u8], words: [u32; N]) -> [bool; N] {
+    let patterns = words.map(u32::to_be_bytes);
+    let needles = patterns.map(|word| word[0]);
+    let mut found = [false; N];
+    let mut at = 0;
+    while let Some(candidate) = find_any_byte_from(data, &needles, at) {
+        let suffix = &data[candidate..];
+        if suffix.len() < 4 {
+            break;
+        }
+        for (index, pattern) in patterns.iter().enumerate() {
+            found[index] |= suffix[..4] == *pattern;
+        }
+        if found.iter().all(|found| *found) {
+            break;
+        }
+        at = candidate + 1;
+    }
+    found
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AudioSyncKind {
     Adts,
@@ -314,7 +370,37 @@ pub(crate) fn find_avi_idx1_stream_prefix(
 }
 
 pub(crate) fn accumulate_avi_idx1_stream_sizes(data: &[u8], stream_sizes: &mut [u64]) {
+    #[cfg(target_arch = "x86_64")]
+    if data.len() >= 128 && accel_runtime_enabled() && std::arch::is_x86_feature_detected!("avx2") {
+        // The kernel loads only complete index entries and retains scalar scatter semantics.
+        unsafe { x86_64::accumulate_avi_idx1_avx2(data, stream_sizes) };
+        return;
+    }
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    if data.len() >= 64 && accel_runtime_enabled() && aarch64_neon_available() {
+        unsafe { aarch64::accumulate_avi_idx1_neon(data, stream_sizes) };
+        return;
+    }
     scalar::accumulate_avi_idx1_stream_sizes(data, stream_sizes);
+}
+
+fn accumulate_avi_lanes<const N: usize>(ids: [u32; N], sizes: [u32; N], totals: &mut [u64]) {
+    // Consecutive entries often belong to one stream. Reduce the batch before
+    // touching its accumulator to avoid a serial load/store chain for every lane.
+    if let Some((&id, rest)) = ids.split_first()
+        && rest.iter().all(|&other| other == id)
+    {
+        if let Some(total) = totals.get_mut(id as usize) {
+            let size = sizes.into_iter().map(u64::from).sum::<u64>();
+            *total = total.saturating_add(size);
+        }
+        return;
+    }
+    for (id, size) in ids.into_iter().zip(sizes) {
+        if let Some(total) = totals.get_mut(id as usize) {
+            *total = total.saturating_add(u64::from(size));
+        }
+    }
 }
 
 pub(crate) fn score_ts_packet_layout(
@@ -526,7 +612,7 @@ pub(crate) fn find_dts_sync(data: &[u8], start: usize) -> Option<usize> {
 }
 
 #[allow(dead_code)]
-fn find_pair_from(
+pub(crate) fn find_pair_from(
     data: &[u8],
     start: usize,
     first: u8,
@@ -904,6 +990,57 @@ pub(crate) mod scalar {
 mod x86_64 {
     use super::{AudioSyncCandidate, Range};
     use std::arch::x86_64::*;
+
+    #[target_feature(enable = "avx2")]
+    pub(crate) unsafe fn accumulate_avi_idx1_avx2(data: &[u8], totals: &mut [u64]) {
+        let byte_mask = _mm256_set1_epi32(255);
+        let ascii_zero = _mm256_set1_epi32(48);
+        let nine = _mm256_set1_epi32(9);
+        let minus_one = _mm256_set1_epi32(-1);
+        let mut at = 0;
+        while data.len() - at >= 128 {
+            // Four contiguous loads cover eight complete entries. Transpose headers and
+            // sizes into matching lanes; saturating addition does not depend on lane order.
+            let (a, b, c, d) = unsafe {
+                (
+                    _mm256_loadu_si256(data.as_ptr().add(at).cast()),
+                    _mm256_loadu_si256(data.as_ptr().add(at + 32).cast()),
+                    _mm256_loadu_si256(data.as_ptr().add(at + 64).cast()),
+                    _mm256_loadu_si256(data.as_ptr().add(at + 96).cast()),
+                )
+            };
+            let headers =
+                _mm256_unpacklo_epi64(_mm256_unpacklo_epi32(a, b), _mm256_unpacklo_epi32(c, d));
+            let sizes =
+                _mm256_unpackhi_epi64(_mm256_unpackhi_epi32(a, b), _mm256_unpackhi_epi32(c, d));
+            let first = _mm256_sub_epi32(_mm256_and_si256(headers, byte_mask), ascii_zero);
+            let second = _mm256_sub_epi32(
+                _mm256_and_si256(_mm256_srli_epi32::<8>(headers), byte_mask),
+                ascii_zero,
+            );
+            let invalid = _mm256_or_si256(
+                _mm256_or_si256(
+                    _mm256_cmpgt_epi32(first, nine),
+                    _mm256_cmpgt_epi32(second, nine),
+                ),
+                _mm256_or_si256(
+                    _mm256_cmpgt_epi32(_mm256_setzero_si256(), first),
+                    _mm256_cmpgt_epi32(_mm256_setzero_si256(), second),
+                ),
+            );
+            let ids = _mm256_add_epi32(_mm256_mullo_epi32(first, _mm256_set1_epi32(10)), second);
+            let ids = _mm256_blendv_epi8(ids, minus_one, invalid);
+            let mut id_lanes = [0_u32; 8];
+            let mut size_lanes = [0_u32; 8];
+            unsafe {
+                _mm256_storeu_si256(id_lanes.as_mut_ptr().cast(), ids);
+                _mm256_storeu_si256(size_lanes.as_mut_ptr().cast(), sizes);
+            }
+            super::accumulate_avi_lanes(id_lanes, size_lanes, totals);
+            at += 128;
+        }
+        super::scalar::accumulate_avi_idx1_stream_sizes(&data[at..], totals);
+    }
 
     #[target_feature(enable = "avx2")]
     #[allow(dead_code)]
@@ -1372,6 +1509,35 @@ mod aarch64 {
     use std::arch::aarch64::*;
 
     #[target_feature(enable = "neon")]
+    pub(crate) unsafe fn accumulate_avi_idx1_neon(data: &[u8], totals: &mut [u64]) {
+        let mut at = 0;
+        while data.len() - at >= 64 {
+            // Deinterleave four complete entries: chunk ID, flags, offset, and size.
+            let fields = unsafe { vld4q_u32(data.as_ptr().add(at).cast()) };
+            let first = vsubq_u32(vandq_u32(fields.0, vdupq_n_u32(255)), vdupq_n_u32(48));
+            let second = vsubq_u32(
+                vandq_u32(vshrq_n_u32::<8>(fields.0), vdupq_n_u32(255)),
+                vdupq_n_u32(48),
+            );
+            let valid = vandq_u32(
+                vcleq_u32(first, vdupq_n_u32(9)),
+                vcleq_u32(second, vdupq_n_u32(9)),
+            );
+            let ids = vaddq_u32(vmulq_n_u32(first, 10), second);
+            let ids = vbslq_u32(valid, ids, vdupq_n_u32(u32::MAX));
+            let mut id_lanes = [0_u32; 4];
+            let mut size_lanes = [0_u32; 4];
+            unsafe {
+                vst1q_u32(id_lanes.as_mut_ptr(), ids);
+                vst1q_u32(size_lanes.as_mut_ptr(), fields.3);
+            }
+            super::accumulate_avi_lanes(id_lanes, size_lanes, totals);
+            at += 64;
+        }
+        super::scalar::accumulate_avi_idx1_stream_sizes(&data[at..], totals);
+    }
+
+    #[target_feature(enable = "neon")]
     #[allow(dead_code)]
     pub(crate) unsafe fn find_byte_neon(data: &[u8], needle: u8) -> Option<usize> {
         let needle_vec = vdupq_n_u8(needle);
@@ -1827,6 +1993,9 @@ mod aarch64 {
         lanes.iter().filter(|&&lane| lane != 0).count()
     }
 }
+
+#[cfg(test)]
+mod optimization_tests;
 
 #[cfg(test)]
 mod tests {

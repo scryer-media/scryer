@@ -990,10 +990,7 @@ impl AppUseCase {
             crate::parse_release_metadata_for_target(parse_raw_name.as_str(), &parse_context);
         let snapshot = file_source_snapshot_from_path(&stored_path_to_path_buf(&file.path)).await?;
         let analysis_outcome = match self
-            .services
-            .library
-            .media_analyzer
-            .analyze_file(stored_path_to_path_buf(&file.path))
+            .analyze_catalogued_media_file(None, stored_path_to_path_buf(&file.path))
             .await
         {
             Ok(outcome) => Some(outcome),

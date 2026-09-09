@@ -3281,6 +3281,8 @@ mod tests {
 
     fn make_media_file(release_title: &str, episode_id: Option<&str>) -> TitleMediaFile {
         TitleMediaFile {
+            analysis_details: Default::default(),
+            analysis_attempt: None,
             id: "media-file-1".to_string(),
             title_id: "title-1".to_string(),
             episode_id: episode_id.map(str::to_string),

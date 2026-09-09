@@ -1,0 +1,7 @@
+[package]
+name = "scryer-media-types"
+version = "0.20.0"
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }

@@ -66,6 +66,32 @@ pub struct ImportedFileRejection {
     pub blocking_rule_codes: Vec<String>,
 }
 
+pub(crate) const DISC_REVIEW_REQUIRED_CODE: &str = "disc_review_required";
+pub(crate) const MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE: &str = "media_analysis_review_required";
+
+impl ImportedFileRejection {
+    pub(crate) fn requires_review(&self) -> bool {
+        matches!(
+            self.recycle_reason,
+            RUNTIME_OUT_OF_BAND_CODE
+                | DISC_REVIEW_REQUIRED_CODE
+                | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+        ) || self
+            .blocking_rule_codes
+            .iter()
+            .any(|code| code == SOURCE_CHANGED_AFTER_PROBE_CODE)
+    }
+}
+
+fn disc_review_rejection(message: impl Into<String>) -> ImportedFileRejection {
+    ImportedFileRejection {
+        message: message.into(),
+        recycle_reason: DISC_REVIEW_REQUIRED_CODE,
+        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        blocking_rule_codes: vec![DISC_REVIEW_REQUIRED_CODE.to_string()],
+    }
+}
+
 fn import_source_changed_rejection(
     path: &Path,
     detail: impl std::fmt::Display,
@@ -428,6 +454,7 @@ pub(crate) fn build_media_file_analysis(
     );
 
     crate::MediaFileAnalysis {
+        details: analysis.details.clone(),
         video_codec: analysis
             .video_codec
             .as_deref()
@@ -486,6 +513,7 @@ pub(crate) fn build_media_file_analysis(
 
 pub(crate) fn build_stream_pointer_media_file_analysis() -> crate::MediaFileAnalysis {
     crate::MediaFileAnalysis {
+        details: Default::default(),
         video_codec: None,
         video_width: None,
         video_height: None,
@@ -519,6 +547,7 @@ fn build_synthetic_media_file_analysis(
     let (video_width, video_height) = infer_video_dimensions(parsed.quality.as_deref());
 
     crate::MediaFileAnalysis {
+        details: Default::default(),
         video_codec: None,
         video_width,
         video_height,
@@ -589,7 +618,7 @@ fn path_is_symlink(path: &Path) -> bool {
     reason = "probe-and-validate carries the full import gate context through one decision point"
 )]
 #[cfg(feature = "runtime-media-analysis")]
-pub(crate) async fn probe_and_validate(
+pub(crate) async fn probe_and_validate_with_disc_selection(
     app: &AppUseCase,
     title: &Title,
     parsed: &crate::ParsedReleaseMetadata,
@@ -600,6 +629,7 @@ pub(crate) async fn probe_and_validate(
     existing_score: Option<i32>,
     is_filler: bool,
     runtime_sample_validation: RuntimeSampleValidation,
+    disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> ImportedFileGateDecision {
     // Before anything touches the file, and on the calling thread (the override
     // is thread-local, and the real probe hands off to `spawn_blocking`).
@@ -621,10 +651,30 @@ pub(crate) async fn probe_and_validate(
         }));
     }
 
-    let analysis = match scryer_mediainfo::analyze_file(path) {
+    let probe = match crate::media::analyzer::probe_native_catalog(
+        path.to_path_buf(),
+        disc_selection.cloned().unwrap_or_default(),
+        crate::media::metrics::ProbeOperation::Import,
+    )
+    .await
+    {
+        Ok(probe) => probe,
+        Err(error @ crate::AppError::Validation(_)) => {
+            return ImportedFileGateDecision::Rejected(import_source_changed_rejection(
+                path, error,
+            ));
+        }
+        Err(error) => Err(error.to_string()),
+    };
+    let mut analysis = match probe {
         Ok(analysis) => analysis,
         Err(error) => {
             warn!(error = %error, path = %path.display(), "media analysis failed");
+            if scryer_domain::is_disc_image(&path) {
+                return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
+                    "disc inspection could not complete: {error}; the source image has been preserved"
+                )));
+            }
             if let Some(rejection) = runtime_sample_rejection(runtime_sample_validation, None) {
                 return ImportedFileGateDecision::Rejected(rejection);
             }
@@ -643,7 +693,51 @@ pub(crate) async fn probe_and_validate(
         }
     };
 
+    if analysis.container_format.as_deref() == Some("iso") {
+        if analysis.details.report.status != scryer_media_types::ProbeStatus::Complete
+            || !scryer_mediainfo::is_valid_video(&analysis)
+        {
+            return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
+                "disc inspection requires review ({:?}); the source image has been preserved",
+                analysis.details.report.status
+            )));
+        }
+        if title.facet != MediaFacet::Movie
+            && analysis
+                .details
+                .disc
+                .as_ref()
+                .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
+        {
+            return ImportedFileGateDecision::Rejected(disc_review_rejection(
+                "episodic disc imports require explicit disc-title-to-episode mappings",
+            ));
+        }
+        if let Some(disc) = &mut analysis.details.disc {
+            if let Err(error) = app.validate_disc_episode_mappings(title, disc).await {
+                return ImportedFileGateDecision::Rejected(disc_review_rejection(
+                    error.to_string(),
+                ));
+            }
+        }
+    }
+
     if analysis.video_codec.is_none() {
+        if analysis.details.selected_video_id.is_some()
+            || analysis.details.report.budget_exhausted
+            || matches!(
+                analysis.details.report.status,
+                scryer_media_types::ProbeStatus::Unsupported
+                    | scryer_media_types::ProbeStatus::Encrypted
+            )
+        {
+            return ImportedFileGateDecision::Rejected(ImportedFileRejection {
+                message: "video analysis is inconclusive; source preserved for review".to_string(),
+                recycle_reason: MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
+                skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                blocking_rule_codes: vec![MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE.to_string()],
+            });
+        }
         return ImportedFileGateDecision::Rejected(ImportedFileRejection {
             message: "imported file is not a valid video".to_string(),
             recycle_reason: "invalid_file",
@@ -652,8 +746,13 @@ pub(crate) async fn probe_and_validate(
         });
     }
 
-    if let Some(rejection) =
-        runtime_sample_rejection(runtime_sample_validation, analysis.duration_seconds)
+    if analysis
+        .details
+        .disc
+        .as_ref()
+        .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
+        && let Some(rejection) =
+            runtime_sample_rejection(runtime_sample_validation, analysis.duration_seconds)
     {
         return ImportedFileGateDecision::Rejected(rejection);
     }
@@ -671,6 +770,32 @@ pub(crate) async fn probe_and_validate(
     });
 
     let accepted_analysis = build_media_file_analysis(&analysis);
+    let mut scoring_analyses = accepted_analysis
+        .details
+        .disc
+        .as_ref()
+        .map(|disc| {
+            disc.selection
+                .episode_mappings
+                .iter()
+                .filter_map(|mapping| {
+                    disc.titles.iter().find(|item| {
+                        item.id == mapping.disc_title_id
+                            || item.aliases.contains(&mapping.disc_title_id)
+                    })
+                })
+                .map(|item| crate::media::disc_analysis::for_title(&accepted_analysis, item))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if scoring_analyses.is_empty() {
+        scoring_analyses.push(accepted_analysis.clone());
+    }
+    let quality_size_bytes = accepted_analysis
+        .details
+        .disc
+        .is_none()
+        .then_some(size_bytes);
 
     // Required audio language gate (post-download, file truth). Distinguishes a
     // provable absence (reject) from an untagged/indeterminate result (accept +
@@ -701,30 +826,32 @@ pub(crate) async fn probe_and_validate(
             Some(&title_audio_context),
             false,
         );
-        match crate::classify_required_audio(
-            &required_audio_languages,
-            &accepted_analysis.audio_streams,
-            &release_audio_hints,
-        ) {
-            crate::RequiredAudioVerdict::Satisfied => {}
-            crate::RequiredAudioVerdict::Missing(missing) => {
-                return ImportedFileGateDecision::Rejected(ImportedFileRejection {
-                    message: format!(
-                        "imported file is missing required audio language(s): {}",
-                        missing.join(", ")
-                    ),
-                    recycle_reason: "language_mismatch",
-                    skip_reason: None,
-                    blocking_rule_codes: Vec::new(),
-                });
-            }
-            crate::RequiredAudioVerdict::Indeterminate(unverified) => {
-                // Neither provably present nor provably absent (untagged tracks):
-                // accept rather than bury a possibly-good release, but flag it.
-                audio_language_warning = Some(format!(
-                    "audio language(s) {} could not be verified from file metadata (untagged track(s)); imported for review",
-                    unverified.join(", ")
-                ));
+        for scoped_analysis in &scoring_analyses {
+            match crate::classify_required_audio(
+                &required_audio_languages,
+                &crate::media::release_labels::eligible_audio_streams(scoped_analysis),
+                &release_audio_hints,
+            ) {
+                crate::RequiredAudioVerdict::Satisfied => {}
+                crate::RequiredAudioVerdict::Missing(missing) => {
+                    return ImportedFileGateDecision::Rejected(ImportedFileRejection {
+                        message: format!(
+                            "imported file is missing required audio language(s): {}",
+                            missing.join(", ")
+                        ),
+                        recycle_reason: "language_mismatch",
+                        skip_reason: None,
+                        blocking_rule_codes: Vec::new(),
+                    });
+                }
+                crate::RequiredAudioVerdict::Indeterminate(unverified) => {
+                    // Neither provably present nor provably absent (untagged tracks):
+                    // accept rather than bury a possibly-good release, but flag it.
+                    audio_language_warning = Some(format!(
+                        "audio language(s) {} could not be verified from file metadata (untagged track(s)); imported for review",
+                        unverified.join(", ")
+                    ));
+                }
             }
         }
     }
@@ -750,13 +877,6 @@ pub(crate) async fn probe_and_validate(
     // `VideoCodec::as_str()` (`"H.264"`): any rule reading
     // `input.file.video_codec` scored differently on the two sides, permanently.
     let rule_file_doc = crate::user_rule_input::file_doc_from_analysis(&accepted_analysis);
-    let accepted_for_rules = ImportedFileAcceptance {
-        analysis: Some(accepted_analysis.clone()),
-        scan_error: None,
-        rule_file_doc: Some(rule_file_doc.clone()),
-        audio_language_warning: None,
-    };
-    let (rescored_for_rules, _) = rescore_from_mediainfo(parsed, &accepted_for_rules);
 
     let user_rules_engine = app
         .services
@@ -786,87 +906,92 @@ pub(crate) async fn probe_and_validate(
         };
         let resolved_profile =
             resolved_import_profile(quality_profile, &required_audio_languages, &persona);
-        let mut decision = build_import_profile_decision(
-            &resolved_profile,
-            &rescored_for_rules,
-            category_hint,
-            // The probe knows the title and the file, not the scope: no
-            // coverage reaches here, so this is the single-member basis the
-            // lane has always used. The canonical score — the number anything
-            // is compared by — is built in
-            // [`compute_post_download_acquisition_decision`], from the scope's
-            // real basis.
-            crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
-            Some(size_bytes),
-            has_existing_file,
-        );
-        let input = crate::user_rule_input::build_rule_input(
-            &rescored_for_rules,
-            &resolved_profile,
-            &decision,
-            crate::user_rule_input::ReleaseRuntimeInfo {
-                size_bytes: Some(size_bytes),
-                published_at: None,
-                thumbs_up: None,
-                thumbs_down: None,
-                is_password_protected: None,
-                extra: None,
-                indexer_languages: None,
-            },
-            crate::user_rule_input::RuleContextInfo {
-                title_id: Some(&title.id),
-                library_name: library_name.as_deref(),
-                category: Some(facet_to_category_hint(&title.facet)),
-                original_language: title.language.as_deref(),
-                original_country: title.country.as_deref(),
-                title_tags: &title.tags,
+        for scoped_analysis in &scoring_analyses {
+            let scoped_file_doc = crate::user_rule_input::file_doc_from_analysis(scoped_analysis);
+            let (rescored_for_rules, _) =
+                rescore_parsed_from_analysis(parsed, Some(scoped_analysis));
+            let mut decision = build_import_profile_decision(
+                &resolved_profile,
+                &rescored_for_rules,
+                category_hint,
+                // The probe knows the title and the file, not the scope: no
+                // coverage reaches here, so this is the single-member basis the
+                // lane has always used. The canonical score — the number anything
+                // is compared by — is built in
+                // [`compute_post_download_acquisition_decision`], from the scope's
+                // real basis.
+                crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
+                quality_size_bytes,
                 has_existing_file,
-                existing_score,
-                search_mode: "post_download",
-                runtime_minutes: title.runtime_minutes,
-                coverage_total_runtime_minutes: title.runtime_minutes,
-                coverage_member_runtime_minutes: title.runtime_minutes,
-                coverage_member_count: Some(1),
-                is_filler,
-            },
-            Some(rule_file_doc.clone()),
-        );
-        let mut evaluator = user_rules_engine.evaluator();
-        match evaluator.evaluate(&input, facet_to_category_hint(&title.facet)) {
-            Ok(result) => {
-                if !result.errors.is_empty() {
+            );
+            let input = crate::user_rule_input::build_rule_input(
+                &rescored_for_rules,
+                &resolved_profile,
+                &decision,
+                crate::user_rule_input::ReleaseRuntimeInfo {
+                    size_bytes: quality_size_bytes,
+                    published_at: None,
+                    thumbs_up: None,
+                    thumbs_down: None,
+                    is_password_protected: None,
+                    extra: None,
+                    indexer_languages: None,
+                },
+                crate::user_rule_input::RuleContextInfo {
+                    title_id: Some(&title.id),
+                    library_name: library_name.as_deref(),
+                    category: Some(facet_to_category_hint(&title.facet)),
+                    original_language: title.language.as_deref(),
+                    original_country: title.country.as_deref(),
+                    title_tags: &title.tags,
+                    has_existing_file,
+                    existing_score,
+                    search_mode: "post_download",
+                    runtime_minutes: title.runtime_minutes,
+                    coverage_total_runtime_minutes: title.runtime_minutes,
+                    coverage_member_runtime_minutes: title.runtime_minutes,
+                    coverage_member_count: Some(1),
+                    is_filler,
+                },
+                Some(scoped_file_doc),
+            );
+            let mut evaluator = user_rules_engine.evaluator();
+            match evaluator.evaluate(&input, facet_to_category_hint(&title.facet)) {
+                Ok(result) => {
+                    if !result.errors.is_empty() {
+                        warn!(
+                            title_id = %title.id,
+                            error_count = result.errors.len(),
+                            "post-download rule evaluation had runtime errors; failing open"
+                        );
+                    }
+
+                    let blocking_rule_codes = finalize_post_download_rule_scores(
+                        &resolved_profile,
+                        &mut decision,
+                        result.entries,
+                    );
+
+                    if !blocking_rule_codes.is_empty() {
+                        return ImportedFileGateDecision::Rejected(ImportedFileRejection {
+                            message: format!(
+                                "post-download score {} rejected import: {}",
+                                decision.release_score,
+                                blocking_rule_codes.join(", ")
+                            ),
+                            recycle_reason: "post_download_rule_blocked",
+                            skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
+                            blocking_rule_codes,
+                        });
+                    }
+                }
+                Err(error) => {
                     warn!(
+                        error = %error,
                         title_id = %title.id,
-                        error_count = result.errors.len(),
-                        "post-download rule evaluation had runtime errors; failing open"
+                        "post-download rule evaluation failed; failing open"
                     );
                 }
-
-                let blocking_rule_codes = finalize_post_download_rule_scores(
-                    &resolved_profile,
-                    &mut decision,
-                    result.entries,
-                );
-
-                if !blocking_rule_codes.is_empty() {
-                    return ImportedFileGateDecision::Rejected(ImportedFileRejection {
-                        message: format!(
-                            "post-download score {} rejected import: {}",
-                            decision.release_score,
-                            blocking_rule_codes.join(", ")
-                        ),
-                        recycle_reason: "post_download_rule_blocked",
-                        skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
-                        blocking_rule_codes,
-                    });
-                }
-            }
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    title_id = %title.id,
-                    "post-download rule evaluation failed; failing open"
-                );
             }
         }
     }
@@ -884,7 +1009,7 @@ pub(crate) async fn probe_and_validate(
     reason = "probe-and-validate carries the full import gate context through one decision point"
 )]
 #[cfg(not(feature = "runtime-media-analysis"))]
-pub(crate) async fn probe_and_validate(
+pub(crate) async fn probe_and_validate_with_disc_selection(
     _app: &AppUseCase,
     _title: &Title,
     parsed: &crate::ParsedReleaseMetadata,
@@ -895,7 +1020,13 @@ pub(crate) async fn probe_and_validate(
     _existing_score: Option<i32>,
     _is_filler: bool,
     _runtime_sample_validation: RuntimeSampleValidation,
+    _disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> ImportedFileGateDecision {
+    if scryer_domain::is_disc_image(&path) {
+        return ImportedFileGateDecision::Rejected(disc_review_rejection(
+            "native disc inspection is not available in this build; the image requires review",
+        ));
+    }
     #[cfg(test)]
     if let Some(acceptance) = probe_override::take() {
         return ImportedFileGateDecision::Accepted(Box::new(acceptance));
@@ -1006,15 +1137,7 @@ pub(crate) async fn prepare_import_candidate(
     is_filler: bool,
     runtime_sample_validation: RuntimeSampleValidation,
 ) -> Result<PreparedImportCandidate, ImportedFileRejection> {
-    let source_snapshot_before = app
-        .services
-        .workflow
-        .file_importer
-        .snapshot_import_source(path)
-        .await
-        .map_err(|err| import_source_changed_rejection(path, err))?;
-
-    match probe_and_validate(
+    prepare_import_candidate_with_disc_selection(
         app,
         title,
         parsed,
@@ -1025,6 +1148,53 @@ pub(crate) async fn prepare_import_candidate(
         existing_score,
         is_filler,
         runtime_sample_validation,
+        None,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "disc choices accompany the existing import validation context"
+)]
+pub(crate) async fn prepare_import_candidate_with_disc_selection(
+    app: &AppUseCase,
+    title: &Title,
+    parsed: &crate::ParsedReleaseMetadata,
+    quality_profile: &crate::QualityProfile,
+    path: &Path,
+    size_bytes: i64,
+    has_existing_file: bool,
+    existing_score: Option<i32>,
+    is_filler: bool,
+    runtime_sample_validation: RuntimeSampleValidation,
+    disc_selection: Option<&scryer_media_types::DiscSelection>,
+) -> Result<PreparedImportCandidate, ImportedFileRejection> {
+    if disc_selection.is_some() && !scryer_domain::is_disc_image(&path) {
+        return Err(disc_review_rejection(
+            "disc selection requires an ISO image",
+        ));
+    }
+    let source_snapshot_before = app
+        .services
+        .workflow
+        .file_importer
+        .snapshot_import_source(path)
+        .await
+        .map_err(|err| import_source_changed_rejection(path, err))?;
+
+    match probe_and_validate_with_disc_selection(
+        app,
+        title,
+        parsed,
+        quality_profile,
+        path,
+        size_bytes,
+        has_existing_file,
+        existing_score,
+        is_filler,
+        runtime_sample_validation,
+        disc_selection,
     )
     .await
     {
@@ -1109,6 +1279,7 @@ pub(crate) fn rescore_parsed_from_analysis(
         analysis.audio_profile.as_deref(),
         analysis.audio_channels,
         &analysis.audio_streams,
+        &analysis.details,
     );
 
     // Override resolution from video height
@@ -1229,6 +1400,8 @@ const QUALITY_CONTRADICTED_PREFIX: &str = "quality_contradicted:";
 pub(crate) enum TruthVerdictAction {
     /// Nothing the verdict says stops this import.
     Import,
+    /// Preserve the source until its playback facts can be reviewed.
+    Hold(ImportedFileRejection),
     /// Import it — the scope is empty and an honest file at its real tier beats
     /// nothing — but blocklist the release for this title so the next upgrade
     /// search cannot re-grab the same lie and "upgrade" the scope to the tier it
@@ -1308,6 +1481,14 @@ pub(crate) fn resolve_truth_verdict_action_for_origin(
 
     match verdict {
         TruthVerdict::Consistent => TruthVerdictAction::Import,
+        TruthVerdict::ReviewRequired { codes } => {
+            let mut rejection = disc_review_rejection(format!(
+                "disc playback facts require review; the source image has been preserved: {}",
+                codes.join(", ")
+            ));
+            rejection.blocking_rule_codes = codes.clone();
+            TruthVerdictAction::Hold(rejection)
+        }
         TruthVerdict::Blocked { codes } => TruthVerdictAction::Reject(ImportedFileRejection {
             message: format!(
                 "the downloaded file contradicts what the release advertised and cannot be imported: {}",
@@ -1617,23 +1798,58 @@ pub(crate) async fn persist_media_analysis_result(
     media_files: &std::sync::Arc<dyn crate::MediaFileRepository>,
     file_id: &str,
     accepted: &ImportedFileAcceptance,
-) {
+) -> crate::AppResult<()> {
     if let Some(ref analysis) = accepted.analysis {
-        if let Err(error) = media_files
-            .update_media_file_analysis(file_id, analysis.clone())
+        let stored = if analysis.details.disc.is_some() {
+            async {
+                let current = media_files
+                    .get_media_file_by_id(file_id)
+                    .await?
+                    .ok_or_else(|| crate::AppError::NotFound(format!("media file {file_id}")))?;
+                if current.analysis_details.revision > 0
+                    && current.analysis_details.disc.as_ref().is_some_and(|disc| {
+                        Some(&disc.selection)
+                            != analysis.details.disc.as_ref().map(|next| &next.selection)
+                    })
+                {
+                    return Err(crate::AppError::Validation(
+                        "saved disc selection changed before import metadata was published".into(),
+                    ));
+                }
+                if !media_files
+                    .update_media_file_analysis_if_unchanged(&current, analysis.clone())
+                    .await?
+                {
+                    return Err(crate::AppError::Validation(
+                        "media file changed before import metadata was published".into(),
+                    ));
+                }
+                Ok(())
+            }
             .await
-        {
+        } else {
+            media_files
+                .update_media_file_analysis(file_id, analysis.clone())
+                .await
+        };
+        if let Err(error) = stored {
             warn!(error = %error, file_id = %file_id, "failed to store media analysis");
             let _ = media_files
                 .mark_scan_failed(file_id, &error.to_string())
                 .await;
+            if analysis.details.disc.is_some() {
+                return Err(crate::AppError::ManualReconciliationRequired(format!(
+                    "disc image was placed in the library but its title metadata could not be saved: {error}; review media file {file_id} before completing the import"
+                )));
+            }
         }
-        return;
+        return Ok(());
     }
 
     if let Some(ref error) = accepted.scan_error {
         let _ = media_files.mark_scan_failed(file_id, error).await;
     }
+    Ok(())
 }
 
 #[expect(
@@ -1684,6 +1900,9 @@ async fn finalize_import_rejection(
     reopen_episode_ids: Option<&[String]>,
     rejection: &ImportedFileRejection,
 ) {
+    if rejection.requires_review() {
+        return;
+    }
     let episode_ids = attribution.episode_ids;
     let normalized_source_title = normalize_release_name(Some(completed_name));
     let failure_reason = Some(rejection.message.clone());

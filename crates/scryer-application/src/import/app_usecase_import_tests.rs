@@ -1170,6 +1170,7 @@ fn build_rename_tokens_includes_quality() {
 
 fn test_media_analysis(video_height: Option<i32>) -> crate::MediaFileAnalysis {
     crate::MediaFileAnalysis {
+        details: Default::default(),
         video_codec: Some(crate::release_parser::VideoCodec::H264),
         video_width: Some(1920),
         video_height,
@@ -1201,6 +1202,7 @@ fn test_rule_file_doc(
     dovi_bl_compat_id: Option<u8>,
 ) -> scryer_rules::FileDoc {
     scryer_rules::FileDoc {
+        details: Default::default(),
         video_codec: Some("hevc".to_string()),
         video_width: Some(3840),
         video_height: Some(2160),
@@ -1864,6 +1866,8 @@ fn scoped_media_file(
 ) -> crate::EpisodeScopedMediaFile {
     crate::EpisodeScopedMediaFile {
         media_file: crate::TitleMediaFile {
+            analysis_details: Default::default(),
+            analysis_attempt: None,
             id: id.to_string(),
             title_id: "title-1".to_string(),
             episode_id: episode_ids.first().map(|value| (*value).to_string()),

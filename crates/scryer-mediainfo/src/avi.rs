@@ -2,10 +2,10 @@ use crate::scan::{self, AudioSyncKind};
 use crate::types::{RawContainer, RawTrack, TrackKind};
 use crate::{AnalysisProfile, MediaInfoError};
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(test)]
 use std::path::Path;
 
 const AVI_IDX1_READ_BATCH_BYTES: usize = 64 * 1024;
-const AVI_MP3_FALLBACK_SCAN_BYTES: usize = 1024 * 1024;
 const AVI_HEADER_CHUNK_MAX_BYTES: u32 = 64 * 1024;
 
 #[derive(Debug, Clone)]
@@ -34,15 +34,19 @@ fn format_chunk_id(chunk_id: riff::ChunkId) -> String {
 }
 
 /// Parse an AVI (RIFF) container and extract stream metadata.
+#[cfg(test)]
 pub(crate) fn parse_avi(
     path: &Path,
     profile: AnalysisProfile,
 ) -> Result<RawContainer, MediaInfoError> {
-    let mut file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
-    let file_len = file
-        .metadata()
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?
-        .len();
+    parse_avi_source(&mut crate::source::FileSource::open(path)?, profile)
+}
+
+pub(crate) fn parse_avi_source(
+    mut file: &mut dyn crate::source::MediaSource,
+    profile: AnalysisProfile,
+) -> Result<RawContainer, MediaInfoError> {
+    let file_len = file.len();
 
     let riff_chunk = riff::Chunk::read(&mut file, 0)
         .map_err(|e| MediaInfoError::Parse(format!("failed to read RIFF header: {e}")))?;
@@ -69,6 +73,7 @@ pub(crate) fn parse_avi(
     let mut tracks = Vec::new();
     let mut idx1_offset = None;
     let mut movi_payload_offset = None;
+    let mut movi_end = None;
 
     for offset in top_chunks {
         let child = riff::Chunk::read(&mut file, offset)
@@ -89,6 +94,11 @@ pub(crate) fn parse_avi(
                 )?;
             } else if chunk_id_matches(list_type, b"movi") {
                 movi_payload_offset = Some(child.offset() + 12);
+                movi_end = child
+                    .offset()
+                    .checked_add(8)
+                    .and_then(|start| start.checked_add(u64::from(child.len())))
+                    .filter(|end| *end <= file_len && child.len() >= 4);
             }
         } else if chunk_id_matches(child.id(), b"idx1") {
             idx1_offset = Some(offset);
@@ -101,14 +111,172 @@ pub(crate) fn parse_avi(
         apply_idx1_stream_sizes(&idx1, &mut file, &mut tracks)?;
     }
 
-    backfill_track_bitrates(&mut file, movi_payload_offset, &mut tracks, profile)?;
+    backfill_track_bitrates(&mut tracks);
+    let mut details = scryer_media_types::AnalysisDetails::default();
+    for track in &mut tracks {
+        track.raw.metadata.id = Some(track.stream_number.to_string());
+    }
+    if !profile.skips_deep_probes() {
+        if let Some((start, end)) = movi_payload_offset.zip(movi_end) {
+            enrich_movi(&mut file, start, end, &mut tracks, &mut details)?;
+        } else {
+            avi_sampling_warning(&mut details.report, false);
+        }
+    }
 
     Ok(RawContainer {
+        details,
         format_name: "avi".into(),
         duration_seconds,
         num_chapters: None,
         tracks: tracks.into_iter().map(|track| track.raw).collect(),
     })
+}
+
+fn avi_sampling_warning(report: &mut scryer_media_types::ProbeReport, budget: bool) {
+    report.status = scryer_media_types::ProbeStatus::Incomplete;
+    report.budget_exhausted |= budget;
+    let code = if budget {
+        "avi_sample_budget"
+    } else {
+        "avi_sample_reference_invalid"
+    };
+    if !report.warnings.iter().any(|warning| warning.code == code) {
+        report.warnings.push(scryer_media_types::ProbeWarning {
+            code: code.into(),
+            message: "AVI sample inspection did not cover all referenced payloads".into(),
+            ..Default::default()
+        });
+    }
+}
+
+/// Read prefixes of individual stream chunks, following bounded record lists.
+/// Chunk lengths are used only for seeking; allocations never follow them.
+fn enrich_movi<T: Read + Seek>(
+    stream: &mut T,
+    mut at: u64,
+    mut end: u64,
+    tracks: &mut [AviTrack],
+    details: &mut scryer_media_types::AnalysisDetails,
+) -> Result<(), MediaInfoError> {
+    let mut stack = Vec::new();
+    let mut counts = vec![0_u8; tracks.len()];
+    let mut remaining = 1024 * 1024_usize;
+    let mut buf = vec![0; 64 * 1024];
+    for _ in 0..4096 {
+        if at == end {
+            if let Some((resume, parent_end)) = stack.pop() {
+                at = resume;
+                end = parent_end;
+                continue;
+            }
+            return Ok(());
+        }
+        if end.saturating_sub(at) < 8 {
+            avi_sampling_warning(&mut details.report, false);
+            return Ok(());
+        }
+        stream
+            .seek(SeekFrom::Start(at))
+            .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+        let mut header = [0; 8];
+        stream
+            .read_exact(&mut header)
+            .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+        let length = u64::from(read_u32_le(&header, 4));
+        let payload = at + 8;
+        let Some(payload_end) = payload.checked_add(length).filter(|value| *value <= end) else {
+            avi_sampling_warning(&mut details.report, false);
+            return Ok(());
+        };
+        let Some(next) = payload_end
+            .checked_add(length & 1)
+            .filter(|value| *value <= end)
+        else {
+            avi_sampling_warning(&mut details.report, false);
+            return Ok(());
+        };
+        at = next;
+        if &header[..4] == b"LIST" {
+            if length < 4 {
+                avi_sampling_warning(&mut details.report, false);
+                return Ok(());
+            }
+            let mut kind = [0; 4];
+            stream
+                .read_exact(&mut kind)
+                .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+            if &kind == b"rec " {
+                if stack.len() >= 8 {
+                    avi_sampling_warning(&mut details.report, true);
+                    return Ok(());
+                }
+                stack.push((next, end));
+                at = payload + 4;
+                end = payload_end;
+            }
+            continue;
+        }
+        let Some(number) = parse_idx1_stream_number(&header[..2]) else {
+            continue;
+        };
+        let Some(index) = tracks
+            .iter()
+            .position(|track| track.stream_number == number)
+        else {
+            continue;
+        };
+        let track = &mut tracks[index].raw;
+        let eligible = (track.kind == TrackKind::Video && matches!(&header[2..4], b"dc" | b"db"))
+            || (track.kind == TrackKind::Audio && &header[2..4] == b"wb");
+        if !eligible || length == 0 {
+            continue;
+        }
+        if counts[index] >= 16 {
+            avi_sampling_warning(&mut details.report, true);
+            continue;
+        }
+        if remaining == 0 {
+            avi_sampling_warning(&mut details.report, true);
+            return Ok(());
+        }
+        let take = length.min(buf.len() as u64).min(remaining as u64) as usize;
+        stream
+            .read_exact(&mut buf[..take])
+            .map_err(|error| MediaInfoError::Io(error.to_string()))?;
+        remaining -= take;
+        counts[index] += 1;
+        if (take as u64) < length {
+            avi_sampling_warning(&mut details.report, true);
+        }
+        // Preserve complete table accounting over a single audio frame's rate.
+        let bitrate = track
+            .bit_rate_bps
+            .zip(Some(track.metadata.bitrate_provenance));
+        crate::ts::probe_elementary_stream(&buf[..take], track);
+        if let Some((rate, provenance)) = bitrate {
+            track.bit_rate_bps = Some(rate);
+            track.metadata.bitrate_provenance = provenance;
+        } else if track.codec_name.as_deref() == Some("mp3") {
+            track.bit_rate_bps = None;
+            track.metadata.estimated_bitrate_bps =
+                find_mp3_bitrate(&buf[..take]).and_then(|rate| u64::try_from(rate).ok());
+        }
+        if track.kind == TrackKind::Video {
+            crate::video_metadata::annex_b(
+                &buf[..take],
+                track,
+                &mut details.report,
+                &mut details.caption_services,
+            );
+        }
+        if counts.iter().all(|count| *count >= 16) && at < end {
+            avi_sampling_warning(&mut details.report, true);
+            return Ok(());
+        }
+    }
+    avi_sampling_warning(&mut details.report, true);
+    Ok(())
 }
 
 /// Collect child chunk byte-offsets from a parent chunk's iterator, so we can
@@ -290,11 +458,11 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
     };
 
     // Frame rate from strh: dwScale at offset 20, dwRate at offset 24
-    let frame_rate_fps = if strh.len() >= 28 {
+    let declared_frame_rate = if strh.len() >= 28 {
         let dw_scale = read_u32_le(strh, 20);
         let dw_rate = read_u32_le(strh, 24);
         if dw_scale > 0 && dw_rate > 0 {
-            Some(dw_rate as f64 / dw_scale as f64)
+            scryer_media_types::Rational::new(i64::from(dw_rate), u64::from(dw_scale))
         } else {
             None
         }
@@ -338,17 +506,25 @@ fn parse_video_stream(strh: &[u8], strf: &[u8]) -> RawTrack {
     }
 
     RawTrack {
+        metadata: scryer_media_types::StreamMetadata {
+            declared_frame_rate,
+            ..Default::default()
+        },
         kind: TrackKind::Video,
         codec_id,
         codec_name,
         audio_profile: None,
-        codec_private: None,
+        codec_private: strf
+            .get(40..)
+            .filter(|bytes| !bytes.is_empty())
+            .map(<[u8]>::to_vec),
         width,
         height,
         channels: None,
         bit_rate_bps: None,
         language: None,
-        frame_rate_fps,
+        frame_rate_fps: declared_frame_rate
+            .map(|rate| rate.numerator as f64 / rate.denominator as f64),
         color_transfer: None,
         dovi_config: None,
         has_hdr10plus: false,
@@ -376,17 +552,41 @@ fn parse_audio_stream(_strh: &[u8], strf: &[u8]) -> RawTrack {
         } else {
             format!("0x{w_format_tag:04X}/0x{codec_format_tag:04X}")
         };
-        codec_name = Some(map_audio_format_tag(codec_format_tag).to_owned());
-        channels = Some(n_channels as i32);
-        bit_rate_bps = Some(n_avg_bytes_per_sec as i64 * 8);
+        codec_name = if matches!(codec_format_tag, 1 | 3) {
+            (strf.len() >= 16)
+                .then(|| crate::audio_metadata::pcm_codec(codec_format_tag, read_u16_le(strf, 14)))
+                .flatten()
+                .map(str::to_owned)
+        } else {
+            Some(map_audio_format_tag(codec_format_tag).to_owned())
+        };
+        channels = (n_channels > 0).then_some(n_channels as i32);
+        bit_rate_bps = (n_avg_bytes_per_sec > 0).then_some(n_avg_bytes_per_sec as i64 * 8);
     }
 
+    let codec_private = strf.get(16..18).and_then(|bytes| {
+        let size = usize::from(u16::from_le_bytes(bytes.try_into().ok()?));
+        let start = if read_u16_le(strf, 0) == 0xfffe {
+            40
+        } else {
+            18
+        };
+        strf.get(start..18 + size)
+            .filter(|bytes| !bytes.is_empty())
+            .map(<[u8]>::to_vec)
+    });
+    let audio_profile = crate::codec::detect_header_audio_profile(
+        &codec_id,
+        codec_name.as_deref(),
+        codec_private.as_deref(),
+    );
     RawTrack {
+        metadata: crate::audio_metadata::wave_format(strf),
         kind: TrackKind::Audio,
         codec_id,
         codec_name,
-        audio_profile: None,
-        codec_private: None,
+        audio_profile,
+        codec_private,
         width: None,
         height: None,
         channels,
@@ -482,12 +682,7 @@ fn parse_idx1_stream_number(prefix: &[u8]) -> Option<usize> {
     usize::from_str_radix(value, 16).ok()
 }
 
-fn backfill_track_bitrates<T: Read + Seek>(
-    stream: &mut T,
-    movi_payload_offset: Option<u64>,
-    tracks: &mut [AviTrack],
-    profile: AnalysisProfile,
-) -> Result<(), MediaInfoError> {
+fn backfill_track_bitrates(tracks: &mut [AviTrack]) {
     for track in tracks.iter_mut() {
         if track.raw.bit_rate_bps.unwrap_or_default() > 0 {
             continue;
@@ -502,42 +697,9 @@ fn backfill_track_bitrates<T: Read + Seek>(
             && duration_seconds > 0.0
         {
             track.raw.bit_rate_bps = Some((total_bytes as f64 * 8.0 / duration_seconds) as i64);
+            track.raw.metadata.bitrate_provenance = scryer_media_types::Provenance::Observed;
         }
     }
-
-    let needs_mp3_bitrate = tracks.iter().any(|track| {
-        track.raw.kind == TrackKind::Audio
-            && track.raw.codec_name.as_deref() == Some("mp3")
-            && track.raw.bit_rate_bps.unwrap_or_default() <= 0
-    });
-    if !needs_mp3_bitrate {
-        return Ok(());
-    }
-    if profile.skips_deep_probes() {
-        return Ok(());
-    }
-
-    stream
-        .seek(SeekFrom::Start(movi_payload_offset.unwrap_or(0)))
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
-
-    let mut buf = vec![0_u8; AVI_MP3_FALLBACK_SCAN_BYTES];
-    let bytes_read = stream
-        .read(&mut buf)
-        .map_err(|e| MediaInfoError::Io(e.to_string()))?;
-    buf.truncate(bytes_read);
-
-    let fallback_bitrate = find_mp3_bitrate(&buf);
-    for track in tracks.iter_mut() {
-        if track.raw.kind == TrackKind::Audio
-            && track.raw.codec_name.as_deref() == Some("mp3")
-            && track.raw.bit_rate_bps.unwrap_or_default() <= 0
-        {
-            track.raw.bit_rate_bps = fallback_bitrate;
-        }
-    }
-
-    Ok(())
 }
 
 /// Map a video FourCC to a canonical codec name.
@@ -792,5 +954,157 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
 
         assert_eq!(super::find_mp3_bitrate(&data), Some(128_000));
+    }
+
+    #[test]
+    fn avi_authored_mpeg4_preserves_sequence_properties_and_rational_timing() {
+        let mut source =
+            std::io::Cursor::new(include_bytes!("../tests/media/matrix_avi_002.avi").as_slice());
+        let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
+        let video = raw
+            .tracks
+            .iter()
+            .find(|track| track.kind == crate::types::TrackKind::Video)
+            .unwrap();
+        assert_eq!(
+            video.metadata.declared_frame_rate,
+            scryer_media_types::Rational::new(24, 1)
+        );
+        assert_eq!(video.metadata.profile.as_deref(), Some("Simple Profile"));
+        assert_eq!(video.metadata.bit_depth, Some(8));
+        assert_eq!(video.metadata.pixel_format.as_deref(), Some("yuv420p"));
+        assert_eq!(
+            video.metadata.display_aspect_ratio,
+            scryer_media_types::Rational::new(16, 9)
+        );
+    }
+
+    #[test]
+    fn avi_avc_timing_and_extensible_aac_configuration_are_not_misread() {
+        let mut source =
+            std::io::Cursor::new(include_bytes!("../tests/media/matrix_avi_013.avi").as_slice());
+        let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
+        let video = raw
+            .tracks
+            .iter()
+            .find(|track| track.kind == crate::types::TrackKind::Video)
+            .unwrap();
+        assert_eq!(video.frame_rate_fps, Some(25.0));
+        let mp3 = raw
+            .tracks
+            .iter()
+            .find(|track| track.codec_name.as_deref() == Some("mp3"))
+            .unwrap();
+        assert_eq!(mp3.metadata.channel_layout.as_deref(), Some("stereo"));
+        let aac = raw
+            .tracks
+            .iter()
+            .find(|track| track.codec_name.as_deref() == Some("aac"))
+            .unwrap();
+        assert_eq!(aac.audio_profile.as_deref(), Some("LC"));
+        let config =
+            crate::codec::aac_configuration_metadata(aac.codec_private.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(config.sample_rate, 48_000);
+        assert_eq!(config.layout, Some((6, "5.1")));
+    }
+
+    fn sample_track(number: usize) -> super::AviTrack {
+        super::AviTrack {
+            raw: crate::types::RawTrack {
+                kind: crate::types::TrackKind::Audio,
+                codec_name: Some("mp3".into()),
+                ..Default::default()
+            },
+            stream_number: number,
+            duration_seconds: None,
+            declared_payload_bytes: None,
+            index_bytes: 0,
+        }
+    }
+
+    fn sample_chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = id.to_vec();
+        bytes.extend((payload.len() as u32).to_le_bytes());
+        bytes.extend(payload);
+        if payload.len() % 2 != 0 {
+            bytes.push(0);
+        }
+        bytes
+    }
+
+    #[test]
+    fn avi_record_sampling_keeps_audio_stream_facts_separate() {
+        let mut record = b"rec ".to_vec();
+        record.extend(sample_chunk(b"00wb", &[0xff, 0xfb, 0x90, 0x64]));
+        record.extend(sample_chunk(b"01wb", &[0xff, 0xfb, 0x50, 0xc0]));
+        let bytes = sample_chunk(b"LIST", &record);
+        let mut tracks = vec![sample_track(0), sample_track(1)];
+        let mut details = scryer_media_types::AnalysisDetails::default();
+        super::enrich_movi(
+            &mut std::io::Cursor::new(&bytes),
+            0,
+            bytes.len() as u64,
+            &mut tracks,
+            &mut details,
+        )
+        .unwrap();
+        assert_eq!(
+            tracks[0].raw.metadata.channel_layout.as_deref(),
+            Some("stereo")
+        );
+        assert_eq!(
+            tracks[1].raw.metadata.channel_layout.as_deref(),
+            Some("mono")
+        );
+        assert_eq!(tracks[0].raw.metadata.estimated_bitrate_bps, Some(128_000));
+        assert_eq!(tracks[1].raw.metadata.estimated_bitrate_bps, Some(64_000));
+        assert!(tracks.iter().all(|track| track.raw.bit_rate_bps.is_none()));
+    }
+
+    #[test]
+    fn avi_sample_reads_are_bounded_and_invalid_references_are_visible() {
+        struct Counted {
+            cursor: std::io::Cursor<Vec<u8>>,
+            read: usize,
+        }
+        impl std::io::Read for Counted {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                let count = std::io::Read::read(&mut self.cursor, bytes)?;
+                self.read += count;
+                Ok(count)
+            }
+        }
+        impl std::io::Seek for Counted {
+            fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+                std::io::Seek::seek(&mut self.cursor, to)
+            }
+        }
+        let bytes = sample_chunk(b"00wb", &vec![0; 128 * 1024]);
+        let end = bytes.len() as u64;
+        let mut source = Counted {
+            cursor: std::io::Cursor::new(bytes),
+            read: 0,
+        };
+        let mut details = scryer_media_types::AnalysisDetails::default();
+        super::enrich_movi(&mut source, 0, end, &mut [sample_track(0)], &mut details).unwrap();
+        assert_eq!(source.read, 8 + 64 * 1024);
+        assert!(details.report.budget_exhausted);
+        assert_eq!(
+            details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
+
+        source.cursor =
+            std::io::Cursor::new([b"00wb".as_slice(), &u32::MAX.to_le_bytes()].concat());
+        source.read = 0;
+        let mut details = scryer_media_types::AnalysisDetails::default();
+        super::enrich_movi(&mut source, 0, 8, &mut [sample_track(0)], &mut details).unwrap();
+        assert_eq!(source.read, 8);
+        assert!(!details.report.budget_exhausted);
+        assert_eq!(
+            details.report.warnings[0].code,
+            "avi_sample_reference_invalid"
+        );
     }
 }

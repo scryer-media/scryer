@@ -1,6 +1,7 @@
 /// Track type discriminator for intermediate parsing results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TrackKind {
+    #[default]
     Video,
     Audio,
     Subtitle,
@@ -9,7 +10,7 @@ pub(crate) enum TrackKind {
 /// Intermediate representation of a single track extracted from any container
 /// format. Container-specific parsers populate this struct; codec analysis and
 /// HDR detection then operate on it uniformly.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct RawTrack {
     pub kind: TrackKind,
     /// Raw container codec identifier, e.g. `"V_MPEG4/ISO/AVC"` (MKV) or
@@ -43,6 +44,7 @@ pub(crate) struct RawTrack {
     /// Set to `true` when SMPTE ST 2094-40 (HDR10+) dynamic metadata is found
     /// in the video bitstream.
     pub has_hdr10plus: bool,
+    pub metadata: scryer_media_types::StreamMetadata,
 }
 
 /// Parsed container-level metadata.
@@ -56,4 +58,5 @@ pub(crate) struct RawContainer {
     pub num_chapters: Option<i32>,
     /// All tracks found in the container.
     pub tracks: Vec<RawTrack>,
+    pub details: scryer_media_types::AnalysisDetails,
 }

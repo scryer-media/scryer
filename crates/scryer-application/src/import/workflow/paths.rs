@@ -674,6 +674,7 @@ fn parsed_usable_release_from_file_stem(path: &Path) -> Option<ParsedReleaseMeta
 pub(crate) struct ImportVideoFile {
     pub(crate) physical: PathBuf,
     pub(crate) logical_name: Option<String>,
+    pub(crate) disc_selection: Option<scryer_media_types::DiscSelection>,
 }
 
 impl ImportVideoFile {
@@ -683,7 +684,16 @@ impl ImportVideoFile {
         Self {
             physical,
             logical_name: None,
+            disc_selection: None,
         }
+    }
+
+    pub(crate) fn with_disc_selection(
+        mut self,
+        selection: Option<scryer_media_types::DiscSelection>,
+    ) -> Self {
+        self.disc_selection = selection;
+        self
     }
 
     /// The path on disk. Every filesystem, artifact, move and cleanup call uses

@@ -371,6 +371,88 @@ impl LibraryMutations {
         Ok(from_media_rename_apply(result))
     }
 
+    async fn media_file_disc_episode_targets(
+        &self,
+        ctx: &Context<'_>,
+        file_id: ID,
+    ) -> GqlResult<Vec<crate::types::MediaDiscEpisodeTargetPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episodes = app
+            .media_file_disc_episode_targets(&actor, file_id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(episodes
+            .into_iter()
+            .map(|episode| {
+                let label = episode.episode_label.unwrap_or_else(|| {
+                    format!(
+                        "S{}E{}",
+                        episode.season_number.unwrap_or_default(),
+                        episode.episode_number.unwrap_or_default()
+                    )
+                });
+                crate::types::MediaDiscEpisodeTargetPayload {
+                    episode_id: ID::from(episode.id),
+                    label: episode
+                        .title
+                        .map_or_else(|| label.clone(), |name| format!("{label} · {name}")),
+                    duration_seconds: episode.duration_seconds.map(Into::into),
+                }
+            })
+            .collect())
+    }
+
+    /// Save explicit disc-title-to-episode associations on the existing physical image.
+    async fn map_media_file_disc_episodes(
+        &self,
+        ctx: &Context<'_>,
+        file_id: ID,
+        mappings: Vec<crate::types::MediaDiscEpisodeMappingInput>,
+    ) -> GqlResult<TitleMediaFilePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let file = app
+            .map_media_file_disc_episodes(
+                &actor,
+                file_id.as_str(),
+                mappings.into_iter().map(Into::into).collect(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_title_media_file(file))
+    }
+
+    /// Opt-in bounded header diagnostics; this does not change import acceptance or stored analysis.
+    async fn diagnose_media_file(
+        &self,
+        ctx: &Context<'_>,
+        file_id: ID,
+    ) -> GqlResult<crate::types::MediaStructuralDiagnosticsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.diagnose_media_file(&actor, file_id.as_str())
+            .await
+            .map(Into::into)
+            .map_err(to_gql_error)
+    }
+
+    /// Select a playback title in a registered ISO; null restores automatic selection.
+    async fn select_media_file_disc_title(
+        &self,
+        ctx: &Context<'_>,
+        file_id: ID,
+        disc_title_id: Option<String>,
+    ) -> GqlResult<TitleMediaFilePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let file = app
+            .select_media_file_disc_title(&actor, file_id.as_str(), disc_title_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_title_media_file(file))
+    }
+
     /// Accept a background job to delete a media file, optionally removing it from disk.
     async fn delete_media_file(
         &self,

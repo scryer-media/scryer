@@ -395,6 +395,10 @@ pub(super) async fn background_refresh_series(
         "background library refresh completed"
     );
 
+    if let Err(error) = app.refresh_stale_media_analysis(library_id).await {
+        warn!(%error, library_id, "stale media analysis refresh failed");
+    }
+
     Ok(summary)
 }
 
@@ -567,6 +571,10 @@ pub(super) async fn background_refresh_movies(
         elapsed_ms = elapsed_ms_u64(started_at),
         "background movie refresh completed"
     );
+
+    if let Err(error) = app.refresh_stale_media_analysis(library_id).await {
+        warn!(%error, library_id, "stale media analysis refresh failed");
+    }
 
     Ok(summary)
 }

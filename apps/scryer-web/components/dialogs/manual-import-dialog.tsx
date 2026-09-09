@@ -1,5 +1,7 @@
 
 import * as React from "react";
+import { ManualDiscSelectionControl } from "./manual-disc-selection";
+import type { ManualDiscSelection } from "@/lib/utils/manual-import-video-facts";
 import { Check, ChevronsUpDown, FileVideo, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -109,6 +111,7 @@ type ManualImportFileMapping = {
   candidateId: string;
   episodeId?: string;
   seriesMovieLinkId?: string;
+  discSelection?: import("@/lib/utils/manual-import-video-facts").ManualDiscSelection;
 };
 
 function formatFileSize(bytes: number) {
@@ -375,6 +378,7 @@ const ManualImportTargetSelect = React.memo(function ManualImportTargetSelect({
 });
 
 type Props = {
+  facet: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   titleId: string;
@@ -386,6 +390,7 @@ type Props = {
 };
 
 export function ManualImportDialog({
+  facet,
   open,
   onOpenChange,
   titleId,
@@ -408,6 +413,7 @@ export function ManualImportDialog({
   const [episodes, setEpisodes] = React.useState<AvailableEpisode[]>([]);
   const [seriesMovies, setSeriesMovies] = React.useState<AvailableSeriesMovie[]>([]);
   const [mappings, setMappings] = React.useState<Record<string, string>>({});
+  const [discSelections, setDiscSelections] = React.useState<Record<string, ManualDiscSelection>>({});
   const [selectionId, setSelectionId] = React.useState<string | null>(null);
   const [importing, setImporting] = React.useState(false);
 
@@ -452,13 +458,16 @@ export function ManualImportDialog({
         // Initialize mappings from suggested matches
         const initial: Record<string, string> = {};
         for (const file of preview.files) {
-          initial[file.candidateId] = file.suggestedEpisodeId
+          initial[file.candidateId] = file.fileName.toLowerCase().endsWith(".iso")
+            ? UNASSIGNED
+            : file.suggestedEpisodeId
             ? episodeTargetValue(file.suggestedEpisodeId)
             : file.suggestedSeriesMovieLinkId
               ? seriesMovieTargetValue(file.suggestedSeriesMovieLinkId)
               : UNASSIGNED;
         }
         setMappings(initial);
+        setDiscSelections({});
       })
       .catch((err: unknown) => {
         setArchiveExtractionNeeded(false);
@@ -477,6 +486,7 @@ export function ManualImportDialog({
       setEpisodes([]);
       setSeriesMovies([]);
       setMappings({});
+      setDiscSelections({});
       setSelectionId(null);
       setError(null);
       setArchivePluginRequired(false);
@@ -520,6 +530,10 @@ export function ManualImportDialog({
     const fileMappings = Object.entries(mappings)
       .filter(([, target]) => target !== UNASSIGNED)
       .flatMap<ManualImportFileMapping>(([candidateId, target]) => {
+        if (target === "__disc__" && discSelections[candidateId]) {
+          return [{ candidateId, discSelection: discSelections[candidateId] }];
+        }
+        if (target === "__movie__") return [{ candidateId }];
         if (target.startsWith(EPISODE_TARGET_PREFIX)) {
           return [{
             candidateId,
@@ -558,6 +572,7 @@ export function ManualImportDialog({
   }, [
     client,
     mappings,
+    discSelections,
     onImportQueued,
     onOpenChange,
     setImportError,
@@ -681,14 +696,41 @@ export function ManualImportDialog({
                         )}
                       </TableCell>
                       <TableCell>
-                        <ManualImportTargetSelect
+                        {file.fileName.toLowerCase().endsWith(".iso") ? (
+                          <ManualDiscSelectionControl
+                            disc={file.videoFacts?.disc ?? null}
+                            report={file.videoFacts?.report}
+                            isMovie={facet === "MOVIE"}
+                            episodes={episodes.map((episode) => ({ id: episode.id, label: episodeLabel(episode) }))}
+                            value={discSelections[file.candidateId] ?? null}
+                            onChange={(selection) => {
+                              setDiscSelections((previous) => {
+                                const next = { ...previous };
+                                if (selection) next[file.candidateId] = selection;
+                                else delete next[file.candidateId];
+                                return next;
+                              });
+                              handleMappingChange(file.candidateId, selection ? "__disc__" : UNASSIGNED);
+                            }}
+                          />
+                        ) : facet === "MOVIE" ? (
+                          <select
+                            aria-label={file.fileName}
+                            className="rounded border bg-background p-2 text-sm"
+                            value={mappings[file.candidateId] ?? UNASSIGNED}
+                            onChange={(event) => handleMappingChange(file.candidateId, event.target.value)}
+                          >
+                            <option value={UNASSIGNED}>{t("mediaInfo.discSkip")}</option>
+                            <option value="__movie__">{t("mediaInfo.discImportMovie")}</option>
+                          </select>
+                        ) : <ManualImportTargetSelect
                           candidateId={file.candidateId}
                           value={mappings[file.candidateId] ?? UNASSIGNED}
                           groupedEpisodes={groupedEpisodes}
                           seriesMovies={seriesMovies}
                           targetLabels={targetLabels}
                           onChange={handleMappingChange}
-                        />
+                        />}
                       </TableCell>
                     </TableRow>
                   ))}

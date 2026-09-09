@@ -175,7 +175,11 @@ pub(crate) struct ScoredReleasePreview {
 pub(crate) enum TruthVerdict {
     /// No analysis yet, or the file matched its announcement within bounds.
     Consistent,
-    /// Measured size or quality materially contradicts a comparable announcement.
+    /// Playback facts cannot be assigned to the requested scope. Preserve the
+    /// source for review; this is not evidence against the release.
+    ReviewRequired { codes: Vec<String> },
+    /// The file differs from its announcement by more than [`TRUTH_VARIANCE_BOUND`],
+    /// or a scored fact changed materially. The release was mis-advertised.
     Contradicted { codes: Vec<String> },
     /// The announcement **asserted** the field a veto keys on and the file
     /// contradicts it: the name said H.265 and the stream is a blocklisted
@@ -222,9 +226,10 @@ impl TruthVerdict {
     pub(crate) fn codes(&self) -> &[String] {
         match self {
             Self::Consistent => &[],
-            Self::Contradicted { codes } | Self::Blocked { codes } | Self::Vetoed { codes } => {
-                codes
-            }
+            Self::Contradicted { codes }
+            | Self::Blocked { codes }
+            | Self::Vetoed { codes }
+            | Self::ReviewRequired { codes } => codes,
         }
     }
 }
@@ -318,6 +323,150 @@ fn score_release_with_rules(
     ctx: &ScoringContext<'_>,
     rules: &mut RuleEvaluationBatch,
 ) -> ScoredRelease {
+    score_disc_scope_with_rules(evidence, ctx, rules, None)
+}
+
+fn score_disc_scope_with_rules(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+    episode_ids: Option<&[String]>,
+) -> ScoredRelease {
+    let Some(analyzed) = &evidence.analyzed else {
+        return score_single_release_with_rules(evidence, ctx, rules);
+    };
+    let Some(disc) = &analyzed.analysis.details.disc else {
+        return score_single_release_with_rules(evidence, ctx, rules);
+    };
+    if disc.selection.title_id.as_ref().is_some_and(|id| {
+        !disc
+            .titles
+            .iter()
+            .any(|title| title.id == *id || title.aliases.contains(id))
+    }) {
+        return score_unresolved_disc(evidence, ctx, rules, "disc_title_override_invalid");
+    }
+    if episode_ids.is_some_and(|ids| {
+        ids.is_empty()
+            || ids.iter().any(|id| {
+                disc.selection
+                    .episode_mappings
+                    .iter()
+                    .filter(|mapping| mapping.episode_ids.contains(id))
+                    .count()
+                    != 1
+            })
+    }) {
+        return score_unresolved_disc(evidence, ctx, rules, "disc_episode_mapping_unresolved");
+    }
+    let mut scores = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for mapping in &disc.selection.episode_mappings {
+        if episode_ids.is_some_and(|ids| !mapping.episode_ids.iter().any(|id| ids.contains(id))) {
+            continue;
+        }
+        let Some(title) = disc.titles.iter().find(|title| {
+            title.id == mapping.disc_title_id || title.aliases.contains(&mapping.disc_title_id)
+        }) else {
+            return score_unresolved_disc(evidence, ctx, rules, "disc_episode_mapping_unresolved");
+        };
+        if mapping.episode_ids.len() != 1 || !seen.insert(&title.id) {
+            return score_unresolved_disc(evidence, ctx, rules, "disc_episode_mapping_ambiguous");
+        }
+        if title.report.status != scryer_media_types::ProbeStatus::Complete
+            || title
+                .duration_seconds
+                .is_none_or(|seconds| !seconds.is_finite() || seconds <= 0.0)
+        {
+            return score_unresolved_disc(evidence, ctx, rules, "disc_mapped_title_inconclusive");
+        }
+        let analysis = crate::media::disc_analysis::for_title(&analyzed.analysis, title);
+        let rule_file_doc = Some(crate::user_rule_input::file_doc_from_analysis(&analysis));
+        let scoped = ReleaseEvidence {
+            parsed: evidence.parsed.clone(),
+            announced_size_bytes: evidence.announced_size_bytes,
+            analyzed: Some(AnalyzedFacts {
+                analysis,
+                actual_size_bytes: analyzed.actual_size_bytes,
+                rule_file_doc,
+            }),
+        };
+        scores.push(score_single_release_with_rules(&scoped, ctx, rules));
+    }
+    if scores.is_empty() {
+        return score_single_release_with_rules(evidence, ctx, rules);
+    }
+    // Every mapped playback sequence must clear the gate. A superior soundtrack
+    // or cut elsewhere on the image cannot raise another episode's bar.
+    let severity = scores
+        .iter()
+        .map(|score| match score.truth_verdict {
+            TruthVerdict::ReviewRequired { .. } => 4,
+            TruthVerdict::Blocked { .. } => 3,
+            TruthVerdict::Vetoed { .. } => 2,
+            TruthVerdict::Contradicted { .. } => 1,
+            TruthVerdict::Consistent => 0,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut codes = scores
+        .iter()
+        .flat_map(|score| score.truth_verdict.codes().iter().cloned())
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    let mut weakest = scores
+        .into_iter()
+        .max_by_key(|score| {
+            (
+                crate::quality_profile::quality_tier_index(
+                    &ctx.profile.criteria,
+                    score.parsed_quality.as_deref(),
+                )
+                .unwrap_or(usize::MAX),
+                std::cmp::Reverse(score.total),
+            )
+        })
+        .expect("nonempty mapped titles");
+    weakest.truth_verdict = match severity {
+        4 => TruthVerdict::ReviewRequired { codes },
+        3 => TruthVerdict::Blocked { codes },
+        2 => TruthVerdict::Vetoed { codes },
+        1 => TruthVerdict::Contradicted { codes },
+        _ => TruthVerdict::Consistent,
+    };
+    weakest
+}
+
+fn score_unresolved_disc(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+    code: &str,
+) -> ScoredRelease {
+    // Retain the announcement, but never substitute another playback title's
+    // measurements for missing or invalid episode evidence.
+    let announced = ReleaseEvidence {
+        parsed: evidence.parsed.clone(),
+        announced_size_bytes: evidence.announced_size_bytes,
+        analyzed: None,
+    };
+    let mut score = score_single_release_with_rules(&announced, ctx, rules);
+    score.truth_verdict = TruthVerdict::ReviewRequired {
+        codes: vec![code.into()],
+    };
+    score
+}
+
+fn score_single_release_with_rules(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    let is_disc = evidence
+        .analyzed
+        .as_ref()
+        .is_some_and(|facts| facts.analysis.details.disc.is_some());
     let announced_decision = run_term_pipeline(
         &evidence.parsed,
         evidence.announced_size_bytes,
@@ -326,6 +475,10 @@ fn score_release_with_rules(
         rules,
     );
     let release_score = announced_decision.preference_score;
+    // Preserve the acquisition score while comparing only facts measurable for
+    // this playback title. Filesystem overhead and other cuts have no title size.
+    let comparable_announcement =
+        is_disc.then(|| run_term_pipeline(&evidence.parsed, None, None, ctx, rules));
 
     let mut analyzed_decision = None;
     let mut analyzed_quality = None;
@@ -341,13 +494,18 @@ fn score_release_with_rules(
             .0;
             let analyzed_pass = run_term_pipeline(
                 &analyzed_parsed,
-                Some(analyzed.actual_size_bytes),
+                (!is_disc).then_some(analyzed.actual_size_bytes),
                 analyzed.rule_file_doc.clone(),
                 ctx,
                 rules,
             );
-            let mut classified =
-                classify_truth(&evidence.parsed, &announced_decision, &analyzed_pass);
+            let mut classified = classify_truth(
+                &evidence.parsed,
+                comparable_announcement
+                    .as_ref()
+                    .unwrap_or(&announced_decision),
+                &analyzed_pass,
+            );
             if matches!(classified.1, TruthVerdict::Consistent)
                 && !ctx.size_basis.covers_multiple_members()
                 && size_claim_mismatch(evidence.announced_size_bytes, analyzed.actual_size_bytes)
@@ -389,6 +547,9 @@ fn score_release_with_rules(
                     TruthVerdict::Contradicted { mut codes } => {
                         codes.push(code);
                         TruthVerdict::Contradicted { codes }
+                    }
+                    TruthVerdict::ReviewRequired { codes } => {
+                        TruthVerdict::ReviewRequired { codes }
                     }
                     TruthVerdict::Consistent => TruthVerdict::Contradicted { codes: vec![code] },
                 };
@@ -700,6 +861,7 @@ fn size_claim_mismatch(announced: Option<i64>, actual: i64) -> bool {
 /// its own file was written with, and every candidate would look like an upgrade.
 pub(crate) fn analyzed_facts_from_media_file(file: &crate::TitleMediaFile) -> AnalyzedFacts {
     let analysis = MediaFileAnalysis {
+        details: file.analysis_details.clone(),
         video_codec: file.video_codec,
         video_width: file.video_width,
         video_height: file.video_height,
@@ -882,4 +1044,18 @@ pub(crate) fn score_media_file(
     ctx: &ScoringContext<'_>,
 ) -> ScoredRelease {
     score_release(&evidence_from_media_file(file), ctx)
+}
+
+pub(crate) fn score_media_file_for_episodes(
+    file: &crate::TitleMediaFile,
+    episode_ids: &[String],
+    ctx: &ScoringContext<'_>,
+) -> ScoredRelease {
+    let mut rules = RuleEvaluationBatch::from_context(ctx);
+    score_disc_scope_with_rules(
+        &evidence_from_media_file(file),
+        ctx,
+        &mut rules,
+        Some(episode_ids),
+    )
 }

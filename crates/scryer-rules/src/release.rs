@@ -88,6 +88,7 @@ pub struct UserRuleInput {
 /// Available as `input.file` in Rego during post-download evaluation.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileDoc {
+    pub details: scryer_media_types::AnalysisDetails,
     /// Video stream codec name (e.g. "hevc", "av1", "h264").
     pub video_codec: Option<String>,
     pub video_width: Option<i32>,
@@ -1927,6 +1928,7 @@ score_entry["internal"] := 300 if {
 
     fn test_file_doc() -> FileDoc {
         FileDoc {
+            details: Default::default(),
             video_codec: Some("hevc".to_string()),
             video_width: Some(3840),
             video_height: Some(2160),
