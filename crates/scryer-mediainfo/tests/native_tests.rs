@@ -112,6 +112,7 @@ fn short_transport_stream_audio_retains_separate_bitrate_estimates() {
         ("h264_aac.ts", 129_042),
         ("matrix_ts_001.ts", 4_970),
         ("simd_dense_h264_aac.ts", 4_924),
+        ("matrix_ts_016.m2ts", 4_970),
     ] {
         let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
         let audio = analysis

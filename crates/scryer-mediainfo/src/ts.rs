@@ -913,7 +913,16 @@ impl TsStreamProbeState {
             Some("truehd") => probe_truehd_track(&self.buffer, track),
             Some("dts") => probe_dts_track(&self.buffer, track),
             Some("unknown") if self.kind == TrackKind::Audio => {
-                probe_unknown_audio_track(&self.buffer, track)
+                probe_unknown_audio_track(&self.buffer, track);
+                // Identification establishes the codec, not completion of its
+                // metadata. Continue with that codec's bounded sampling rules.
+                if track
+                    .codec_name
+                    .as_deref()
+                    .is_some_and(|name| name != "unknown")
+                {
+                    self.codec_name.clone_from(&track.codec_name);
+                }
             }
             _ => {}
         }
@@ -2443,12 +2452,19 @@ mod tests {
 
     #[test]
     fn short_aac_samples_are_estimated_only_when_enrichment_finishes() {
-        for (frames, exhausted) in [(1, false), (16, false), (16, true)] {
+        for (codec, frames, exhausted) in [
+            ("aac", 1, false),
+            ("aac", 16, false),
+            ("aac", 16, true),
+            ("unknown", 1, false),
+            ("unknown", 16, false),
+            ("unknown", 16, true),
+        ] {
             let mut track = RawTrack {
-                codec_name: Some("aac".into()),
+                codec_name: Some(codec.into()),
                 ..Default::default()
             };
-            let mut state = TsStreamProbeState::new(0, TrackKind::Audio, Some("aac".into()));
+            let mut state = TsStreamProbeState::new(0, TrackKind::Audio, Some(codec.into()));
             state.push_payload(
                 &[0xFF, 0xF1, 0x50, 0x80, 0x00, 0xFF, 0xFC].repeat(frames),
                 &mut track,
@@ -2458,6 +2474,7 @@ mod tests {
                 "continue collecting toward the regular 128-frame target"
             );
             assert!(track.metadata.estimated_bitrate_bps.is_none());
+            assert_eq!(state.codec_name.as_deref(), Some("aac"));
             state.finish(&mut track, exhausted);
             assert_eq!(
                 track.metadata.estimated_bitrate_bps,
