@@ -12,6 +12,7 @@ import {
   SettingsMaintenanceRulesSection,
   type MaintenanceLibraryOption,
   type MaintenanceQualityProfileOption,
+  type MaintenanceStorageRootOption,
 } from "@/components/views/settings/settings-maintenance-rules-section";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -138,6 +139,7 @@ export function SettingsMaintenanceRulesContainer({
     MaintenanceActionDescriptor[]
   >([]);
   const [libraries, setLibraries] = useState<MaintenanceLibraryOption[]>([]);
+  const [storageRoots, setStorageRoots] = useState<MaintenanceStorageRootOption[]>([]);
   const [qualityProfiles, setQualityProfiles] = useState<
     MaintenanceQualityProfileOption[]
   >([]);
@@ -295,6 +297,7 @@ export function SettingsMaintenanceRulesContainer({
         description: t(template.descriptionKey),
         regoSource: template.regoSource,
         actionKind: template.actionKind,
+        subjectKind: template.subjectKind ?? "TITLE",
         targetQualityProfileId: template.targetQualityProfileId ?? "",
         tags: [...(template.tags ?? [])],
         graceDays: template.graceDays,
@@ -389,12 +392,27 @@ export function SettingsMaintenanceRulesContainer({
         setActionDescriptors(descriptors.data?.maintenanceActionDescriptors ?? []);
       }
       if (!libraryList.error) {
+        const catalogLibraries = libraryList.data?.libraries ?? [];
         setLibraries(
-          (libraryList.data?.libraries ?? []).map(
+          catalogLibraries.map(
             (library: { id: string; name: string }) => ({
               id: library.id,
               name: library.name,
             }),
+          ),
+        );
+        setStorageRoots(
+          catalogLibraries.flatMap(
+            (library: {
+              id: string;
+              name: string;
+              roots?: { id: string; path: string }[];
+            }) =>
+              (library.roots ?? []).map((root) => ({
+                id: root.id,
+                path: root.path,
+                libraryName: library.name,
+              })),
           ),
         );
       }
@@ -1120,6 +1138,7 @@ export function SettingsMaintenanceRulesContainer({
         ruleSetRecords={ruleSetRecords}
         actionDescriptors={actionDescriptors}
         libraries={libraries}
+        storageRoots={storageRoots}
         qualityProfiles={qualityProfiles}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}

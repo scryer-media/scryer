@@ -27,7 +27,7 @@ const ACTION_KINDS: MaintenanceActionKind[] = [
 ];
 
 test("the gallery ships every starter template exactly once", () => {
-  assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 13);
+  assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 15);
 
   const ids = MAINTENANCE_RULE_TEMPLATES.map((template) => template.id);
   assert.deepEqual([...new Set(ids)], ids);
@@ -111,7 +111,10 @@ test("a template never picks the quality profile the operator has to choose", ()
 
 test("every file-deleting template is marked and says so in its copy", () => {
   for (const template of MAINTENANCE_RULE_TEMPLATES) {
-    const deletesFiles = template.actionKind === "DELETE_TITLE_AND_FILES";
+    const deletesFiles = [
+      "DELETE_TITLE_AND_FILES",
+      "UNMONITOR_SCOPE_DELETE_FILES",
+    ].includes(template.actionKind);
     assert.equal(
       template.destructive === true,
       deletesFiles,
@@ -137,8 +140,23 @@ test("every file-deleting template is marked and says so in its copy", () => {
       "watched-by-every-requester",
       "expired-request-leases",
       "tagged-for-removal",
+      "keep-newest-three-downloaded-episodes",
+      "keep-newest-two-downloaded-seasons",
     ],
   );
+});
+
+test("retention examples use the rank for their exact scope", () => {
+  const episodes = MAINTENANCE_RULE_TEMPLATES.find(
+    (template) => template.id === "keep-newest-three-downloaded-episodes",
+  );
+  const seasons = MAINTENANCE_RULE_TEMPLATES.find(
+    (template) => template.id === "keep-newest-two-downloaded-seasons",
+  );
+  assert.equal(episodes?.subjectKind, "EPISODE");
+  assert.match(episodes?.regoSource ?? "", /episode_position_by_air_date > 3/);
+  assert.equal(seasons?.subjectKind, "SEASON");
+  assert.match(seasons?.regoSource ?? "", /season_position_by_air_date > 2/);
 });
 
 test("every template key resolves in the default locale and in Russian", () => {

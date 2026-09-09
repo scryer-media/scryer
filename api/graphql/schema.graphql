@@ -2003,6 +2003,11 @@ input CreateMaintenanceRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	"""
+	Configured library root whose capacity and owned files this revision
+	uses. Required when the matcher reads a storage fact.
+	"""
+	storageRootId: String
 }
 
 """
@@ -11436,6 +11441,11 @@ type MaintenanceActionDescriptor {
 	Whether configuring the action requires at least one title tag.
 	"""
 	requiresTags: Boolean!
+	"""
+	Whether this action remains valid when a configured storage root limits
+	the files it may affect.
+	"""
+	supportsStorageScope: Boolean!
 }
 
 """
@@ -12068,6 +12078,16 @@ type MaintenancePreviewTitle {
 	"""
 	totalSizeBytes: Int!
 	"""
+	Number of files eligible for deletion on the selected storage root, or
+	null when this matcher does not select a resolvable root.
+	"""
+	storageRootFileCount: Int
+	"""
+	Combined bytes eligible for deletion on the selected storage root, or
+	null when this matcher does not select a resolvable root.
+	"""
+	storageRootTotalSizeBytes: Int
+	"""
 	Subject scope: title, season, or episode.
 	"""
 	subjectKind: String!
@@ -12154,6 +12174,11 @@ type MaintenanceRuleRevision {
 	"""
 	graceDays: Int!
 	"""
+	Configured library root whose capacity and owned files this revision
+	uses, or null when it is not storage-scoped.
+	"""
+	storageRootId: String
+	"""
 	Hash of the exact stored source, used to attribute a decision to the
 	revision that produced it.
 	"""
@@ -12199,6 +12224,11 @@ type MaintenanceRuleSet {
 	How far this rule's effects are armed, independent of its mode.
 	"""
 	effectArming: MaintenanceEffectArming!
+	"""
+	This rule was disarmed because new show facts can change its destructive
+	title matches. Review the matcher and arm it again to acknowledge them.
+	"""
+	destructiveRearmRequired: Boolean!
 	"""
 	Libraries the rule is confined to. Empty means every library.
 	"""
@@ -18792,6 +18822,11 @@ input PreviewMaintenanceRuleInput {
 	Grace period for the unsaved draft; defaults to zero.
 	"""
 	graceDays: Int
+	"""
+	Configured library root for an unsaved matcher. Required when its
+	matcher reads a storage fact.
+	"""
+	storageRootId: String
 	"""
 	Optional exact subjects, requiring their owning `titleIds`.
 	"""
@@ -26907,6 +26942,11 @@ input UpdateMaintenanceRuleMatcherInput {
 	defaults to zero.
 	"""
 	graceDays: Int
+	"""
+	Configured library root. Omission preserves the current root, null
+	clears it, and a value replaces it.
+	"""
+	storageRootId: ID
 }
 
 """

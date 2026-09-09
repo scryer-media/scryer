@@ -33,6 +33,8 @@ mod maintenance_evaluation;
 mod maintenance_execution;
 mod maintenance_rules;
 mod maintenance_safety;
+mod maintenance_storage_execution;
+mod maintenance_title_completion;
 mod maintenance_watch_facts;
 mod media_analysis;
 mod media_requests;

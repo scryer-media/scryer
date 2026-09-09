@@ -1,4 +1,7 @@
-import type { MaintenanceActionKind } from "@/lib/types/maintenance-rule-sets";
+import type {
+  MaintenanceActionKind,
+  MaintenanceRuleScope,
+} from "@/lib/types/maintenance-rule-sets";
 
 /// Which kind of title a template was written for. The maintenance editor scopes
 /// a rule by library rather than by facet, so this is descriptive metadata the
@@ -22,6 +25,8 @@ export type MaintenanceRuleTemplate = {
   titleKey: string;
   descriptionKey: string;
   actionKind: MaintenanceActionKind;
+  /// The scope the example needs. Omitted examples remain title-scoped.
+  subjectKind?: MaintenanceRuleScope;
   /// Prefilled target profile for a profile-changing action. Left empty on
   /// every shipped template: which profile to move a title to is a choice only
   /// the operator can make, so the editor asks for it before the rule saves.
@@ -197,6 +202,32 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie", "show"],
     regoSource:
       "package rules\nimport rego.v1\n\nmatch if not input.facts.quality_profile_id\n",
+  },
+  {
+    id: "keep-newest-three-downloaded-episodes",
+    name: "keep_newest_three_downloaded_episodes",
+    titleKey: "settings.maintenanceTemplateNewestEpisodesTitle",
+    descriptionKey: "settings.maintenanceTemplateNewestEpisodesDescription",
+    actionKind: "UNMONITOR_SCOPE_DELETE_FILES",
+    subjectKind: "EPISODE",
+    graceDays: 7,
+    subjectFacets: ["show"],
+    destructive: true,
+    regoSource:
+      "package rules\nimport rego.v1\n\nmatch if input.facts.episode_position_by_air_date > 3\n",
+  },
+  {
+    id: "keep-newest-two-downloaded-seasons",
+    name: "keep_newest_two_downloaded_seasons",
+    titleKey: "settings.maintenanceTemplateNewestSeasonsTitle",
+    descriptionKey: "settings.maintenanceTemplateNewestSeasonsDescription",
+    actionKind: "UNMONITOR_SCOPE_DELETE_FILES",
+    subjectKind: "SEASON",
+    graceDays: 7,
+    subjectFacets: ["show"],
+    destructive: true,
+    regoSource:
+      "package rules\nimport rego.v1\n\nmatch if input.facts.season_position_by_air_date > 2\n",
   },
 ];
 

@@ -49,6 +49,7 @@ import {
   setMaintenanceRuleArmingInput,
   titleScopedActionDescriptors,
   scopedActionDescriptors,
+  storageScopedActionDescriptors,
   updateMaintenanceRuleMatcherInput,
   updateMaintenanceRuleMetadataInput,
 } from "./maintenance-rule-sets.ts";
@@ -64,6 +65,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     allowedRepeatModes: ["ONCE"],
     requiresTargetQualityProfile: false,
     requiresTags: false,
+    supportsStorageScope: true,
   },
   {
     kind: "DELETE_TITLE_AND_FILES",
@@ -75,6 +77,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     allowedRepeatModes: ["ONCE"],
     requiresTargetQualityProfile: false,
     requiresTags: false,
+    supportsStorageScope: false,
   },
   {
     kind: "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY",
@@ -86,6 +89,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     allowedRepeatModes: ["ONCE"],
     requiresTargetQualityProfile: false,
     requiresTags: false,
+    supportsStorageScope: false,
   },
   {
     kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
@@ -97,6 +101,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
     allowedRepeatModes: ["EVERY_RUN"],
     requiresTargetQualityProfile: true,
     requiresTags: false,
+    supportsStorageScope: false,
   },
 ];
 
@@ -108,6 +113,7 @@ const detail: MaintenanceRuleSetDetail = {
     enabled: false,
     evaluationMode: "DISABLED",
     effectArming: "NONE",
+    destructiveRearmRequired: false,
     libraryIds: ["lib-movies", "lib-series"],
     subjectKind: "TITLE",
     currentRevisionNumber: 3,
@@ -127,6 +133,7 @@ const detail: MaintenanceRuleSetDetail = {
     revisionNumber: 3,
     regoSource: "match if {\n\tinput.facts.has_file\n}\n",
     graceDays: 14,
+    storageRootId: null,
     matcherContentHash: "blake3:abcdef",
     createdBy: "operator",
     createdAt: "2026-01-02T00:00:00Z",
@@ -213,6 +220,7 @@ test("a tag action sends normalized, deduplicated labels and nothing else", () =
       allowedRepeatModes: ["ensure_state"],
       requiresTargetQualityProfile: false,
       requiresTags: true,
+      supportsStorageScope: false,
     },
   ];
   const draft = {
@@ -257,6 +265,7 @@ test("the tag actions are offerable for a title rule", () => {
       allowedRepeatModes: ["ensure_state"],
       requiresTargetQualityProfile: false,
       requiresTags: true,
+      supportsStorageScope: false,
     },
   ];
   assert.equal(
@@ -277,6 +286,7 @@ test("matcher and metadata updates split along the API's versioned and unversion
     "graceDays",
     "id",
     "regoSource",
+    "storageRootId",
   ]);
   assert.deepEqual(Object.keys(metadata).sort(), [
     "description",
@@ -284,6 +294,34 @@ test("matcher and metadata updates split along the API's versioned and unversion
     "libraryIds",
     "name",
   ]);
+});
+
+test("a selected root follows create, update, and inline preview inputs", () => {
+  const draft = {
+    ...maintenanceRuleDraftFromDetail(detail),
+    storageRootId: "root-a",
+  };
+
+  assert.equal(
+    createMaintenanceRuleSetInput(draft, descriptors).storageRootId,
+    "root-a",
+  );
+  assert.equal(
+    updateMaintenanceRuleMatcherInput("rule-1", draft, descriptors).storageRootId,
+    "root-a",
+  );
+  assert.equal(
+    maintenancePreviewInput({ draft, descriptors }).storageRootId,
+    "root-a",
+  );
+  assert.equal(
+    updateMaintenanceRuleMatcherInput(
+      "rule-1",
+      maintenanceRuleDraftFromDetail(detail),
+      descriptors,
+    ).storageRootId,
+    null,
+  );
 });
 
 test("only descriptors that support a movie or a show are offerable for a title rule", () => {
@@ -300,17 +338,12 @@ test("only descriptors that support a movie or a show are offerable for a title 
   );
 });
 
-test("an action the backend's title executor cannot run is never offered", () => {
-  // Its descriptor says SHOW, so the subject filter alone would offer it — and
-  // the API would then refuse to save the rule, leaving the operator with a
-  // validation error and nothing to do about it. Mirrors
-  // EXECUTABLE_TITLE_RULE_ACTIONS in
-  // crates/scryer-application/src/maintenance_rules/action_execution.rs.
-  const withShowDelete: MaintenanceActionDescriptor[] = [
+test("a selected storage root follows the server's action capability", () => {
+  const withRootFileOnly: MaintenanceActionDescriptor[] = [
     ...descriptors,
     {
       kind: "UNMONITOR_TITLE_DELETE_ALL_FILES",
-      supportedRuleScopes: [],
+      supportedRuleScopes: ["TITLE"],
       supportedSubjects: ["MOVIE", "SHOW"],
       riskClass: "HIGH",
       effectClasses: ["DELETE_FILES"],
@@ -318,6 +351,43 @@ test("an action the backend's title executor cannot run is never offered", () =>
       allowedRepeatModes: ["ONCE"],
       requiresTargetQualityProfile: false,
       requiresTags: false,
+      supportsStorageScope: true,
+    },
+  ];
+  assert.deepEqual(
+    storageScopedActionDescriptors(withRootFileOnly, "TITLE", "root-a").map(
+      (descriptor) => descriptor.kind,
+    ),
+    ["DO_NOTHING", "UNMONITOR_TITLE_DELETE_ALL_FILES"],
+  );
+  assert.deepEqual(
+    storageScopedActionDescriptors(descriptors, "TITLE", "").map(
+      (descriptor) => descriptor.kind,
+    ),
+    [
+      "DO_NOTHING",
+      "DELETE_TITLE_AND_FILES",
+      "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+    ],
+  );
+});
+
+test("title file-only deletion is offered while show-only legacy deletion remains hidden", () => {
+  // Mirrors EXECUTABLE_TITLE_RULE_ACTIONS in
+  // crates/scryer-application/src/maintenance_rules/action_execution.rs.
+  const withShowDelete: MaintenanceActionDescriptor[] = [
+    ...descriptors,
+    {
+      kind: "UNMONITOR_TITLE_DELETE_ALL_FILES",
+      supportedRuleScopes: ["TITLE"],
+      supportedSubjects: ["MOVIE", "SHOW"],
+      riskClass: "HIGH",
+      effectClasses: ["DELETE_FILES"],
+      timingMode: "GRACE",
+      allowedRepeatModes: ["ONCE"],
+      requiresTargetQualityProfile: false,
+      requiresTags: false,
+      supportsStorageScope: true,
     },
     {
       kind: "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
@@ -329,6 +399,7 @@ test("an action the backend's title executor cannot run is never offered", () =>
       allowedRepeatModes: ["ONCE"],
       requiresTargetQualityProfile: false,
       requiresTags: false,
+      supportsStorageScope: false,
     },
   ];
 
@@ -343,6 +414,7 @@ test("an action the backend's title executor cannot run is never offered", () =>
     "DO_NOTHING",
     "DELETE_TITLE_AND_FILES",
     "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+    "UNMONITOR_TITLE_DELETE_ALL_FILES",
   ]);
 });
 

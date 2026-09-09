@@ -24,6 +24,7 @@ scryer-infrastructure-workflow = { path = "../scryer-infrastructure-workflow" }
 scryer-logging = { path = "../scryer-logging" }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-plugins = { path = "../scryer-plugins" }
+scryer-rules = { path = "../scryer-rules" }
 scryer-runtime-info = { path = "../scryer-runtime-info" }
 async-graphql = { workspace = true }
 async-graphql-axum = { version = "7.2" }
@@ -59,7 +60,6 @@ webauthn-rs = { workspace = true }
 url = "2"
 
 [dev-dependencies]
-scryer-rules = { path = "../scryer-rules" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }

@@ -31,6 +31,7 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 enabled: false,
                 evaluation_mode: MaintenanceEvaluationMode::Disabled,
                 effect_arming: scryer_domain::MaintenanceEffectArming::None,
+                destructive_rearm_required: false,
                 library_ids: Vec::new(),
                 subject_kind: MaintenanceRuleSubjectKind::Title,
                 current_revision_number: 1,
@@ -45,6 +46,7 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#
                     .to_string(),
                 grace_days: 7,
+                storage_root_id: None,
                 matcher_content_hash: "hash-1".to_string(),
                 created_by: None,
                 created_at: now,
@@ -920,6 +922,178 @@ async fn action_runs_append_finish_and_enforce_attempt_uniqueness() {
 }
 
 #[tokio::test]
+async fn storage_held_action_refund_rekeys_the_run_and_is_atomic() {
+    let (services, db) = temp_services("scryer_maintenance_held_action_refund").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    let mut row = candidate("cand-1", "rule-a", "title-1", 1);
+    row.action_kind = "unmonitor_scope_delete_files".to_string();
+    store.create_candidate(&row).await.expect("create");
+    assert!(
+        store
+            .transition_candidate_state(
+                &row.id,
+                MaintenanceCandidateState::Executing,
+                "execution_leased",
+                &[MaintenanceCandidateState::Observing],
+                now,
+            )
+            .await
+            .expect("lease")
+    );
+    store
+        .record_candidate_attempts(&row.id, 1, now)
+        .await
+        .expect("reserve attempt");
+
+    let running = scryer_domain::LifecycleActionRun {
+        id: "run-1".to_string(),
+        candidate_id: row.id.clone(),
+        rule_set_id: row.rule_set_id.clone(),
+        revision_number: row.revision_number,
+        title_id: row.title_id.clone(),
+        subject_id: row.subject_id.clone(),
+        subject_kind: row.subject_kind.clone(),
+        action_kind: row.action_kind.clone(),
+        match_generation: row.match_generation,
+        idempotency_key: "cand-1:1:delete".to_string(),
+        attempt: 1,
+        status: scryer_domain::LifecycleActionRunStatus::Running,
+        hold_reason: None,
+        error: None,
+        detail: r#"{"scoped_deletion":1,"files":[]}"#.to_string(),
+        started_at: now,
+        finished_at: None,
+        created_at: now,
+    };
+    store.start_action_run(&running).await.expect("start");
+
+    let mut held = running.clone();
+    held.status = scryer_domain::LifecycleActionRunStatus::Held;
+    held.idempotency_key = format!("hold:{}", held.id);
+    held.hold_reason = Some("storage_capacity_unavailable".to_string());
+    held.finished_at = Some(now + chrono::Duration::seconds(1));
+    assert!(
+        store
+            .finish_held_action_run_and_release_attempt(&held, 1)
+            .await
+            .expect("finish held and refund")
+    );
+
+    let refunded = store
+        .get_active_candidate("rule-a", "title-1")
+        .await
+        .expect("read")
+        .expect("candidate remains active");
+    assert_eq!(refunded.state, MaintenanceCandidateState::Blocked);
+    assert_eq!(refunded.action_attempts, 0);
+    assert_eq!(
+        store
+            .latest_scoped_deletion_action_run(&row.id, 1, &row.action_kind)
+            .await
+            .expect("checkpoint")
+            .expect("held checkpoint")
+            .id,
+        held.id,
+        "the rekeyed hold retains durable checkpoint evidence"
+    );
+    assert!(
+        !store
+            .finish_held_action_run_and_release_attempt(&held, 1)
+            .await
+            .expect("second finish is a compare-and-set miss"),
+        "a repeated hold must not refund twice"
+    );
+
+    // Releasing the original execution key makes its same attempt reusable.
+    assert!(
+        store
+            .transition_candidate_state(
+                &row.id,
+                MaintenanceCandidateState::Executing,
+                "execution_leased",
+                &[MaintenanceCandidateState::Blocked],
+                now + chrono::Duration::seconds(2),
+            )
+            .await
+            .expect("re-lease")
+    );
+    store
+        .record_candidate_attempts(&row.id, 1, now + chrono::Duration::seconds(2))
+        .await
+        .expect("reserve same attempt again");
+    let mut retry = running.clone();
+    retry.id = "run-2".to_string();
+    retry.started_at = now + chrono::Duration::seconds(2);
+    retry.created_at = retry.started_at;
+    store
+        .start_action_run(&retry)
+        .await
+        .expect("same attempt and original execution key are reusable");
+
+    let mut wrong_generation = retry.clone();
+    wrong_generation.status = scryer_domain::LifecycleActionRunStatus::Held;
+    wrong_generation.match_generation = 2;
+    wrong_generation.idempotency_key = format!("hold:{}", wrong_generation.id);
+    wrong_generation.hold_reason = Some("storage_capacity_unavailable".to_string());
+    wrong_generation.finished_at = Some(now + chrono::Duration::seconds(3));
+    assert!(
+        !store
+            .finish_held_action_run_and_release_attempt(&wrong_generation, 1)
+            .await
+            .expect("wrong generation is a conditional miss")
+    );
+    let mut wrong_attempt = retry.clone();
+    wrong_attempt.status = scryer_domain::LifecycleActionRunStatus::Held;
+    wrong_attempt.attempt = 2;
+    wrong_attempt.idempotency_key = format!("hold:{}", wrong_attempt.id);
+    wrong_attempt.hold_reason = Some("storage_capacity_unavailable".to_string());
+    wrong_attempt.finished_at = Some(now + chrono::Duration::seconds(3));
+    assert!(
+        !store
+            .finish_held_action_run_and_release_attempt(&wrong_attempt, 2)
+            .await
+            .expect("wrong attempt is a conditional miss")
+    );
+    let unchanged = store
+        .get_active_candidate("rule-a", "title-1")
+        .await
+        .expect("read")
+        .expect("candidate remains active");
+    assert_eq!(unchanged.state, MaintenanceCandidateState::Executing);
+    assert_eq!(unchanged.action_attempts, 1);
+
+    let mut no_longer_running = retry.clone();
+    no_longer_running.status = scryer_domain::LifecycleActionRunStatus::Succeeded;
+    no_longer_running.finished_at = Some(now + chrono::Duration::seconds(4));
+    store
+        .finish_action_run(&no_longer_running)
+        .await
+        .expect("finish retry before synthetic hold");
+    no_longer_running.status = scryer_domain::LifecycleActionRunStatus::Held;
+    no_longer_running.idempotency_key = format!("hold:{}", no_longer_running.id);
+    no_longer_running.hold_reason = Some("storage_capacity_unavailable".to_string());
+    assert!(
+        store
+            .finish_held_action_run_and_release_attempt(&no_longer_running, 1)
+            .await
+            .is_err(),
+        "a non-running action row rolls back the candidate refund"
+    );
+    let rolled_back = store
+        .get_active_candidate("rule-a", "title-1")
+        .await
+        .expect("read")
+        .expect("candidate remains active");
+    assert_eq!(rolled_back.state, MaintenanceCandidateState::Executing);
+    assert_eq!(rolled_back.action_attempts, 1);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn maintenance_scoped_deletion_checkpoint_survives_unbounded_safety_holds() {
     let (services, db) = temp_services("scryer_maintenance_checkpoint_holds").await;
     seed_rule_set(&services, "rule-a").await;
@@ -974,7 +1148,7 @@ async fn maintenance_scoped_deletion_checkpoint_survives_unbounded_safety_holds(
     );
     assert_eq!(
         store
-            .latest_scoped_deletion_action_run("cand-1")
+            .latest_scoped_deletion_action_run("cand-1", 1, "unmonitor_scope_delete_files")
             .await
             .unwrap()
             .unwrap()
@@ -983,7 +1157,11 @@ async fn maintenance_scoped_deletion_checkpoint_survives_unbounded_safety_holds(
     );
     assert!(
         store
-            .latest_scoped_deletion_action_run("other-candidate")
+            .latest_scoped_deletion_action_run(
+                "other-candidate",
+                1,
+                "unmonitor_scope_delete_files",
+            )
             .await
             .unwrap()
             .is_none()

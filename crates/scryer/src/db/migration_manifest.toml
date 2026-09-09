@@ -2139,3 +2139,20 @@ kind = "sql"
 file = "postgres/migrations/0229_media_analysis_revision.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 230
+description = "maintenance storage root selection and destructive rearm review"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0230_maintenance_storage_roots.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0230_maintenance_storage_roots.sql"
+engine = "postgres"
+scope = "all"

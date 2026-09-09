@@ -193,6 +193,7 @@ fn draft(rego_source: &str) -> MaintenanceRuleDraft {
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
         grace_days: 0,
+        storage_root_id: None,
         library_ids: Vec::new(),
         evaluation_mode: None,
     }
@@ -269,6 +270,7 @@ fn inline_matcher(rego_source: &str) -> MaintenancePreviewMatcher {
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
         grace_days: 0,
+        storage_root_id: None,
     }
 }
 
@@ -721,6 +723,7 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
                     MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
+                storage_root_id: None,
             },
         )
         .await

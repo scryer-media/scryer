@@ -4528,6 +4528,11 @@ pub struct MaintenanceRuleSet {
     /// How far this rule's effects are armed, independent of its mode. The
     /// action handler requires both this and the instance effect gates.
     pub effect_arming: MaintenanceEffectArming,
+    /// Set only by the one-time compatibility migration when newly available
+    /// show facts could widen an already destructively armed title rule.
+    /// Operators must review and arm the rule again before it can execute.
+    #[serde(default)]
+    pub destructive_rearm_required: bool,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     pub subject_kind: MaintenanceRuleSubjectKind,
@@ -4556,6 +4561,10 @@ pub struct MaintenanceRuleRevision {
     /// that boundary rather than passing the raw text around.
     pub action_spec_json: String,
     pub grace_days: i64,
+    /// Configured library root whose capacity and owned files this revision
+    /// may read. `None` preserves the legacy root-agnostic behavior.
+    #[serde(default)]
+    pub storage_root_id: Option<String>,
     pub matcher_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,

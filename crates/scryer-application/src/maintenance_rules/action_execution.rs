@@ -43,7 +43,8 @@ use crate::maintenance_rules::action_catalog::{
 use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    QUALITY_PROFILE_TAG_PREFIX, build_subject_input, claim_is_live_at,
+    QUALITY_PROFILE_TAG_PREFIX, build_subject_input_with_completed_retention_episodes,
+    claim_is_live_at,
 };
 use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
@@ -114,6 +115,7 @@ const EXECUTOR_TERMINAL_EXPECTED_STATES: &[MaintenanceCandidateState] =
 pub const EXECUTABLE_TITLE_RULE_ACTIONS: &[MaintenanceActionKind] = &[
     MaintenanceActionKind::DoNothing,
     MaintenanceActionKind::UnmonitorScopeKeepFiles,
+    MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
     MaintenanceActionKind::DeleteTitleAndFiles,
     MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
     MaintenanceActionKind::AddTags,
@@ -133,6 +135,20 @@ pub fn supported_scope_actions(
             MaintenanceActionKind::UnmonitorScopeDeleteFiles,
         ],
     }
+}
+
+/// Actions which remain meaningful when a rule is constrained to files on one
+/// configured storage root. Whole-record deletion is intentionally absent:
+/// the root filter may retain files elsewhere, while deleting the record would
+/// make that retained media untracked.
+pub fn supports_storage_scope(kind: MaintenanceActionKind) -> bool {
+    matches!(
+        kind,
+        MaintenanceActionKind::DoNothing
+            | MaintenanceActionKind::UnmonitorScopeKeepFiles
+            | MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
+            | MaintenanceActionKind::UnmonitorScopeDeleteFiles
+    )
 }
 
 /// The refusal both the authoring check and the executor's rejection arm speak,
@@ -162,6 +178,9 @@ pub mod execution_reason {
     pub const ACTIVE_ACQUISITION: &str = "active_acquisition";
     /// Acquisition activity could not be ruled out.
     pub const ACQUISITION_UNKNOWN: &str = "acquisition_unknown";
+    /// A storage-pressure deletion owns the conservative global filesystem
+    /// guard. This is a hold because another worker will release it.
+    pub const STORAGE_DELETION_IN_PROGRESS: &str = "storage_deletion_in_progress";
     /// The action needs an application seam that does not exist yet
     /// (`unmonitor_title_delete_all_files`'s title-preserving file deletion).
     pub const ACTION_NOT_FULLY_SUPPORTED: &str = "action_not_fully_supported";
@@ -235,7 +254,7 @@ enum CandidateOutcome {
 }
 
 /// What the pre-execution safety rechecks decided.
-enum SafetyDecision {
+pub(super) enum SafetyDecision {
     /// Act on this title, which every check has just seen fresh.
     Proceed(Box<Title>, Box<scryer_rules::maintenance::MaintenanceInput>),
     /// Refuse and block the candidate with this reason.
@@ -248,8 +267,25 @@ enum SafetyDecision {
 
 /// What an action implementation reports back.
 pub(super) enum ActionResult {
-    Executed { detail: serde_json::Value },
-    AlreadySatisfied { detail: serde_json::Value },
+    Executed {
+        detail: serde_json::Value,
+    },
+    AlreadySatisfied {
+        detail: serde_json::Value,
+    },
+    /// A storage-pressure matcher stopped matching after one or more files.
+    /// The resulting terminal cancellation lets a future match start a new
+    /// generation and grace period.
+    Canceled {
+        reason: &'static str,
+        detail: serde_json::Value,
+    },
+    /// Capacity or another live execution fact became unknown after work had
+    /// started. Keep the journal and remaining manifest for a later recheck.
+    Held {
+        reason: &'static str,
+        detail: serde_json::Value,
+    },
 }
 
 // ── Arming ──────────────────────────────────────────────────────────────────
@@ -501,6 +537,14 @@ impl AppUseCase {
                 continue;
             };
             let descriptor = descriptor_for(kind);
+            if detail.revision.storage_root_id.is_some() && !supports_storage_scope(kind) {
+                warn!(
+                    rule_set_id = detail.rule_set.id.as_str(),
+                    action_kind = detail.revision_action_kind(),
+                    "skipping storage-root maintenance rule with unsupported action"
+                );
+                continue;
+            }
             if descriptor.timing_mode == MaintenanceTimingMode::MembershipTracking {
                 // do_nothing tracks membership; nothing ever becomes due.
                 continue;
@@ -509,6 +553,7 @@ impl AppUseCase {
             let eligible = if high_risk {
                 gates.destructive_effects_enabled
                     && detail.rule_set.effect_arming == MaintenanceEffectArming::Destructive
+                    && !detail.rule_set.destructive_rearm_required
             } else {
                 gates.reversible_effects_enabled
                     && detail.rule_set.effect_arming != MaintenanceEffectArming::None
@@ -897,7 +942,17 @@ impl AppUseCase {
             }
             SafetyDecision::Proceed(title, input) => {
                 match self
-                    .execute_maintenance_action(detail, kind, &candidate, &title, &input, &mut run)
+                    .execute_maintenance_action(
+                        detail,
+                        kind,
+                        &candidate,
+                        &title,
+                        &input,
+                        &mut run,
+                        evaluator,
+                        libraries,
+                        tag_conflicts,
+                    )
                     .await
                 {
                     Ok(ActionResult::Executed { detail: evidence }) => {
@@ -932,6 +987,42 @@ impl AppUseCase {
                             .await?
                         {
                             CandidateOutcome::AlreadySatisfied
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                    Ok(ActionResult::Canceled {
+                        reason,
+                        detail: evidence,
+                    }) => {
+                        run.status = LifecycleActionRunStatus::Held;
+                        run.hold_reason = Some(reason.to_string());
+                        run.detail = evidence.to_string();
+                        run.finished_at = Some(Utc::now());
+                        candidates.finish_action_run(&run).await?;
+                        if self
+                            .finish_maintenance_candidate(
+                                &candidate.id,
+                                MaintenanceCandidateState::Canceled,
+                                reason,
+                            )
+                            .await?
+                        {
+                            CandidateOutcome::Canceled
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                    Ok(ActionResult::Held {
+                        reason,
+                        detail: evidence,
+                    }) => {
+                        run.detail = evidence.to_string();
+                        if self
+                            .finish_candidate_hold_and_release_attempt(&mut run, attempt, reason)
+                            .await?
+                        {
+                            CandidateOutcome::Held
                         } else {
                             CandidateOutcome::LeaseLost
                         }
@@ -991,6 +1082,27 @@ impl AppUseCase {
         run.finished_at = Some(Utc::now());
         candidates.finish_action_run(run).await?;
         self.finish_maintenance_candidate(&candidate.id, MaintenanceCandidateState::Blocked, reason)
+            .await
+    }
+
+    /// A storage or guard hold happens after the attempt was reserved. Make the
+    /// held action evidence and refund inseparable: a crash before this write
+    /// retains the conservative reservation, while a completed hold leaves the
+    /// same attempt number available for a later recovered evaluation.
+    async fn finish_candidate_hold_and_release_attempt(
+        &self,
+        run: &mut LifecycleActionRun,
+        expected_attempt: i64,
+        reason: &'static str,
+    ) -> AppResult<bool> {
+        run.status = LifecycleActionRunStatus::Held;
+        run.hold_reason = Some(reason.to_string());
+        run.finished_at = Some(Utc::now());
+        run.idempotency_key = format!("hold:{}", run.id);
+        self.services
+            .customization
+            .maintenance_evaluation
+            .finish_held_action_run_and_release_attempt(run, expected_attempt)
             .await
     }
 
@@ -1061,7 +1173,7 @@ impl AppUseCase {
     /// matters: eligibility first so a disarmed rule never even re-evaluates,
     /// the matcher before the environment so "stopped matching" reads as a
     /// cancel rather than a hold, and the environment holds last.
-    async fn maintenance_execution_safety_checks(
+    pub(super) async fn maintenance_execution_safety_checks(
         &self,
         detail: &MaintenanceRuleSetDetail,
         evaluator: &mut MaintenanceRulesEvaluator,
@@ -1094,6 +1206,9 @@ impl AppUseCase {
         let Some(kind) = MaintenanceActionKind::parse_wire_str(&candidate.action_kind) else {
             return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
         };
+        if detail.revision.storage_root_id.is_some() && !supports_storage_scope(kind) {
+            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+        }
         let high_risk = descriptor_for(kind).risk_class == MaintenanceRiskClass::High;
         let still_eligible = fresh.enabled
             && fresh.evaluation_mode == MaintenanceEvaluationMode::Observe
@@ -1101,6 +1216,7 @@ impl AppUseCase {
             && if high_risk {
                 gates.destructive_effects_enabled
                     && fresh.effect_arming == MaintenanceEffectArming::Destructive
+                    && !fresh.destructive_rearm_required
             } else {
                 gates.reversible_effects_enabled
                     && fresh.effect_arming != MaintenanceEffectArming::None
@@ -1317,10 +1433,96 @@ impl AppUseCase {
         if subject.excluded_by(&title.id, &exclusions) {
             return SafetyDecision::Excluded;
         }
-        if high_risk && subject.ambiguous_files {
+        if high_risk && candidate.subject_kind != "title" && subject.ambiguous_files {
             return SafetyDecision::Hold("ambiguous_episode_file_coverage");
         }
-        let mut input = build_subject_input(
+        let deletion_checkpoint = if matches!(
+            kind,
+            MaintenanceActionKind::UnmonitorScopeDeleteFiles
+                | MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
+        ) {
+            match self
+                .maintenance_deletion_checkpoint(
+                    candidate,
+                    detail.revision.storage_root_id.as_deref(),
+                )
+                .await
+            {
+                Ok(checkpoint) => checkpoint,
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        } else {
+            None
+        };
+        // A storage-scoped rule's subject may move after its preview. Even
+        // unmonitor-and-keep-files changes the whole subject, so it must not
+        // run once no actual owned file remains on the selected root.
+        let mut storage_journal_cleanup_only = false;
+        if detail.revision.storage_root_id.is_some() {
+            let storage_owned_files = if candidate.subject_kind == "title" {
+                match self.maintenance_title_deletion_files(&title).await {
+                    Ok(files) => files,
+                    Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+                }
+            } else if subject.ambiguous_files {
+                return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+            } else {
+                subject.files.clone()
+            };
+            match self
+                .maintenance_root_file_summary(
+                    &storage_owned_files,
+                    detail.revision.storage_root_id.as_deref(),
+                )
+                .await
+            {
+                Ok(summary) if matches!(summary.file_count, Some(count) if count > 0) => {}
+                Ok(summary) => {
+                    let Some(checkpoint) = deletion_checkpoint.as_ref() else {
+                        return if matches!(summary.file_count, Some(0)) {
+                            SafetyDecision::Cancel(
+                                crate::maintenance_rules::evaluation::candidate_reason::OUT_OF_SCOPE,
+                            )
+                        } else {
+                            SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION)
+                        };
+                    };
+                    match self
+                        .maintenance_storage_checkpoint_can_resume(
+                            checkpoint,
+                            &storage_owned_files,
+                            detail.revision.storage_root_id.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(true) => match self
+                            .maintenance_storage_checkpoint_needs_catalog_cleanup(
+                                checkpoint,
+                                &storage_owned_files,
+                            )
+                            .await
+                        {
+                            Ok(cleanup_only) => storage_journal_cleanup_only = cleanup_only,
+                            Err(_) => {
+                                return SafetyDecision::Hold(
+                                    execution_reason::UNKNOWN_AT_EXECUTION,
+                                );
+                            }
+                        },
+                        Ok(false) | Err(_) => {
+                            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+                        }
+                    }
+                }
+                Err(_) => {
+                    return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+                }
+            }
+        }
+        let completed_retention_episode_ids = deletion_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.completed_retention_episode_ids());
+        let mut input = build_subject_input_with_completed_retention_episodes(
             recheck_time,
             &title,
             &library,
@@ -1332,13 +1534,31 @@ impl AppUseCase {
                 .get(&title.id)
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
+            completed_retention_episode_ids.as_ref(),
         );
-        if kind == MaintenanceActionKind::UnmonitorScopeDeleteFiles {
-            match self.maintenance_deletion_checkpoint(candidate).await {
-                Ok(Some(checkpoint)) => checkpoint.baseline.restore(&mut input),
-                Ok(None) => {}
-                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
-            }
+        // The capacity snapshot must be fresh for this lease. Baseline restore
+        // below deliberately excludes storage facts, so a resumed deletion
+        // cannot match against the capacity it observed before deleting.
+        if self
+            .populate_maintenance_storage_facts(
+                &mut input,
+                detail.revision.storage_root_id.as_deref(),
+            )
+            .await
+            .is_err()
+        {
+            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+        }
+        if detail.revision.storage_root_id.is_some()
+            && !matches!(
+                input.facts.storage_available_bytes,
+                scryer_rules::maintenance::Observation::Known { .. }
+            )
+        {
+            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+        }
+        if let Some(checkpoint) = deletion_checkpoint.as_ref() {
+            checkpoint.restore_baseline_if_started(&mut input);
         }
         let outcome = evaluator
             .evaluate(&input)
@@ -1346,9 +1566,12 @@ impl AppUseCase {
             .and_then(|result| result.records.first().map(|record| record.decision.outcome));
         match outcome {
             Some(MaintenanceOutcome::Match) => {}
-            Some(MaintenanceOutcome::NoMatch) => {
+            Some(MaintenanceOutcome::NoMatch) if !storage_journal_cleanup_only => {
                 return SafetyDecision::Cancel(execution_reason::NO_MATCH_AT_EXECUTION);
             }
+            // Every exact journal path is already absent. Continue only far
+            // enough to remove its stale media-file row and record progress.
+            Some(MaintenanceOutcome::NoMatch) => {}
             Some(MaintenanceOutcome::Unknown) | None => {
                 return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
             }
@@ -1388,6 +1611,9 @@ impl AppUseCase {
         title: &Title,
         input: &scryer_rules::maintenance::MaintenanceInput,
         run: &mut LifecycleActionRun,
+        evaluator: &mut MaintenanceRulesEvaluator,
+        libraries: &HashMap<String, MaintenanceLibraryRef>,
+        tag_conflicts: &HashSet<String>,
     ) -> AppResult<ActionResult> {
         let actor = User::system_execution_actor();
         match kind {
@@ -1444,15 +1670,20 @@ impl AppUseCase {
                     }),
                 })
             }
-            MaintenanceActionKind::UnmonitorTitleDeleteAllFiles => {
-                Err(AppError::Validation(format!(
-                    "{}: title-preserving file deletion is not implemented yet",
-                    execution_reason::ACTION_NOT_FULLY_SUPPORTED
-                )))
-            }
-            MaintenanceActionKind::UnmonitorScopeDeleteFiles => {
-                self.execute_scoped_maintenance_deletion(candidate, title, input, run)
-                    .await
+            MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
+            | MaintenanceActionKind::UnmonitorScopeDeleteFiles => {
+                self.execute_scoped_maintenance_deletion(
+                    candidate,
+                    title,
+                    input,
+                    run,
+                    detail.revision.storage_root_id.as_deref(),
+                    detail,
+                    evaluator,
+                    libraries,
+                    tag_conflicts,
+                )
+                .await
             }
             MaintenanceActionKind::UnmonitorShowDeleteExistingFiles
             | MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
@@ -1670,7 +1901,6 @@ mod tests {
     /// restated here literally. This list and that arm are edited together; the
     /// test below is what makes a one-sided edit fail.
     const EXECUTOR_REJECTION_ARM_KINDS: &[MaintenanceActionKind] = &[
-        MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
         MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
         MaintenanceActionKind::UnmonitorScopeDeleteFiles,
         MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty,

@@ -6770,11 +6770,30 @@ pub trait LifecycleActionRunRepository: Send + Sync {
     /// Write the attempt's terminal status, hold reason, error, and detail.
     async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
 
-    /// The newest durable scoped-deletion checkpoint, independently of the
-    /// number of later safety holds in the candidate's history.
+    /// Finish a storage-held running attempt and return its reservation in one
+    /// transaction. The release succeeds only while this exact generation,
+    /// action, attempt, and execution lease still belong to the candidate.
+    ///
+    /// Storage capacity and the filesystem guard are environmental holds, not
+    /// failures. Releasing their reservation avoids consuming retry budget or
+    /// colliding with the next attempt's execution idempotency key.
+    async fn finish_held_action_run_and_release_attempt(
+        &self,
+        run: &scryer_domain::LifecycleActionRun,
+        expected_attempt: i64,
+    ) -> AppResult<bool>;
+
+    /// The newest durable policy-deletion checkpoint for this exact candidate
+    /// generation and action, independently of later safety holds.
+    ///
+    /// A candidate can match again after a partial deletion was cancelled.
+    /// That later generation must create a new preview and grace period rather
+    /// than inheriting an old manifest.
     async fn latest_scoped_deletion_action_run(
         &self,
         candidate_id: &str,
+        match_generation: i64,
+        action_kind: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleActionRun>>;
 
     /// Newest first, optionally narrowed by rule set and/or candidate.

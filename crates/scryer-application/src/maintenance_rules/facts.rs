@@ -17,7 +17,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use scryer_domain::{
-    LifecycleClaim, LifecycleClaimKind, LifecycleClaimState, MediaFacet, Title, UserMediaSignal,
+    LifecycleClaim, LifecycleClaimKind, LifecycleClaimState, MaintenanceRuleSubjectKind as Scope,
+    MediaFacet, Title, UserMediaSignal,
 };
 use scryer_rules::maintenance::{
     MAINTENANCE_INPUT_SCHEMA_VERSION, MaintenanceFactsDoc, MaintenanceFileDoc, MaintenanceInput,
@@ -41,9 +42,7 @@ pub mod unknown_reason {
     /// Scryer does not record this signal yet. Applies to `last_upgraded_at`
     /// (no distinct upgrade event exists — the newest file timestamp is a
     /// different fact and must not stand in for it), `active_downloads`
-    /// (download-state wiring is out of scope for the foundation wave), and the
-    /// three episode counts for series-facet titles (only per-title episode
-    /// queries exist, so a preview over 50 titles would fan out).
+    /// (download-state wiring is out of scope for the foundation wave).
     pub const NOT_YET_COLLECTED: &str = "not_yet_collected";
 
     /// The title has files, but none of their rows carry a parseable
@@ -61,12 +60,33 @@ pub mod unknown_reason {
     /// is held rather than told the wrong one.
     pub const USER_NOT_FOUND: &str = "user_not_found";
 
-    /// Watch signals are recorded per movie and per episode, never per show
-    /// (RFC 137 "Normalized observation model"). A series- or anime-facet title
-    /// therefore has no watch answer at all in this MVP, and a silent `false`
-    /// would let "delete what nobody watched" fire on every show in the
-    /// library.
+    /// Watch signals are recorded per movie and per episode, never per show.
+    /// A caller that bypasses the scoped builder has no complete show inventory
+    /// to intersect, and a silent `false` would let "delete what nobody
+    /// watched" fire on every show in the library.
     pub const SHOW_WATCH_ROLLUP_UNAVAILABLE: &str = "show_watch_rollup_unavailable";
+
+    /// A whole-show or season completion set cannot be determined because at
+    /// least one episode has no parseable air date.
+    pub const EPISODE_AIR_DATE_UNRESOLVED: &str = "episode_air_date_unresolved";
+
+    /// The media-server snapshot contains no row for an aired episode. That is
+    /// not the same as an explicitly unplayed row, so completion must hold.
+    pub const EPISODE_WATCH_HISTORY_MISSING: &str = "episode_watch_history_missing";
+
+    /// A played episode lacks a timestamp. `last_watched_at` is informative,
+    /// never a synthetic completion timestamp, and therefore stays unknown.
+    pub const EPISODE_PLAY_TIME_MISSING: &str = "episode_play_time_missing";
+
+    /// A requested episode/season rank cannot be proven from current eligible
+    /// downloaded coverage. This includes missing, unreadable, shared, future,
+    /// special, and unresolved-air-date episodes. Unknown keeps a negated rank
+    /// matcher from treating a missing rank as deletion permission.
+    pub const RETENTION_RANK_UNAVAILABLE: &str = "retention_rank_unavailable";
+
+    /// A media-file path could not be inspected, so an episode download count
+    /// cannot honestly say how many episode files are present.
+    pub const EPISODE_FILE_COVERAGE_UNRESOLVED: &str = "episode_file_coverage_unresolved";
 
     /// No enabled media-server connection of a signal-sync provider exists, so
     /// nothing could have reported a play. Distinct from "nobody watched it".
@@ -363,6 +383,12 @@ fn build_facts(
         episode_count: episode_count_observation(&title.facet),
         episode_file_count: episode_count_observation(&title.facet),
         monitored_episode_count: episode_count_observation(&title.facet),
+        episode_position_by_air_date: Observation::unknown(
+            unknown_reason::RETENTION_RANK_UNAVAILABLE,
+        ),
+        season_position_by_air_date: Observation::unknown(
+            unknown_reason::RETENTION_RANK_UNAVAILABLE,
+        ),
         active_downloads: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         watched_by_user_ids: watched.watched_by_user_ids,
         last_watched_at: watched.last_watched_at,
@@ -373,6 +399,13 @@ fn build_facts(
         request_lease_expires_at: claim_facts.request_lease_expires_at,
         active_retention_claims: claim_facts.active_retention_claims,
         series_movies: series_movies_observation(&title.facet, series_movies),
+        // Storage facts are populated only when a rule selected one configured
+        // root. Until that storage context is applied they are confirmed absent
+        // rather than a made-up capacity value.
+        storage_root_id: Observation::absent(),
+        storage_available_bytes: Observation::absent(),
+        storage_total_bytes: Observation::absent(),
+        storage_available_percent: Observation::absent(),
     }
 }
 
@@ -826,7 +859,34 @@ pub(crate) fn build_subject_input(
     claims: MaintenanceTitleClaims<'_>,
     series_movies: &[MaintenanceSeriesMovieDoc],
 ) -> MaintenanceInput {
-    use scryer_domain::MaintenanceRuleSubjectKind as Scope;
+    build_subject_input_with_completed_retention_episodes(
+        evaluation_time,
+        title,
+        library,
+        subject,
+        people,
+        watch,
+        claims,
+        series_movies,
+        None,
+    )
+}
+
+/// Build a fresh fact snapshot with only this candidate's completed deletion
+/// coverage overlaid for retention ranks. The overlay never replaces live
+/// inventory, so concurrent imports and other candidates stay visible.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_subject_input_with_completed_retention_episodes(
+    evaluation_time: DateTime<Utc>,
+    title: &Title,
+    library: &MaintenanceLibraryRef,
+    subject: &super::subjects::MaintenanceSubject,
+    people: MaintenanceTitlePeople<'_>,
+    watch: MaintenanceTitleWatch<'_>,
+    claims: MaintenanceTitleClaims<'_>,
+    series_movies: &[MaintenanceSeriesMovieDoc],
+    completed_retention_episode_ids: Option<&BTreeSet<String>>,
+) -> MaintenanceInput {
     let mut input = build_title_input(
         evaluation_time,
         title,
@@ -837,57 +897,109 @@ pub(crate) fn build_subject_input(
         claims,
         series_movies,
     );
-    if subject.kind == Scope::Title {
-        return input;
+    if subject.kind != Scope::Title {
+        input.subject.kind = match subject.kind {
+            Scope::Season => MaintenanceSubjectKind::Season,
+            Scope::Episode => MaintenanceSubjectKind::Episode,
+            Scope::Title => unreachable!(),
+        };
+        input.subject.season_number = subject
+            .collection
+            .as_ref()
+            .and_then(|collection| collection.collection_index.parse().ok())
+            .or_else(|| {
+                subject
+                    .episodes
+                    .first()
+                    .and_then(|episode| episode.season_number.as_ref()?.parse().ok())
+            });
+        input.subject.subject_id = subject.id.clone();
+        input.subject.collection_id = subject
+            .collection
+            .as_ref()
+            .map(|collection| collection.id.clone());
+        input.subject.episode_id = (subject.kind == Scope::Episode).then(|| subject.id.clone());
+        input.subject.name = subject.label.clone();
     }
-    input.subject.kind = match subject.kind {
-        Scope::Season => MaintenanceSubjectKind::Season,
-        Scope::Episode => MaintenanceSubjectKind::Episode,
-        Scope::Title => unreachable!(),
-    };
-    input.subject.season_number = subject
-        .collection
-        .as_ref()
-        .and_then(|collection| collection.collection_index.parse().ok())
-        .or_else(|| {
-            subject
-                .episodes
-                .first()
-                .and_then(|episode| episode.season_number.as_ref()?.parse().ok())
-        });
-    input.subject.subject_id = subject.id.clone();
-    input.subject.collection_id = subject
-        .collection
-        .as_ref()
-        .map(|collection| collection.id.clone());
-    input.subject.episode_id = (subject.kind == Scope::Episode).then(|| subject.id.clone());
-    input.subject.name = subject.label.clone();
     input.facts.monitored = Observation::known(subject.monitored);
     if let Some(created_at) = subject
         .collection
         .as_ref()
         .filter(|_| subject.kind == Scope::Season)
         .map(|collection| collection.created_at)
-        .or_else(|| subject.episodes.first().map(|episode| episode.created_at))
+        .or_else(|| {
+            (subject.kind == Scope::Episode)
+                .then(|| subject.episodes.first().map(|episode| episode.created_at))
+                .flatten()
+        })
     {
         input.facts.added_at = Observation::known(created_at.to_rfc3339());
     }
-    input.facts.episode_count = Observation::known(subject.episodes.len() as i64);
-    input.facts.monitored_episode_count = Observation::known(
-        subject
-            .episodes
-            .iter()
-            .filter(|episode| episode.monitored)
-            .count() as i64,
-    );
-    input.facts.episode_file_count = Observation::known(subject.episode_file_count);
-    let watched =
-        scoped_watch_observations(evaluation_time, subject, people.requester_user_ids, watch);
-    input.facts.watched_by_user_ids = watched.watched_by_user_ids;
-    input.facts.last_watched_at = watched.last_watched_at;
-    input.facts.watched_by_any_requester = watched.watched_by_any_requester;
-    input.facts.watched_by_all_requesters = watched.watched_by_all_requesters;
+    let has_episode_inventory = subject.kind != Scope::Title
+        || matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
+    if has_episode_inventory {
+        input.facts.episode_count = Observation::known(subject.episodes.len() as i64);
+        input.facts.monitored_episode_count = Observation::known(
+            subject
+                .episodes
+                .iter()
+                .filter(|episode| episode.monitored)
+                .count() as i64,
+        );
+        input.facts.episode_file_count = if subject.episode_file_count_unresolved {
+            Observation::unknown(unknown_reason::EPISODE_FILE_COVERAGE_UNRESOLVED)
+        } else {
+            Observation::known(subject.episode_file_count)
+        };
+        let watched =
+            scoped_watch_observations(evaluation_time, subject, people.requester_user_ids, watch);
+        input.facts.watched_by_user_ids = watched.watched_by_user_ids;
+        input.facts.last_watched_at = watched.last_watched_at;
+        input.facts.watched_by_any_requester = watched.watched_by_any_requester;
+        input.facts.watched_by_all_requesters = watched.watched_by_all_requesters;
+    }
+    let (episode_position_by_air_date, season_position_by_air_date) =
+        retention_rank_observations(evaluation_time, subject, completed_retention_episode_ids);
+    input.facts.episode_position_by_air_date = episode_position_by_air_date;
+    input.facts.season_position_by_air_date = season_position_by_air_date;
     input
+}
+
+fn retention_rank_observations(
+    evaluation_time: DateTime<Utc>,
+    subject: &super::subjects::MaintenanceSubject,
+    completed_retention_episode_ids: Option<&BTreeSet<String>>,
+) -> (Observation<i64>, Observation<i64>) {
+    let unavailable = || Observation::unknown(unknown_reason::RETENTION_RANK_UNAVAILABLE);
+    let Some(inventory) = subject.inventory.as_ref() else {
+        return (unavailable(), unavailable());
+    };
+    let ranks = completed_retention_episode_ids
+        .filter(|ids| !ids.is_empty())
+        .map(|ids| inventory.retention_ranks_with_completed_episode_coverage(evaluation_time, ids))
+        .unwrap_or_else(|| inventory.retention_ranks_at(evaluation_time));
+    match subject.kind {
+        Scope::Episode => (
+            ranks
+                .episode_positions
+                .get(&subject.id)
+                .copied()
+                .map_or_else(unavailable, Observation::known),
+            unavailable(),
+        ),
+        Scope::Season => (
+            unavailable(),
+            ranks
+                .season_positions
+                .get(&subject.id)
+                .copied()
+                .map_or_else(unavailable, Observation::known),
+        ),
+        // Title-scoped deletion has no singular episode or season rank. Hold a
+        // rank-reading policy instead of exposing an absent field it could
+        // negate into a destructive match.
+        Scope::Title => (unavailable(), unavailable()),
+    }
 }
 
 fn scoped_watch_observations(
@@ -901,16 +1013,20 @@ fn scoped_watch_observations(
     }
     let mut episodes = Vec::new();
     for episode in &subject.episodes {
-        if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Season {
+        if matches!(
+            subject.kind,
+            scryer_domain::MaintenanceRuleSubjectKind::Season
+                | scryer_domain::MaintenanceRuleSubjectKind::Title
+        ) {
             let Some(air_date) = episode.air_date.as_deref() else {
-                return WatchObservations::all_unknown("episode_air_date_unresolved");
+                return WatchObservations::all_unknown(unknown_reason::EPISODE_AIR_DATE_UNRESOLVED);
             };
             let aired = if let Some(instant) = parse_timestamp(air_date) {
                 instant <= evaluation_time
             } else if let Ok(date) = chrono::NaiveDate::parse_from_str(air_date, "%Y-%m-%d") {
                 date <= evaluation_time.date_naive()
             } else {
-                return WatchObservations::all_unknown("episode_air_date_unresolved");
+                return WatchObservations::all_unknown(unknown_reason::EPISODE_AIR_DATE_UNRESOLVED);
             };
             if !aired {
                 continue;
@@ -941,7 +1057,7 @@ fn scoped_watch_observations(
         // A catalog episode missing from the server's snapshot has no known
         // history. Explicit unplayed signals are confirmed absence instead.
         if signals.is_empty() {
-            return WatchObservations::all_unknown("episode_watch_history_missing");
+            return WatchObservations::all_unknown(unknown_reason::EPISODE_WATCH_HISTORY_MISSING);
         }
         let observed = watch_observations(
             &MediaFacet::Movie,
@@ -975,7 +1091,7 @@ fn scoped_watch_observations(
     WatchObservations {
         watched_by_user_ids: Observation::known(complete.into_iter().collect()),
         last_watched_at: if missing_play_time {
-            Observation::unknown("episode_play_time_missing")
+            Observation::unknown(unknown_reason::EPISODE_PLAY_TIME_MISSING)
         } else {
             latest.map_or_else(
                 || Observation::absent_because(unknown_reason::NEVER_WATCHED),
@@ -1844,7 +1960,9 @@ mod tests {
             collection: None,
             files: vec![],
             episode_file_count: 0,
+            episode_file_count_unresolved: false,
             ambiguous_files: false,
+            inventory: None,
             monitored: true,
             label: "Season 1".into(),
             episodes: dates
@@ -1881,6 +1999,123 @@ mod tests {
         row.scryer_episode_id = Some(format!("episode-{episode}"));
         row.kind = scryer_domain::MediaServerSignalKind::Episode;
         row
+    }
+
+    fn scoped_title(dates: &[Option<&str>]) -> super::super::subjects::MaintenanceSubject {
+        let mut subject = scoped_season(dates);
+        subject.kind = scryer_domain::MaintenanceRuleSubjectKind::Title;
+        subject.id = "title-1".into();
+        subject.label = "Title 1".into();
+        subject
+    }
+
+    #[test]
+    fn whole_show_watch_completion_requires_one_person_for_every_aired_episode() {
+        let mut subject =
+            scoped_title(&[Some("2024-01-01"), Some("2024-01-02"), Some("2099-01-01")]);
+        // The whole-show inventory intentionally has no files. Aired specials
+        // still participate in completion; future episodes do not.
+        subject.episodes[1].episode_type = scryer_domain::EpisodeType::Special;
+        let context = fresh_context(&["alice", "bob"]);
+        let requesters = vec!["alice".to_string()];
+        let mut signals = vec![
+            episode_signal(0, Some("alice"), true),
+            episode_signal(1, Some("bob"), true),
+        ];
+
+        let incomplete = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            Some(&requesters),
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+            },
+        );
+        assert!(matches!(
+            incomplete.watched_by_user_ids,
+            Observation::Known { value, .. } if value.is_empty()
+        ));
+        assert!(matches!(
+            incomplete.watched_by_all_requesters,
+            Observation::Known { value: false, .. }
+        ));
+
+        signals.push(episode_signal(1, Some("alice"), true));
+        let complete = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            Some(&requesters),
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+            },
+        );
+        assert!(matches!(
+            complete.watched_by_user_ids,
+            Observation::Known { value, .. } if value == vec!["alice"]
+        ));
+        assert!(matches!(
+            complete.watched_by_all_requesters,
+            Observation::Known { value: true, .. }
+        ));
+
+        let mut show = faceted_title(Some("alice"), MediaFacet::Series);
+        show.created_at = instant("2020-01-01T00:00:00Z");
+        let input = build_subject_input(
+            Utc::now(),
+            &show,
+            &library(),
+            &subject,
+            MaintenanceTitlePeople {
+                requester_user_ids: Some(&requesters),
+                usernames: &usernames(&[("alice", "Alice")]),
+            },
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+            },
+            MaintenanceTitleClaims::none(),
+            &[],
+        );
+        assert!(matches!(
+            input.facts.episode_count,
+            Observation::Known { value: 3, .. }
+        ));
+        assert!(matches!(
+            input.facts.episode_file_count,
+            Observation::Known { value: 0, .. }
+        ));
+        assert!(matches!(
+            input.facts.watched_by_all_requesters,
+            Observation::Known { value: true, .. }
+        ));
+        assert!(matches!(
+            input.facts.added_at,
+            Observation::Known { value, .. } if value == "2020-01-01T00:00:00+00:00"
+        ));
+    }
+
+    #[test]
+    fn whole_show_watch_completion_holds_for_an_unresolved_aired_inventory() {
+        let subject = scoped_title(&[Some("2024-01-01"), None]);
+        let context = fresh_context(&["alice"]);
+        let signals = vec![episode_signal(0, Some("alice"), true)];
+
+        let facts = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            None,
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&signals),
+            },
+        );
+        assert!(matches!(
+            facts.watched_by_user_ids,
+            Observation::Unknown { reason, .. }
+                if reason == unknown_reason::EPISODE_AIR_DATE_UNRESOLVED
+        ));
     }
 
     #[test]

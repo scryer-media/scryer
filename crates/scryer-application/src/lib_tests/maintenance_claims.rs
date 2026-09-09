@@ -134,6 +134,7 @@ fn draft(rego_source: &str, kind: MaintenanceActionKind) -> MaintenanceRuleDraft
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(kind),
         grace_days: 0,
+        storage_root_id: None,
         library_ids: Vec::new(),
         evaluation_mode: None,
     }
@@ -515,6 +516,7 @@ async fn preview_reads_the_same_claim_facts_as_the_pass() {
                         MaintenanceActionKind::DeleteTitleAndFiles,
                     ),
                     grace_days: 0,
+                    storage_root_id: None,
                 },
                 selection: MaintenancePreviewSelection::Titles(vec![
                     spared.id.clone(),

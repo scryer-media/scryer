@@ -31,6 +31,7 @@ use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
     build_subject_input,
 };
+use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
 use crate::maintenance_rules::{
     MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
 };
@@ -54,6 +55,17 @@ pub const MAINTENANCE_PREVIEW_DEFAULT_TITLES: usize = 20;
 /// policy and nowhere near the overflow.
 pub const MAINTENANCE_MAX_GRACE_DAYS: i64 = 3650;
 
+/// Facts whose semantics depend on one configured library root. A policy that
+/// reaches any of these must persist that root identity with its revision.
+const STORAGE_MAINTENANCE_FACTS: [&str; 4] = [
+    "storage_root_id",
+    "storage_available_bytes",
+    "storage_total_bytes",
+    "storage_available_percent",
+];
+
+const STORAGE_ROOT_MEMBERSHIP_UNAVAILABLE: &str = "storage_root_membership_unavailable";
+
 // ── Request models ──────────────────────────────────────────────────────────
 
 /// A new rule set plus its first matcher revision.
@@ -65,6 +77,8 @@ pub struct MaintenanceRuleDraft {
     pub rego_source: String,
     pub action_spec: MaintenanceActionSpec,
     pub grace_days: i64,
+    /// Configured root for storage-capacity facts and root-filtered deletion.
+    pub storage_root_id: Option<String>,
     /// Empty means every library.
     pub library_ids: Vec<String>,
     /// Only [`MaintenanceEvaluationMode::Disabled`] is accepted in this wave.
@@ -78,6 +92,9 @@ pub struct MaintenanceMatcherDraft {
     pub rego_source: String,
     pub action_spec: MaintenanceActionSpec,
     pub grace_days: i64,
+    /// `None` preserves the stored root for older GraphQL clients. `Some(None)`
+    /// explicitly clears it, and `Some(Some(_))` replaces it.
+    pub storage_root_id: Option<Option<String>>,
 }
 
 /// Which matcher a preview should run.
@@ -92,6 +109,7 @@ pub enum MaintenancePreviewMatcher {
         rego_source: String,
         action_spec: MaintenanceActionSpec,
         grace_days: i64,
+        storage_root_id: Option<String>,
     },
 }
 
@@ -153,6 +171,10 @@ pub struct MaintenancePreviewTitleResult {
     pub subject_label: String,
     pub file_count: i64,
     pub total_size_bytes: i64,
+    /// Files eligible for deletion on the revision's selected root. `None`
+    /// means this preview is not storage-scoped or the root cannot be resolved.
+    pub storage_root_file_count: Option<i64>,
+    pub storage_root_total_size_bytes: Option<i64>,
     pub title_id: String,
     pub title_name: String,
     pub facet: MediaFacet,
@@ -240,6 +262,7 @@ impl AppUseCase {
 
         require_dormant_evaluation_mode(draft.evaluation_mode)?;
         let name = require_non_empty(&draft.name, "name")?;
+        let storage_root_id = draft.storage_root_id;
 
         let id = Id::new_rego_safe().0;
         let prepared = prepare_matcher(
@@ -253,6 +276,13 @@ impl AppUseCase {
             .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
+        self.require_storage_root_for_matcher(
+            &prepared.rego_source,
+            &id,
+            storage_root_id.as_deref(),
+            &draft.action_spec,
+        )
+        .await?;
 
         let now = Utc::now();
         let rule_set = MaintenanceRuleSet {
@@ -265,13 +295,22 @@ impl AppUseCase {
             enabled: false,
             evaluation_mode: MaintenanceEvaluationMode::Disabled,
             effect_arming: scryer_domain::MaintenanceEffectArming::None,
+            destructive_rearm_required: false,
             library_ids: draft.library_ids,
             subject_kind: draft.subject_kind,
             current_revision_number: 1,
             created_at: now,
             updated_at: now,
         };
-        let revision = build_revision(&id, 1, &prepared, draft.grace_days, actor, now);
+        let revision = build_revision(
+            &id,
+            1,
+            &prepared,
+            draft.grace_days,
+            storage_root_id,
+            actor,
+            now,
+        );
 
         self.services
             .customization
@@ -313,6 +352,22 @@ impl AppUseCase {
             .await?;
 
         let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
+        let current_revision = self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .get_revision(&rule_set.id, rule_set.current_revision_number)
+            .await?
+            .ok_or_else(|| {
+                AppError::Repository(format!(
+                    "maintenance rule set {} has no revision {}",
+                    rule_set.id, rule_set.current_revision_number
+                ))
+            })?;
+        let storage_root_id = draft
+            .storage_root_id
+            .clone()
+            .unwrap_or(current_revision.storage_root_id);
         let prepared = prepare_matcher(
             &rule_set.id,
             rule_set.subject_kind,
@@ -324,6 +379,13 @@ impl AppUseCase {
             .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
+        self.require_storage_root_for_matcher(
+            &prepared.rego_source,
+            &rule_set.id,
+            storage_root_id.as_deref(),
+            &draft.action_spec,
+        )
+        .await?;
 
         let now = Utc::now();
         let revision_number = rule_set.current_revision_number + 1;
@@ -332,6 +394,7 @@ impl AppUseCase {
             revision_number,
             &prepared,
             draft.grace_days,
+            storage_root_id,
             actor,
             now,
         );
@@ -346,6 +409,7 @@ impl AppUseCase {
         // Mirrors what `add_revision` wrote in the same transaction, so the
         // detail this returns can never claim an arming the store just cleared.
         rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
+        rule_set.destructive_rearm_required = false;
         rule_set.updated_at = now;
         Ok(MaintenanceRuleSetDetail {
             rule_set,
@@ -497,7 +561,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let (policy, subject_kind, library_ids, grace_days) =
+        let (policy, subject_kind, library_ids, grace_days, storage_root_id) =
             self.resolve_preview_policy(request.matcher).await?;
         // Preview evaluates against real subjects and reports per-title
         // outcomes, so an ungated one is a person-fact oracle: ask "did user x
@@ -552,6 +616,18 @@ impl AppUseCase {
                     .push(file);
             }
         }
+        // Show inventory includes full episode/file ownership and watch
+        // coverage. Keep one immutable snapshot per selected title so every
+        // scoped subject in this preview derives from the same observation.
+        let mut episode_inventories_by_title = HashMap::new();
+        for title in &titles {
+            if title.facet != MediaFacet::Movie {
+                episode_inventories_by_title.insert(
+                    title.id.clone(),
+                    self.maintenance_load_title_episode_inventory(title).await?,
+                );
+            }
+        }
         // Preview must see exactly what the evaluator sees, so the same two
         // batched people lookups run here, once for the whole selection, and so
         // does the series-movie load.
@@ -585,6 +661,7 @@ impl AppUseCase {
         let engine = MaintenanceRulesEngine::build(std::slice::from_ref(&policy))
             .map_err(|e| AppError::Validation(format!("rule failed to compile: {e}")))?;
         let mut evaluator = engine.evaluator();
+        let mut storage_facts = MaintenanceStorageFactCache::new();
 
         let evaluated_at = Utc::now();
         let mut results = Vec::with_capacity(titles.len());
@@ -615,17 +692,61 @@ impl AppUseCase {
                     .map(Vec::as_slice),
                 store_readable: claims_by_title.is_some(),
             };
-            for subject in self
-                .maintenance_subjects_for_title(subject_kind, &title, files)
-                .await?
-            {
+            let subjects = if title.facet == MediaFacet::Movie {
+                self.maintenance_subjects_for_title(subject_kind, &title, files)
+                    .await?
+            } else {
+                let inventory = episode_inventories_by_title.get(&title.id).ok_or_else(|| {
+                    AppError::Repository("maintenance preview lost title episode inventory".into())
+                })?;
+                self.maintenance_subjects_from_episode_inventory(
+                    subject_kind,
+                    &title,
+                    files,
+                    inventory,
+                )?
+            };
+            for subject in subjects {
                 if results.len() >= result_limit {
                     break;
                 }
                 if selected_subjects.is_some_and(|ids| !ids.contains(&subject.id)) {
                     continue;
                 }
-                let input = build_subject_input(
+                let root_file_summary = match storage_root_id.as_deref() {
+                    None => {
+                        self.maintenance_root_file_summary(&subject.files, None)
+                            .await?
+                    }
+                    Some(root_id) if subject.kind == MaintenanceRuleSubjectKind::Title => {
+                        match self.maintenance_title_deletion_files(&title).await {
+                            Ok(owned_files) => {
+                                self.maintenance_root_file_summary(&owned_files, Some(root_id))
+                                    .await?
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    rule_set_id = policy.id.as_str(),
+                                    title_id = title.id.as_str(),
+                                    error = %error,
+                                    "could not prove title file ownership for storage preview"
+                                );
+                                MaintenanceRootFileSummary::default()
+                            }
+                        }
+                    }
+                    Some(_) if subject.ambiguous_files => MaintenanceRootFileSummary::default(),
+                    Some(root_id) => {
+                        self.maintenance_root_file_summary(&subject.files, Some(root_id))
+                            .await?
+                    }
+                };
+                if storage_root_id.is_some() && matches!(root_file_summary.file_count, Some(0)) {
+                    continue;
+                }
+                let storage_root_membership_unknown =
+                    storage_root_id.is_some() && root_file_summary.file_count.is_none();
+                let mut input = build_subject_input(
                     evaluated_at,
                     &title,
                     &library,
@@ -638,12 +759,24 @@ impl AppUseCase {
                         .map(Vec::as_slice)
                         .unwrap_or_default(),
                 );
+                self.populate_maintenance_storage_facts_from_cache(
+                    &mut input,
+                    storage_root_id.as_deref(),
+                    &mut storage_facts,
+                )
+                .await?;
 
                 let evaluation = evaluator
                     .evaluate(&input)
                     .map_err(|e| AppError::Validation(format!("rule evaluation failed: {e}")))?;
 
-                let (outcome, reason_codes, error) =
+                let (outcome, reason_codes, error) = if storage_root_membership_unknown {
+                    (
+                        Some(MaintenanceOutcome::Unknown),
+                        vec![STORAGE_ROOT_MEMBERSHIP_UNAVAILABLE.to_string()],
+                        None,
+                    )
+                } else {
                     match (evaluation.records.first(), evaluation.errors.first()) {
                         (Some(record), _) => (
                             Some(record.decision.outcome),
@@ -656,7 +789,8 @@ impl AppUseCase {
                             Vec::new(),
                             Some("rule produced no decision".to_string()),
                         ),
-                    };
+                    }
+                };
 
                 let excluded = subject.excluded_by(&title.id, &exclusions);
                 let active = self
@@ -687,6 +821,8 @@ impl AppUseCase {
                     subject_label: subject.label,
                     file_count: subject.files.len() as i64,
                     total_size_bytes: subject.files.iter().map(|file| file.size_bytes).sum(),
+                    storage_root_file_count: root_file_summary.file_count,
+                    storage_root_total_size_bytes: root_file_summary.total_size_bytes,
                     title_id: title.id.clone(),
                     title_name: title.name.clone(),
                     facet: title.facet.clone(),
@@ -758,6 +894,49 @@ impl AppUseCase {
         )))
     }
 
+    /// Resolve a selected root by its durable ID and reject a storage matcher
+    /// whose revision omits one. Root selection is global because a rule may
+    /// cover more than one library while pressure is measured on one mounted
+    /// filesystem.
+    async fn require_storage_root_for_matcher(
+        &self,
+        rego_source: &str,
+        rule_set_id: &str,
+        storage_root_id: Option<&str>,
+        action_spec: &MaintenanceActionSpec,
+    ) -> AppResult<()> {
+        let referenced = maintenance_referenced_facts(rego_source, rule_set_id)
+            .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?;
+        let reads_storage = STORAGE_MAINTENANCE_FACTS
+            .iter()
+            .any(|fact| referenced.contains(*fact));
+        if reads_storage && storage_root_id.is_none() {
+            return Err(AppError::Validation(
+                "a matcher that reads storage facts must select a configured library root".into(),
+            ));
+        }
+        let Some(storage_root_id) = storage_root_id else {
+            return Ok(());
+        };
+        if !super::action_execution::supports_storage_scope(action_spec.kind) {
+            return Err(AppError::Validation(
+                "this action is not supported for a storage-root-scoped maintenance rule".into(),
+            ));
+        }
+        let roots = self.services.catalog.libraries.list(None).await?;
+        if roots
+            .iter()
+            .flat_map(|library| library.roots.iter())
+            .any(|root| root.id == storage_root_id)
+        {
+            Ok(())
+        } else {
+            Err(AppError::Validation(format!(
+                "storage root '{storage_root_id}' is not configured"
+            )))
+        }
+    }
+
     pub(crate) async fn require_maintenance_rule_set(
         &self,
         id: &str,
@@ -802,11 +981,19 @@ impl AppUseCase {
         MaintenanceRuleSubjectKind,
         Vec<String>,
         i64,
+        Option<String>,
     )> {
         match matcher {
             MaintenancePreviewMatcher::Stored { rule_set_id } => {
                 let rule_set = self.require_maintenance_rule_set(&rule_set_id).await?;
                 let detail = self.load_maintenance_rule_detail(rule_set).await?;
+                self.require_storage_root_for_matcher(
+                    &detail.revision.rego_source,
+                    &detail.rule_set.id,
+                    detail.revision.storage_root_id.as_deref(),
+                    &detail.action_spec,
+                )
+                .await?;
                 Ok((
                     MaintenancePolicy {
                         id: detail.rule_set.id,
@@ -816,6 +1003,7 @@ impl AppUseCase {
                     detail.rule_set.subject_kind,
                     detail.rule_set.library_ids,
                     detail.revision.grace_days,
+                    detail.revision.storage_root_id,
                 ))
             }
             MaintenancePreviewMatcher::Inline {
@@ -824,6 +1012,7 @@ impl AppUseCase {
                 rego_source,
                 action_spec,
                 grace_days,
+                storage_root_id,
             } => {
                 let scratch_id = Id::new_rego_safe().0;
                 let prepared = prepare_matcher(
@@ -833,6 +1022,13 @@ impl AppUseCase {
                     &action_spec,
                     grace_days,
                 )?;
+                self.require_storage_root_for_matcher(
+                    &prepared.rego_source,
+                    &scratch_id,
+                    storage_root_id.as_deref(),
+                    &action_spec,
+                )
+                .await?;
                 Ok((
                     MaintenancePolicy {
                         id: scratch_id,
@@ -842,6 +1038,7 @@ impl AppUseCase {
                     subject_kind,
                     library_ids,
                     grace_days,
+                    storage_root_id,
                 ))
             }
         }
@@ -1079,6 +1276,7 @@ fn build_revision(
     revision_number: i64,
     prepared: &PreparedMatcher,
     grace_days: i64,
+    storage_root_id: Option<String>,
     actor: &User,
     created_at: chrono::DateTime<Utc>,
 ) -> MaintenanceRuleRevision {
@@ -1089,6 +1287,7 @@ fn build_revision(
         rego_source: prepared.rego_source.clone(),
         action_spec_json: prepared.action_spec_json.clone(),
         grace_days,
+        storage_root_id,
         matcher_content_hash: prepared.content_hash.clone(),
         created_by: Some(actor.id.clone()),
         created_at,

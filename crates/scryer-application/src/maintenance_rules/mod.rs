@@ -37,6 +37,7 @@ pub mod facts;
 pub mod safety;
 pub(crate) mod scoped_deletion;
 pub mod service;
+pub(crate) mod storage;
 pub(crate) mod subjects;
 
 pub use action_catalog::{

@@ -714,6 +714,7 @@ impl ScopedMaintenanceFixture {
                         MaintenanceActionKind::UnmonitorScopeDeleteFiles,
                     ),
                     grace_days: grace,
+                    storage_root_id: None,
                     library_ids: vec![],
                     evaluation_mode: None,
                 },

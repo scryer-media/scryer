@@ -74,12 +74,17 @@ import {
   previewOutcomeLabelKey,
   riskClassBadgeTone,
   riskClassLabelKey,
-  scopedActionDescriptors,
+  storageScopedActionDescriptors,
 } from "@/lib/utils/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
 export type MaintenanceQualityProfileOption = { id: string; name: string };
+export type MaintenanceStorageRootOption = {
+  id: string;
+  path: string;
+  libraryName: string;
+};
 
 const EVALUATION_MODE_OPTIONS: MaintenanceEvaluationMode[] = [
   "DISABLED",
@@ -102,6 +107,7 @@ type SettingsMaintenanceRulesSectionProps = {
   ruleSetRecords: MaintenanceRuleSetRecord[];
   actionDescriptors: MaintenanceActionDescriptor[];
   libraries: MaintenanceLibraryOption[];
+  storageRoots: MaintenanceStorageRootOption[];
   qualityProfiles: MaintenanceQualityProfileOption[];
   copyRuleSet: (record: MaintenanceRuleSetRecord) => void;
   editRuleSet: (record: MaintenanceRuleSetRecord) => void;
@@ -345,6 +351,15 @@ function MaintenanceTemplateCard({
         <Badge tone="neutral" className="text-[10px]">
           <ActionLabel kind={template.actionKind} />
         </Badge>
+        {template.subjectKind ? (
+          <Badge tone="info" className="text-[10px]">
+            {t(
+              template.subjectKind === "EPISODE"
+                ? "settings.maintenanceScopeEpisode"
+                : "settings.maintenanceScopeSeason",
+            )}
+          </Badge>
+        ) : null}
         {template.destructive ? (
           <Badge tone="negative" className="text-[10px]">
             {t("settings.maintenanceTemplateDestructiveBadge")}
@@ -635,6 +650,15 @@ function MaintenancePreviewPanel({
                         {title.titleName}
                         {title.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{title.subjectLabel}</div>}
                         <div className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: title.fileCount, size: formatBytes(title.totalSizeBytes) })}</div>
+                        {title.storageRootFileCount !== null &&
+                        title.storageRootTotalSizeBytes !== null ? (
+                          <div className="text-xs text-muted-foreground">
+                            {t("settings.maintenanceStorageRootFileSummary", {
+                              count: title.storageRootFileCount,
+                              size: formatBytes(title.storageRootTotalSizeBytes),
+                            })}
+                          </div>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <PreviewOutcomeCell title={title} />
@@ -698,6 +722,7 @@ export function SettingsMaintenanceRulesSection({
   ruleSetRecords,
   actionDescriptors,
   libraries,
+  storageRoots,
   qualityProfiles,
   copyRuleSet,
   editRuleSet,
@@ -714,8 +739,13 @@ export function SettingsMaintenanceRulesSection({
 }: SettingsMaintenanceRulesSectionProps) {
   const t = useTranslate();
   const offerableDescriptors = React.useMemo(
-    () => scopedActionDescriptors(actionDescriptors, ruleSetDraft.subjectKind),
-    [actionDescriptors, ruleSetDraft.subjectKind],
+    () =>
+      storageScopedActionDescriptors(
+        actionDescriptors,
+        ruleSetDraft.subjectKind,
+        ruleSetDraft.storageRootId,
+      ),
+    [actionDescriptors, ruleSetDraft.subjectKind, ruleSetDraft.storageRootId],
   );
   const needsTargetProfile = actionRequiresTargetQualityProfile(
     actionDescriptors,
@@ -887,6 +917,17 @@ export function SettingsMaintenanceRulesSection({
                                 })}
                               />
                               <ArmingBadge arming={record.effectArming} />
+                              {record.destructiveRearmRequired ? (
+                                <p
+                                  id={selectorId(
+                                    "settings-maintenance-rule-review-required",
+                                    record.id,
+                                  )}
+                                  className="text-xs text-[var(--scry-warning-text)]"
+                                >
+                                  {t("settings.maintenanceRuleReviewRequired")}
+                                </p>
+                              ) : null}
                             </div>
                           </TableCell>
                           <TableCell className="text-center">
@@ -1079,6 +1120,59 @@ export function SettingsMaintenanceRulesSection({
                           {t("settings.maintenanceRuleGraceDaysHelp")}
                         </p>
                       </label>
+                    </div>
+
+                    <div>
+                      <SingleSelectField
+                        id="settings-maintenance-rule-storage-root"
+                        label={t("settings.maintenanceRuleStorageRoot")}
+                        placeholder={t("settings.maintenanceRuleStorageRootNone")}
+                        value={ruleSetDraft.storageRootId}
+                        onValueChange={(storageRootId) =>
+                          setRuleSetDraft((prev) => {
+                            const current = descriptorForActionKind(
+                              actionDescriptors,
+                              prev.actionKind,
+                            );
+                            return {
+                              ...prev,
+                              storageRootId,
+                              actionKind:
+                                storageRootId && !current?.supportsStorageScope
+                                  ? "DO_NOTHING"
+                                  : prev.actionKind,
+                            };
+                          })
+                        }
+                        options={storageRoots.map((root) => ({
+                          value: root.id,
+                          label: `${root.libraryName} · ${root.path}`,
+                        }))}
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t("settings.maintenanceRuleStorageRootHelp")}
+                      </p>
+                      {ruleSetDraft.storageRootId ? (
+                        <div className="mt-1 space-y-1">
+                          <p
+                            id="settings-maintenance-rule-storage-root-retention"
+                            className="text-xs text-[var(--scry-warning-text)]"
+                          >
+                            {t("settings.maintenanceRuleStorageRootUnmonitorHelp")}
+                          </p>
+                          <Button
+                            id="settings-maintenance-rule-storage-root-clear"
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              setRuleSetDraft((prev) => ({ ...prev, storageRootId: "" }))
+                            }
+                          >
+                            {t("settings.maintenanceRuleStorageRootClear")}
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
 
                     {needsTags ? (

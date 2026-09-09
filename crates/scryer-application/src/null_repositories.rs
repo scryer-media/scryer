@@ -1700,6 +1700,8 @@ impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRep
     async fn latest_scoped_deletion_action_run(
         &self,
         _candidate_id: &str,
+        _match_generation: i64,
+        _action_kind: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleActionRun>> {
         Ok(None)
     }
@@ -1710,6 +1712,15 @@ impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRep
         ))
     }
     async fn finish_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_held_action_run_and_release_attempt(
+        &self,
+        _run: &scryer_domain::LifecycleActionRun,
+        _expected_attempt: i64,
+    ) -> AppResult<bool> {
         Err(AppError::Repository(
             MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
         ))

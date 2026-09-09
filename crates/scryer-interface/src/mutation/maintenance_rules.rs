@@ -39,6 +39,7 @@ fn preview_matcher(
             rego_source,
             action_spec: crate::mappers::maintenance_action_spec_from_input(action),
             grace_days: grace_days(input.grace_days),
+            storage_root_id: input.storage_root_id.take(),
         }),
         (None, Some(_), None) => Err(to_gql_error(AppError::Validation(
             "previewing an unsaved matcher requires 'action'".to_string(),
@@ -126,6 +127,7 @@ impl MaintenanceRuleMutations {
                     rego_source: input.rego_source,
                     action_spec: crate::mappers::maintenance_action_spec_from_input(input.action),
                     grace_days: grace_days(input.grace_days),
+                    storage_root_id: input.storage_root_id,
                     library_ids: input.library_ids.unwrap_or_default(),
                     // Maintenance rules ship dark: the service accepts only the
                     // disabled mode, so the client never chooses one.
@@ -159,6 +161,13 @@ impl MaintenanceRuleMutations {
                     rego_source: input.rego_source,
                     action_spec: crate::mappers::maintenance_action_spec_from_input(input.action),
                     grace_days: grace_days(input.grace_days),
+                    storage_root_id: match input.storage_root_id {
+                        async_graphql::MaybeUndefined::Undefined => None,
+                        async_graphql::MaybeUndefined::Null => Some(None),
+                        async_graphql::MaybeUndefined::Value(root_id) => {
+                            Some(Some(root_id.to_string()))
+                        }
+                    },
                 },
             )
             .await

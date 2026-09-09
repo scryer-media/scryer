@@ -240,6 +240,7 @@ pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSe
         enabled: rule_set.enabled,
         evaluation_mode: maintenance_evaluation_mode_value(rule_set.evaluation_mode),
         effect_arming: maintenance_effect_arming_value(rule_set.effect_arming),
+        destructive_rearm_required: rule_set.destructive_rearm_required,
         library_ids: rule_set.library_ids.clone(),
         subject_kind: maintenance_rule_subject_kind_value(rule_set.subject_kind),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
@@ -262,6 +263,7 @@ pub fn from_maintenance_rule_revision(
         revision_number: to_graphql_int(revision.revision_number),
         rego_source: scryer_rules::strip_editor_source(&revision.rego_source),
         grace_days: to_graphql_int(revision.grace_days),
+        storage_root_id: revision.storage_root_id,
         matcher_content_hash: revision.matcher_content_hash,
         created_by: revision.created_by.map(ID::from),
         created_at: revision.created_at,
@@ -331,6 +333,10 @@ fn from_maintenance_action_descriptor(
             descriptor.kind,
             AppActionKind::AddTags | AppActionKind::RemoveTags
         ),
+        supports_storage_scope:
+            scryer_application::maintenance_rules::action_execution::supports_storage_scope(
+                descriptor.kind,
+            ),
     }
 }
 
@@ -359,6 +365,8 @@ pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenanceP
                 subject_label: title.subject_label,
                 file_count: to_graphql_int(title.file_count),
                 total_size_bytes: title.total_size_bytes,
+                storage_root_file_count: title.storage_root_file_count.map(to_graphql_int),
+                storage_root_total_size_bytes: title.storage_root_total_size_bytes,
                 title_id: ID::from(title.title_id),
                 title_name: title.title_name,
                 facet: title.facet.as_str().to_string(),
@@ -580,6 +588,20 @@ mod tests {
         assert_eq!(
             requiring,
             vec![MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged]
+        );
+        let storage_scoped: Vec<_> = descriptors
+            .iter()
+            .filter(|descriptor| descriptor.supports_storage_scope)
+            .map(|descriptor| descriptor.kind)
+            .collect();
+        assert_eq!(
+            storage_scoped,
+            vec![
+                MaintenanceActionKind::DoNothing,
+                MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
+                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+            ]
         );
         for descriptor in &descriptors {
             assert!(!descriptor.supported_subjects.is_empty());
