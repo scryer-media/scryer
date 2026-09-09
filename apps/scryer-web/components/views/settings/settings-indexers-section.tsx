@@ -897,6 +897,13 @@ export function SettingsIndexersSection({
       [indexerDraft.configValues, selectedProviderFields],
     );
   const [advancedConfigOpen, setAdvancedConfigOpen] = React.useState(false);
+  const [hasCustomizedName, setHasCustomizedName] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!isEditorOpen) {
+      setHasCustomizedName(false);
+    }
+  }, [isEditorOpen]);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
@@ -926,9 +933,10 @@ export function SettingsIndexersSection({
         const previousProvider = providerTypes.find(
           (providerType) => providerType.providerType === prev.providerType,
         );
-        const shouldAutofillName =
-          prev.name.trim().length === 0 ||
-          prev.name === providerDefaultName(prev.providerType, previousProvider);
+        const shouldAutofillName = isEditing
+          ? prev.name.trim().length === 0 ||
+            prev.name === providerDefaultName(prev.providerType, previousProvider)
+          : !hasCustomizedName;
         const nextConfigValues: Record<string, string> = {};
         for (const field of nextProvider?.configFields ?? []) {
           if (field.valueSource === "HOST_BINDING") {
@@ -959,6 +967,8 @@ export function SettingsIndexersSection({
     },
     [
       indexerDownloadClientMappingCatalogResource.catalog,
+      hasCustomizedName,
+      isEditing,
       providerTypes,
       setIndexerDraft,
     ],
@@ -1338,10 +1348,13 @@ export function SettingsIndexersSection({
                   id="settings-indexer-name"
                   value={indexerDraft.name}
                   onChange={(event) =>
-                    setIndexerDraft((prev: IndexerDraft) => ({
-                      ...prev,
-                      name: event.target.value,
-                    }))
+                    {
+                      setHasCustomizedName(true);
+                      setIndexerDraft((prev: IndexerDraft) => ({
+                        ...prev,
+                        name: event.target.value,
+                      }));
+                    }
                   }
                   required
                   placeholder={t("form.indexerNamePlaceholder")}
