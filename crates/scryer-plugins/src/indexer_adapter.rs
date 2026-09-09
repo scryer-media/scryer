@@ -655,11 +655,31 @@ fn decode_search_result(
             };
             Err(AppError::temporary_unavailable(message, retry_after))
         }
-        PluginResult::Err(error) => Err(AppError::Repository(format!(
-            "{context}: plugin error {:?}: {}",
-            error.code, error.public_message
-        ))),
+        PluginResult::Err(error) => Err(indexer_search_plugin_error(error, context)),
     }
+}
+
+/// Component plugins deliberately keep unexpected trap details out of their
+/// public error. An upstream's explicit API-key rejection is safe, actionable
+/// information, though, and the guest currently carries it only in that debug
+/// detail. Promote the category without relaying the untrusted detail itself.
+fn indexer_search_plugin_error(error: PluginError, context: &str) -> AppError {
+    let is_api_key_rejection = error.public_message == "indexer component failed"
+        && error.debug_message.as_deref().is_some_and(|message| {
+            let normalized = message.to_ascii_lowercase();
+            (normalized.contains("api key") || normalized.contains("apikey"))
+                && (normalized.contains("invalid")
+                    || normalized.contains("rejected")
+                    || normalized.contains("error"))
+        });
+    if is_api_key_rejection {
+        return AppError::Validation("The indexer rejected the API key.".to_string());
+    }
+
+    AppError::Repository(format!(
+        "{context}: plugin error {:?}: {}",
+        error.code, error.public_message
+    ))
 }
 
 fn host_incomplete_reason(reason: PluginIncompleteReason) -> HostIncompleteReason {
@@ -1835,6 +1855,30 @@ mod tests {
                 retry_after: Some(std::time::Duration::from_secs(45)),
             }
         );
+    }
+
+    #[test]
+    fn component_api_key_rejection_is_actionable_without_exposing_debug_detail() {
+        let error = decode_search_result(
+            PluginResult::Err(PluginError {
+                code: PluginErrorCode::Temporary,
+                public_message: "indexer component failed".to_string(),
+                debug_message: Some(
+                    "Newznab API key error 100: Invalid API Key (key=secret)".to_string(),
+                ),
+                retry_after_seconds: None,
+                details: None,
+            }),
+            true,
+            "indexer search",
+        )
+        .expect_err("an API-key rejection must fail the search");
+
+        assert_eq!(
+            error.to_string(),
+            "validation: The indexer rejected the API key."
+        );
+        assert!(!error.to_string().contains("secret"));
     }
 
     #[test]
