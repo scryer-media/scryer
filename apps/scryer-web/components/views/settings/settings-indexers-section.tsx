@@ -1495,40 +1495,7 @@ export function SettingsIndexersSection({
               <p className="text-sm text-muted-foreground">
                 {t("settings.indexerManagedParentHint")}
               </p>
-            ) : (
-              <div className="flex items-center gap-6">
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    id="settings-indexer-enable-interactive-search"
-                    checked={indexerDraft.enableInteractiveSearch}
-                    onCheckedChange={(value) =>
-                      setIndexerDraft((prev: IndexerDraft) => ({
-                        ...prev,
-                        enableInteractiveSearch: value === true,
-                      }))
-                    }
-                  />
-                  <span className="text-sm">
-                    {t("settings.indexerInteractiveSearch")}
-                  </span>
-                </label>
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    id="settings-indexer-enable-auto-search"
-                    checked={indexerDraft.enableAutoSearch}
-                    onCheckedChange={(value) =>
-                      setIndexerDraft((prev: IndexerDraft) => ({
-                        ...prev,
-                        enableAutoSearch: value === true,
-                      }))
-                    }
-                  />
-                  <span className="text-sm">
-                    {t("settings.indexerAutoSearch")}
-                  </span>
-                </label>
-              </div>
-            )}
+            ) : null}
             <div className="flex gap-2">
               <Button id="settings-indexer-save" type="submit" disabled={mutatingIndexerId === "new"}>
                 {mutatingIndexerId === "new"
@@ -1556,6 +1523,44 @@ export function SettingsIndexersSection({
               >
                 {t("label.cancel")}
               </Button>
+              {!isManagedSyncProvider ? (
+                <>
+                  <label className="flex h-9 items-center gap-3">
+                    <Checkbox
+                      id="settings-indexer-enable-interactive-search"
+                      className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                      checked={indexerDraft.enableInteractiveSearch}
+                      disabled={mutatingIndexerId !== null}
+                      onCheckedChange={(value) =>
+                        setIndexerDraft((prev: IndexerDraft) => ({
+                          ...prev,
+                          enableInteractiveSearch: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">
+                      {t("settings.indexerInteractiveSearch")}
+                    </span>
+                  </label>
+                  <label className="flex h-9 items-center gap-3">
+                    <Checkbox
+                      id="settings-indexer-enable-auto-search"
+                      className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
+                      checked={indexerDraft.enableAutoSearch}
+                      disabled={mutatingIndexerId !== null}
+                      onCheckedChange={(value) =>
+                        setIndexerDraft((prev: IndexerDraft) => ({
+                          ...prev,
+                          enableAutoSearch: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">
+                      {t("settings.indexerAutoSearch")}
+                    </span>
+                  </label>
+                </>
+              ) : null}
             </div>
               </form>
             </CardContent>
