@@ -1265,6 +1265,9 @@ impl DownloadClient for WeaverDownloadClient {
             Err(error) if is_weaver_schema_error(&error, "historyItem") => {
                 let page = self.list_history_page(offset, 100).await?;
                 let count = page.len();
+                if count == 0 {
+                    return Ok(DownloadClientObservation::Absent);
+                }
                 if let Some(item) = page
                     .into_iter()
                     .find(|item| item.download_client_item_id == locator.item_id)
@@ -1273,11 +1276,7 @@ impl DownloadClient for WeaverDownloadClient {
                 }
                 Ok(DownloadClientObservation::Unknown {
                     reason: "Weaver lacks exact history lookup; continuing history recovery".into(),
-                    next_history_offset: if count == 100 {
-                        offset.saturating_add(100)
-                    } else {
-                        0
-                    },
+                    next_history_offset: offset.saturating_add(count),
                 })
             }
             Err(error) => Err(error),
@@ -2176,6 +2175,72 @@ mod tests {
             .await
             .expect("requests should be recorded");
         assert!(!String::from_utf8_lossy(&requests[0].body).contains("deleteFiles"));
+    }
+
+    #[tokio::test]
+    async fn exact_observation_advances_capped_pages_and_finishes_history() {
+        use base64::Engine;
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("queueItems"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":{"queueItems":[]}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("historyItem(id"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"errors":[{"message":"Unknown field historyItem"}]})),
+            )
+            .mount(&server)
+            .await;
+        for offset in 0..=2 {
+            let cursor =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("off:{offset}"));
+            let items = if offset == 2 {
+                json!([])
+            } else {
+                json!([{"id":offset + 1,"name":"release","state":"COMPLETE","progressPercent":100.0,
+                    "totalBytes":42,"attributes":[],"createdAt":"2024-01-01T00:00:00Z"}])
+            };
+            Mock::given(method("POST"))
+                .and(body_string_contains("historyItems"))
+                .and(body_string_contains(format!("\"after\":\"{cursor}\"")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"data":{"historyItems":items}})),
+                )
+                .mount(&server)
+                .await;
+        }
+        let client = WeaverDownloadClient::new(server.uri(), None);
+        let locator = ClientJobLocator::new(Some("weaver"), "weaver", "2");
+        assert!(matches!(
+            client.observe_download(&locator, 0).await.unwrap(),
+            DownloadClientObservation::Unknown {
+                next_history_offset: 1,
+                ..
+            }
+        ));
+        assert!(
+            matches!(client.observe_download(&locator, 1).await.unwrap(),
+            DownloadClientObservation::Present(item) if item.download_client_item_id == "2")
+        );
+        let missing = ClientJobLocator::new(Some("weaver"), "weaver", "3");
+        assert!(matches!(
+            client.observe_download(&missing, 1).await.unwrap(),
+            DownloadClientObservation::Unknown {
+                next_history_offset: 2,
+                ..
+            }
+        ));
+        assert!(matches!(
+            client.observe_download(&missing, 2).await.unwrap(),
+            DownloadClientObservation::Absent
+        ));
     }
 
     #[tokio::test]

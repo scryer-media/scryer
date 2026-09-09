@@ -463,6 +463,33 @@ async fn reconcile_terminal_download_cleanup(
     let client_remove_data = remove_data
         && !payload_already_removed
         && (!host_managed_payload || client_type == "sabnzbd");
+    if client_remove_data
+        && !host_managed_payload
+        && let Some(record) = record
+    {
+        // The client owns entry-and-data deletion as one operation. Persist
+        // its identity before sending it so a lost response can be reconciled
+        // through authoritative absence on the original client.
+        let checkpoint = serde_json::json!({
+            "native_remove_requested": true,
+            "download_id": record.download_id.to_string(),
+            "client_id": record.client_id,
+            "client_type": record.client_type,
+            "item_id": record.item_id,
+        })
+        .to_string();
+        if let Err(error) = app
+            .services
+            .workflow
+            .download_submissions
+            .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint)
+            .await
+        {
+            tracing::warn!(client_id, download_client_item_id, error = %error,
+                "failed to checkpoint native removal intent");
+            return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
+        }
+    }
     let delete_result = if client_id.is_empty() {
         app.services
             .integrations
@@ -653,16 +680,13 @@ async fn remove_host_payload_before_entry_cleanup(
     let mappings = parse_download_client_remote_path_mappings(&config.config_json)?;
     apply_remote_path_mappings_to_completed_download(&mut completed, &mappings);
 
-    let status = app
-        .services
-        .integrations
-        .download_client
-        .get_client_status_for_client_id(client_id)
-        .await?;
-    let roots = status
-        .remote_output_roots
+    // Remote metadata describes a job; it cannot authorize local deletion.
+    // Only roots saved by the operator in this client's path mappings grant
+    // that authority, including explicit identity mappings on shared hosts.
+    let roots = mappings
         .iter()
-        .map(|root| {
+        .map(|mapping| {
+            let root = mapping.local_root();
             let root = std::path::PathBuf::from(root.trim());
             if !root.is_absolute()
                 || root == std::path::Path::new("/")
@@ -671,7 +695,7 @@ async fn remove_host_payload_before_entry_cleanup(
                     .any(|component| matches!(component, std::path::Component::ParentDir))
             {
                 return Err(AppError::Validation(format!(
-                    "download client reported an unusable output root: {}",
+                    "download client path mapping has an unusable local root: {}",
                     root.display()
                 )));
             }
@@ -680,7 +704,7 @@ async fn remove_host_payload_before_entry_cleanup(
         .collect::<AppResult<Vec<_>>>()?;
     if roots.is_empty() {
         return Err(AppError::Validation(
-            "download client did not report an absolute local output root for payload cleanup"
+            "host payload cleanup requires an operator-configured local root in remote path mappings"
                 .to_string(),
         ));
     }

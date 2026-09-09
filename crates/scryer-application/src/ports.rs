@@ -3972,6 +3972,16 @@ pub trait DownloadSubmissionRepository: Send + Sync {
     }
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()>;
 
+    /// Persist the operator-selected routing before terminalizing a manual import.
+    async fn set_download_cleanup_attribution(
+        &self,
+        _id: &DownloadId,
+        _title_id: &str,
+        _facet: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn seed_download_cleanup(&self, _limit: usize) -> AppResult<()> {
         Ok(())
     }
@@ -6840,7 +6850,10 @@ pub enum DownloadCleanupClaim {
     /// Compatibility repositories without durable cleanup support.
     Unmanaged,
     Deferred,
-    Claimed(DownloadCleanupRecord),
+    Claimed(Box<DownloadCleanupRecord>),
+    Settled {
+        outcome: String,
+    },
 }
 
 #[derive(Clone, Debug, Default)]

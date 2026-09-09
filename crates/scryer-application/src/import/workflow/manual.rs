@@ -415,6 +415,17 @@ async fn maybe_remove_completed_manual_import_download(
                         "verified manual import has no durable client binding".into(),
                     )
                 })?;
+            if let Some(title_id) = title_id.filter(|id| !id.trim().is_empty()) {
+                app.services
+                    .workflow
+                    .download_submissions
+                    .set_download_cleanup_attribution(
+                        &binding.download_id,
+                        title_id,
+                        facet.as_str(),
+                    )
+                    .await?;
+            }
             app.services
                 .workflow
                 .download_submissions
@@ -434,7 +445,7 @@ async fn maybe_remove_completed_manual_import_download(
                 .claim_download_cleanup(&binding.download_id)
                 .await?
             {
-                run_claimed_download_cleanup(app, record, None).await;
+                run_claimed_download_cleanup(app, *record, None).await;
             }
             Ok::<(), AppError>(())
         }

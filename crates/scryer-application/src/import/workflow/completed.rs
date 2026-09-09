@@ -549,7 +549,7 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
             reconcile_unclaimed_terminal_cleanup(app, tracked, state, cache, None).await
         }
         Ok(crate::DownloadCleanupClaim::Claimed(record)) => {
-            run_claimed_download_cleanup(app, record, cache)
+            run_claimed_download_cleanup(app, *record, cache)
                 .await
                 .map(|(_, _, cleanup)| cleanup)
                 .unwrap_or_else(|| {
@@ -558,6 +558,20 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
         }
         Ok(crate::DownloadCleanupClaim::Deferred) => {
             TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure)
+        }
+        Ok(crate::DownloadCleanupClaim::Settled { outcome }) => {
+            TerminalDownloadCleanup::bare(match outcome.as_str() {
+                "policy_retained" => TerminalDownloadCleanupOutcome::NotConfigured,
+                "handed_off" => TerminalDownloadCleanupOutcome::HandedOff,
+                "seeding_entry_kept" => TerminalDownloadCleanupOutcome::SeedingEntryKept,
+                "payload_and_entry_removed" | "entry_removed" => {
+                    TerminalDownloadCleanupOutcome::Removed
+                }
+                "entry_absent" | "payload_removed_entry_absent" | "native_removal_recovered" => {
+                    TerminalDownloadCleanupOutcome::AlreadyGone
+                }
+                _ => TerminalDownloadCleanupOutcome::RetryableFailure,
+            })
         }
         Err(error) => {
             tracing::warn!(download_id = %tracked.download_id, error = %error, "failed to claim terminal cleanup");
@@ -644,7 +658,7 @@ pub(crate) async fn run_claimed_download_cleanup(
                 Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(), Some(&locator),
             ).await?;
         if persisted.as_deref().is_some_and(|state| {
-            !matches!(state, "imported" | "imported_seeding" | "failed")
+            !matches!(state, "imported" | "imported_seeding" | "failed" | "ignored")
         }) {
             return Err(AppError::Validation("import is no longer settled; cleanup deferred".into()));
         }
@@ -657,12 +671,16 @@ pub(crate) async fn run_claimed_download_cleanup(
         };
         let library_id = title.as_ref().map(|title| title.library_id.as_str());
         let facet = title.as_ref().map(|title| title.facet.clone())
-            .or_else(|| facet_from_tracked_label(record.facet.as_deref()))
-            .ok_or_else(|| AppError::Validation("cleanup has no valid routing attribution".into()))?;
-        let policy = app.read_download_client_routing_entry(
-            library_id, &facet, &record.client_id,
-        ).await?.unwrap_or_else(crate::catalog_helpers::default_download_client_routing_entry);
-        let remove = if state.counts_as_imported() { policy.remove_completed } else { policy.remove_failed };
+            .or_else(|| facet_from_tracked_label(record.facet.as_deref()));
+        let remove = if state == TrackedDownloadState::Ignored {
+            true
+        } else {
+            let facet = facet.as_ref().ok_or_else(|| AppError::Validation("cleanup has no valid routing attribution".into()))?;
+            let policy = app.read_download_client_routing_entry(
+                library_id, facet, &record.client_id,
+            ).await?.unwrap_or_else(crate::catalog_helpers::default_download_client_routing_entry);
+            if state.counts_as_imported() { policy.remove_completed } else { policy.remove_failed }
+        };
         if !remove {
             if !finish_cleanup_attempt(app, &record, "policy_retained", true, 0, None).await {
                 return Ok(None);
@@ -675,21 +693,31 @@ pub(crate) async fn run_claimed_download_cleanup(
             .observe_download(&locator, record.history_offset).await? {
             crate::DownloadClientObservation::Present(item) => *item,
             crate::DownloadClientObservation::Absent => {
-                let payload_removed = record.payload_checkpoint.as_deref()
-                    .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                let checkpoint = record.payload_checkpoint.as_deref()
+                    .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok());
+                let payload_removed = checkpoint.as_ref()
                     .is_some_and(|checkpoint| checkpoint.get("payload_removed").and_then(|v| v.as_bool()) == Some(true));
-                if payload_removed {
+                let native_requested = checkpoint.as_ref().is_some_and(|checkpoint| {
+                    checkpoint.get("native_remove_requested").and_then(|v| v.as_bool()) == Some(true)
+                        && checkpoint.get("download_id").and_then(|v| v.as_str()) == Some(record.download_id.to_string().as_str())
+                        && checkpoint.get("client_id").and_then(|v| v.as_str()) == Some(record.client_id.as_str())
+                        && checkpoint.get("client_type").and_then(|v| v.as_str()) == Some(record.client_type.as_str())
+                        && checkpoint.get("item_id").and_then(|v| v.as_str()) == Some(record.item_id.as_str())
+                });
+                if payload_removed || native_requested || state == TrackedDownloadState::Ignored {
                     if state == TrackedDownloadState::ImportedSeeding {
                         app.services.workflow.download_submissions.record_identity_tracked_state_for_download(
                             Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(),
                             Some(&locator), "imported", Some("seeding_complete"), None,
                         ).await?;
                     }
-                    if !finish_cleanup_attempt(app, &record, "payload_removed_entry_absent", true, 0, None).await {
+                    let outcome = if payload_removed { "payload_removed_entry_absent" }
+                        else if native_requested { "native_removal_recovered" } else { "entry_absent" };
+                    if !finish_cleanup_attempt(app, &record, outcome, true, 0, None).await {
                         return Ok(None);
                     }
                     tracing::info!(download_id = %record.download_id, client_id = %record.client_id,
-                        "cleanup recovered: payload deletion checkpointed and entry absent");
+                        outcome, "cleanup recovered after authoritative entry absence");
                     return Ok(Some((record.download_id, None,
                         TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::AlreadyGone))));
                 }
@@ -729,6 +757,7 @@ pub(crate) async fn run_claimed_download_cleanup(
         let cleanup = reconcile_unclaimed_terminal_cleanup(app, &tracked, state, cache, Some(&record)).await;
         let complete = terminal_download_cleanup_is_complete(cleanup.outcome);
         let outcome = match cleanup.outcome {
+            TerminalDownloadCleanupOutcome::Removed if state == TrackedDownloadState::Ignored => "entry_removed",
             TerminalDownloadCleanupOutcome::Removed => "payload_and_entry_removed",
             TerminalDownloadCleanupOutcome::AlreadyGone => "entry_absent",
             TerminalDownloadCleanupOutcome::NotConfigured => "policy_retained",

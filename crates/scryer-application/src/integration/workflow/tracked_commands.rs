@@ -3383,7 +3383,7 @@ async fn reconcile_terminal_tracked_downloads(
         let mut work = futures_util::stream::iter(candidates).map(|candidate| async move {
             match repository.claim_download_cleanup(&candidate.download_id).await {
                 Ok(crate::DownloadCleanupClaim::Claimed(record)) =>
-                    crate::import::import::run_claimed_download_cleanup(app, record, None).await,
+                    crate::import::import::run_claimed_download_cleanup(app, *record, None).await,
                 Ok(_) => None,
                 Err(error) => {
                     tracing::warn!(download_id = %candidate.download_id, error = %error, "failed to claim cleanup");
@@ -3411,6 +3411,30 @@ async fn reconcile_terminal_tracked_downloads(
                     state,
                     TerminalSettleTrigger::Reconcile,
                     cleanup,
+                )
+                .await;
+            }
+        }
+        // A retained entry can be rediscovered after its intent completed.
+        // Replay that result without rerunning policy or client mutations.
+        let retained: Vec<_> = tracker
+            .get_all()
+            .into_iter()
+            .filter(|tracked| tracked.state.is_import_settled())
+            .map(|tracked| (tracked.id.clone(), tracked.download_id, tracked.state))
+            .collect();
+        for (id, download_id, state) in retained {
+            if matches!(
+                repository.has_pending_download_cleanup(&download_id).await,
+                Ok(false)
+            ) {
+                finalize_tracked_terminal_state_with(
+                    app,
+                    tracker,
+                    &id,
+                    state,
+                    TerminalSettleTrigger::Reconcile,
+                    None,
                 )
                 .await;
             }

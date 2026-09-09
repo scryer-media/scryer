@@ -3256,6 +3256,40 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
 
     let item_id = "imported-cleanup-1";
     let download_id = "download-id-imported-cleanup-1";
+    let output = tempfile::tempdir().unwrap();
+    app.update_download_client_config(&user, crate::DownloadClientConfigUpdate {
+        id: config.id.clone(),
+        config_json: Some(serde_json::json!({
+            "remote_path_mappings": format!("{} => {}", output.path().display(), output.path().display())
+        }).to_string()),
+        ..Default::default()
+    }).await.unwrap();
+    let payload = output.path().join("Imported Cleanup Retry");
+    std::fs::create_dir(&payload).unwrap();
+    std::fs::write(payload.join("movie.mkv"), b"imported media").unwrap();
+    download_client
+        .set_client_status(crate::DownloadClientStatus {
+            remote_output_roots: vec![output.path().display().to_string()],
+            ..Default::default()
+        })
+        .await;
+    download_client
+        .completed_downloads
+        .lock()
+        .await
+        .push(scryer_domain::CompletedDownload {
+            client_type: "nzbget".into(),
+            client_id: config.id.clone(),
+            download_client_item_id: item_id.into(),
+            download_id: Some(download_id.into()),
+            name: "Imported Cleanup Retry".into(),
+            release_name: None,
+            dest_dir: payload.display().to_string(),
+            category: Some("scryer-movies".into()),
+            size_bytes: None,
+            completed_at: None,
+            parameters: vec![],
+        });
     let mut history_item = queue_history_fixture_item(item_id, DownloadQueueState::Completed, 40);
     history_item.client_id = config.id.clone();
     history_item.client_name = config.name.clone();
@@ -3401,9 +3435,13 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
     .await
     .expect("poller should retry imported cleanup on the next cycle");
 
+    assert!(
+        !payload.exists(),
+        "host payload cleanup must precede entry removal"
+    );
     assert_eq!(
         download_client.deleted_requests.lock().await.clone(),
-        // Usenet: the entry goes, the data stays the client's business.
+        // NZBGet receives entry-only removal after guarded host payload deletion.
         vec![(
             Some(config.id.clone()),
             None,

@@ -24,7 +24,10 @@ fn cleanup_record(row: &SqlRow) -> AppResult<DownloadCleanupRecord> {
 }
 
 async fn enqueue_cleanup_tx(tx: &mut SqlTx<'_>, id: &str, state: &str) -> AppResult<()> {
-    if !matches!(state, "imported" | "imported_seeding" | "failed") {
+    if !matches!(
+        state,
+        "imported" | "imported_seeding" | "failed" | "ignored"
+    ) {
         return Ok(());
     }
     let now = Utc::now();
@@ -40,8 +43,7 @@ async fn enqueue_cleanup_tx(tx: &mut SqlTx<'_>, id: &str, state: &str) -> AppRes
            FROM downloads d
            JOIN download_submissions s ON s.id = d.id
            LEFT JOIN download_client_bindings b ON b.download_id = d.id
-          WHERE d.id = {} AND TRIM(COALESCE(s.title_id, '')) <> ''
-            AND TRIM(COALESCE(s.facet, '')) <> ''
+          WHERE d.id = {}
             AND TRIM(COALESCE(b.native_item_id, s.download_client_item_id, '')) <> ''
          ON CONFLICT(download_id) DO UPDATE SET
              tracked_state = excluded.tracked_state,
@@ -75,12 +77,11 @@ impl DownloadSubmissionStore {
              FROM downloads d JOIN download_submissions s ON s.id = d.id
              LEFT JOIN download_client_bindings b ON b.download_id = d.id
              WHERE NOT EXISTS (SELECT 1 FROM download_cleanup c WHERE c.download_id = d.id)
-               AND TRIM(COALESCE(s.title_id, '')) <> '' AND TRIM(COALESCE(s.facet, '')) <> ''
                AND TRIM(COALESCE(b.native_item_id, s.download_client_item_id, '')) <> ''
                AND COALESCE(
                 (SELECT st.tracked_state FROM download_identity_states st
                  WHERE st.canonical_download_id = d.id ORDER BY st.updated_at DESC, st.id DESC LIMIT 1),
-                s.tracked_state) IN ('imported', 'imported_seeding', 'failed')
+                s.tracked_state) IN ('imported', 'imported_seeding', 'failed', 'ignored')
              ORDER BY d.created_at, d.id LIMIT {}",
             &[SqlArg::I64(limit.min(100) as i64)],
         ).await?;
@@ -135,12 +136,21 @@ impl DownloadSubmissionStore {
                     &[SqlArg::Timestamp(now + chrono::Duration::minutes(5)), SqlArg::Timestamp(now),
                       SqlArg::Text(id.clone()), SqlArg::Timestamp(now), SqlArg::Timestamp(now)],
                 ).await?;
-                if changed == 0 { return Ok(DownloadCleanupClaim::Deferred); }
+                if changed == 0 {
+                    let settled = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                        "SELECT outcome FROM download_cleanup WHERE download_id = {} AND status = 'completed'",
+                        &[SqlArg::Text(id.clone())],
+                    ).await?;
+                    return match settled {
+                        Some(row) => Ok(DownloadCleanupClaim::Settled { outcome: row.text("outcome")? }),
+                        None => Ok(DownloadCleanupClaim::Deferred),
+                    };
+                }
                 let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     &format!("SELECT {CLEANUP_COLUMNS} FROM download_cleanup c WHERE c.download_id = {{}}"),
                     &[SqlArg::Text(id)],
                 ).await?.ok_or_else(|| AppError::Repository("claimed cleanup disappeared".into()))?;
-                Ok(DownloadCleanupClaim::Claimed(cleanup_record(&row)?))
+                Ok(DownloadCleanupClaim::Claimed(Box::new(cleanup_record(&row)?)))
             })
         }).await
     }

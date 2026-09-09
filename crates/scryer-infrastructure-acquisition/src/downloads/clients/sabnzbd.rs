@@ -796,11 +796,7 @@ impl DownloadClient for SabnzbdDownloadClient {
             // Compatible backends may cap a page below the requested limit.
             // Advance by the actual count; only an empty page ends this scan.
             if count == 0 {
-                if offset == 0 {
-                    return Ok(DownloadClientObservation::Absent);
-                }
-                start = 0;
-                break;
+                return Ok(DownloadClientObservation::Absent);
             }
             start = start.saturating_add(count);
         }
@@ -3153,6 +3149,49 @@ mod tests {
                 .to_string()
                 .contains("invalid SABnzbd history response")
         );
+    }
+
+    #[tokio::test]
+    async fn exact_observation_finishes_a_resumed_scan_with_ignored_filter() {
+        use scryer_application::{ClientJobLocator, DownloadClientObservation};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"queue":{"slots":[]}})))
+            .mount(&server)
+            .await;
+        for offset in 0..=5 {
+            let slots = if offset == 5 {
+                json!([])
+            } else {
+                json!([{"nzo_id":format!("other-{offset}"),"name":"other", "status":"Completed","completed":1}])
+            };
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("start", offset.to_string()))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"history":{"slots":slots}})),
+                )
+                .mount(&server)
+                .await;
+        }
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let locator = ClientJobLocator::new(Some("sab"), "sabnzbd", "missing");
+        let DownloadClientObservation::Unknown {
+            next_history_offset,
+            ..
+        } = client.observe_download(&locator, 0).await.unwrap()
+        else {
+            panic!("scan must be bounded");
+        };
+        assert_eq!(next_history_offset, 4);
+        assert!(matches!(
+            client
+                .observe_download(&locator, next_history_offset)
+                .await
+                .unwrap(),
+            DownloadClientObservation::Absent
+        ));
     }
 
     #[tokio::test]

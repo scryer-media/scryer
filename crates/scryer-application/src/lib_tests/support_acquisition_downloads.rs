@@ -297,6 +297,8 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     pub(super) identity_state_details: Arc<Mutex<HashMap<String, String>>>,
     pub(super) tracked_states: TrackedDownloadStates,
     pub(super) pending_cleanup: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
+    pub(super) settled_cleanup:
+        Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
     pub(super) cleanup_checkpoints:
         Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
@@ -730,6 +732,18 @@ pub(super) fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn claim_download_cleanup(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadCleanupClaim> {
+        Ok(match self.settled_cleanup.lock().await.get(id) {
+            Some(outcome) => crate::DownloadCleanupClaim::Settled {
+                outcome: outcome.clone(),
+            },
+            None => crate::DownloadCleanupClaim::Unmanaged,
+        })
+    }
+
     async fn checkpoint_download_cleanup_payload(
         &self,
         id: &scryer_domain::download_identity::DownloadId,
