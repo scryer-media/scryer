@@ -1,9 +1,9 @@
 import type { DownloadClientDraft } from "@/lib/types/download-clients";
 
 export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = [
-  "nzbget",
-  "sabnzbd",
   "weaver",
+  "sabnzbd",
+  "nzbget",
 ] as const;
 
 export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "nzbget";
