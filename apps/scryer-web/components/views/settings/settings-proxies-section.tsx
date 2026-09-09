@@ -456,22 +456,22 @@ export function SettingsProxiesSection({
                   </label>
                   <label>
                     <Label
-                      className="mb-2 block"
+                      className="mb-2 flex items-center gap-1.5"
                       htmlFor="settings-indexer-proxy-base-url"
                     >
-                      <span className="inline-flex items-center gap-1.5">
-                        {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
-                        {isTunnelDraft || isWireguardDraft ? (
-                          <InfoHelp
-                            ariaLabel={t("settings.proxyEndpoint")}
-                            text={
-                              isWireguardDraft
-                                ? t("settings.proxyEndpointHelpWireguard")
-                                : t("settings.proxyEndpointHelp")
-                            }
-                          />
-                        ) : null}
-                      </span>
+                      {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3"
+                        ? t("settings.proxyEndpoint")
+                        : t("settings.baseUrl")}
+                      {isTunnelDraft || isWireguardDraft ? (
+                        <InfoHelp
+                          ariaLabel={t("settings.proxyEndpoint")}
+                          text={
+                            isWireguardDraft
+                              ? t("settings.proxyEndpointHelpWireguard")
+                              : t("settings.proxyEndpointHelp")
+                          }
+                        />
+                      ) : null}
                     </Label>
                     <Input
                       id="settings-indexer-proxy-base-url"
