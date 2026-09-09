@@ -1947,6 +1947,7 @@ fn scan_mp4_sample_probes(
                             | "mpeg2video"
                             | "mpeg4"
                             | "vc1"
+                            | "mjpeg"
                     )
                 )
         });
@@ -1998,6 +1999,7 @@ fn scan_mp4_video_metadata_with_cache(
                     | "mpeg2video"
                     | "mpeg4"
                     | "vc1"
+                    | "mjpeg"
             )
         ) {
             continue;

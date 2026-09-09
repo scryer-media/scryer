@@ -289,6 +289,7 @@ pub(crate) fn parse_mkv_source(
                         | "mpeg2video"
                         | "mpeg4"
                         | "vc1"
+                        | "mjpeg"
                 )
             )
         })
@@ -1658,6 +1659,7 @@ impl<R: Read + Seek> MkvRawScanner<R> {
                                             | "mpeg2video"
                                             | "mpeg4"
                                             | "vc1"
+                                            | "mjpeg"
                                     )
                                 )
                         }) {

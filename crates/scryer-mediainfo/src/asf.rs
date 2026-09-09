@@ -354,6 +354,10 @@ fn parse_video_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
     track.codec_private = codec_private;
     track.width = Some(width);
     track.height = Some(height);
+    if matches!(track.codec_name.as_deref(), Some("wmv1" | "wmv2")) {
+        track.metadata.bit_depth = Some(8);
+        track.metadata.pixel_format = Some("yuv420p".into());
+    }
     Ok(track)
 }
 
@@ -894,6 +898,28 @@ mod tests {
         assert_eq!(audio.metadata.channel_layout.as_deref(), Some("5.1"));
         assert_eq!(audio.metadata.sample_rate, Some(48_000));
         assert_eq!(audio.metadata.profile.as_deref(), Some("LC"));
+    }
+
+    #[test]
+    fn legacy_windows_media_video_properties_reach_the_catalog_contract() {
+        for fixture in ["wmv_wmv1_wmav1.wmv", "wmv_wmv2_video_only.wmv"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/media")
+                .join(fixture);
+            let analysis = crate::analyze_catalog_file(&path).unwrap();
+            let video = analysis
+                .details
+                .streams
+                .iter()
+                .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+                .unwrap();
+            assert_eq!(video.metadata.bit_depth, Some(8), "{fixture}");
+            assert_eq!(
+                video.metadata.pixel_format.as_deref(),
+                Some("yuv420p"),
+                "{fixture}"
+            );
+        }
     }
 
     #[test]
