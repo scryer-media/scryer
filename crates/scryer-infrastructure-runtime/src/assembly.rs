@@ -2303,6 +2303,13 @@ mod tests {
 
         let result = async {
             source.seed().await?;
+            let definition_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM settings_definitions")
+                    .fetch_one(source.sqlite.as_ref().expect("sqlite source").pool())
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+            let definition_count = u64::try_from(definition_count)
+                .expect("setting definition count must be nonnegative");
             target.seed_stale_ephemeral_rows().await?;
             let outcome = source.export_backup(&bundle_path, passphrase).await?;
             let inspected = inspect_backup_bundle(&bundle_path, Some(passphrase))?;
@@ -2324,12 +2331,12 @@ mod tests {
                     .row_counts
                     .get("settings_definitions")
                     .copied(),
-                Some(4),
-                "backup should include the seeded setting definition rows"
+                Some(definition_count),
+                "backup should include every custom and migration-seeded setting definition"
             );
             assert_eq!(
                 inspected.row_counts.get("settings_definitions").copied(),
-                Some(4),
+                Some(definition_count),
                 "inspected bundle should persist the setting definition row count"
             );
             assert_eq!(

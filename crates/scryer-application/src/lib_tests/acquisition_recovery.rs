@@ -6868,6 +6868,9 @@ impl IndexerClient for PendingStatusAssertingIndexerClient {
 #[tokio::test]
 async fn scheduled_rss_fetches_before_deciding_due_pending_releases() {
     let pending_title = "Scheduled.Pending.Movie.2024.1080p.WEB-DL-GRP";
+    // A strictly better revision makes the fresh winner deterministic. Equal
+    // releases may legitimately select the durable pending row as the winner.
+    let rss_title = "Scheduled.Pending.Movie.2024.1080p.WEB-DL.REPACK-GRP";
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -6876,7 +6879,7 @@ async fn scheduled_rss_fetches_before_deciding_due_pending_releases() {
     let indexer_client = Arc::new(PendingStatusAssertingIndexerClient {
         pending_releases: pending_releases.clone(),
         searches: indexer_searches.clone(),
-        release_title: pending_title.to_string(),
+        release_title: rss_title.to_string(),
     });
     let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
         download_client,
@@ -6934,7 +6937,7 @@ async fn scheduled_rss_fetches_before_deciding_due_pending_releases() {
             .lock()
             .await
             .iter()
-            .any(|submission| submission.source_title.as_deref() == Some(pending_title))
+            .any(|submission| submission.source_title.as_deref() == Some(rss_title))
     );
 }
 

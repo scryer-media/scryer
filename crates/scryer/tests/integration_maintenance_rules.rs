@@ -307,7 +307,7 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
                 "regoSource": MONITORED_MATCHER,
                 "action": delete_action(),
                 "graceDays": 14,
-                "libraryIds": ["lib-movies"],
+                "libraryIds": [movie_library_id()],
             }
         }),
     )
@@ -323,7 +323,7 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
     assert_eq!(rule_set["enabled"], false);
     assert_eq!(rule_set["evaluationMode"], "DISABLED");
     assert_eq!(rule_set["subjectKind"], "TITLE");
-    assert_eq!(rule_set["libraryIds"], json!(["lib-movies"]));
+    assert_eq!(rule_set["libraryIds"], json!([movie_library_id()]));
     assert_eq!(rule_set["currentRevisionNumber"], 1);
 
     let revision = &detail["revision"];
@@ -496,6 +496,10 @@ async fn maintenance_rule_matcher_update_appends_a_revision() {
 #[tokio::test]
 async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
     let ctx = TestContext::new().await;
+    let library_ids = vec![
+        movie_library_id(),
+        scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+    ];
 
     let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
@@ -518,7 +522,7 @@ async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
                 "id": id,
                 "name": "Renamed",
                 "description": "Now scoped",
-                "libraryIds": ["lib-a", "lib-b"],
+                "libraryIds": library_ids,
             }
         }),
     )
@@ -528,7 +532,7 @@ async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
     let rule_set = &renamed["data"]["updateMaintenanceRuleMetadata"];
     assert_eq!(rule_set["name"], "Renamed");
     assert_eq!(rule_set["description"], "Now scoped");
-    assert_eq!(rule_set["libraryIds"], json!(["lib-a", "lib-b"]));
+    assert_eq!(rule_set["libraryIds"], json!(library_ids));
     assert_eq!(rule_set["currentRevisionNumber"], 1);
     // Renaming leaves the matcher alone, so the action it authorizes is
     // unchanged and still reported on the rule set itself.

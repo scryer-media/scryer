@@ -918,7 +918,7 @@ impl AppUseCase {
             let proxy_override = normalized_proxy_config_id
                 .as_ref()
                 .map(|value| value.as_deref());
-            self.test_indexer_connection(
+            self.probe_indexer_connection(
                 actor,
                 &effective_provider,
                 validation_config_json,

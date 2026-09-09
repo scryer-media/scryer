@@ -372,6 +372,11 @@ fn finalize_post_download_rule_scores(
         .collect();
     let rules_reduce_score =
         crate::quality_profile::sum_score_deltas(entries.iter().map(|entry| entry.delta)) < 0;
+    let contributing_rule_codes: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.delta < 0)
+        .map(|entry| entry.code.clone())
+        .collect();
     for entry in entries {
         let source = match entry.origin {
             scryer_rules::PolicyOrigin::User => crate::quality_profile::ScoringSource::UserRule {
@@ -389,7 +394,7 @@ fn finalize_post_download_rule_scores(
     }
     crate::quality_profile::apply_min_score_gate(profile, decision);
     // Mandatory checks retain their existing origin-aware import paths.
-    decision
+    let mut blocking_codes: Vec<_> = decision
         .scoring_log
         .iter()
         .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::FinalScoreRejection)
@@ -397,7 +402,18 @@ fn finalize_post_download_rule_scores(
             rules_reduce_score || !builtin_score_rejections.contains(entry.code.as_str())
         })
         .map(|entry| entry.code.clone())
-        .collect()
+        .collect();
+    // Keep the rule provenance in import failures and blocklist reasons, but
+    // only after the completed score fails a gate. A recovered penalty is not
+    // itself a rejection.
+    if !blocking_codes.is_empty() {
+        for code in contributing_rule_codes {
+            if !blocking_codes.contains(&code) {
+                blocking_codes.push(code);
+            }
+        }
+    }
+    blocking_codes
 }
 
 #[cfg(feature = "runtime-media-analysis")]
@@ -1955,6 +1971,7 @@ mod tests {
             }
             let codes = finalize_post_download_rule_scores(&profile, &mut decision, entries);
             assert_eq!(codes.is_empty(), rescued);
+            assert_eq!(codes.iter().any(|code| code == "penalty"), !rescued);
             assert_eq!(
                 decision.release_score,
                 baseline.release_score - 10_000 + if rescued { 20_000 } else { 0 }

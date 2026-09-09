@@ -909,6 +909,13 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 continue;
             };
             if record.hashes.is_none() {
+                // Adoption verifies a destination placed by the user. Without
+                // full-hash proof, any remaining source still belongs to them.
+                if operation.operation_type
+                    == crate::location::model::LocationOperationType::Adoption
+                {
+                    continue;
+                }
                 let source = stored_path_to_path_buf(&file.source_path);
                 if source == file.destination() {
                     return Err(AppError::Validation(
