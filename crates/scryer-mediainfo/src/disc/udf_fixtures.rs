@@ -90,6 +90,12 @@ fn authored_udf(metadata_partition: bool) -> Vec<u8> {
     let mut logical = vec![0; BLOCK];
     u32_at(&mut logical, 16, 2);
     u32_at(&mut logical, 212, BLOCK as u32);
+    logical[217..236].copy_from_slice(b"*OSTA UDF Compliant");
+    u16_at(
+        &mut logical,
+        240,
+        if metadata_partition { 0x0250 } else { 0x0102 },
+    );
     let part = u16::from(metadata_partition);
     ad(&mut logical, 248, 0, part, BLOCK as u32);
     let map_len = if metadata_partition { 70 } else { 6 };
@@ -101,6 +107,7 @@ fn authored_udf(metadata_partition: bool) -> Vec<u8> {
         map[0] = 2;
         map[1] = 64;
         map[5..28].copy_from_slice(b"*UDF Metadata Partition");
+        u16_at(map, 28, 0x0250);
         u16_at(map, 36, 1);
         u32_at(map, 40, 0);
         u32_at(map, 44, u32::MAX);
@@ -135,6 +142,12 @@ fn authored_udf(metadata_partition: bool) -> Vec<u8> {
         }
     };
     let mut fsd = vec![0; BLOCK];
+    fsd[417..436].copy_from_slice(b"*OSTA UDF Compliant");
+    u16_at(
+        &mut fsd,
+        440,
+        if metadata_partition { 0x0250 } else { 0x0102 },
+    );
     ad(&mut fsd, 400, 1, part, BLOCK as u32);
     tag(&mut fsd, 256, 0, 512);
     put(&mut image, physical(0), &fsd);
@@ -283,6 +296,68 @@ fn udf_continuation_bounds_and_crc_coverage_are_enforced() {
             "UDF CRC does not cover descriptor fields"
         ))
     ));
+}
+
+#[test]
+fn udf_supported_domains_allow_read_only_protection() {
+    for revision in [0x0102, 0x0150, 0x0200, 0x0201, 0x0250, 0x0260] {
+        for protection in 0..=3 {
+            let metadata = revision >= 0x0250;
+            let mut bytes = authored_udf(metadata);
+            let logical = &mut bytes[21 * BLOCK..22 * BLOCK];
+            u16_at(logical, 240, revision);
+            logical[242] = protection;
+            if metadata {
+                u16_at(logical, 446 + 28, revision);
+            }
+            tag(logical, 6, 21, if metadata { 510 } else { 446 });
+            let sector = if metadata { 308 } else { 300 };
+            let fsd = &mut bytes[sector * BLOCK..(sector + 1) * BLOCK];
+            u16_at(fsd, 440, revision);
+            fsd[442] = protection;
+            tag(fsd, 256, 0, 512);
+            let inventory = image::open(&mut Cursor::new(bytes)).unwrap();
+            assert!(inventory.files.contains_key("BDMV/STREAM/00001.M2TS"));
+        }
+    }
+}
+
+#[test]
+fn udf_unimplemented_domains_and_layout_flags_remain_unsupported() {
+    for (sector, field, value) in [
+        (21, 216, 1), // Dirty domain identifier.
+        (21, 217, b'!'),
+        (21, 241, 3),      // Future UDF revision.
+        (21, 242, 4),      // Unknown domain flag.
+        (21, 243, 1),      // Unknown domain extension.
+        (21, 442, 2),      // Physical map references another volume.
+        (21, 446 + 36, 2), // Metadata map references another volume.
+        (21, 446 + 29, 3), // Future metadata partition revision.
+        (21, 446 + 58, 2), // Unknown metadata partition flag.
+        (21, 258, 1),      // Erased file-set ICB allocation.
+        (308, 416, 1),     // File-set domain is also checked.
+        (308, 449, 8),     // File-set continuation is not implemented.
+        (308, 410, 1),     // Erased root ICB allocation.
+    ] {
+        let mut bytes = authored_udf(true);
+        let descriptor = &mut bytes[sector * BLOCK..(sector + 1) * BLOCK];
+        descriptor[field] = value;
+        if sector == 21 {
+            tag(descriptor, 6, 21, 510);
+        } else {
+            tag(descriptor, 256, 0, 512);
+        }
+        assert!(
+            matches!(
+                image::open(&mut Cursor::new(bytes.clone())),
+                Err(ImageError::Unsupported(_))
+            ),
+            "sector={sector} field={field}"
+        );
+        let report = super::diagnose_source(&mut Cursor::new(bytes), Default::default());
+        assert_eq!(report.status, scryer_media_types::ProbeStatus::Unsupported);
+        assert!(!report.warnings.is_empty());
+    }
 }
 
 #[test]

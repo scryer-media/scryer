@@ -143,6 +143,8 @@ pub fn udf(files: &[(&str, Vec<u8>)], metadata: bool) -> Vec<u8> {
     let mut logical = vec![0; BLOCK];
     dword(&mut logical, 16, 2);
     dword(&mut logical, 212, BLOCK as u32);
+    logical[217..236].copy_from_slice(b"*OSTA UDF Compliant");
+    word(&mut logical, 240, if metadata { 0x0250 } else { 0x0102 });
     allocation(&mut logical, 248, 0, part, BLOCK);
     let map_size = if metadata { 70 } else { 6 };
     dword(&mut logical, 264, map_size);
@@ -153,6 +155,7 @@ pub fn udf(files: &[(&str, Vec<u8>)], metadata: bool) -> Vec<u8> {
         map[0] = 2;
         map[1] = 64;
         map[5..28].copy_from_slice(b"*UDF Metadata Partition");
+        word(map, 28, 0x0250);
         word(map, 36, 1);
         dword(map, 44, u32::MAX);
         dword(map, 48, u32::MAX);
@@ -175,6 +178,8 @@ pub fn udf(files: &[(&str, Vec<u8>)], metadata: bool) -> Vec<u8> {
     tag(&mut end, 8, 22, 512, version);
     put(&mut image, 22, &end);
     let mut fsd = vec![0; BLOCK];
+    fsd[417..436].copy_from_slice(b"*OSTA UDF Compliant");
+    word(&mut fsd, 440, if metadata { 0x0250 } else { 0x0102 });
     allocation(&mut fsd, 400, directories[""], part, BLOCK);
     tag(&mut fsd, 256, 0, 512, version);
     put(&mut image, mapped(0), &fsd);

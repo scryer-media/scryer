@@ -439,10 +439,37 @@ fn mapped_read(
         extents: mapped(maps, partition, block, length)?,
     })
 }
+fn udf_domain(bytes: &[u8], at: usize) -> Result<()> {
+    let id = bytes
+        .get(at..at + 32)
+        .ok_or(ImageError::Malformed("short UDF domain identifier"))?;
+    if id[0] != 0 || &id[1..24] != b"*OSTA UDF Compliant\0\0\0\0" {
+        return Err(ImageError::Unsupported(
+            "unrecognized or dirty UDF domain identifier",
+        ));
+    }
+    if !matches!(
+        le16(id, 24)?,
+        0x0102 | 0x0150 | 0x0200 | 0x0201 | 0x0250 | 0x0260
+    ) {
+        return Err(ImageError::Unsupported("UDF domain revision"));
+    }
+    // Hard/soft write protection does not restrict this read-only reader.
+    if id[26] & !3 != 0 || id[27..].iter().any(|byte| *byte != 0) {
+        return Err(ImageError::Unsupported("UDF domain flags or extensions"));
+    }
+    Ok(())
+}
+
 fn long_ad(bytes: &[u8], at: usize) -> Result<(u32, u16, u32)> {
     let length = le32(bytes, at)?;
     if length >> 30 != 0 {
         return Err(ImageError::Unsupported("unrecorded UDF ICB extent"));
+    }
+    if le16(bytes, at + 10)? != 0 {
+        return Err(ImageError::Unsupported(
+            "erased or extended UDF ICB allocation",
+        ));
     }
     Ok((le32(bytes, at + 4)?, le16(bytes, at + 8)?, length))
 }
@@ -549,6 +576,7 @@ fn udf_volume(reader: &mut Reader<'_>, mut start: u32, mut length: u32) -> Resul
     let (_, logical) = logical.ok_or(ImageError::Malformed(
         "missing UDF logical volume descriptor",
     ))?;
+    udf_domain(&logical, 216)?;
     if le32(&logical, 212)? != BLOCK as u32 {
         return Err(ImageError::Unsupported("UDF logical block size"));
     }
@@ -574,8 +602,29 @@ fn udf_volume(reader: &mut Reader<'_>, mut start: u32, mut length: u32) -> Resul
         }
         let map = &logical[at..at + size];
         let number = match (map[0], size) {
-            (1, 6) => le16(map, 4)?,
+            (1, 6) => {
+                if le16(map, 2)? != 1 {
+                    return Err(ImageError::Unsupported(
+                        "multi-volume UDF partition reference",
+                    ));
+                }
+                le16(map, 4)?
+            }
             (2, 64) if map.get(5..28) == Some(b"*UDF Metadata Partition") => {
+                if le16(map, 36)? != 1 {
+                    return Err(ImageError::Unsupported(
+                        "multi-volume UDF metadata partition",
+                    ));
+                }
+                if map[4] != 0
+                    || !matches!(le16(map, 28)?, 0x0250 | 0x0260)
+                    || map[58] & !1 != 0
+                    || map[59..].iter().any(|byte| *byte != 0)
+                {
+                    return Err(ImageError::Unsupported(
+                        "UDF metadata partition revision or flags",
+                    ));
+                }
                 metadata_maps.push((maps.len(), le32(map, 40)?, le32(map, 44)?));
                 le16(map, 38)?
             }
@@ -626,6 +675,10 @@ fn udf_volume(reader: &mut Reader<'_>, mut start: u32, mut length: u32) -> Resul
     let fsd = mapped_read(reader, &maps, partition, block, BLOCK)?;
     if validate_tag(&fsd, Some(block))? != 256 {
         return Err(ImageError::Malformed("missing UDF file set descriptor"));
+    }
+    udf_domain(&fsd, 416)?;
+    if le32(&fsd, 448)? != 0 {
+        return Err(ImageError::Unsupported("chained UDF file sets"));
     }
     let (root, partition, _) = long_ad(&fsd, 400)?;
     let mut files = BTreeMap::new();
