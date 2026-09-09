@@ -464,17 +464,19 @@ export function SettingsProxiesSection({
                       className="mb-2 block"
                       htmlFor="settings-indexer-proxy-base-url"
                     >
-                      {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
-                      {isTunnelDraft || isWireguardDraft ? (
-                        <InfoHelp
-                          ariaLabel={t("settings.proxyEndpoint")}
-                          text={
-                            isWireguardDraft
-                              ? t("settings.proxyEndpointHelpWireguard")
-                              : t("settings.proxyEndpointHelp")
-                          }
-                        />
-                      ) : null}
+                      <span className="inline-flex items-center gap-1.5">
+                        {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3" ? t("settings.proxyEndpoint") : t("settings.baseUrl")}
+                        {isTunnelDraft || isWireguardDraft ? (
+                          <InfoHelp
+                            ariaLabel={t("settings.proxyEndpoint")}
+                            text={
+                              isWireguardDraft
+                                ? t("settings.proxyEndpointHelpWireguard")
+                                : t("settings.proxyEndpointHelp")
+                            }
+                          />
+                        ) : null}
+                      </span>
                     </Label>
                     <Input
                       id="settings-indexer-proxy-base-url"
@@ -711,15 +713,17 @@ export function SettingsProxiesSection({
                         className="mb-2 block"
                         htmlFor="settings-indexer-proxy-private-key"
                       >
-                        {t("settings.proxyPrivateKey")}
-                        <InfoHelp
-                          ariaLabel={t("settings.proxyPrivateKey")}
-                          text={
-                            isWireguardDraft
-                              ? t("settings.proxyPrivateKeyHelpWireguard")
-                              : t("settings.proxyPrivateKeyHelp")
-                          }
-                        />
+                        <span className="inline-flex items-center gap-1.5">
+                          {t("settings.proxyPrivateKey")}
+                          <InfoHelp
+                            ariaLabel={t("settings.proxyPrivateKey")}
+                            text={
+                              isWireguardDraft
+                                ? t("settings.proxyPrivateKeyHelpWireguard")
+                                : t("settings.proxyPrivateKeyHelp")
+                            }
+                          />
+                        </span>
                       </Label>
                       {isWireguardDraft ? (
                         <Input
@@ -822,11 +826,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-peer-public-key"
                             >
-                              {t("settings.proxyPeerPublicKey")}
-                              <InfoHelp
-                                ariaLabel={t("settings.proxyPeerPublicKey")}
-                                text={t("settings.proxyPeerPublicKeyHelp")}
-                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyPeerPublicKey")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyPeerPublicKey")}
+                                  text={t("settings.proxyPeerPublicKeyHelp")}
+                                />
+                              </span>
                             </Label>
                             {/* A public key is public: it is read back in full
                                 and shown as typed, never masked. */}
@@ -856,11 +862,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-preshared-key"
                             >
-                              {t("settings.proxyPresharedKey")}
-                              <InfoHelp
-                                ariaLabel={t("settings.proxyPresharedKey")}
-                                text={t("settings.proxyPresharedKeyHelp")}
-                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyPresharedKey")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyPresharedKey")}
+                                  text={t("settings.proxyPresharedKeyHelp")}
+                                />
+                              </span>
                             </Label>
                             <Input
                               id="settings-indexer-proxy-preshared-key"
@@ -907,11 +915,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-addresses"
                             >
-                              {t("settings.proxyTunnelAddresses")}
-                              <InfoHelp
-                                ariaLabel={t("settings.proxyTunnelAddresses")}
-                                text={t("settings.proxyTunnelAddressesHelp")}
-                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelAddresses")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelAddresses")}
+                                  text={t("settings.proxyTunnelAddressesHelp")}
+                                />
+                              </span>
                             </Label>
                             <Textarea
                               id="settings-indexer-proxy-tunnel-addresses"
@@ -934,11 +944,13 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-dns-servers"
                             >
-                              {t("settings.proxyTunnelDnsServers")}
-                              <InfoHelp
-                                ariaLabel={t("settings.proxyTunnelDnsServers")}
-                                text={t("settings.proxyTunnelDnsServersHelp")}
-                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelDnsServers")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelDnsServers")}
+                                  text={t("settings.proxyTunnelDnsServersHelp")}
+                                />
+                              </span>
                             </Label>
                             <Textarea
                               id="settings-indexer-proxy-tunnel-dns-servers"
@@ -962,15 +974,17 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-mtu"
                             >
-                              {t("settings.proxyTunnelMtu")}
-                              <InfoHelp
-                                ariaLabel={t("settings.proxyTunnelMtu")}
-                                text={t("settings.proxyTunnelMtuHelp", {
-                                  min: WIREGUARD_MTU_MIN,
-                                  max: WIREGUARD_MTU_MAX,
-                                  default: WIREGUARD_MTU_DEFAULT,
-                                })}
-                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelMtu")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelMtu")}
+                                  text={t("settings.proxyTunnelMtuHelp", {
+                                    min: WIREGUARD_MTU_MIN,
+                                    max: WIREGUARD_MTU_MAX,
+                                    default: WIREGUARD_MTU_DEFAULT,
+                                  })}
+                                />
+                              </span>
                             </Label>
                             {/* Blank is a real value here — it means "use the
                                 engine's default" — so these are text fields
@@ -994,13 +1008,15 @@ export function SettingsProxiesSection({
                               className="mb-2 block"
                               htmlFor="settings-indexer-proxy-tunnel-keepalive"
                             >
-                              {t("settings.proxyTunnelKeepalive")}
-                              <InfoHelp
-                                ariaLabel={t("settings.proxyTunnelKeepalive")}
-                                text={t("settings.proxyTunnelKeepaliveHelp", {
-                                  default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
-                                })}
-                              />
+                              <span className="inline-flex items-center gap-1.5">
+                                {t("settings.proxyTunnelKeepalive")}
+                                <InfoHelp
+                                  ariaLabel={t("settings.proxyTunnelKeepalive")}
+                                  text={t("settings.proxyTunnelKeepaliveHelp", {
+                                    default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
+                                  })}
+                                />
+                              </span>
                             </Label>
                             <Input
                               id="settings-indexer-proxy-tunnel-keepalive"
