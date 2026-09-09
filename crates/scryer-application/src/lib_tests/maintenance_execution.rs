@@ -85,6 +85,7 @@ const ALWAYS_MATCHER: &str = "match := true\n";
 
 fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Unmonitor stale".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),
@@ -97,6 +98,7 @@ fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
 
 fn delete_draft() -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Retire".to_string(),
         description: String::new(),
         rego_source: ALWAYS_MATCHER.to_string(),
@@ -335,6 +337,8 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
             rule_set_id: rule_id.clone(),
             revision_number: candidate.revision_number,
             title_id: title.id.clone(),
+            subject_id: title.id.clone(),
+            subject_kind: "title".to_string(),
             action_kind: candidate.action_kind.clone(),
             match_generation: candidate.match_generation,
             idempotency_key: "orphan-key".to_string(),

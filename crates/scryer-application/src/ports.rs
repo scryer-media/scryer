@@ -6559,7 +6559,7 @@ pub struct MaintenanceCandidateQuery {
 /// Durable lifecycle candidates (RFC 137 section 8).
 ///
 /// The store, not just the migration's partial unique index, is responsible for
-/// the one-active-candidate-per-(rule, title) invariant: a create is refused
+/// the one-active-candidate-per-(rule, kind, subject) invariant: a create is refused
 /// when an active candidate already exists.
 #[async_trait]
 pub trait MaintenanceCandidateRepository: Send + Sync {
@@ -6568,6 +6568,16 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         &self,
         rule_set_id: &str,
         title_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
+        self.get_active_subject_candidate(rule_set_id, "title", title_id)
+            .await
+    }
+
+    async fn get_active_subject_candidate(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleCandidate>>;
 
     async fn list_candidates(
@@ -6577,7 +6587,17 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
 
     /// Highest match generation ever recorded for this subject, terminal rows
     /// included. Zero when the subject has never had a candidate.
-    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64>;
+    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
+        self.max_subject_match_generation(rule_set_id, "title", title_id)
+            .await
+    }
+
+    async fn max_subject_match_generation(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<i64>;
 
     async fn create_candidate(
         &self,
@@ -6696,6 +6716,13 @@ pub trait LifecycleActionRunRepository: Send + Sync {
 
     /// Write the attempt's terminal status, hold reason, error, and detail.
     async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// The newest durable scoped-deletion checkpoint, independently of the
+    /// number of later safety holds in the candidate's history.
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        candidate_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionRun>>;
 
     /// Newest first, optionally narrowed by rule set and/or candidate.
     async fn list_action_runs(

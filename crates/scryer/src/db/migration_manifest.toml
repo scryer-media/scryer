@@ -2105,3 +2105,20 @@ kind = "sql"
 file = "postgres/migrations/0227_rule_set_evaluation_metadata.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 228
+description = "maintenance episode and season subject identity"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0228_maintenance_subjects.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0228_maintenance_subjects.sql"
+engine = "postgres"
+scope = "all"

@@ -38,28 +38,30 @@ impl MaintenanceEvaluationStore {
 // ── Column lists and shared SQL ─────────────────────────────────────────────
 
 const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash, title_id,
-    library_id, facet, subject_kind, match_generation, state, state_reason, reason_codes,
+    library_id, facet, subject_kind, subject_id, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
     held_since, action_attempts, created_at, updated_at";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
         (id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id, facet,
-         subject_kind, match_generation, state, state_reason, reason_codes, action_kind,
+         subject_kind, subject_id, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
          action_attempts, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
-const ACTION_RUN_COLUMNS: &str = "id, candidate_id, rule_set_id, revision_number, title_id,
+const ACTION_RUN_COLUMNS: &str =
+    "id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id,
     action_kind, match_generation, idempotency_key, attempt, status, hold_reason, error,
     detail, started_at, finished_at, created_at";
 
 const INSERT_ACTION_RUN_SQL: &str = "INSERT INTO lifecycle_action_runs
-        (id, candidate_id, rule_set_id, revision_number, title_id, action_kind,
+        (id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id, action_kind,
          match_generation, idempotency_key, attempt, status, hold_reason, error, detail,
          started_at, finished_at, created_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
-const EXCLUSION_COLUMNS: &str = "id, rule_set_id, title_id, reason, created_by, created_at";
+const EXCLUSION_COLUMNS: &str =
+    "id, rule_set_id, title_id, subject_kind, subject_id, reason, created_by, created_at";
 
 const EVALUATION_RUN_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash,
     started_at, finished_at, status, evaluated_count, matched_count, no_match_count,
@@ -85,22 +87,24 @@ fn active_state_predicate() -> (String, Vec<SqlArg>) {
 
 #[async_trait]
 impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
-    async fn get_active_candidate(
+    async fn get_active_subject_candidate(
         &self,
         rule_set_id: &str,
-        title_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
     ) -> AppResult<Option<LifecycleCandidate>> {
         let (predicate, mut args) = active_state_predicate();
         let sql = format!(
             "SELECT {CANDIDATE_COLUMNS}
                FROM lifecycle_candidates
-              WHERE rule_set_id = {{}} AND title_id = {{}} AND {predicate}
+              WHERE rule_set_id = {{}} AND subject_kind = {{}} AND subject_id = {{}} AND {predicate}
               ORDER BY match_generation DESC
               LIMIT 1"
         );
         let mut bound = vec![
             SqlArg::Text(rule_set_id.to_string()),
-            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(subject_kind.to_string()),
+            SqlArg::Text(subject_id.to_string()),
         ];
         bound.append(&mut args);
 
@@ -167,12 +171,17 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
             .collect()
     }
 
-    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
+    async fn max_subject_match_generation(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<i64> {
         // Terminal rows count: generations are monotonic per subject, so a
         // cancel-then-rematch is always distinguishable from a continuation.
         let sql = "SELECT match_generation
                      FROM lifecycle_candidates
-                    WHERE rule_set_id = {} AND title_id = {}
+                    WHERE rule_set_id = {} AND subject_kind = {} AND subject_id = {}
                     ORDER BY match_generation DESC
                     LIMIT 1";
         Ok(SqlRuntime::fetch_optional(
@@ -180,7 +189,8 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
             sql,
             &[
                 SqlArg::Text(rule_set_id.to_string()),
-                SqlArg::Text(title_id.to_string()),
+                SqlArg::Text(subject_kind.to_string()),
+                SqlArg::Text(subject_id.to_string()),
             ],
         )
         .await?
@@ -194,12 +204,13 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         let (predicate, mut predicate_args) = active_state_predicate();
         let exists_sql = format!(
             "SELECT id FROM lifecycle_candidates
-              WHERE rule_set_id = {{}} AND title_id = {{}} AND {predicate}
+              WHERE rule_set_id = {{}} AND subject_kind = {{}} AND subject_id = {{}} AND {predicate}
               LIMIT 1"
         );
         let mut exists_args = vec![
             SqlArg::Text(candidate.rule_set_id.clone()),
-            SqlArg::Text(candidate.title_id.clone()),
+            SqlArg::Text(candidate.subject_kind.clone()),
+            SqlArg::Text(candidate.subject_id.clone()),
         ];
         exists_args.append(&mut predicate_args);
         let insert_args = candidate_args(candidate)?;
@@ -550,6 +561,33 @@ impl LifecycleActionRunRepository for MaintenanceEvaluationStore {
         .await
     }
 
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        candidate_id: &str,
+    ) -> AppResult<Option<LifecycleActionRun>> {
+        // Checkpoint details are serialized by the application. Filter before
+        // limiting so an arbitrary number of later hold rows cannot hide them.
+        let sql = format!(
+            "SELECT {ACTION_RUN_COLUMNS}
+               FROM lifecycle_action_runs
+              WHERE candidate_id = {{}} AND action_kind = {{}} AND detail LIKE {{}} ESCAPE '!'
+              ORDER BY started_at DESC, id DESC LIMIT 1"
+        );
+        SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            &sql,
+            &[
+                SqlArg::Text(candidate_id.to_string()),
+                SqlArg::Text("unmonitor_scope_delete_files".to_string()),
+                SqlArg::Text("%\"scoped!_deletion\":%".to_string()),
+            ],
+        )
+        .await?
+        .as_ref()
+        .map(row_to_action_run)
+        .transpose()
+    }
+
     async fn list_action_runs(
         &self,
         rule_set_id: Option<&str>,
@@ -647,12 +685,14 @@ impl MaintenanceExclusionRepository for MaintenanceEvaluationStore {
             &self.datastore,
             "create_maintenance_rule_exclusion",
             "INSERT INTO maintenance_rule_exclusions
-                (id, rule_set_id, title_id, reason, created_by, created_at)
-             VALUES ({}, {}, {}, {}, {}, {})",
+                (id, rule_set_id, title_id, subject_kind, subject_id, reason, created_by, created_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
             vec![
                 SqlArg::Text(exclusion.id.clone()),
                 SqlArg::OptText(exclusion.rule_set_id.clone()),
                 SqlArg::Text(exclusion.title_id.clone()),
+                SqlArg::Text(exclusion.subject_kind.as_storage_str().to_string()),
+                SqlArg::Text(exclusion.subject_id.clone()),
                 SqlArg::Text(exclusion.reason.clone()),
                 SqlArg::OptText(exclusion.created_by.clone()),
                 SqlArg::Timestamp(exclusion.created_at),
@@ -785,6 +825,7 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(candidate.library_id.clone()),
         SqlArg::Text(candidate.facet.clone()),
         SqlArg::Text(candidate.subject_kind.clone()),
+        SqlArg::Text(candidate.subject_id.clone()),
         SqlArg::I64(candidate.match_generation),
         SqlArg::Text(candidate.state.as_storage_str().to_string()),
         SqlArg::Text(candidate.state_reason.clone()),
@@ -809,6 +850,8 @@ fn action_run_args(run: &LifecycleActionRun) -> Vec<SqlArg> {
         SqlArg::Text(run.rule_set_id.clone()),
         SqlArg::I64(run.revision_number),
         SqlArg::Text(run.title_id.clone()),
+        SqlArg::Text(run.subject_kind.clone()),
+        SqlArg::Text(run.subject_id.clone()),
         SqlArg::Text(run.action_kind.clone()),
         SqlArg::I64(run.match_generation),
         SqlArg::Text(run.idempotency_key.clone()),
@@ -830,6 +873,8 @@ fn row_to_action_run(row: &SqlRow) -> AppResult<LifecycleActionRun> {
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
         title_id: row.text("title_id")?,
+        subject_kind: row.text("subject_kind")?,
+        subject_id: row.text("subject_id")?,
         action_kind: row.text("action_kind")?,
         match_generation: row.i64("match_generation")?,
         idempotency_key: row.text("idempotency_key")?,
@@ -854,6 +899,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         library_id: row.text("library_id")?,
         facet: row.text("facet")?,
         subject_kind: row.text("subject_kind")?,
+        subject_id: row.text("subject_id")?,
         match_generation: row.i64("match_generation")?,
         // An unrecognized stored state was written by a newer build. Reading it
         // back as `Blocked` would be a lie about what happened; `Observing` is
@@ -887,6 +933,11 @@ fn row_to_exclusion(row: &SqlRow) -> AppResult<MaintenanceRuleExclusion> {
         id: row.text("id")?,
         rule_set_id: row.opt_text("rule_set_id")?,
         title_id: row.text("title_id")?,
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::parse_storage(
+            &row.text("subject_kind")?,
+        )
+        .ok_or_else(|| AppError::Repository("invalid maintenance exclusion scope".into()))?,
+        subject_id: row.text("subject_id")?,
         reason: row.text("reason")?,
         created_by: row.opt_text("created_by")?,
         created_at: row.timestamp("created_at")?,

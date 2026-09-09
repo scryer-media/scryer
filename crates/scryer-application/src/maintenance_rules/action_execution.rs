@@ -43,7 +43,7 @@ use crate::maintenance_rules::action_catalog::{
 use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    QUALITY_PROFILE_TAG_PREFIX, build_title_input, claim_is_live_at,
+    QUALITY_PROFILE_TAG_PREFIX, build_subject_input, claim_is_live_at,
 };
 use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
@@ -119,6 +119,21 @@ pub const EXECUTABLE_TITLE_RULE_ACTIONS: &[MaintenanceActionKind] = &[
     MaintenanceActionKind::AddTags,
     MaintenanceActionKind::RemoveTags,
 ];
+
+/// The single supported scope/action matrix exposed to the rule builder.
+pub fn supported_scope_actions(
+    scope: scryer_domain::MaintenanceRuleSubjectKind,
+) -> &'static [MaintenanceActionKind] {
+    match scope {
+        scryer_domain::MaintenanceRuleSubjectKind::Title => EXECUTABLE_TITLE_RULE_ACTIONS,
+        scryer_domain::MaintenanceRuleSubjectKind::Season
+        | scryer_domain::MaintenanceRuleSubjectKind::Episode => &[
+            MaintenanceActionKind::DoNothing,
+            MaintenanceActionKind::UnmonitorScopeKeepFiles,
+            MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+        ],
+    }
+}
 
 /// The refusal both the authoring check and the executor's rejection arm speak,
 /// so an operator reads the same sentence wherever they hit the boundary.
@@ -204,6 +219,7 @@ pub struct MaintenanceActionHandlingReport {
 /// One action run with its title's display name resolved for rendering.
 #[derive(Clone, Debug)]
 pub struct MaintenanceActionRunView {
+    pub subject_label: String,
     pub run: LifecycleActionRun,
     pub title_name: String,
 }
@@ -221,7 +237,7 @@ enum CandidateOutcome {
 /// What the pre-execution safety rechecks decided.
 enum SafetyDecision {
     /// Act on this title, which every check has just seen fresh.
-    Proceed(Box<Title>),
+    Proceed(Box<Title>, Box<scryer_rules::maintenance::MaintenanceInput>),
     /// Refuse and block the candidate with this reason.
     Hold(&'static str),
     /// The subject stopped matching (or vanished); cancel the candidate.
@@ -231,7 +247,7 @@ enum SafetyDecision {
 }
 
 /// What an action implementation reports back.
-enum ActionResult {
+pub(super) enum ActionResult {
     Executed { detail: serde_json::Value },
     AlreadySatisfied { detail: serde_json::Value },
 }
@@ -344,6 +360,12 @@ impl AppUseCase {
         let names = self
             .maintenance_title_names(runs.iter().map(|run| run.title_id.clone()))
             .await?;
+        let summaries = self
+            .maintenance_subject_summaries(
+                runs.iter()
+                    .map(|row| (row.subject_kind.clone(), row.title_id.clone())),
+            )
+            .await?;
         Ok(runs
             .into_iter()
             .map(|run| {
@@ -351,7 +373,25 @@ impl AppUseCase {
                     &names,
                     &run.title_id,
                 );
-                MaintenanceActionRunView { run, title_name }
+                let subject_label = serde_json::from_str::<serde_json::Value>(&run.detail)
+                    .ok()
+                    .and_then(|detail| {
+                        detail
+                            .get("subject_label")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .or_else(|| {
+                        summaries
+                            .get(&(run.subject_kind.clone(), run.subject_id.clone()))
+                            .map(|summary| summary.0.clone())
+                    })
+                    .unwrap_or_else(|| run.subject_id.clone());
+                MaintenanceActionRunView {
+                    run,
+                    title_name,
+                    subject_label,
+                }
             })
             .collect())
     }
@@ -738,6 +778,8 @@ impl AppUseCase {
             rule_set_id: candidate.rule_set_id.clone(),
             revision_number: candidate.revision_number,
             title_id: candidate.title_id.clone(),
+            subject_kind: candidate.subject_kind.clone(),
+            subject_id: candidate.subject_id.clone(),
             action_kind: candidate.action_kind.clone(),
             match_generation: candidate.match_generation,
             // Filled in below: holds carry a per-row key so repeated re-checks
@@ -768,7 +810,7 @@ impl AppUseCase {
         // their own id. Only the path that is about to mutate claims the
         // execution key, whose (key, attempt) uniqueness is what makes a
         // crashed or concurrent duplicate attempt detectable.
-        if matches!(decision, SafetyDecision::Proceed(_)) {
+        if matches!(decision, SafetyDecision::Proceed(..)) {
             // The attempt is *reserved* here — durably, and strictly before the
             // run row and any external side effect. A counter only advanced
             // after a handled failure leaves an interrupted attempt invisible:
@@ -853,9 +895,9 @@ impl AppUseCase {
                     CandidateOutcome::LeaseLost
                 }
             }
-            SafetyDecision::Proceed(title) => {
+            SafetyDecision::Proceed(title, input) => {
                 match self
-                    .execute_maintenance_action(detail, kind, &candidate, &title)
+                    .execute_maintenance_action(detail, kind, &candidate, &title, &input, &mut run)
                     .await
                 {
                     Ok(ActionResult::Executed { detail: evidence }) => {
@@ -1090,23 +1132,20 @@ impl AppUseCase {
             }
         }
 
-        // (2) Exclusions recheck.
-        match self
+        let exclusions = match self
             .services
             .customization
             .maintenance_evaluation
             .list_exclusions(Some(&candidate.rule_set_id))
             .await
         {
-            Ok(exclusions)
-                if exclusions
-                    .iter()
-                    .any(|exclusion| exclusion.title_id == candidate.title_id) =>
-            {
-                return SafetyDecision::Excluded;
-            }
-            Ok(_) => {}
+            Ok(exclusions) => exclusions,
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        if fresh.subject_kind.as_storage_str() != candidate.subject_kind
+            || !supported_scope_actions(fresh.subject_kind).contains(&kind)
+        {
+            return SafetyDecision::Hold(execution_reason::ACTION_NOT_FULLY_SUPPORTED);
         }
 
         // (3) Fresh matcher re-evaluation on current facts.
@@ -1260,11 +1299,32 @@ impl AppUseCase {
                 .map(Vec::as_slice),
             store_readable: claims_by_title.is_some(),
         };
-        let input = build_title_input(
+        let subject = match self
+            .maintenance_resolve_subject(
+                &candidate.subject_kind,
+                &candidate.subject_id,
+                &title,
+                files,
+            )
+            .await
+        {
+            Ok(subject) => subject,
+            Err(AppError::NotFound(_)) => {
+                return SafetyDecision::Cancel(execution_reason::TITLE_MISSING);
+            }
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        if subject.excluded_by(&title.id, &exclusions) {
+            return SafetyDecision::Excluded;
+        }
+        if high_risk && subject.ambiguous_files {
+            return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+        }
+        let mut input = build_subject_input(
             recheck_time,
             &title,
             &library,
-            files,
+            &subject,
             people,
             watch,
             claims,
@@ -1273,6 +1333,13 @@ impl AppUseCase {
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
         );
+        if kind == MaintenanceActionKind::UnmonitorScopeDeleteFiles {
+            match self.maintenance_deletion_checkpoint(candidate).await {
+                Ok(Some(checkpoint)) => checkpoint.baseline.restore(&mut input),
+                Ok(None) => {}
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        }
         let outcome = evaluator
             .evaluate(&input)
             .ok()
@@ -1309,7 +1376,7 @@ impl AppUseCase {
             }
         }
 
-        SafetyDecision::Proceed(Box::new(title))
+        SafetyDecision::Proceed(Box::new(title), Box::new(input))
     }
 
     /// Perform the action through existing use cases, as the system actor.
@@ -1319,6 +1386,8 @@ impl AppUseCase {
         kind: MaintenanceActionKind,
         candidate: &LifecycleCandidate,
         title: &Title,
+        input: &scryer_rules::maintenance::MaintenanceInput,
+        run: &mut LifecycleActionRun,
     ) -> AppResult<ActionResult> {
         let actor = User::system_execution_actor();
         match kind {
@@ -1329,6 +1398,12 @@ impl AppUseCase {
                 })
             }
             MaintenanceActionKind::UnmonitorScopeKeepFiles => {
+                if candidate.subject_kind != "title" {
+                    self.unmonitor_maintenance_child(candidate, title).await?;
+                    return Ok(ActionResult::Executed {
+                        detail: serde_json::json!({"unmonitored": true}),
+                    });
+                }
                 if !title.monitored {
                     return Ok(ActionResult::AlreadySatisfied {
                         detail: serde_json::json!({ "monitored": false }),
@@ -1375,8 +1450,11 @@ impl AppUseCase {
                     execution_reason::ACTION_NOT_FULLY_SUPPORTED
                 )))
             }
+            MaintenanceActionKind::UnmonitorScopeDeleteFiles => {
+                self.execute_scoped_maintenance_deletion(candidate, title, input, run)
+                    .await
+            }
             MaintenanceActionKind::UnmonitorShowDeleteExistingFiles
-            | MaintenanceActionKind::UnmonitorScopeDeleteFiles
             | MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
             | MaintenanceActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
                 // Exactly the complement of `EXECUTABLE_TITLE_RULE_ACTIONS`, and

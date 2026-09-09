@@ -1587,10 +1587,11 @@ const MAINTENANCE_EVALUATION_NOT_CONFIGURED: &str =
 
 #[async_trait]
 impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationRepository {
-    async fn get_active_candidate(
+    async fn get_active_subject_candidate(
         &self,
         _rule_set_id: &str,
-        _title_id: &str,
+        _subject_kind: &str,
+        _subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
         Ok(None)
     }
@@ -1600,7 +1601,12 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
         Ok(vec![])
     }
-    async fn max_match_generation(&self, _rule_set_id: &str, _title_id: &str) -> AppResult<i64> {
+    async fn max_subject_match_generation(
+        &self,
+        _rule_set_id: &str,
+        _subject_kind: &str,
+        _subject_id: &str,
+    ) -> AppResult<i64> {
         Ok(0)
     }
     async fn create_candidate(
@@ -1691,6 +1697,13 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
 
 #[async_trait]
 impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRepository {
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        _candidate_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionRun>> {
+        Ok(None)
+    }
+
     async fn start_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
         Err(AppError::Repository(
             MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),

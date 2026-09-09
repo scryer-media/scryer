@@ -278,6 +278,7 @@ impl LibraryRepository for MockLibraryRepo {
 
 #[derive(Default)]
 pub(super) struct MockShowRepo {
+    pub(super) fail_monitoring: Mutex<bool>,
     pub(super) anime_numbering_bridges: Mutex<HashMap<String, scryer_domain::AnimeNumberingBridge>>,
     pub(super) collections: Arc<Mutex<Vec<Collection>>>,
     pub(super) episodes: Arc<Mutex<Vec<Episode>>>,
@@ -549,6 +550,9 @@ impl ShowRepository for MockShowRepo {
         collection_id: &str,
         monitored: bool,
     ) -> AppResult<()> {
+        if *self.fail_monitoring.lock().await {
+            return Err(AppError::Repository("fixture monitoring failure".into()));
+        }
         let mut episodes = self.episodes.lock().await;
         for episode in episodes.iter_mut() {
             if episode.collection_id.as_deref() == Some(collection_id) {
@@ -644,6 +648,9 @@ impl ShowRepository for MockShowRepo {
     }
 
     async fn update_episode(&self, episode_id: &str, update: EpisodeUpdate) -> AppResult<Episode> {
+        if update.monitored.is_some() && *self.fail_monitoring.lock().await {
+            return Err(AppError::Repository("fixture monitoring failure".into()));
+        }
         let mut episodes = self.episodes.lock().await;
         let item = episodes
             .iter_mut()

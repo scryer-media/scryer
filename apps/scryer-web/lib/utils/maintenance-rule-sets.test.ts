@@ -48,6 +48,7 @@ import {
   runStatusLabelKey,
   setMaintenanceRuleArmingInput,
   titleScopedActionDescriptors,
+  scopedActionDescriptors,
   updateMaintenanceRuleMatcherInput,
   updateMaintenanceRuleMetadataInput,
 } from "./maintenance-rule-sets.ts";
@@ -55,6 +56,7 @@ import {
 const descriptors: MaintenanceActionDescriptor[] = [
   {
     kind: "DO_NOTHING",
+    supportedRuleScopes: ["TITLE", "SEASON", "EPISODE"],
     supportedSubjects: ["MOVIE", "SHOW", "SEASON", "EPISODE"],
     riskClass: "NONE",
     effectClasses: [],
@@ -65,6 +67,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
   },
   {
     kind: "DELETE_TITLE_AND_FILES",
+    supportedRuleScopes: ["TITLE"],
     supportedSubjects: ["MOVIE", "SHOW"],
     riskClass: "HIGH",
     effectClasses: ["DELETE_FILES"],
@@ -75,6 +78,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
   },
   {
     kind: "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY",
+    supportedRuleScopes: [],
     supportedSubjects: ["SEASON"],
     riskClass: "LOW",
     effectClasses: ["UNMONITOR"],
@@ -85,6 +89,7 @@ const descriptors: MaintenanceActionDescriptor[] = [
   },
   {
     kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+    supportedRuleScopes: ["TITLE"],
     supportedSubjects: ["MOVIE", "SHOW"],
     riskClass: "MEDIUM",
     effectClasses: ["SEARCH"],
@@ -200,6 +205,7 @@ test("a tag action sends normalized, deduplicated labels and nothing else", () =
     ...descriptors,
     {
       kind: "ADD_TAGS",
+      supportedRuleScopes: ["TITLE"],
       supportedSubjects: ["MOVIE", "SHOW"],
       riskClass: "LOW",
       effectClasses: ["catalog_intent"],
@@ -243,6 +249,7 @@ test("the tag actions are offerable for a title rule", () => {
     ...descriptors,
     {
       kind: "REMOVE_TAGS",
+      supportedRuleScopes: ["TITLE"],
       supportedSubjects: ["MOVIE", "SHOW"],
       riskClass: "LOW",
       effectClasses: ["catalog_intent"],
@@ -303,6 +310,7 @@ test("an action the backend's title executor cannot run is never offered", () =>
     ...descriptors,
     {
       kind: "UNMONITOR_TITLE_DELETE_ALL_FILES",
+      supportedRuleScopes: [],
       supportedSubjects: ["MOVIE", "SHOW"],
       riskClass: "HIGH",
       effectClasses: ["DELETE_FILES"],
@@ -313,6 +321,7 @@ test("an action the backend's title executor cannot run is never offered", () =>
     },
     {
       kind: "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
+      supportedRuleScopes: [],
       supportedSubjects: ["SHOW"],
       riskClass: "HIGH",
       effectClasses: ["DELETE_FILES"],
@@ -777,4 +786,32 @@ test("every contract title and description key resolves in the default locale", 
   }
 
   assert.deepEqual(missing, []);
+});
+
+
+test("scope is copied, sent on create and preview, and immutable on matcher updates", () => {
+  const scoped: MaintenanceRuleSetDetail = { ...detail, ruleSet: { ...detail.ruleSet, subjectKind: "EPISODE" } };
+  const draft = copyMaintenanceRuleDraft(scoped);
+  assert.equal(draft.subjectKind, "EPISODE");
+  assert.equal(createMaintenanceRuleSetInput(draft, descriptors).subjectKind, "EPISODE");
+  assert.equal(maintenancePreviewInput({ draft, descriptors, libraryId: "series" }).subjectKind, "EPISODE");
+  assert.equal(Object.hasOwn(updateMaintenanceRuleMatcherInput("rule", draft, descriptors), "subjectKind"), false);
+});
+
+test("the API's scope matrix controls child actions", () => {
+  const scoped: MaintenanceActionDescriptor = { ...descriptors[0], kind: "UNMONITOR_SCOPE_DELETE_FILES", supportedRuleScopes: ["SEASON", "EPISODE"] };
+  assert.equal(scopedActionDescriptors([scoped], "TITLE").length, 0);
+  assert.equal(scopedActionDescriptors([scoped], "EPISODE")[0].kind, "UNMONITOR_SCOPE_DELETE_FILES");
+  assert.equal(scopedActionDescriptors([scoped], "SEASON")[0].kind, "UNMONITOR_SCOPE_DELETE_FILES");
+});
+
+test("exact subject preview retains its owning title and the draft library scope", () => {
+  const draft = { ...initialMaintenanceRuleDraft(), subjectKind: "EPISODE" as const, libraryIds: ["series"] };
+  const input = maintenancePreviewInput({ draft, descriptors, titleIds: ["show"], subjectIds: ["episode"], libraryId: "ignored" });
+  assert.ok("titleIds" in input);
+  assert.ok("subjectIds" in input);
+  assert.deepEqual(input.titleIds, ["show"]);
+  assert.deepEqual(input.subjectIds, ["episode"]);
+  assert.deepEqual(input.libraryIds, ["series"]);
+  assert.equal(Object.hasOwn(input, "libraryId"), false);
 });

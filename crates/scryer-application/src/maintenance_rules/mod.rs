@@ -35,7 +35,9 @@ pub mod action_execution;
 pub mod evaluation;
 pub mod facts;
 pub mod safety;
+pub(crate) mod scoped_deletion;
 pub mod service;
+pub(crate) mod subjects;
 
 pub use action_catalog::{
     MAINTENANCE_ACTION_SCHEMA_VERSION, MaintenanceActionDescriptor, MaintenanceActionKind,

@@ -3573,6 +3573,7 @@ export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ru
 export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
   maintenanceActionDescriptors {
     kind
+    supportedRuleScopes
     supportedSubjects
     riskClass
     effectClasses
@@ -3592,7 +3593,12 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     id
     ruleSetId
     ruleName
+    fileCount
+    totalSizeBytes
     revisionNumber
+    subjectKind
+    subjectId
+    subjectLabel
     titleId
     titleName
     libraryId
@@ -3634,6 +3640,10 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
     id
     ruleSetId
     candidateId
+    detail
+    subjectKind
+    subjectId
+    subjectLabel
     titleId
     titleName
     actionKind
@@ -3663,6 +3673,9 @@ export const maintenanceInstanceGatesQuery = `query MaintenanceInstanceGates {
 export const MAINTENANCE_EXCLUSION_FIELDS = `
     id
     ruleSetId
+    subjectKind
+    subjectId
+    subjectLabel
     titleId
     titleName
     reason

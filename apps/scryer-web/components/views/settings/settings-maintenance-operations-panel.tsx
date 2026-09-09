@@ -1,3 +1,4 @@
+import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
 import { Ban, Loader2, Play, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -419,6 +420,8 @@ export function MaintenanceCandidatesPanel({
                     <TableCell className="font-medium">
                       <div className="flex flex-col gap-1">
                         <span>{candidate.titleName}</span>
+                        {candidate.subjectKind !== "title" && <span className="text-sm text-muted-foreground">{candidate.subjectLabel}</span>}
+                        {candidate.fileCount != null && <span className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: candidate.fileCount, size: formatBytes(candidate.totalSizeBytes) })}</span>}
                         {shadowRuleIds.has(candidate.ruleSetId) ? (
                           <Badge tone="outline" className="w-fit">
                             {t("settings.maintenanceCandidatesShadowBadge")}
@@ -735,7 +738,7 @@ export function MaintenanceRunsPanel({
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {timestamp(run.startedAt, dateTimeFormat)}
                     </TableCell>
-                    <TableCell className="font-medium">{run.titleName}</TableCell>
+                    <TableCell className="font-medium">{run.titleName}{run.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{run.subjectLabel}</div>}</TableCell>
                     <TableCell className="text-muted-foreground">
                       <ActionKindLabel kind={run.actionKind} />
                     </TableCell>
@@ -748,8 +751,9 @@ export function MaintenanceRunsPanel({
                     <TableCell className="max-w-[220px] truncate text-[var(--scry-warning-text)]">
                       {run.holdReason ?? "—"}
                     </TableCell>
-                    <TableCell className="max-w-[220px] truncate text-[var(--scry-danger-text)]">
+                    <TableCell className="min-w-[220px] whitespace-normal text-[var(--scry-danger-text)]">
                       {run.error ?? "—"}
+                      <MaintenanceFileResults detail={run.detail} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -829,7 +833,7 @@ export function MaintenanceExclusionsPanel({
                     data-ui="settings-table-row"
                     id={selectorId("settings-maintenance-exclusion-row", exclusion.id)}
                   >
-                    <TableCell className="font-medium">{exclusion.titleName}</TableCell>
+                    <TableCell className="font-medium">{exclusion.titleName}{exclusion.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{exclusion.subjectLabel}</div>}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {exclusion.ruleSetId
                         ? (rule?.name ?? exclusion.ruleSetId)
@@ -871,4 +875,30 @@ export function MaintenanceExclusionsPanel({
       </CardContent>
     </Card>
   );
+}
+
+function MaintenanceFileResults({ detail }: { detail: string }) {
+  const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
+  let deadline: string | null = null;
+  let totalSize: number | null = null;
+  let files: { file_id: string; file_path?: string; completed: boolean; error: string | null }[] = [];
+  try {
+    const value: unknown = JSON.parse(detail);
+    if (value && typeof value === "object" && "files" in value && Array.isArray(value.files)) {
+      files = value.files.filter((file) => typeof file?.file_id === "string" && typeof file?.completed === "boolean");
+      if ("grace_deadline" in value && typeof value.grace_deadline === "string") deadline = value.grace_deadline;
+      if ("total_size_bytes" in value && typeof value.total_size_bytes === "number") totalSize = value.total_size_bytes;
+    }
+  } catch { return null; }
+  if (files.length === 0) return null;
+  return <details className="whitespace-normal text-foreground">
+    <summary className="cursor-pointer text-sm">{t("settings.maintenanceFileResults")} ({files.length})</summary>
+    {totalSize != null && <p className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: files.length, size: formatBytes(totalSize) })}</p>}
+    {deadline && <p className="text-xs text-muted-foreground">{t("settings.maintenancePreviewDue", { time: formatUiDateTime(deadline, dateTimeFormat) })}</p>}
+    <Table><TableBody>{files.map((file) => <TableRow key={file.file_id} data-ui="settings-table-row">
+      <TableCell className="break-all text-xs">{file.file_path ?? file.file_id}</TableCell>
+      <TableCell className="text-xs">{file.error ?? (file.completed ? t("settings.maintenanceFileDeleted") : t("settings.maintenanceFilePending"))}</TableCell>
+    </TableRow>)}</TableBody></Table>
+  </details>;
 }

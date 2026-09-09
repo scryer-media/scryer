@@ -31,6 +31,16 @@
           "descKey": "settings.refMaintSubjectTitleId"
         },
         {
+          "field": "subject_id",
+          "type": "string",
+          "descKey": "settings.refMaintSubjectId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refMaintCollectionId"
+        },
+        {
           "field": "season_number",
           "type": "number?",
           "descKey": "settings.refMaintSubjectSeasonNumber"

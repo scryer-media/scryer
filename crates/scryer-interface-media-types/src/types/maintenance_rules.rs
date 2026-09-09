@@ -22,6 +22,8 @@ pub enum MaintenanceEvaluationMode {
 pub enum MaintenanceRuleSubjectKind {
     /// The rule evaluates whole titles, both movies and shows.
     Title,
+    Season,
+    Episode,
 }
 
 /// How far a rule set's effects are armed. Arming is per rule and independent
@@ -229,6 +231,8 @@ pub struct MaintenanceRuleSetDetail {
 /// Static registry entry describing one maintenance action to the rule builder.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceActionDescriptor {
+    /// Scopes for which this build implements the action.
+    pub supported_rule_scopes: Vec<MaintenanceRuleSubjectKind>,
     /// Catalog action this descriptor describes.
     pub kind: MaintenanceActionKind,
     /// Subjects the action may be configured against.
@@ -268,6 +272,14 @@ pub struct MaintenanceRuleValidationPayload {
 /// a no-match.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenancePreviewTitle {
+    pub excluded: bool,
+    pub due_at: Option<DateTime<Utc>>,
+    pub due_at_is_estimate: bool,
+    pub subject_label: String,
+    pub file_count: i32,
+    pub total_size_bytes: i64,
+    pub subject_kind: String,
+    pub subject_id: ID,
     /// Evaluated title ID.
     pub title_id: ID,
     /// Evaluated title name.
@@ -308,6 +320,11 @@ pub struct MaintenancePreviewPayload {
 /// `FAILED` mean an action was attempted.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceCandidate {
+    pub file_count: Option<i32>,
+    pub total_size_bytes: Option<i64>,
+    pub subject_label: String,
+    pub subject_kind: String,
+    pub subject_id: ID,
     /// Candidate ID.
     pub id: ID,
     /// Rule set that produced the candidate.
@@ -419,6 +436,9 @@ pub struct MaintenanceInstanceGates {
 /// A subject a maintenance rule must never act on.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceExclusion {
+    pub subject_label: String,
+    pub subject_kind: String,
+    pub subject_id: ID,
     /// Exclusion ID.
     pub id: ID,
     /// Rule the exclusion is confined to, or null when it is global.
@@ -445,6 +465,11 @@ pub struct DeleteMaintenanceExclusionPayload {
 /// One recorded action-handler attempt on one candidate, holds included.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceActionRun {
+    pub subject_label: String,
+    /// Persisted per-file outcomes and policy provenance.
+    pub detail: String,
+    pub subject_kind: String,
+    pub subject_id: ID,
     /// Action-run ID.
     pub id: ID,
     /// Rule set the attempt belongs to.
@@ -502,6 +527,8 @@ pub struct MaintenanceActionInput {
 /// Creates a maintenance rule set together with its first matcher revision.
 #[derive(InputObject)]
 pub struct CreateMaintenanceRuleSetInput {
+    /// Defaults to title scope when omitted.
+    pub subject_kind: Option<MaintenanceRuleSubjectKind>,
     /// Rule-set name.
     pub name: String,
     /// Optional description.
@@ -590,6 +617,10 @@ pub struct SetMaintenanceInstanceGatesInput {
 /// Excludes one subject from maintenance rules.
 #[derive(InputObject)]
 pub struct ExcludeMaintenanceSubjectInput {
+    /// Required for episode or season scope.
+    pub subject_id: Option<ID>,
+    /// Defaults to title scope when omitted.
+    pub subject_kind: Option<MaintenanceRuleSubjectKind>,
     /// Title to exclude.
     pub title_id: ID,
     /// Rule to confine the exclusion to. Omitted means every rule.
@@ -612,6 +643,10 @@ pub struct ValidateMaintenanceRuleInput {
 /// `titleIds` or `libraryId`, never both.
 #[derive(InputObject)]
 pub struct PreviewMaintenanceRuleInput {
+    /// Selected libraries for an unsaved matcher; empty means all libraries.
+    pub library_ids: Option<Vec<String>>,
+    /// Defaults to title scope when omitted.
+    pub subject_kind: Option<MaintenanceRuleSubjectKind>,
     /// Stored rule set to preview at its current revision.
     pub rule_set_id: Option<ID>,
     /// Unsaved matcher source to preview, as written in the editor.
@@ -620,6 +655,8 @@ pub struct PreviewMaintenanceRuleInput {
     pub action: Option<MaintenanceActionInput>,
     /// Grace period for the unsaved draft; defaults to zero.
     pub grace_days: Option<i32>,
+    /// Optional exact subjects, requiring their owning `titleIds`.
+    pub subject_ids: Option<Vec<ID>>,
     /// Evaluate exactly these titles.
     pub title_ids: Option<Vec<ID>>,
     /// Evaluate the first titles of this library.

@@ -32,6 +32,10 @@ fn preview_matcher(
             rule_set_id: String::from(rule_set_id),
         }),
         (None, Some(rego_source), Some(action)) => Ok(MaintenancePreviewMatcher::Inline {
+            library_ids: input.library_ids.take().unwrap_or_default(),
+            subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
+                input.subject_kind,
+            ),
             rego_source,
             action_spec: crate::mappers::maintenance_action_spec_from_input(action),
             grace_days: grace_days(input.grace_days),
@@ -56,6 +60,23 @@ fn preview_matcher(
 fn preview_selection(
     input: &mut PreviewMaintenanceRuleInput,
 ) -> GqlResult<MaintenancePreviewSelection> {
+    if let Some(subject_ids) = input.subject_ids.take() {
+        if input.library_id.is_some() || input.title_ids.is_none() {
+            return Err(to_gql_error(AppError::Validation(
+                "subjectIds requires titleIds and cannot be combined with libraryId".into(),
+            )));
+        }
+        return Ok(MaintenancePreviewSelection::Subjects {
+            title_ids: input
+                .title_ids
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            subject_ids: subject_ids.into_iter().map(String::from).collect(),
+        });
+    }
     match (input.title_ids.take(), input.library_id.take()) {
         (Some(title_ids), None) => Ok(MaintenancePreviewSelection::Titles(
             title_ids.into_iter().map(String::from).collect(),
@@ -97,6 +118,9 @@ impl MaintenanceRuleMutations {
             .create_maintenance_rule_set(
                 &actor,
                 MaintenanceRuleDraft {
+                    subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
+                        input.subject_kind,
+                    ),
                     name: input.name,
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
@@ -366,10 +390,27 @@ impl MaintenanceRuleMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
+        let subject_kind =
+            crate::mappers::maintenance_rule_subject_kind_into_application(input.subject_kind);
+        let subject_id = input
+            .subject_id
+            .as_ref()
+            .map(|id| id.as_str())
+            .or_else(|| {
+                (subject_kind == scryer_domain::MaintenanceRuleSubjectKind::Title)
+                    .then(|| input.title_id.as_str())
+            })
+            .ok_or_else(|| {
+                to_gql_error(AppError::Validation(
+                    "episode and season exclusions require subjectId".into(),
+                ))
+            })?;
         let exclusion = app
-            .exclude_maintenance_subject(
+            .exclude_maintenance_scoped_subject(
                 &actor,
                 input.title_id.as_ref(),
+                subject_kind,
+                subject_id,
                 input.rule_set_id.map(String::from),
                 input.reason,
             )
@@ -421,5 +462,65 @@ impl MaintenanceRuleMutations {
             .map_err(to_gql_error)?;
 
         Ok(crate::mappers::from_maintenance_evaluation_trigger(trigger))
+    }
+}
+
+#[cfg(test)]
+mod maintenance_scope_tests {
+    use super::*;
+    use async_graphql::{InputType, value};
+
+    #[test]
+    fn maintenance_scope_omitted_preview_scope_remains_title() {
+        let mut input = PreviewMaintenanceRuleInput::parse(Some(
+            value!({ "ruleSetId": "rule", "titleIds": ["title"] }),
+        ))
+        .unwrap_or_else(|_| panic!("fixture preview input must parse"));
+        assert_eq!(
+            crate::mappers::maintenance_rule_subject_kind_into_application(input.subject_kind),
+            scryer_domain::MaintenanceRuleSubjectKind::Title
+        );
+        assert!(
+            matches!(preview_selection(&mut input).unwrap(), MaintenancePreviewSelection::Titles(ids) if ids == vec!["title"])
+        );
+    }
+
+    #[test]
+    fn maintenance_scope_exact_subject_requires_owning_titles() {
+        let mut input = PreviewMaintenanceRuleInput::parse(Some(
+            value!({ "ruleSetId": "rule", "titleIds": ["title"], "subjectIds": ["episode"] }),
+        ))
+        .unwrap_or_else(|_| panic!("fixture preview input must parse"));
+        assert!(
+            matches!(preview_selection(&mut input).unwrap(), MaintenancePreviewSelection::Subjects { title_ids, subject_ids } if title_ids == vec!["title"] && subject_ids == vec!["episode"])
+        );
+        for value in [
+            value!({ "ruleSetId": "rule", "subjectIds": ["episode"] }),
+            value!({ "ruleSetId": "rule", "subjectIds": ["episode"], "libraryId": "library" }),
+        ] {
+            let mut input = PreviewMaintenanceRuleInput::parse(Some(value))
+                .unwrap_or_else(|_| panic!("fixture preview input must parse"));
+            assert!(preview_selection(&mut input).is_err());
+        }
+    }
+
+    #[test]
+    fn maintenance_scope_child_values_are_additive() {
+        for (value, expected) in [
+            ("SEASON", scryer_domain::MaintenanceRuleSubjectKind::Season),
+            (
+                "EPISODE",
+                scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            ),
+        ] {
+            let input = PreviewMaintenanceRuleInput::parse(Some(
+                value!({ "ruleSetId": "rule", "subjectKind": value }),
+            ))
+            .unwrap_or_else(|_| panic!("fixture preview input must parse"));
+            assert_eq!(
+                crate::mappers::maintenance_rule_subject_kind_into_application(input.subject_kind),
+                expected
+            );
+        }
     }
 }

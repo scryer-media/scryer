@@ -110,10 +110,11 @@ impl InMemoryMaintenanceEvaluationRepo {
 
 #[async_trait]
 impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
-    async fn get_active_candidate(
+    async fn get_active_subject_candidate(
         &self,
         rule_set_id: &str,
-        title_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
     ) -> AppResult<Option<LifecycleCandidate>> {
         Ok(self
             .candidates
@@ -122,7 +123,8 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
             .iter()
             .find(|candidate| {
                 candidate.rule_set_id == rule_set_id
-                    && candidate.title_id == title_id
+                    && candidate.subject_kind == subject_kind
+                    && candidate.subject_id == subject_id
                     && !candidate.state.is_terminal()
             })
             .cloned())
@@ -161,14 +163,21 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         Ok(rows)
     }
 
-    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
+    async fn max_subject_match_generation(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<i64> {
         Ok(self
             .candidates
             .lock()
             .await
             .iter()
             .filter(|candidate| {
-                candidate.rule_set_id == rule_set_id && candidate.title_id == title_id
+                candidate.rule_set_id == rule_set_id
+                    && candidate.subject_kind == subject_kind
+                    && candidate.subject_id == subject_id
             })
             .map(|candidate| candidate.match_generation)
             .max()
@@ -179,7 +188,8 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         let mut rows = self.candidates.lock().await;
         if rows.iter().any(|row| {
             row.rule_set_id == candidate.rule_set_id
-                && row.title_id == candidate.title_id
+                && row.subject_kind == candidate.subject_kind
+                && row.subject_id == candidate.subject_id
                 && !row.state.is_terminal()
         }) {
             return Err(AppError::Validation(format!(
@@ -412,6 +422,24 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
         Ok(())
     }
 
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        candidate_id: &str,
+    ) -> AppResult<Option<LifecycleActionRun>> {
+        Ok(self
+            .action_runs
+            .lock()
+            .await
+            .iter()
+            .filter(|run| {
+                run.candidate_id == candidate_id
+                    && run.action_kind == "unmonitor_scope_delete_files"
+                    && run.detail.contains("\"scoped_deletion\":")
+            })
+            .max_by(|a, b| (a.started_at, &a.id).cmp(&(b.started_at, &b.id)))
+            .cloned())
+    }
+
     async fn list_action_runs(
         &self,
         rule_set_id: Option<&str>,
@@ -551,6 +579,7 @@ fn evaluation_app() -> EvaluationFixture {
 
 fn draft(rego_source: &str, grace_days: i64) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),

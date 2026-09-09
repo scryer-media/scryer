@@ -45,11 +45,23 @@ pub fn maintenance_evaluation_mode_into_application(
     }
 }
 
+pub fn maintenance_rule_subject_kind_into_application(
+    kind: Option<MaintenanceRuleSubjectKind>,
+) -> scryer_domain::MaintenanceRuleSubjectKind {
+    match kind.unwrap_or(MaintenanceRuleSubjectKind::Title) {
+        MaintenanceRuleSubjectKind::Title => scryer_domain::MaintenanceRuleSubjectKind::Title,
+        MaintenanceRuleSubjectKind::Season => scryer_domain::MaintenanceRuleSubjectKind::Season,
+        MaintenanceRuleSubjectKind::Episode => scryer_domain::MaintenanceRuleSubjectKind::Episode,
+    }
+}
+
 pub fn maintenance_rule_subject_kind_value(
     kind: scryer_domain::MaintenanceRuleSubjectKind,
 ) -> MaintenanceRuleSubjectKind {
     match kind {
         scryer_domain::MaintenanceRuleSubjectKind::Title => MaintenanceRuleSubjectKind::Title,
+        scryer_domain::MaintenanceRuleSubjectKind::Season => MaintenanceRuleSubjectKind::Season,
+        scryer_domain::MaintenanceRuleSubjectKind::Episode => MaintenanceRuleSubjectKind::Episode,
     }
 }
 
@@ -82,6 +94,10 @@ pub fn from_maintenance_action_run(
     let run = view.run;
     let kind = AppActionKind::parse_wire_str(&run.action_kind)?;
     Some(MaintenanceActionRun {
+        subject_label: view.subject_label,
+        subject_kind: run.subject_kind,
+        subject_id: ID::from(run.subject_id),
+        detail: run.detail,
         id: ID::from(run.id),
         rule_set_id: ID::from(run.rule_set_id),
         candidate_id: ID::from(run.candidate_id),
@@ -279,6 +295,18 @@ fn from_maintenance_action_descriptor(
     descriptor: &AppActionDescriptor,
 ) -> MaintenanceActionDescriptor {
     MaintenanceActionDescriptor {
+        supported_rule_scopes: [
+            scryer_domain::MaintenanceRuleSubjectKind::Title,
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+        ]
+        .into_iter()
+        .filter(|scope| {
+            scryer_application::maintenance_rules::action_execution::supported_scope_actions(*scope)
+                .contains(&descriptor.kind)
+        })
+        .map(maintenance_rule_subject_kind_value)
+        .collect(),
         kind: maintenance_action_kind_value(descriptor.kind),
         supported_subjects: descriptor
             .supported_subjects
@@ -323,6 +351,14 @@ pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenanceP
             .titles
             .into_iter()
             .map(|title| MaintenancePreviewTitle {
+                excluded: title.excluded,
+                due_at: title.due_at,
+                due_at_is_estimate: title.due_at_is_estimate,
+                subject_kind: title.subject_kind.as_storage_str().to_string(),
+                subject_id: ID::from(title.subject_id),
+                subject_label: title.subject_label,
+                file_count: to_graphql_int(title.file_count),
+                total_size_bytes: title.total_size_bytes,
                 title_id: ID::from(title.title_id),
                 title_name: title.title_name,
                 facet: title.facet.as_str().to_string(),
@@ -382,6 +418,11 @@ pub fn from_maintenance_candidate(
 ) -> MaintenanceCandidate {
     let candidate = view.candidate;
     MaintenanceCandidate {
+        file_count: view.file_count.map(to_graphql_int),
+        total_size_bytes: view.total_size_bytes,
+        subject_label: view.subject_label,
+        subject_kind: candidate.subject_kind,
+        subject_id: ID::from(candidate.subject_id),
         id: ID::from(candidate.id),
         rule_set_id: ID::from(candidate.rule_set_id),
         rule_name: view.rule_name,
@@ -444,6 +485,9 @@ pub fn from_maintenance_exclusion(
 ) -> MaintenanceExclusion {
     let exclusion = view.exclusion;
     MaintenanceExclusion {
+        subject_label: view.subject_label,
+        subject_kind: exclusion.subject_kind.as_storage_str().to_string(),
+        subject_id: ID::from(exclusion.subject_id),
         id: ID::from(exclusion.id),
         rule_set_id: exclusion.rule_set_id.map(ID::from),
         title_id: ID::from(exclusion.title_id),

@@ -128,6 +128,7 @@ impl ClaimFixture {
 
 fn draft(rego_source: &str, kind: MaintenanceActionKind) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Lease rule".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),
@@ -507,6 +508,8 @@ async fn preview_reads_the_same_claim_facts_as_the_pass() {
             &fixture.user,
             MaintenancePreviewRequest {
                 matcher: MaintenancePreviewMatcher::Inline {
+                    library_ids: vec![],
+                    subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: EXPIRED_LEASE_MATCHER.to_string(),
                     action_spec: MaintenanceActionSpec::new(
                         MaintenanceActionKind::DeleteTitleAndFiles,

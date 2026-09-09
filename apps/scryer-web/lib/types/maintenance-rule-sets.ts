@@ -12,8 +12,9 @@ export type MaintenanceEvaluationMode = "DISABLED" | "SHADOW" | "OBSERVE";
 /// additionally permits the high-risk actions that delete files.
 export type MaintenanceEffectArming = "NONE" | "REVERSIBLE" | "DESTRUCTIVE";
 
-/// Subjects an action descriptor declares support for. The UI only offers
-/// title-scoped rules, so only `MOVIE` and `SHOW` descriptors are selectable.
+/// Rule scope is distinct from an action's movie/show/season/episode vocabulary.
+export type MaintenanceRuleScope = "TITLE" | "SEASON" | "EPISODE";
+
 export type MaintenanceSubjectScope = "MOVIE" | "SHOW" | "SEASON" | "EPISODE";
 
 export type MaintenanceRiskClass = "NONE" | "LOW" | "MEDIUM" | "HIGH";
@@ -43,10 +44,8 @@ export type MaintenanceRuleSetRecord = {
   /// can evaluate in `OBSERVE` while still armed to `NONE`.
   effectArming: MaintenanceEffectArming;
   libraryIds: string[];
-  /// Granularity the rule set is scoped to. Kept as a plain string because the
-  /// rule-set vocabulary (title/season/episode) is not the same enum as an
-  /// action descriptor's `supportedSubjects` (movie/show/season/episode).
-  subjectKind: string;
+  /// Immutable granularity, separate from an action's supported subjects.
+  subjectKind: MaintenanceRuleScope;
   currentRevisionNumber: number;
   /// Action and grace period of the revision in force, carried on the list
   /// payload so rendering badges never needs a per-rule detail fetch.
@@ -85,6 +84,7 @@ export type MaintenanceRuleSetDetail = {
 };
 
 export type MaintenanceActionDescriptor = {
+  supportedRuleScopes: MaintenanceRuleScope[];
   kind: MaintenanceActionKind;
   supportedSubjects: MaintenanceSubjectScope[];
   riskClass: MaintenanceRiskClass;
@@ -98,6 +98,7 @@ export type MaintenanceActionDescriptor = {
 };
 
 export type MaintenanceRuleSetDraft = {
+  subjectKind: MaintenanceRuleScope;
   name: string;
   description: string;
   regoSource: string;
@@ -116,7 +117,17 @@ export type MaintenanceValidationResult = {
   errors: string[];
 };
 
+export type MaintenanceTestSubject = { titleId: string; subjectId: string };
+
 export type MaintenancePreviewTitle = {
+  excluded: boolean;
+  dueAt: string | null;
+  dueAtIsEstimate: boolean;
+  subjectLabel: string;
+  fileCount: number;
+  totalSizeBytes: number;
+  subjectKind: string;
+  subjectId: string;
   titleId: string;
   titleName: string;
   facet: string;
@@ -155,6 +166,11 @@ export type MaintenanceCandidateState =
 /// subject: a candidate records that a rule matched it and how much of the
 /// grace period is left.
 export type MaintenanceCandidate = {
+  fileCount: number | null;
+  totalSizeBytes: number | null;
+  subjectLabel: string;
+  subjectKind: string;
+  subjectId: string;
   id: string;
   ruleSetId: string;
   ruleName: string;
@@ -200,6 +216,10 @@ export type MaintenanceEvaluationRun = {
 
 /// One attempt by the action handler to execute one candidate's action.
 export type MaintenanceActionRun = {
+  subjectLabel: string;
+  detail: string;
+  subjectKind: string;
+  subjectId: string;
   id: string;
   ruleSetId: string;
   candidateId: string;
@@ -234,6 +254,9 @@ export type MaintenanceGateKey = keyof MaintenanceInstanceGates;
 
 /// A subject a maintenance rule must never act on.
 export type MaintenanceExclusion = {
+  subjectLabel: string;
+  subjectKind: string;
+  subjectId: string;
   id: string;
   /// Null when the exclusion is global rather than confined to one rule.
   ruleSetId: string | null;

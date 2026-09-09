@@ -2462,6 +2462,14 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
     matcherContentHash
     evaluatedAt
     titles {
+      excluded
+      dueAt
+      dueAtIsEstimate
+      subjectKind
+      subjectId
+      subjectLabel
+      fileCount
+      totalSizeBytes
       titleId
       titleName
       facet

@@ -1,4 +1,6 @@
+import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
+import { MaintenanceSubjectPicker } from "@/components/common/maintenance-subject-picker";
 import {
   AlertTriangle,
   BookOpen,
@@ -37,6 +39,8 @@ import {
   maintenanceTemplateFacetLabelKey,
   type MaintenanceRuleTemplate,
 } from "@/lib/constants/maintenance-rule-templates";
+import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { formatUiDateTime } from "@/lib/utils/date-format";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   MaintenanceActionDescriptor,
@@ -47,6 +51,8 @@ import type {
   MaintenancePreviewResult,
   MaintenancePreviewSource,
   MaintenancePreviewTitle,
+  MaintenanceRuleScope,
+  MaintenanceTestSubject,
   MaintenanceRuleSetDraft,
   MaintenanceRuleSetRecord,
   MaintenanceValidationResult,
@@ -68,7 +74,7 @@ import {
   previewOutcomeLabelKey,
   riskClassBadgeTone,
   riskClassLabelKey,
-  titleScopedActionDescriptors,
+  scopedActionDescriptors,
 } from "@/lib/utils/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
 
@@ -111,7 +117,7 @@ type SettingsMaintenanceRulesSectionProps = {
   setPreviewLibraryId: (id: string) => void;
   previewLimit: number;
   setPreviewLimit: (limit: number) => void;
-  runPreview: () => Promise<void> | void;
+  runPreview: (subject?: MaintenanceTestSubject) => Promise<void> | void;
   previewing: boolean;
   previewResult: MaintenancePreviewResult | null;
   previewError: string | null;
@@ -429,6 +435,7 @@ function PreviewOutcomeCell({ title }: { title: MaintenancePreviewTitle }) {
 function MaintenancePreviewPanel({
   isEditorOpen,
   draftName,
+  draftScope,
   ruleSetRecords,
   libraries,
   previewSource,
@@ -443,7 +450,7 @@ function MaintenancePreviewPanel({
   previewing,
   previewResult,
   previewError,
-}: { draftName: string } & Pick<
+}: { draftName: string; draftScope: MaintenanceRuleScope } & Pick<
   SettingsMaintenanceRulesSectionProps,
   | "isEditorOpen"
   | "ruleSetRecords"
@@ -462,10 +469,16 @@ function MaintenancePreviewPanel({
   | "previewError"
 >) {
   const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
+  const scope = previewSource === "draft" ? draftScope : ruleSetRecords.find((rule) => rule.id === previewRuleSetId)?.subjectKind ?? "TITLE";
+  const [selectedSubject, setSelectedSubject] = React.useState<MaintenanceTestSubject | undefined>();
+  const [targetPending, setTargetPending] = React.useState(false);
+  const [manualTarget, setManualTarget] = React.useState(false);
+  React.useEffect(() => { setSelectedSubject(undefined); setTargetPending(false); setManualTarget(false); }, [previewSource, previewRuleSetId, previewLibraryId, draftName, scope]);
   const canPreviewDraft = isEditorOpen;
   const canRun =
-    !previewing &&
-    Boolean(previewLibraryId) &&
+    !previewing && !targetPending &&
+    Boolean(previewLibraryId || selectedSubject) &&
     (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
 
   return (
@@ -555,11 +568,25 @@ function MaintenancePreviewPanel({
           </label>
         </div>
 
+        <MaintenanceSubjectPicker key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
+          scope={scope} onChange={(subject, pending, active) => { setSelectedSubject(subject); setTargetPending(pending); setManualTarget(active); }} />
+        {!manualTarget && previewResult?.titles.length ? (
+          <SingleSelectField
+            id="settings-maintenance-preview-subject"
+            label={t("settings.maintenancePreviewSubject")}
+            value={selectedSubject?.subjectId ?? "all"}
+            onValueChange={(id) => setSelectedSubject(previewResult.titles.find((subject) => subject.subjectId === id))}
+            options={[
+              { value: "all", label: t("settings.maintenancePreviewSample") },
+              ...previewResult.titles.map((subject) => ({ value: subject.subjectId, label: subject.subjectKind === "title" ? subject.titleName : `${subject.titleName} · ${subject.subjectLabel}` })),
+            ]}
+          />
+        ) : null}
         <Button
           id="settings-maintenance-preview-run"
           type="button"
           variant="secondary"
-          onClick={() => void runPreview()}
+          onClick={() => void runPreview(selectedSubject)}
           disabled={!canRun}
         >
           {previewing
@@ -577,7 +604,7 @@ function MaintenancePreviewPanel({
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
               {t("settings.maintenancePreviewMeta", {
-                time: previewResult.evaluatedAt,
+                time: formatUiDateTime(previewResult.evaluatedAt, dateTimeFormat),
                 hash: previewResult.matcherContentHash.slice(0, 12),
               })}
             </p>
@@ -597,18 +624,22 @@ function MaintenancePreviewPanel({
                 <TableBody>
                   {previewResult.titles.map((title) => (
                     <TableRow
-                      key={title.titleId}
+                      key={`${title.subjectKind}:${title.subjectId}`}
                       data-ui="settings-table-row"
                       id={selectorId(
                         "settings-maintenance-preview-row",
-                        title.titleId,
+                        title.subjectId,
                       )}
                     >
                       <TableCell className="font-medium">
                         {title.titleName}
+                        {title.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{title.subjectLabel}</div>}
+                        <div className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: title.fileCount, size: formatBytes(title.totalSizeBytes) })}</div>
                       </TableCell>
                       <TableCell>
                         <PreviewOutcomeCell title={title} />
+                        {title.excluded && <div><Badge tone="warning">{t("settings.maintenancePreviewExcluded")}</Badge></div>}
+                        {title.dueAt && <div className="mt-1 text-xs text-muted-foreground">{t(title.dueAtIsEstimate ? "settings.maintenancePreviewEstimatedDue" : "settings.maintenancePreviewDue", { time: formatUiDateTime(title.dueAt, dateTimeFormat) })}</div>}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {title.error ? (
@@ -683,8 +714,8 @@ export function SettingsMaintenanceRulesSection({
 }: SettingsMaintenanceRulesSectionProps) {
   const t = useTranslate();
   const offerableDescriptors = React.useMemo(
-    () => titleScopedActionDescriptors(actionDescriptors),
-    [actionDescriptors],
+    () => scopedActionDescriptors(actionDescriptors, ruleSetDraft.subjectKind),
+    [actionDescriptors, ruleSetDraft.subjectKind],
   );
   const needsTargetProfile = actionRequiresTargetQualityProfile(
     actionDescriptors,
@@ -783,6 +814,7 @@ export function SettingsMaintenanceRulesSection({
                             >
                               {record.name}
                             </span>
+                            {record.subjectKind !== "TITLE" && <div className="text-xs text-muted-foreground">{t(record.subjectKind === "SEASON" ? "settings.maintenanceScopeSeason" : "settings.maintenanceScopeEpisode")}</div>}
                           </TableCell>
                           <TableCell className="max-w-[200px] truncate text-muted-foreground">
                             {record.description || "—"}
@@ -964,6 +996,20 @@ export function SettingsMaintenanceRulesSection({
                       </label>
                     </div>
 
+                    <SingleSelectField
+                      id="settings-maintenance-rule-scope"
+                      label={t("settings.maintenanceRuleScope")}
+                      value={ruleSetDraft.subjectKind}
+                      disabled={Boolean(editingRuleSetId)}
+                      onValueChange={(value) => setRuleSetDraft((prev) => ({
+                        ...prev, subjectKind: value as MaintenanceRuleSetDraft["subjectKind"], actionKind: "DO_NOTHING",
+                      }))}
+                      options={[
+                        { value: "TITLE", label: t("label.title") },
+                        { value: "SEASON", label: t("settings.maintenanceScopeSeason") },
+                        { value: "EPISODE", label: t("settings.maintenanceScopeEpisode") },
+                      ]}
+                    />
                     <div className="grid gap-3 md:grid-cols-2">
                       <div>
                         {offerableDescriptors.length > 0 ? (
@@ -1243,6 +1289,7 @@ export function SettingsMaintenanceRulesSection({
             <MaintenancePreviewPanel
               isEditorOpen={isEditorOpen}
               draftName={ruleSetDraft.name}
+              draftScope={ruleSetDraft.subjectKind}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               {...previewProps}

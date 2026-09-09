@@ -187,6 +187,7 @@ async fn record_play(
 
 fn draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Watched movies".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),
@@ -263,6 +264,8 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
 
 fn inline_matcher(rego_source: &str) -> MaintenancePreviewMatcher {
     MaintenancePreviewMatcher::Inline {
+        library_ids: vec![],
+        subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         rego_source: rego_source.to_string(),
         action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
         grace_days: 0,

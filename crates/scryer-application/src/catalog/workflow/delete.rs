@@ -35,6 +35,10 @@ pub(crate) enum MediaFileDiskDeletion {
     Keep,
     /// Delete from disk after validating this file's own preview fingerprint.
     DeleteConfirmed(DeleteExecutionConfirmation),
+    DeleteByPolicy {
+        plan: crate::library::user_delete::PolicyMediaFileDeletePlan,
+        authorization: crate::PolicyDeleteAuthorization,
+    },
     /// Delete from disk; an aggregate preview covering this file was already
     /// validated by the caller.
     DeletePreapproved,
@@ -1004,6 +1008,9 @@ impl AppUseCase {
                     typed_confirmation.as_deref(),
                 )
                 .await?;
+            }
+            MediaFileDiskDeletion::DeleteByPolicy { plan, authorization } => {
+                self.execute_delete_media_file_by_policy(file_id, &plan, &authorization).await?;
             }
             MediaFileDiskDeletion::DeletePreapproved => {
                 self.execute_delete_media_file_preapproved(file_id).await?;

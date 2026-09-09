@@ -4479,26 +4479,30 @@ impl MaintenanceEvaluationMode {
 
 /// Granularity a maintenance rule set is scoped to.
 ///
-/// Season- and episode-scoped rule sets are an RFC concept but have no
-/// persistence or evaluation path yet, so this wave stores only `Title`. The
-/// column is a string so widening the enum stays a code change.
+/// Scope is immutable after creation. Omitted scope retains title behavior.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MaintenanceRuleSubjectKind {
     #[default]
     Title,
+    Season,
+    Episode,
 }
 
 impl MaintenanceRuleSubjectKind {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Title => "title",
+            Self::Season => "season",
+            Self::Episode => "episode",
         }
     }
 
     pub fn parse_storage(value: &str) -> Option<Self> {
         match value {
             "title" => Some(Self::Title),
+            "season" => Some(Self::Season),
+            "episode" => Some(Self::Episode),
             _ => None,
         }
     }
@@ -4649,7 +4653,9 @@ pub struct LifecycleCandidate {
     pub library_id: String,
     pub facet: String,
     pub subject_kind: String,
-    /// Increments per (rule, title) each time a fresh candidate is created, so
+    /// Title, collection, or episode ID, according to `subject_kind`.
+    pub subject_id: String,
+    /// Increments per (rule, subject kind, subject ID) for each fresh candidate, so
     /// a cancel-then-rematch is distinguishable from a continuing membership.
     pub match_generation: i64,
     pub state: MaintenanceCandidateState,
@@ -4687,6 +4693,8 @@ pub struct MaintenanceRuleExclusion {
     /// `None` means the exclusion is global.
     pub rule_set_id: Option<String>,
     pub title_id: String,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    pub subject_id: String,
     pub reason: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -4828,6 +4836,8 @@ pub struct LifecycleActionRun {
     pub rule_set_id: String,
     pub revision_number: i64,
     pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     /// Catalog wire name of the action, as stored on the candidate.
     pub action_kind: String,
     pub match_generation: i64,
