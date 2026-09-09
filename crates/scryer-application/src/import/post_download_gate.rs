@@ -67,12 +67,15 @@ pub struct ImportedFileRejection {
 }
 
 pub(crate) const DISC_REVIEW_REQUIRED_CODE: &str = "disc_review_required";
+pub(crate) const MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE: &str = "media_analysis_review_required";
 
 impl ImportedFileRejection {
     pub(crate) fn requires_review(&self) -> bool {
         matches!(
             self.recycle_reason,
-            RUNTIME_OUT_OF_BAND_CODE | DISC_REVIEW_REQUIRED_CODE
+            RUNTIME_OUT_OF_BAND_CODE
+                | DISC_REVIEW_REQUIRED_CODE
+                | MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
         )
     }
 }
@@ -668,6 +671,21 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
     }
 
     if analysis.video_codec.is_none() {
+        if analysis.details.selected_video_id.is_some()
+            || analysis.details.report.budget_exhausted
+            || matches!(
+                analysis.details.report.status,
+                scryer_media_types::ProbeStatus::Unsupported
+                    | scryer_media_types::ProbeStatus::Encrypted
+            )
+        {
+            return ImportedFileGateDecision::Rejected(ImportedFileRejection {
+                message: "video analysis is inconclusive; source preserved for review".to_string(),
+                recycle_reason: MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
+                skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                blocking_rule_codes: vec![MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE.to_string()],
+            });
+        }
         return ImportedFileGateDecision::Rejected(ImportedFileRejection {
             message: "imported file is not a valid video".to_string(),
             recycle_reason: "invalid_file",

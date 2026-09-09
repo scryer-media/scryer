@@ -238,9 +238,24 @@ fn jpeg(track: &mut RawTrack, data: &[u8]) -> Option<()> {
     Some(())
 }
 
+pub(crate) fn mpeg_sequence_header_end(data: &[u8], start: usize) -> Option<usize> {
+    // Matrix data may resemble start codes and must stay outside the extension
+    // scan. The second load flag follows the optional intra matrix bit field.
+    let intra_bytes = if data.get(start + 7)? & 2 != 0 { 64 } else { 0 };
+    let non_intra_bytes = if data.get(start + 7 + intra_bytes)? & 1 != 0 {
+        64
+    } else {
+        0
+    };
+    let end = start + 8 + intra_bytes + non_intra_bytes;
+    data.get(start..end)?;
+    Some(end)
+}
+
 fn mpeg12(track: &mut RawTrack, data: &[u8]) -> Option<()> {
     use scryer_media_types::Rational;
     let start = data.windows(4).position(|bytes| bytes == [0, 0, 1, 0xb3])? + 4;
+    let header_end = mpeg_sequence_header_end(data, start)?;
     let mut bits = crate::ts::BitReader::new(data.get(start..start + 8)?);
     let mut width = bits.read_bits(12)?;
     let mut height = bits.read_bits(12)?;
@@ -266,7 +281,7 @@ fn mpeg12(track: &mut RawTrack, data: &[u8]) -> Option<()> {
     let mut color = track.metadata.color.clone();
     let mut display_dimensions = None;
     if mpeg2 {
-        for (at, code) in data[start + 8..]
+        for (at, code) in data[header_end..]
             .windows(4)
             .enumerate()
             .filter(|(_, bytes)| bytes[..3] == [0, 0, 1])
@@ -278,7 +293,7 @@ fn mpeg12(track: &mut RawTrack, data: &[u8]) -> Option<()> {
             if code[3] != 0xb5 {
                 continue;
             }
-            let mut ext = crate::ts::BitReader::new(&data[start + 8 + at + 4..]);
+            let mut ext = crate::ts::BitReader::new(&data[header_end + at + 4..]);
             match ext.read_bits(4)? {
                 1 => {
                     if profile_level.is_some() {

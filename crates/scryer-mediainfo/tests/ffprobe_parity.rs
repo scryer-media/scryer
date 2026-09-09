@@ -292,10 +292,8 @@ fn ffprobe_optional_i32(value: Option<&Value>, key: &str) -> Option<i32> {
 
 fn ffprobe_bitrate_kbps(value: Option<&Value>) -> Option<i32> {
     value
-        .and_then(|stream| stream.get("bit_rate"))
-        .and_then(Value::as_str)
-        .and_then(|bitrate| bitrate.parse::<i64>().ok())
-        .map(|bitrate| (bitrate / 1000) as i32)
+        .and_then(analysis_parity::reference_bitrate_bps)
+        .map(|bitrate| (bitrate / 1000.0) as i32)
 }
 
 fn ffprobe_language_for_compare(

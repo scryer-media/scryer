@@ -6,7 +6,9 @@ The AV1 and HEVC sequence fixtures contain one second of black 64×64 video at 2
 
 `chapters_nero.mp4` and `chapters_quicktime.mp4` remux the HEVC sequence fixture with two authored chapters: “Opening” at 0–0.5 seconds and “幕間” at 0.5–1 second. FFmpeg 8.1.1 created both; `-movflags +faststart+disable_chpl` omits the Nero list in the QuickTime fixture. Neither file contains subtitle dialogue. Native tests check titles, precise start/end times, and exclusion of chapter text from subtitle scoring.
 
-The application regression `canonical_catalog_and_import_paths_preserve_the_same_analysis_contract` runs 23 fixtures through `NativeMediaAnalyzer`, the actual post-download import gate, and the rule projection. It compares the complete analysis contract, excluding elapsed probe time. Coverage includes AC-3/E-AC-3, Opus, Vorbis, FLAC, and AVI stream sampling, alongside video sequence metadata and MP4 chapters.
+`ps_mpeg1_mp2.mpg` and `ps_mpeg2_mp2.vob` contain two seconds of 160×120 `testsrc2` at 25 fps and a 440 Hz mono tone sampled at 48 kHz. FFmpeg 8.1.1 generated them with video targets of 200 kbps and MP2 audio at 128 kbps, using the `mpeg` and `vob` muxers respectively. Native expectations require the correct MPEG video family, 8-bit 4:2:0, square pixels, rational timing, MPEG-2 Main profile, and mono MP2 metadata. Sequence-header bitrate sentinels remain unknown. These are ordinary program-stream fixtures, not authored DVD navigation.
+
+The application regression `canonical_catalog_and_import_paths_preserve_the_same_analysis_contract` runs 36 fixtures through `NativeMediaAnalyzer`, the actual post-download import gate, and the rule projection. It compares the complete analysis contract, excluding elapsed probe time. Coverage includes MPEG-PS, ASF, FLV, AC-3/E-AC-3, Opus, Vorbis, FLAC, and AVI stream sampling, alongside video sequence metadata and MP4 chapters.
 
 The supplemental fixture SHA-256 values are:
 
@@ -17,6 +19,8 @@ bfbb700dd364d80a840b36f88a7ce56fee0fe062014132ac9cd8b73b15f579c9  hevc_sequence_
 00f9a98d74fe4784618a5abd3f544d497e299a7c297d28d9e0323b8e7ee94e98  hevc_sequence_pq.mkv
 874da880e21134b5ee191c7a1bc52cf2c247e61c711ede03c88e7fbb32b80bf6  chapters_nero.mp4
 1344fa8f6c1fec10eda5720f2e8c4da157665c96ab0a097ff4f97daccf9a5c00  chapters_quicktime.mp4
+a9faea43ed2067d7debf9ee423fa5577e81ad5f2050b6f3e3e4ba3387bb2ff13  ps_mpeg1_mp2.mpg
+cc05b9fc1ccea97944a2a15e46515e65b82140dd6444ebfbc807bbf3b42df312  ps_mpeg2_mp2.vob
 ```
 
 ## Differential checks
@@ -35,6 +39,8 @@ The `media-probe-parity` workflow is manually dispatched. It runs native expecta
 FFprobe's `sample_fmt` describes a decoder's chosen output representation. It is retained in reference reports but does not define the encoded representation of compressed audio. Native fixtures separately require PCM representation and explicit container sample bit depth; compressed decoder output formats stay unknown.
 
 E-AC-3 frame-size/block-duration bitrate in transport streams and Matroska is compared as an estimate unless explicit stream statistics are present. The native estimate remains separate from measured bitrate. MP4 sample-table accounting and Matroska BPS statistics still require measured bitrate and its provenance; omitting both measured and estimated values remains a mismatch.
+
+FFprobe 8.1.1 reports MPEG-1's unspecified/VBR sequence bitrate code (`0x3ffff`) as 104,857,200 bps. The comparison retains that raw reference output but excludes that specific codec/value pair from required bitrate measurements. Neighboring valid declarations remain mandatory, and native fixtures require the unspecified bitrate to stay unknown.
 
 The differential harness is deliberately strict and is also useful for tracking remaining gaps. A successful subset run does not establish complete-corpus parity or complete-file integrity.
 

@@ -178,6 +178,7 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
                 Ok(analysis)
                     if analysis.container_format.as_deref() == Some("iso")
                         || analysis.video_codec.is_some()
+                        || analysis.details.selected_video_id.is_some()
                         || analysis.details.report.budget_exhausted
                         || matches!(
                             analysis.details.report.status,

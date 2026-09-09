@@ -78,6 +78,56 @@ fn mp4_chapter_lists_and_referenced_text_tracks_preserve_authored_titles() {
 }
 
 #[test]
+fn program_stream_codec_headers_reach_the_catalog_contract() {
+    for (name, codec) in [
+        ("ps_mpeg1_mp2.mpg", "mpeg1video"),
+        ("ps_mpeg2_mp2.vob", "mpeg2video"),
+    ] {
+        let analysis = scryer_mediainfo::analyze_catalog_file(&media(name)).unwrap();
+        assert_eq!(analysis.video_codec.as_deref(), Some(codec), "{name}");
+        assert_eq!(analysis.video_width, Some(160));
+        assert_eq!(analysis.video_height, Some(120));
+        let video = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+            .unwrap();
+        assert_eq!(video.metadata.id.as_deref(), Some("00e0"));
+        assert_eq!(video.metadata.bitrate_bps, None);
+        assert_eq!(analysis.video_bitrate_kbps, None);
+        assert_eq!(video.metadata.bit_depth, Some(8));
+        assert_eq!(video.metadata.pixel_format.as_deref(), Some("yuv420p"));
+        assert_eq!(
+            video.metadata.declared_frame_rate,
+            scryer_media_types::Rational::new(25, 1)
+        );
+        assert_eq!(
+            video.metadata.profile.as_deref(),
+            (codec == "mpeg2video").then_some("Main")
+        );
+        assert_eq!(
+            video.metadata.sample_aspect_ratio,
+            scryer_media_types::Rational::new(1, 1)
+        );
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .unwrap();
+        assert_eq!(audio.codec.as_deref(), Some("mp2"));
+        assert_eq!(audio.metadata.sample_rate, Some(48_000));
+        assert_eq!(audio.metadata.channel_layout.as_deref(), Some("mono"));
+        assert_eq!(
+            analysis.details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
+        assert!(analysis.details.report.bytes_read < 256 * 1024);
+    }
+}
+
+#[test]
 fn asf_timing_languages_and_stream_ids_reach_the_catalog_contract() {
     let analysis =
         scryer_mediainfo::analyze_catalog_file(&media("wmv_wmv1_aac_surround.wmv")).unwrap();

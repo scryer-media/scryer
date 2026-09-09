@@ -6240,6 +6240,64 @@ mod authored_disc_image;
 
 #[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
+async fn unknown_program_video_codec_is_held_for_review_across_production_paths() {
+    let fixture = fail_closed_pack_fixture().await;
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path().join("Fail.Closed.Pack.S01E01.mpg");
+    let bytes = [
+        0, 0, 1, 0xba, 0x44, 0, 4, 0, 4, 1, 0, 0, 3, 0xf8, 0, 0, 1, 0xe0, 0, 3, 0x80, 0, 0,
+    ];
+    std::fs::write(&source, bytes).unwrap();
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let crate::MediaAnalysisOutcome::Inconclusive(analysis) =
+        analyzer.analyze_file(source.clone()).await.unwrap()
+    else {
+        panic!("detected video without codec headers must remain inconclusive");
+    };
+    assert!(analysis.video_codec.is_none());
+    assert!(analysis.details.selected_video_id.is_some());
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Fail.Closed.Pack.S01E01.mpg");
+    let decision = crate::post_download_gate::probe_and_validate_with_disc_selection(
+        &fixture.app,
+        &fixture.title,
+        &parsed,
+        &profile,
+        &source,
+        bytes.len() as i64,
+        false,
+        None,
+        false,
+        crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+        None,
+    )
+    .await;
+    let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = decision else {
+        panic!("inconclusive video must require review before import");
+    };
+    assert!(rejection.requires_review());
+    assert_eq!(
+        rejection.recycle_reason,
+        crate::post_download_gate::MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+    );
+    for origin in [
+        crate::import::decide::ImportOrigin::Automatic,
+        crate::import::decide::ImportOrigin::OperatorQueued,
+    ] {
+        assert_eq!(
+            crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+            crate::import::decide::RejectionDisposition::Hold,
+        );
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
 async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract() {
     let fixture = fail_closed_pack_fixture().await;
     let profile = fixture
@@ -6283,6 +6341,8 @@ async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract(
         "flv_flv1_pcm_u8.flv",
         "flv_flv1_speex.flv",
         "flv_h264_mp3.flv",
+        "ps_mpeg1_mp2.mpg",
+        "ps_mpeg2_mp2.vob",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../scryer-mediainfo/tests/media")

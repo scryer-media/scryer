@@ -4,6 +4,15 @@ use serde_json::Value;
 fn number(value: &Value) -> Option<f64> {
     value.as_f64().or_else(|| value.as_str()?.parse().ok())
 }
+pub fn reference_bitrate_bps(stream: &Value) -> Option<f64> {
+    let bitrate = number(&stream["bit_rate"])?;
+    // FFprobe 8.1.1 exposes MPEG-1's all-ones bitrate code as a rate. That
+    // sequence value means unspecified/VBR; it is not a 104.8572 Mbps stream.
+    if stream["codec_name"] == "mpeg1video" && bitrate == f64::from(0x3ffff_u32 * 400) {
+        return None;
+    }
+    (bitrate.is_finite() && bitrate > 0.0).then_some(bitrate)
+}
 fn rational(value: &Value) -> Option<f64> {
     if let Some(text) = value.as_str() {
         let (n, d) = text.split_once('/').or_else(|| text.split_once(':'))?;
@@ -273,7 +282,7 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
                     &stream["field_order"],
                 );
             }
-            let bitrate = number(&stream["bit_rate"]).filter(|rate| *rate > 0.0);
+            let bitrate = reference_bitrate_bps(stream);
             let measured = number(&metadata["bitrate_bps"]);
             let accepts_estimate = reference_bitrate_is_estimate(reference, stream);
             let native_bitrate = measured.or_else(|| {
@@ -457,6 +466,21 @@ pub fn compare(native: &Value, reference: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mpeg1_bitrate_sentinel_is_not_a_reference_measurement() {
+        let mut stream = serde_json::json!({"codec_name":"mpeg1video", "bit_rate":"104857200"});
+        assert_eq!(reference_bitrate_bps(&stream), None);
+        stream["bit_rate"] = "104856800".into();
+        assert_eq!(reference_bitrate_bps(&stream), Some(104856800.0));
+        let reference = serde_json::json!({"streams":[stream]});
+        let native = serde_json::json!({"details":{"streams":[{"kind":"video","codec":"mpeg1video","metadata":{}}]}});
+        assert!(compare(&native, &serde_json::json!({"streams":[{"codec_type":"video", "codec_name":"mpeg1video", "bit_rate":"104856800"}]})).iter().any(|error| error.contains("bitrate_bps")));
+        let mut other_codec = reference["streams"][0].clone();
+        other_codec["codec_name"] = "h264".into();
+        other_codec["bit_rate"] = "104857200".into();
+        assert_eq!(reference_bitrate_bps(&other_codec), Some(104857200.0));
+    }
+
     #[test]
     fn estimated_reference_bitrates_still_require_native_values_and_preserve_declarations() {
         for codec in ["aac", "eac3", "mp1", "mp2", "mp3"] {

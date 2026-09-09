@@ -73,7 +73,21 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
                 offset: None,
             });
         }
+        if kind == TrackKind::Video {
+            track.codec_name = identify_mpeg_video(&pes.payload).map(str::to_owned);
+        }
         crate::ts::probe_elementary_stream(&pes.payload, &mut track);
+        if (0xc0..=0xdf).contains(&id) && track.metadata.sample_rate.is_none() {
+            track.codec_name = None;
+        }
+        if track.codec_name.is_none() {
+            report.warnings.push(scryer_media_types::ProbeWarning {
+                code: "program_codec_unknown".into(),
+                message: "Bounded PES sampling did not identify the elementary codec".into(),
+                stream_id: track.metadata.id.clone(),
+                offset: None,
+            });
+        }
         if kind == TrackKind::Video {
             crate::video_metadata::annex_b(
                 &pes.payload,
@@ -132,9 +146,28 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
     })
 }
 
+fn identify_mpeg_video(data: &[u8]) -> Option<&'static str> {
+    let start = data.windows(4).position(|bytes| bytes == [0, 0, 1, 0xb3])? + 4;
+    let header_end = crate::legacy_video::mpeg_sequence_header_end(data, start)?;
+    let suffix = data.get(header_end..)?;
+    let next = suffix.windows(4).find(|bytes| bytes[..3] == [0, 0, 1])?;
+    let codec = match next[3] {
+        0xb5 => "mpeg2video",
+        0 | 0xb2 | 0xb8 => "mpeg1video",
+        _ => return None,
+    };
+    let mut candidate = RawTrack {
+        kind: TrackKind::Video,
+        codec_name: Some(codec.into()),
+        ..Default::default()
+    };
+    crate::legacy_video::enrich(&mut candidate, data);
+    (candidate.metadata.bit_depth == Some(8)).then_some(codec)
+}
+
 fn classify(id: u16) -> Option<(TrackKind, &'static str)> {
     match id {
-        0xe0..=0xef => Some((TrackKind::Video, "mpeg2video")),
+        0xe0..=0xef => Some((TrackKind::Video, "unknown")),
         0xc0..=0xdf => Some((TrackKind::Audio, "mp2")),
         0xbd80..=0xbd87 => Some((TrackKind::Audio, "ac3")),
         0xbd88..=0xbd8f => Some((TrackKind::Audio, "dts")),
@@ -355,6 +388,52 @@ mod tests {
     }
 
     #[test]
+    fn program_video_identification_uses_sequence_syntax_and_skips_matrices() {
+        for (bytes, expected) in [
+            (
+                &include_bytes!("../tests/media/ps_mpeg1_mp2.mpg")[..],
+                "mpeg1video",
+            ),
+            (
+                &include_bytes!("../tests/media/ps_mpeg2_mp2.vob")[..],
+                "mpeg2video",
+            ),
+        ] {
+            let mut streams = BTreeMap::new();
+            scan_pes(bytes, &mut streams, true);
+            let data = &streams[&0xe0].payload;
+            assert_eq!(identify_mpeg_video(data), Some(expected));
+            let start = data
+                .windows(4)
+                .position(|bytes| bytes == [0, 0, 1, 0xb3])
+                .unwrap()
+                + 4;
+            assert_eq!(identify_mpeg_video(&data[..start + 8]), None);
+            let mut matrix = [0_u8; 64];
+            matrix[8..12].copy_from_slice(&[0, 0, 1, 0xb5]);
+            let mut with_matrix = data.to_vec();
+            with_matrix[start + 7] |= 2;
+            with_matrix.splice(start + 8..start + 8, matrix);
+            assert_eq!(identify_mpeg_video(&with_matrix), Some(expected));
+            assert_eq!(identify_mpeg_video(&with_matrix[..start + 40]), None);
+        }
+        let bytes = [
+            0, 0, 1, 0xe0, 0, 3, 0x80, 0, 0, 0, 0, 1, 0xc0, 0, 3, 0x80, 0, 0,
+        ];
+        let raw = parse_ps(&mut std::io::Cursor::new(bytes)).unwrap();
+        assert!(raw.tracks.iter().all(|track| track.codec_name.is_none()));
+        assert_eq!(
+            raw.details
+                .report
+                .warnings
+                .iter()
+                .filter(|warning| warning.code == "program_codec_unknown")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn catalog_selection_preserves_program_stream_discovery_order() {
         fn packet(id: u8, data: &[u8]) -> Vec<u8> {
             let mut bytes = vec![0, 0, 1, id];
@@ -363,8 +442,12 @@ mod tests {
             bytes.extend(data);
             bytes
         }
-        let sd = [0, 0, 1, 0xb3, 0x2d, 0x01, 0xe0, 0x13, 0, 0, 0x60, 0];
-        let hd = [0, 0, 1, 0xb3, 0x50, 0x02, 0xd0, 0x13, 0, 0, 0x60, 0];
+        let sd = [
+            0, 0, 1, 0xb3, 0x2d, 0x01, 0xe0, 0x13, 0, 0, 0x60, 0, 0, 0, 1, 0, 0, 8,
+        ];
+        let hd = [
+            0, 0, 1, 0xb3, 0x50, 0x02, 0xd0, 0x13, 0, 0, 0x60, 0, 0, 0, 1, 0, 0, 8,
+        ];
         let bytes = [
             packet(0xc4, &[]),
             packet(0xe7, &sd),
