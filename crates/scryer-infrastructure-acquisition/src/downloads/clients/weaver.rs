@@ -1841,6 +1841,11 @@ impl DownloadClient for WeaverDownloadClient {
 
 /// Weaver's refusal when an API key without admin scope asks for
 /// `deleteFiles`: "admin scope required to delete completed files".
+///
+/// TODO(0.21.0): remove this compatibility shim (this needle, the refusal
+/// arm in `remove_history_item`, and the host-deletion fallback it drives in
+/// `reconcile_terminal_download_cleanup`) once Weaver integration-scoped
+/// keys can delete completed files again.
 const ADMIN_SCOPE_REFUSAL_NEEDLE: &str = "admin scope required";
 
 impl WeaverDownloadClient {

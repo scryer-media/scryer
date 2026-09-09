@@ -418,6 +418,11 @@ async fn reconcile_terminal_download_cleanup(
         // Weaver deletes its own files unless its API key was refused the
         // scope to do so: from then on (persisted on the checkpoint) the host
         // path deletes the payload and Weaver only removes the entry.
+        //
+        // TODO(0.21.0): remove this compatibility shim (`native_payload_refused`,
+        // the `Unauthorized` arm below, `CLIENT_REFUSED_PAYLOAD_DELETION_KEY`
+        // and its carry-through in `persist_plan` and `completed.rs`) once
+        // Weaver integration-scoped keys can delete completed files again.
         let host_managed_payload = remove_data
             && (client_type.trim() != "weaver" || native_payload_refused)
             && !plugin_has_native_data_removal(app, client_id).await;
