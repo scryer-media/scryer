@@ -20,7 +20,6 @@ import { Link } from "react-router";
 
 import { AuthenticatedAvatar } from "@/components/common/authenticated-avatar";
 import { DownloadClientTypeLogo } from "@/components/common/download-client-type-logo";
-import { TitleHoverCard } from "@/components/common/title-hover-card";
 import {
   IndexerErrorHistoryModal,
   type IndexerErrorHistoryScope,
@@ -30,6 +29,10 @@ import {
   DashboardPanel,
   DashboardPanelEmpty,
 } from "@/components/views/dashboard/dashboard-panel";
+import {
+  CalendarEventHoverCard,
+  type CalendarEpisodeItem,
+} from "@/components/views/calendar-view";
 import { StorageUsageRing } from "@/components/views/dashboard/storage-usage-ring";
 import {
   usageTagBadgeTone,
@@ -784,6 +787,27 @@ type RecentlyImportedHoverPreview = {
   };
 };
 
+function calendarEpisodeForImportedItem(item: DashboardImportedItem): CalendarEpisodeItem {
+  const facet = normalizeFacet(item.facet)?.toLowerCase() ?? "series";
+  return {
+    id: item.id,
+    titleId: item.titleId,
+    libraryId: item.libraryId ?? "Unknown library",
+    libraryName: item.libraryId,
+    titleName: item.titleName ?? item.titleId,
+    titleFacet: facet,
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: item.quality,
+    overview: formatBytes(item.sizeBytes),
+    imageUrl: item.posterUrl,
+    airDate: item.occurredAt,
+    monitored: true,
+    playbackLinks: [],
+    mediaAvailability: { state: "UNMONITORED", primaryQualityLabel: null },
+  };
+}
+
 function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
   const t = useTranslate();
   const isMobile = useIsMobile();
@@ -886,44 +910,9 @@ function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
         )}
       </DashboardPanel>
       {!isMobile && hoverPreview ? (
-        <TitleHoverCard
+        <CalendarEventHoverCard
           key={hoverPreview.item.id}
-          preview={{
-            id: hoverPreview.item.id || hoverPreview.item.titleId,
-            title: hoverPreview.item.titleName ?? hoverPreview.item.titleId,
-            facet: hoverPreview.item.facet,
-            posterUrl: hoverPreview.item.posterUrl,
-            anchor: hoverPreview.anchor,
-            badges: (
-              <>
-                {normalizeFacet(hoverPreview.item.facet) ? (
-                  <span className="fc-scryer-hover-card-meta-badge">
-                    {normalizeFacet(hoverPreview.item.facet)}
-                  </span>
-                ) : null}
-                <span className="fc-scryer-hover-card-meta-badge">
-                  {hoverPreview.item.eventType === "FILE_UPGRADED"
-                    ? t("dashboard.upgradeBadge")
-                    : t("dashboard.recentlyImported")}
-                </span>
-                {hoverPreview.item.quality ? (
-                  <span className="fc-scryer-hover-card-meta-badge">
-                    {hoverPreview.item.quality}
-                  </span>
-                ) : null}
-              </>
-            ),
-            summary: formatBytes(hoverPreview.item.sizeBytes),
-            footer: (
-              <>
-                <span>{formatCompactAge(hoverPreview.item.occurredAt) ?? "—"}</span>
-                {hoverPreview.item.libraryId ? (
-                  <span>{hoverPreview.item.libraryId}</span>
-                ) : null}
-              </>
-            ),
-          }}
-          ariaLabel={`${t("dashboard.recentlyImported")} ${hoverPreview.item.titleName ?? hoverPreview.item.titleId}`}
+          preview={{ episode: calendarEpisodeForImportedItem(hoverPreview.item), anchor: hoverPreview.anchor }}
           onMouseEnter={clearHoverTimer}
           onMouseLeave={scheduleHoverPreviewClose}
         />

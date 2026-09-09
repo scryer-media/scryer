@@ -4,12 +4,14 @@ import { useQuery } from "urql";
 import {
   ChevronDown,
   ChevronUp,
-  CalendarClock,
   Loader2,
   RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TitleHoverCard } from "@/components/common/title-hover-card";
+import {
+  CalendarEventHoverCard,
+  type CalendarEpisodeItem,
+} from "@/components/views/calendar-view";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -136,6 +138,31 @@ function historyHoverDetails(event: TitleHistoryEvent): {
   };
 }
 
+function calendarEpisodeForHistoryEvent(
+  event: TitleHistoryEvent,
+  details: ReturnType<typeof historyHoverDetails>,
+  episodeLabel?: string | null,
+): CalendarEpisodeItem {
+  const libraryName = event.sourceSystem ?? event.clientName ?? null;
+  return {
+    id: event.id,
+    titleId: event.titleId,
+    libraryId: libraryName ?? "Scryer",
+    libraryName,
+    titleName: event.titleName ?? event.titleId,
+    titleFacet: details.facet?.toLowerCase() ?? "series",
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: episodeLabel ?? null,
+    overview: event.quality,
+    imageUrl: details.posterUrl,
+    airDate: event.occurredAt,
+    monitored: true,
+    playbackLinks: [],
+    mediaAvailability: { state: "UNMONITORED", primaryQualityLabel: null },
+  };
+}
+
 function HistoryTitleHoverLink({
   event,
   label,
@@ -149,8 +176,6 @@ function HistoryTitleHoverLink({
   className: string;
   episodeLabel?: string | null;
 }) {
-  const t = useTranslate();
-  const dateTimeFormat = useUiDateTimeFormat();
   const isMobile = useIsMobile();
   const [previewAnchor, setPreviewAnchor] = React.useState<{
     top: number;
@@ -212,7 +237,6 @@ function HistoryTitleHoverLink({
         onMouseLeave: scheduleClose,
       }
     : undefined;
-  const summary = [episodeLabel, event.quality].filter(Boolean).join(" · ");
   const content = href ? (
     <Link to={href} className={className} title={label} {...hoverProps}>
       {label}
@@ -227,40 +251,12 @@ function HistoryTitleHoverLink({
     <>
       {content}
       {!isMobile && previewAnchor ? (
-        <TitleHoverCard
+        <CalendarEventHoverCard
           key={event.id}
           preview={{
-            id: event.id || event.titleId,
-            title: event.titleName ?? event.titleId,
-            facet: details.facet,
-            posterUrl: details.posterUrl,
+            episode: calendarEpisodeForHistoryEvent(event, details, episodeLabel),
             anchor: previewAnchor,
-            badges: (
-              <>
-                {details.facet ? (
-                  <span className="fc-scryer-hover-card-meta-badge">
-                    {details.facet}
-                  </span>
-                ) : null}
-                <span className="fc-scryer-hover-card-meta-badge">
-                  {getTitleHistoryEventLabel(event.eventType, t)}
-                </span>
-                {event.quality ? (
-                  <span className="fc-scryer-hover-card-meta-badge">
-                    {event.quality}
-                  </span>
-                ) : null}
-              </>
-            ),
-            summary: summary || null,
-            footer: (
-              <span>
-                <CalendarClock aria-hidden="true" />
-                {formatUiDate(event.occurredAt ?? event.createdAt, dateTimeFormat)}
-              </span>
-            ),
           }}
-          ariaLabel={`${getTitleHistoryEventLabel(event.eventType, t)} ${event.titleName ?? event.titleId}`}
           onMouseEnter={clearHoverTimer}
           onMouseLeave={scheduleClose}
         />
