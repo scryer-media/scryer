@@ -912,9 +912,9 @@ async fn nzbget_list_queue_item_has_correct_fields() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn nzbget_list_history_filters_old_entries() {
+async fn nzbget_list_history_retains_old_entries_for_cleanup_recovery() {
     let ctx = TestContext::new().await;
-    // Use original fixture with old timestamps — should filter out everything
+    // Retained jobs remain observable regardless of their completion age.
     Mock::given(method("POST"))
         .and(path("/jsonrpc"))
         .respond_with(
@@ -927,10 +927,7 @@ async fn nzbget_list_history_filters_old_entries() {
         .list_history()
         .await
         .expect("list_history should succeed even with old entries");
-    assert!(
-        items.is_empty(),
-        "old entries beyond 7-day cutoff should be filtered out"
-    );
+    assert_eq!(items.len(), 2, "old retained jobs must remain observable");
 }
 
 #[tokio::test]

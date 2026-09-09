@@ -2015,7 +2015,7 @@ async fn maintenance_scope_candidates_and_exclusions_have_independent_subject_id
 }
 
 #[tokio::test]
-async fn action_sequence_migration_preserves_pre_0231_in_flight_legacy_rows() {
+async fn action_sequence_migration_preserves_pre_0232_in_flight_legacy_rows() {
     crate::spellfix::register_spellfix_auto_extension().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("legacy.db");
@@ -2024,7 +2024,7 @@ async fn action_sequence_migration_preserves_pre_0231_in_flight_legacy_rows() {
         .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
         .await
         .unwrap();
-    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(230), true)
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(231), true)
         .await
         .unwrap();
     run_embedded_migration(&pool, r#"

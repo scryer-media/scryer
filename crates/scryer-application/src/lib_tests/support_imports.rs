@@ -1084,6 +1084,8 @@ impl crate::ImportArtifactRepository for RecordingImportArtifactRepo {
 #[derive(Default, Clone)]
 pub(super) struct TrackingImportRepo {
     pub(super) records: Arc<Mutex<Vec<ImportRecord>>>,
+    pub(super) canonical_ids:
+        Arc<Mutex<HashMap<String, scryer_domain::download_identity::DownloadId>>>,
     pub(super) identities: ImportIdentities,
     pub(super) manual_import_selection: Arc<Mutex<Option<crate::ManualImportSelection>>>,
     pub(super) manual_import_selection_consume_calls: Arc<std::sync::atomic::AtomicUsize>,
@@ -1091,6 +1093,13 @@ pub(super) struct TrackingImportRepo {
 
 #[async_trait]
 impl ImportRepository for TrackingImportRepo {
+    async fn canonical_download_id_for_import(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::download_identity::DownloadId>> {
+        Ok(self.canonical_ids.lock().await.get(id).copied())
+    }
+
     async fn get_manual_import_selection(
         &self,
         selection_id: &str,

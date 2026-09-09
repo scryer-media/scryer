@@ -645,10 +645,10 @@ mod tests {
         include_str!("../../../scryer/src/db/migrations/0029_rule_sets.sql"),
         include_str!("../../../scryer/src/db/migrations/0060_managed_rule_sets.sql"),
         include_str!("../../../scryer/src/db/migrations/0149_rule_set_managed_tag_filter.sql"),
-        include_str!("../../../scryer/src/db/migrations/0224_tracked_rule_packs.sql"),
+        include_str!("../../../scryer/src/db/migrations/0225_tracked_rule_packs.sql"),
     ];
     const METADATA_MIGRATION: &str =
-        include_str!("../../../scryer/src/db/migrations/0227_rule_set_evaluation_metadata.sql");
+        include_str!("../../../scryer/src/db/migrations/0228_rule_set_evaluation_metadata.sql");
 
     async fn apply_migration(pool: &SqlitePool, migration: &'static str) {
         for statement in migration
@@ -792,7 +792,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_0227_defaults_old_rows_and_rejects_unknown_phases() {
+    async fn sqlite_0228_defaults_old_rows_and_rejects_unknown_phases() {
         let (store, pool) = store(false).await;
         let now = Utc::now().to_rfc3339();
         sqlx::query(

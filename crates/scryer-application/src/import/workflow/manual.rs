@@ -392,6 +392,72 @@ async fn maybe_remove_completed_manual_import_download(
         return;
     };
 
+    if app
+        .services
+        .workflow
+        .download_submissions
+        .supports_durable_download_cleanup()
+    {
+        let locator = crate::ClientJobLocator::new(
+            Some(&completed.client_id),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        );
+        let result = async {
+            let binding = app
+                .services
+                .workflow
+                .download_registry
+                .find_active_binding_by_locator(&locator)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "verified manual import has no durable client binding".into(),
+                    )
+                })?;
+            if let Some(title_id) = title_id.filter(|id| !id.trim().is_empty()) {
+                app.services
+                    .workflow
+                    .download_submissions
+                    .set_download_cleanup_attribution(
+                        &binding.download_id,
+                        title_id,
+                        facet.as_str(),
+                    )
+                    .await?;
+            }
+            app.services
+                .workflow
+                .download_submissions
+                .record_identity_tracked_state_for_download(
+                    Some(&binding.download_id),
+                    &crate::DownloadSubmissionIdentity::default(),
+                    Some(&locator),
+                    "imported",
+                    Some("manual_import_completed"),
+                    None,
+                )
+                .await?;
+            if let crate::DownloadCleanupClaim::Claimed(record) = app
+                .services
+                .workflow
+                .download_submissions
+                .claim_download_cleanup(&binding.download_id)
+                .await?
+            {
+                run_claimed_download_cleanup(app, *record, None).await;
+            }
+            Ok::<(), AppError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(client_id = %completed.client_id,
+                item_id = %completed.download_client_item_id, error = %error,
+                "verified manual import cleanup remains unresolved");
+        }
+        return;
+    }
+
     // No tracked row on this path, so the client entry is assumed present and
     // the seeding gate decides on the client's own evidence. A torrent still
     // working off its goal is left alone; the tracked poller picks it up and
@@ -411,6 +477,7 @@ async fn maybe_remove_completed_manual_import_download(
         // No tracked row here, so the gate reads the published snapshot.
         None,
         // Outside the reconcile tick: no shared prefetch, per-row reads.
+        None,
         None,
     )
     .await;

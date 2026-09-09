@@ -625,7 +625,7 @@ mod tests {
     }
 
     /// The post-0218 SQLite shape, copied from
-    /// `migrations/0218_first_class_proxies.sql`, so the round-trip below
+    /// `migrations/0219_first_class_proxies.sql`, so the round-trip below
     /// exercises the real columns rather than a hand-rolled subset.
     async fn proxy_store() -> (ProxyConfigStore, sqlx::SqlitePool) {
         let pool = SqlitePoolOptions::new()
@@ -851,7 +851,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::raw_sql(include_str!(
-            "../../scryer/src/db/migrations/0218_first_class_proxies.sql"
+            "../../scryer/src/db/migrations/0219_first_class_proxies.sql"
         ))
         .execute(&pool)
         .await

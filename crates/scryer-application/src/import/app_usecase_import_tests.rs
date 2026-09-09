@@ -2578,7 +2578,9 @@ async fn maybe_remove_completed_manual_import_download_deletes_history_for_colle
     let download_client = Arc::new(ManualImportCleanupDownloadClient::default());
     let app = build_manual_import_cleanup_app(vec![title], download_client.clone());
     let dir = tempfile::tempdir().expect("tempdir");
-    let completed = test_completed_download("Harbor.Pals.S01.Complete.1080p.WEB-DL", dir.path());
+    let mut completed =
+        test_completed_download("Harbor.Pals.S01.Complete.1080p.WEB-DL", dir.path());
+    completed.client_type = "weaver".into();
 
     maybe_remove_completed_manual_import_download(&app, Some(&completed), Some("series-1"), true)
         .await;
@@ -2601,6 +2603,7 @@ async fn maybe_remove_completed_manual_import_download_deletes_history_for_episo
     let mut completed =
         test_completed_download("Silver Horizon.S01E03-E04.1080p.WEB-DL", dir.path());
     completed.download_client_item_id = "job-episode-set".to_string();
+    completed.client_type = "weaver".into();
 
     maybe_remove_completed_manual_import_download(&app, Some(&completed), Some("anime-1"), true)
         .await;

@@ -13,6 +13,8 @@ use scryer_domain::{Id, TrackedDownloadState, download_identity::DownloadId};
 use super::unique_violation::run_in_transaction_retrying_unique_violation;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
+include!("download_cleanup.rs");
+
 #[derive(Clone)]
 pub struct DownloadSubmissionStore {
     datastore: StoreDatastore,
@@ -446,6 +448,104 @@ fn lenient_timestamp(
 
 #[async_trait]
 impl DownloadSubmissionRepository for DownloadSubmissionStore {
+    fn supports_durable_download_cleanup(&self) -> bool {
+        true
+    }
+    async fn has_pending_download_cleanup(&self, id: &DownloadId) -> AppResult<bool> {
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT id FROM downloads WHERE id = {} AND NOT EXISTS (
+                SELECT 1 FROM download_cleanup c WHERE c.download_id = downloads.id AND c.status = 'completed')",
+            &[SqlArg::Text(id.to_string())],
+        ).await?.is_some())
+    }
+    async fn seed_download_cleanup(&self, limit: usize) -> AppResult<()> {
+        self.seed_cleanup(limit).await
+    }
+
+    async fn set_download_cleanup_attribution(
+        &self,
+        id: &DownloadId,
+        title_id: &str,
+        facet: &str,
+    ) -> AppResult<()> {
+        let id = id.to_string();
+        let title_id = title_id.trim().to_string();
+        let facet = facet.trim().to_string();
+        if title_id.is_empty() || facet.is_empty() {
+            return Err(AppError::Validation(
+                "manual cleanup requires title and facet".into(),
+            ));
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "attribute_download_cleanup", move |tx| {
+            let args = vec![
+                SqlArg::Text(title_id.clone()),
+                SqlArg::Text(facet.clone()),
+                SqlArg::Text(id.clone()),
+            ];
+            Box::pin(async move {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE download_submissions SET title_id = {}, facet = {} WHERE id = {}",
+                    &args,
+                )
+                .await?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE download_cleanup SET title_id = {}, facet = {} WHERE download_id = {}",
+                    &args,
+                )
+                .await?;
+                // A row abandoned for lacking attribution now has it: reopen it
+                // so the manual import's cleanup claim runs instead of finding
+                // a settled row. Leases are untouched (only settled rows match).
+                let now = Utc::now();
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE download_cleanup SET status = 'pending', outcome = NULL, last_error = NULL,
+                     attempts = 0, next_attempt_at = {}, updated_at = {}
+                     WHERE download_id = {} AND status = 'completed' AND outcome = 'cleanup_abandoned'",
+                    &[SqlArg::Timestamp(now), SqlArg::Timestamp(now), args[2].clone()],
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn list_due_download_cleanup(
+        &self,
+        limit: usize,
+    ) -> AppResult<Vec<DownloadCleanupRecord>> {
+        self.due_cleanup(limit).await
+    }
+
+    async fn claim_download_cleanup(&self, id: &DownloadId) -> AppResult<DownloadCleanupClaim> {
+        self.claim_cleanup(id).await
+    }
+
+    async fn checkpoint_download_cleanup_payload(
+        &self,
+        id: &DownloadId,
+        checkpoint: &str,
+    ) -> AppResult<()> {
+        self.checkpoint_cleanup(id, checkpoint).await
+    }
+
+    async fn finish_download_cleanup(
+        &self,
+        id: &DownloadId,
+        outcome: &str,
+        complete: bool,
+        retry_seconds: i64,
+        history_offset: usize,
+        error: Option<&str>,
+    ) -> AppResult<()> {
+        self.finish_cleanup(id, outcome, complete, retry_seconds, history_offset, error)
+            .await
+    }
+
     async fn find_info_hash_for_title_release(
         &self,
         title_id: &str,
@@ -866,7 +966,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                         &[
                             SqlArg::Text(Id::new().0),
                             SqlArg::Text(identity_key),
-                            SqlArg::OptText(Some(canonical_download_id)),
+                            SqlArg::OptText(Some(canonical_download_id.clone())),
                             SqlArg::OptText(identity.download_id),
                             SqlArg::OptText(source_identity.as_ref().map(|source| {
                                 normalize_download_client_id(source.client_id.as_deref())
@@ -881,7 +981,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                                     .as_ref()
                                     .map(|source| source.item_id.clone()),
                             ),
-                            SqlArg::Text(tracked_state),
+                            SqlArg::Text(tracked_state.clone()),
                             SqlArg::OptText(reason),
                             SqlArg::OptText(detail),
                             SqlArg::Timestamp(now),
@@ -889,6 +989,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                         ],
                     )
                     .await?;
+                    enqueue_cleanup_tx(tx, &canonical_download_id, &tracked_state).await?;
                     Ok(())
                 })
             },
@@ -1124,7 +1225,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                         &[
                             SqlArg::Text(Id::new().0),
                             SqlArg::Text(identity_key),
-                            SqlArg::OptText(Some(canonical_download_id)),
+                            SqlArg::OptText(Some(canonical_download_id.clone())),
                             SqlArg::OptText(identity.download_id),
                             SqlArg::OptText(source_identity.as_ref().map(|source| {
                                 normalize_download_client_id(source.client_id.as_deref())
@@ -1139,7 +1240,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                                     .as_ref()
                                     .map(|source| source.item_id.clone()),
                             ),
-                            SqlArg::Text(tracked_state),
+                            SqlArg::Text(tracked_state.clone()),
                             SqlArg::OptText(reason),
                             SqlArg::OptText(detail),
                             SqlArg::Timestamp(now),
@@ -1147,6 +1248,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                         ],
                     )
                     .await?;
+                    enqueue_cleanup_tx(tx, &canonical_download_id, &tracked_state).await?;
                     Ok(previous)
                 })
             },
@@ -1208,6 +1310,71 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     ClientJobLocator::new(
                         row.opt_text("client_id")?.as_deref(),
                         row.text("client_type")?,
+                        row.text("download_client_item_id")?,
+                    ),
+                    row.text("tracked_state")?,
+                ));
+            }
+
+            // Submissions that pre-date identity states (or whose state row
+            // was never written) still carry a legacy `tracked_state` on the
+            // submission itself. Without it a settled legacy job reads as
+            // "never tracked" and freezes its scope while absent.
+            let missing: Vec<&ClientJobLocator> = chunk
+                .iter()
+                .filter(|identity| {
+                    !states.iter().any(|(known, _)| {
+                        known.client_type == identity.client_type
+                            && known.item_id == identity.item_id
+                            && normalize_download_client_id(known.client_id.as_deref())
+                                == normalize_download_client_id(identity.client_id.as_deref())
+                    })
+                })
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            let mut args = Vec::with_capacity(missing.len() * 3);
+            let clauses = missing
+                .iter()
+                .map(|identity| {
+                    args.push(SqlArg::Text(identity.client_type.clone()));
+                    args.push(SqlArg::Text(identity.item_id.clone()));
+                    args.push(SqlArg::Text(normalize_download_client_id(
+                        identity.client_id.as_deref(),
+                    )));
+                    "(download_client_type = {} AND download_client_item_id = {} AND COALESCE(download_client_id, '') = {})"
+                })
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let rows = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT download_client_id, download_client_type, download_client_item_id,
+                            tracked_state
+                     FROM (
+                         SELECT download_client_id, download_client_type,
+                                download_client_item_id, tracked_state,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY COALESCE(download_client_id, ''),
+                                                 download_client_type,
+                                                 download_client_item_id
+                                    ORDER BY submitted_at DESC, id DESC
+                                ) AS row_number
+                         FROM download_submissions
+                         WHERE tracked_state IS NOT NULL AND tracked_state <> ''
+                           AND ({clauses})
+                     ) ranked
+                     WHERE row_number = 1"
+                ),
+                &args,
+            )
+            .await?;
+            for row in rows {
+                states.push((
+                    ClientJobLocator::new(
+                        row.opt_text("download_client_id")?.as_deref(),
+                        row.text("download_client_type")?,
                         row.text("download_client_item_id")?,
                     ),
                     row.text("tracked_state")?,
@@ -1463,11 +1630,12 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                             )),
                             SqlArg::Text(identity.client_type.clone()),
                             SqlArg::Text(identity.item_id.clone()),
-                            SqlArg::Text(tracked_state),
+                            SqlArg::Text(tracked_state.clone()),
                             SqlArg::Timestamp(Utc::now()),
                         ],
                     )
                     .await?;
+                    enqueue_cleanup_tx(tx, &canonical_download_id.to_string(), &tracked_state).await?;
                     Ok(())
                 })
             },
@@ -1733,7 +1901,8 @@ mod seed_goal_tests {
         sqlx::query(
             "CREATE TABLE download_clients (
                  id TEXT PRIMARY KEY,
-                 name TEXT NOT NULL
+                 name TEXT NOT NULL,
+                 client_type TEXT NOT NULL DEFAULT 'qbittorrent'
              );
              CREATE TABLE downloads (
                  id TEXT PRIMARY KEY,
@@ -1797,6 +1966,12 @@ mod seed_goal_tests {
                 .await
                 .expect("post-import tracking migration should apply");
         }
+        sqlx::raw_sql(include_str!(
+            "../../../../scryer/src/db/migrations/0211_durable_download_cleanup.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("cleanup migration should apply");
         DownloadSubmissionStore::new(StoreDatastore::Sqlite {
             pool,
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -2812,6 +2987,466 @@ mod seed_goal_tests {
         assert_eq!(row.client_type.as_deref(), Some("qbittorrent"));
         assert_eq!(row.source_title.as_deref(), Some("Release job-1"));
         assert_eq!(row.size_bytes, Some(123));
+    }
+
+    #[tokio::test]
+    async fn cleanup_resolves_only_unambiguous_legacy_clients_and_persists_the_binding() {
+        for client_count in [0, 1, 2] {
+            let store = store().await;
+            let id = DownloadId::new();
+            let mut legacy = submission(id, "legacy-job", "title-1");
+            legacy.download_client_id = Some(String::new());
+            store
+                .record_submission_with_identity(legacy, submission_identity(id), None)
+                .await
+                .unwrap();
+            // Model the legacy migration's canonical binding with no config ID.
+            SqlRuntime::execute_write(&store.datastore, "test_legacy_binding",
+                "INSERT INTO download_client_bindings (download_id, client_config_id, client_type_snapshot, native_item_id, created_at)
+                 VALUES ({}, '', 'qbittorrent', 'legacy-job', {})",
+                vec![SqlArg::Text(id.to_string()), SqlArg::Timestamp(Utc::now())]).await.unwrap();
+            for n in 0..client_count {
+                SqlRuntime::execute_write(&store.datastore, "test_client",
+                    "INSERT INTO download_clients (id, name, client_type) VALUES ({}, {}, 'qbittorrent')",
+                    vec![SqlArg::Text(format!("client-{n}")), SqlArg::Text(format!("Client {n}"))]).await.unwrap();
+            }
+            store
+                .record_identity_tracked_state_for_download(
+                    Some(&id),
+                    &submission_identity(id),
+                    Some(&ClientJobLocator::new(None, "qbittorrent", "legacy-job")),
+                    "imported",
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let DownloadCleanupClaim::Claimed(record) =
+                store.claim_download_cleanup(&id).await.unwrap()
+            else {
+                panic!("legacy intent should remain durable even when ownership is ambiguous");
+            };
+            assert_eq!(
+                record.client_id,
+                if client_count == 1 { "client-0" } else { "" }
+            );
+            let binding = SqlRuntime::fetch_optional(
+                store.datastore.read_exec(),
+                "SELECT client_config_id FROM download_client_bindings WHERE download_id = {}",
+                &[SqlArg::Text(id.to_string())],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                blank_to_none(binding.opt_text("client_config_id").unwrap()),
+                (client_count == 1).then(|| "client-0".to_string())
+            );
+            // A row already enqueued by an older build must also heal on claim.
+            if client_count == 1 {
+                SqlRuntime::execute_write(&store.datastore, "test_old_intent",
+                    "UPDATE download_cleanup SET client_id = '', lease_until = NULL WHERE download_id = {}",
+                    vec![SqlArg::Text(id.to_string())]).await.unwrap();
+                let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+                let DownloadCleanupClaim::Claimed(recovered) =
+                    reopened.claim_download_cleanup(&id).await.unwrap()
+                else {
+                    panic!("claim");
+                };
+                assert_eq!(recovered.client_id, "client-0");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn attribution_reopens_an_abandoned_cleanup_row() {
+        let store = store().await;
+        let id = DownloadId::new();
+        let mut orphan = submission(id, "job-1", " ");
+        orphan.facet.clear();
+        store
+            .record_submission_with_identity(orphan, submission_identity(id), None)
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                Some(&identity()),
+                "imported",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let DownloadCleanupClaim::Claimed(_) = store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("bound orphan must receive cleanup intent");
+        };
+        store
+            .finish_download_cleanup(&id, "cleanup_abandoned", true, 0, 0, Some("unattributed"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.claim_download_cleanup(&id).await.unwrap(),
+            DownloadCleanupClaim::Settled { .. }
+        ));
+        store
+            .set_download_cleanup_attribution(&id, "chosen-title", "movie")
+            .await
+            .unwrap();
+        let DownloadCleanupClaim::Claimed(reopened) =
+            store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("attribution must reopen an abandoned row");
+        };
+        assert_eq!(reopened.title_id.as_deref(), Some("chosen-title"));
+        assert_eq!(reopened.facet.as_deref(), Some("movie"));
+        assert_eq!(reopened.attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_preserves_manual_orphan_attribution_and_ignored_intents() {
+        for state in ["imported", "ignored"] {
+            let store = store().await;
+            let id = DownloadId::new();
+            let mut orphan = submission(id, "job-1", " ");
+            orphan.facet.clear();
+            store
+                .record_submission_with_identity(orphan, submission_identity(id), None)
+                .await
+                .unwrap();
+            if state == "imported" {
+                store
+                    .set_download_cleanup_attribution(&id, "chosen-title", "movie")
+                    .await
+                    .unwrap();
+            }
+            store
+                .record_identity_tracked_state_for_download(
+                    Some(&id),
+                    &submission_identity(id),
+                    Some(&identity()),
+                    state,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let DownloadCleanupClaim::Claimed(record) =
+                store.claim_download_cleanup(&id).await.unwrap()
+            else {
+                panic!("bound orphan must receive cleanup intent");
+            };
+            assert_eq!(record.tracked_state, state);
+            if state == "imported" {
+                assert_eq!(record.title_id.as_deref(), Some("chosen-title"));
+                assert_eq!(record.facet.as_deref(), Some("movie"));
+            } else {
+                assert!(record.title_id.is_none());
+                assert!(record.facet.is_none());
+            }
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "test_legacy_cleanup",
+                "DELETE FROM download_cleanup WHERE download_id = {}",
+                vec![SqlArg::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+            let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+            reopened.seed_download_cleanup(100).await.unwrap();
+            assert_eq!(
+                reopened.list_due_download_cleanup(100).await.unwrap().len(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_replays_settled_outcomes_after_restart() {
+        for outcome in ["policy_retained", "handed_off", "seeding_entry_kept"] {
+            let store = store().await;
+            let id = DownloadId::new();
+            store
+                .record_submission_with_identity(
+                    submission(id, "job-1", "title-1"),
+                    submission_identity(id),
+                    None,
+                )
+                .await
+                .unwrap();
+            store
+                .record_identity_tracked_state_for_download(
+                    Some(&id),
+                    &submission_identity(id),
+                    Some(&identity()),
+                    "imported",
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            store
+                .finish_download_cleanup(&id, outcome, true, 0, 0, None)
+                .await
+                .unwrap();
+            let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+            assert!(
+                matches!(reopened.claim_download_cleanup(&id).await.unwrap(),
+                DownloadCleanupClaim::Settled { outcome: saved } if saved == outcome)
+            );
+            assert!(
+                reopened
+                    .list_due_download_cleanup(100)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_intent_survives_retry_and_keeps_import_history() {
+        let store = store().await;
+        let id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(id, "job-1", "title-1"),
+                submission_identity(id),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                Some(&identity()),
+                "imported",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let due = store.list_due_download_cleanup(100).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].download_id, id);
+        assert!(store.has_pending_download_cleanup(&id).await.unwrap());
+        let DownloadCleanupClaim::Claimed(first) = store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("cleanup must be claimed");
+        };
+        assert_eq!(first.attempts, 1);
+        assert!(matches!(
+            store.claim_download_cleanup(&id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        store
+            .checkpoint_download_cleanup_payload(&id, r#"{"payload_removed":true}"#)
+            .await
+            .unwrap();
+        store
+            .finish_download_cleanup(&id, "entry_failed", false, 0, 300, Some("client offline"))
+            .await
+            .unwrap();
+        // Recreate the store over the same datastore, as after restarting its owner.
+        let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+        let DownloadCleanupClaim::Claimed(retry) =
+            reopened.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("retry must remain durable");
+        };
+        assert_eq!(retry.attempts, 2);
+        assert_eq!(retry.history_offset, 300);
+        assert_eq!(
+            retry.payload_checkpoint.as_deref(),
+            Some(r#"{"payload_removed":true}"#)
+        );
+        assert_eq!(retry.title_id.as_deref(), Some("title-1"));
+        assert_eq!(
+            reopened
+                .list_terminal_download_history_rows(10)
+                .await
+                .unwrap()[0]
+                .tracked_state,
+            "imported"
+        );
+        reopened
+            .finish_download_cleanup(&id, "removed", true, 0, 0, None)
+            .await
+            .unwrap();
+        reopened.seed_download_cleanup(100).await.unwrap();
+        assert!(!reopened.has_pending_download_cleanup(&id).await.unwrap());
+        assert!(
+            reopened
+                .list_due_download_cleanup(100)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_backfill_progresses_beyond_recent_history_and_excludes_incomplete_imports() {
+        let store = store().await;
+        for index in 0..105 {
+            let id = DownloadId::new();
+            store
+                .record_submission_with_identity(
+                    submission(id, &format!("old-{index}"), "title-1"),
+                    submission_identity(id),
+                    None,
+                )
+                .await
+                .unwrap();
+            // Simulate legacy terminal rows predating the cleanup migration.
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "legacy_fixture",
+                "UPDATE download_submissions SET tracked_state = 'imported' WHERE id = {}",
+                vec![SqlArg::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+            assert!(store.has_pending_download_cleanup(&id).await.unwrap());
+        }
+        let live = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(live, "incomplete", "title-1"),
+                submission_identity(live),
+                None,
+            )
+            .await
+            .unwrap();
+        store.seed_download_cleanup(100).await.unwrap();
+        let first = store.list_due_download_cleanup(200).await.unwrap();
+        assert_eq!(first.len(), 100);
+        for record in first {
+            store
+                .finish_download_cleanup(&record.download_id, "removed", true, 0, 0, None)
+                .await
+                .unwrap();
+        }
+        store.seed_download_cleanup(100).await.unwrap();
+        let remainder = store.list_due_download_cleanup(100).await.unwrap();
+        assert_eq!(remainder.len(), 5);
+        assert!(remainder.iter().all(|record| record.download_id != live));
+    }
+
+    #[tokio::test]
+    async fn legacy_submission_tracked_state_backfills_a_missing_identity_state() {
+        let store = store().await;
+        let legacy = DownloadId::new();
+        store
+            .record_submission(submission(legacy, "legacy-job", "title-1"))
+            .await
+            .unwrap();
+        // A row from before identity states existed: its only tracked state
+        // lives on the submission itself.
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "legacy_fixture",
+            "UPDATE download_submissions SET tracked_state = 'imported' WHERE id = {}",
+            vec![SqlArg::Text(legacy.to_string())],
+        )
+        .await
+        .unwrap();
+        let modern = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(modern, "modern-job", "title-1"),
+                submission_identity(modern),
+                None,
+            )
+            .await
+            .unwrap();
+        let modern_locator = ClientJobLocator::new(Some("primary"), "qbittorrent", "modern-job");
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&modern),
+                &submission_identity(modern),
+                Some(&modern_locator),
+                "downloading",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut states = store
+            .list_identity_tracked_states_for_client_items(&[
+                ClientJobLocator::new(Some("primary"), "qbittorrent", "legacy-job"),
+                modern_locator.clone(),
+                ClientJobLocator::new(Some("primary"), "qbittorrent", "never-seen"),
+            ])
+            .await
+            .unwrap();
+        states.sort_by(|left, right| left.0.item_id.cmp(&right.0.item_id));
+        assert_eq!(
+            states,
+            vec![
+                (
+                    ClientJobLocator::new(Some("primary"), "qbittorrent", "legacy-job"),
+                    "imported".to_string()
+                ),
+                (modern_locator, "downloading".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_due_work_is_fair_and_a_restart_recovers_an_expired_lease() {
+        let store = store().await;
+        let mut rare_id = None;
+        for index in 0..105 {
+            let id = DownloadId::new();
+            let mut item = submission(id, &format!("fair-{index}"), "title-1");
+            if index == 104 {
+                item.download_client_id = Some("secondary".into());
+                rare_id = Some(id);
+            }
+            let locator = ClientJobLocator::from_submission(&item);
+            store
+                .record_submission_with_identity(item, submission_identity(id), None)
+                .await
+                .unwrap();
+            store
+                .update_tracked_state(&locator, "imported")
+                .await
+                .unwrap();
+        }
+        let rare_id = rare_id.unwrap();
+        let due = store.list_due_download_cleanup(1000).await.unwrap();
+        assert_eq!(due.len(), 100);
+        assert!(
+            due.iter()
+                .take(2)
+                .any(|record| record.download_id == rare_id)
+        );
+        assert!(matches!(
+            store.claim_download_cleanup(&rare_id).await.unwrap(),
+            DownloadCleanupClaim::Claimed(_)
+        ));
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "expire_cleanup_fixture_lease",
+            "UPDATE download_cleanup SET lease_until = {} WHERE download_id = {}",
+            vec![
+                SqlArg::Timestamp(Utc::now() - chrono::Duration::seconds(1)),
+                SqlArg::Text(rare_id.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        let reopened = DownloadSubmissionStore::new(store.datastore.clone());
+        let DownloadCleanupClaim::Claimed(retry) =
+            reopened.claim_download_cleanup(&rare_id).await.unwrap()
+        else {
+            panic!("expired worker lease must recover");
+        };
+        assert_eq!(retry.attempts, 2);
     }
 
     #[tokio::test]

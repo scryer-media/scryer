@@ -2025,7 +2025,7 @@ fn row_to_series_movie_link(row: &SqlRow) -> AppResult<SeriesMovieLink> {
 
 /// The link's tag bag, defaulting to empty.
 ///
-/// A row written before migration 0220 reads as `[]` from the column default,
+/// A row written before migration 0221 reads as `[]` from the column default,
 /// and a bag that is not an array of strings is a corrupt row rather than a
 /// reason to fail the whole read: the link is still a real link, so it comes
 /// back untagged and the next tag write rewrites the column.

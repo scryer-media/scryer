@@ -296,6 +296,15 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     pub(super) identity_state_reasons: Arc<Mutex<HashMap<String, String>>>,
     pub(super) identity_state_details: Arc<Mutex<HashMap<String, String>>>,
     pub(super) tracked_states: TrackedDownloadStates,
+    pub(super) pending_cleanup: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
+    pub(super) settled_cleanup:
+        Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
+    pub(super) cleanup_checkpoints:
+        Arc<Mutex<HashMap<scryer_domain::download_identity::DownloadId, String>>>,
+    /// Every `finish_download_cleanup` call as (download, outcome, complete),
+    /// in order; a record only, it never feeds `claim_download_cleanup`.
+    pub(super) finished_cleanup:
+        Arc<Mutex<Vec<(scryer_domain::download_identity::DownloadId, String, bool)>>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
 }
@@ -727,6 +736,53 @@ pub(super) fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn claim_download_cleanup(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadCleanupClaim> {
+        Ok(match self.settled_cleanup.lock().await.get(id) {
+            Some(outcome) => crate::DownloadCleanupClaim::Settled {
+                outcome: outcome.clone(),
+            },
+            None => crate::DownloadCleanupClaim::Unmanaged,
+        })
+    }
+
+    async fn checkpoint_download_cleanup_payload(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        checkpoint: &str,
+    ) -> AppResult<()> {
+        self.cleanup_checkpoints
+            .lock()
+            .await
+            .insert(*id, checkpoint.into());
+        Ok(())
+    }
+
+    async fn has_pending_download_cleanup(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<bool> {
+        Ok(self.pending_cleanup.lock().await.contains(id))
+    }
+
+    async fn finish_download_cleanup(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        outcome: &str,
+        complete: bool,
+        _retry_seconds: i64,
+        _history_offset: usize,
+        _error: Option<&str>,
+    ) -> AppResult<()> {
+        self.finished_cleanup
+            .lock()
+            .await
+            .push((*id, outcome.to_string(), complete));
+        Ok(())
+    }
+
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
         if let Some(message) = self.record_submission_error.lock().await.clone() {
             return Err(AppError::Repository(message));
@@ -1739,6 +1795,13 @@ impl StubSubmitError {
 
 #[derive(Default, Clone)]
 pub(super) struct StubDownloadClient {
+    pub(super) native_data_removal: bool,
+    pub(super) observation_error: Arc<Mutex<Option<String>>>,
+    /// Scripted `observe_download` answers, consumed front to back before the
+    /// fixture's own listings are consulted; the offsets asked for are kept.
+    pub(super) observation_script:
+        Arc<Mutex<std::collections::VecDeque<crate::DownloadClientObservation>>>,
+    pub(super) observed_history_offsets: Arc<Mutex<Vec<usize>>>,
     pub(super) queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
@@ -1746,6 +1809,9 @@ pub(super) struct StubDownloadClient {
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
     pub(super) deleted_requests: DeletedDownloadRequests,
     pub(super) delete_error: Arc<Mutex<Option<String>>>,
+    /// Refuse every delete that asks for the data (as Weaver does for an API
+    /// key without admin scope) while entry-only deletes still succeed.
+    pub(super) payload_delete_refusal: Arc<Mutex<Option<String>>>,
     pub(super) queue_error: Arc<Mutex<Option<String>>>,
     pub(super) recent_activity_error: Arc<Mutex<Option<String>>>,
     pub(super) snapshot_authoritative_client_ids: Arc<Mutex<HashSet<String>>>,
@@ -1782,6 +1848,7 @@ pub(super) struct StubDownloadClient {
     /// `StopSeeding` seeding profile stops a finished torrent uploading, so the
     /// gate's non-removal actions are observable.
     pub(super) paused_requests: PausedDownloadRequests,
+    pub(super) pause_error: Arc<Mutex<Option<String>>>,
 }
 
 impl StubDownloadClient {
@@ -1845,10 +1912,6 @@ impl StubDownloadClient {
         if let Some(error) = self.delete_error.lock().await.clone() {
             return Err(AppError::Repository(error));
         }
-        self.deleted_items
-            .lock()
-            .await
-            .push((id.to_string(), is_history));
         self.deleted_requests.lock().await.push((
             client_id.map(str::to_string),
             client_type.map(str::to_string),
@@ -1856,12 +1919,63 @@ impl StubDownloadClient {
             is_history,
             remove_data,
         ));
+        if remove_data && let Some(refusal) = self.payload_delete_refusal.lock().await.clone() {
+            return Err(AppError::Unauthorized(refusal));
+        }
+        self.deleted_items
+            .lock()
+            .await
+            .push((id.to_string(), is_history));
         Ok(())
     }
 }
 
 #[async_trait]
 impl DownloadClient for StubDownloadClient {
+    fn supports_native_data_removal(&self) -> bool {
+        self.native_data_removal
+    }
+    async fn observe_download(
+        &self,
+        locator: &crate::ClientJobLocator,
+        offset: usize,
+    ) -> AppResult<crate::DownloadClientObservation> {
+        if let Some(error) = self.observation_error.lock().await.as_ref() {
+            return Err(AppError::Repository(error.clone()));
+        }
+        if let Some(observation) = self.observation_script.lock().await.pop_front() {
+            self.observed_history_offsets.lock().await.push(offset);
+            return Ok(observation);
+        }
+        let authoritative = self.snapshot_authoritative_client_ids.lock().await;
+        if !authoritative.is_empty()
+            && !locator
+                .client_id
+                .as_ref()
+                .is_some_and(|id| authoritative.contains(id))
+        {
+            return Ok(crate::DownloadClientObservation::Unknown {
+                reason: "fixture client is unavailable".into(),
+                next_history_offset: 0,
+            });
+        }
+        drop(authoritative);
+        // The fixture's vectors are complete client listings.
+        for item in self
+            .list_queue()
+            .await?
+            .into_iter()
+            .chain(self.list_history().await?)
+        {
+            if item.download_client_item_id == locator.item_id
+                && (item.client_id.is_empty()
+                    || locator.client_id.as_deref() == Some(item.client_id.as_str()))
+            {
+                return Ok(crate::DownloadClientObservation::Present(Box::new(item)));
+            }
+        }
+        Ok(crate::DownloadClientObservation::Absent)
+    }
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -2129,6 +2243,9 @@ impl DownloadClient for StubDownloadClient {
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
+        if let Some(error) = self.pause_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         self.paused_requests
             .lock()
             .await
@@ -2137,6 +2254,9 @@ impl DownloadClient for StubDownloadClient {
     }
 
     async fn pause_queue_item_for_client(&self, client_id: &str, id: &str) -> AppResult<()> {
+        if let Some(error) = self.pause_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         self.paused_requests
             .lock()
             .await

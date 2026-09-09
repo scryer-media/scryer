@@ -1,4 +1,4 @@
-//! Persistence for location operations (migration 0217, plan D5/D7).
+//! Persistence for location operations (migration 0218, plan D5/D7).
 //!
 //! One store behind all six operation types: the operation row, its per-title
 //! checkpoints, its per-file verification records, and the ownership registry

@@ -2178,7 +2178,7 @@ mod tests {
 
     #[cfg(feature = "runtime-backups")]
     #[tokio::test]
-    async fn sqlite_restore_accepts_a_pre_0224_bundle_without_rule_pack_tables() -> AppResult<()> {
+    async fn sqlite_restore_accepts_a_pre_0225_bundle_without_rule_pack_tables() -> AppResult<()> {
         let source = TestBackupSource::new(TestBackupEngine::Sqlite).await?;
         let target = TestBackupTarget::new(TestBackupEngine::Sqlite).await?;
         let bundle_dir =
@@ -2218,7 +2218,7 @@ mod tests {
             staging.finish(BackupBundleExportRequest {
                 output_path: bundle_path.clone(),
                 passphrase: "pre-0224-passphrase".into(),
-                source_migration_key: Some("0223_legacy_fixture".into()),
+                source_migration_key: Some("0224_legacy_fixture".into()),
                 source_scryer_version: "0.20.0".into(),
                 source_engine: "sqlite".into(),
                 secrets: BackupExportSecrets {
@@ -2231,7 +2231,7 @@ mod tests {
             let inspected = inspect_backup_bundle(&bundle_path, Some("pre-0224-passphrase"))?;
             assert_eq!(
                 inspected.source_migration_key.as_deref(),
-                Some("0223_legacy_fixture")
+                Some("0224_legacy_fixture")
             );
             assert!(!inspected.row_counts.contains_key("rule_pack_installations"));
             assert!(!inspected.row_counts.contains_key("rule_pack_members"));

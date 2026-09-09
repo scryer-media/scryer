@@ -8,9 +8,10 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientFeedbackScope,
-    DownloadClientMarkImportedRequest, DownloadClientStatus, DownloadGrabResult,
-    DownloadSourceKind, ResolvedDownloadArtifact, StagedNzbRef,
+    AppError, AppResult, ClientJobLocator, DownloadClient, DownloadClientAddRequest,
+    DownloadClientFeedbackScope, DownloadClientMarkImportedRequest, DownloadClientObservation,
+    DownloadClientStatus, DownloadGrabResult, DownloadSourceKind, ResolvedDownloadArtifact,
+    StagedNzbRef,
 };
 use scryer_domain::{
     CompletedDownload, DownloadQueueItem, DownloadQueueState, DownloadSeedingSnapshot,
@@ -213,6 +214,17 @@ impl WasmDownloadClient {
     }
 }
 
+fn plugin_missing_observation(complete_listing: bool) -> DownloadClientObservation {
+    if complete_listing {
+        DownloadClientObservation::Absent
+    } else {
+        DownloadClientObservation::Unknown {
+            reason: "plugin listings do not establish complete retained-job coverage".into(),
+            next_history_offset: 0,
+        }
+    }
+}
+
 fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
@@ -386,16 +398,9 @@ fn seeding_snapshot_for_item(item: &PluginDownloadItem) -> Option<DownloadSeedin
 /// The removal request to send for one item, with `remove_data` clamped to what
 /// the plugin says it can do.
 ///
-/// This is the first reader of `DownloadClientCapabilities::remove_with_data`.
-/// Three published clients declare it `false` and mean it: rTorrent and
-/// DownloadStation answer a data-removal request with `Unsupported` (Scryer
-/// deletes their files through host filesystem access, not through the client
-/// ABI) and aria2 ignores it. Forwarding the flag verbatim would turn every
-/// terminal cleanup on those two into an error, and the queue entry would never
-/// be removed at all — strictly worse than leaving the payload behind. Sonarr
-/// has the same division of labour and still removes the entry
-/// (`RTorrent.cs:217-225`, `TorrentDownloadStation.cs:144-153`), so dropping the
-/// data half is the right half to lose.
+/// Automatic cleanup checks this capability first and checkpoints guarded host
+/// payload deletion before asking an entry-only adapter to remove the job.
+/// rTorrent, DownloadStation and aria2 require that host cleanup.
 ///
 /// The caller's `remove_data` is a *policy* decision (see
 /// `import::workflow::results::reconcile_terminal_download_cleanup`); this is
@@ -908,6 +913,45 @@ fn build_plugin_add_request(
 
 #[async_trait]
 impl DownloadClient for WasmDownloadClient {
+    fn supports_native_data_removal(&self) -> bool {
+        self.descriptor
+            .download_client()
+            .is_some_and(|provider| provider.capabilities.remove_with_data)
+    }
+
+    async fn observe_download(
+        &self,
+        locator: &ClientJobLocator,
+        history_offset: usize,
+    ) -> AppResult<DownloadClientObservation> {
+        if locator.client_id.as_deref() != Some(self.client_id.as_str())
+            || !locator
+                .client_type
+                .eq_ignore_ascii_case(self.descriptor.provider_type())
+        {
+            return Ok(DownloadClientObservation::Unknown {
+                reason: "client binding does not match this plugin instance".into(),
+                next_history_offset: history_offset,
+            });
+        }
+        let matches = |item: &DownloadQueueItem| item.download_client_item_id == locator.item_id;
+        if let Some(item) = self.list_queue().await?.into_iter().find(&matches) {
+            return Ok(DownloadClientObservation::Present(Box::new(item)));
+        }
+        // These clients enumerate their full retained torrent set, including
+        // completed torrents, without a recent-history window. The host's
+        // queue projection filters completed rows, so history must also pass.
+        let complete_listing = matches!(
+            self.descriptor.provider_type(),
+            "qbittorrent" | "transmission" | "rtorrent"
+        );
+        let history = self.list_history().await?;
+        if let Some(item) = history.into_iter().find(matches) {
+            return Ok(DownloadClientObservation::Present(Box::new(item)));
+        }
+        Ok(plugin_missing_observation(complete_listing))
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,

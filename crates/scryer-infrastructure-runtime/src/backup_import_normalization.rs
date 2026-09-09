@@ -57,7 +57,7 @@ pub fn validate_restore_manifest_table_set(
             ]
         && source_migration_key
             .and_then(migration_number)
-            .is_some_and(|number| number < 224)
+            .is_some_and(|number| number < 225)
     {
         return Ok(());
     }
@@ -629,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_manifest_validation_allows_only_pre_0224_missing_rule_pack_tables() {
+    fn restore_manifest_validation_allows_only_pre_0225_missing_rule_pack_tables() {
         let row_counts = BTreeMap::from_iter([("settings_values".to_string(), 1)]);
         let export_tables = vec![
             "rule_pack_installations".to_string(),
@@ -637,13 +637,13 @@ mod tests {
             "settings_values".to_string(),
         ];
 
-        validate_restore_manifest_table_set(&row_counts, &export_tables, Some("0223_prior_change"))
-            .expect("known pre-0224 bundles should restore into the newer schema");
+        validate_restore_manifest_table_set(&row_counts, &export_tables, Some("0224_prior_change"))
+            .expect("known pre-0225 bundles should restore into the newer schema");
 
         let error = validate_restore_manifest_table_set(
             &row_counts,
             &export_tables,
-            Some("0224_tracked_rule_packs"),
+            Some("0225_tracked_rule_packs"),
         )
         .expect_err("new bundles must include the rule pack tables");
         assert!(error.to_string().contains("rule_pack_installations"));
