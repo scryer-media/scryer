@@ -3885,7 +3885,6 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
     }
 
     if !reused_dry_run_cache {
-        if validation_scope == ReleaseValidationScope::Full {}
         let builtin_manifest = load_builtin_version_manifest(ctx)?;
         let refreshed_builtins =
             refresh_builtin_plugins(ctx, &next_version, Some(&builtin_manifest), false)?;
