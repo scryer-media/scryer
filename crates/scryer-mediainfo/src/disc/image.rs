@@ -717,6 +717,17 @@ fn udf_file(
             ));
         }
     };
+    if le16(&bytes, 20)? != 4 || le16(&bytes, 22)? != 0 || le16(&bytes, 24)? != 1 {
+        return Err(ImageError::Unsupported("UDF file entry strategy"));
+    }
+    if le16(&bytes, 34)? & 0xf800 != 0 {
+        return Err(ImageError::Unsupported(
+            "transformed, versioned, or extended UDF file entry",
+        ));
+    }
+    if bytes[50] != 0 {
+        return Err(ImageError::Unsupported("UDF record-oriented file"));
+    }
     let kind = bytes[27];
     if !matches!(kind, 4 | 5 | 250 | 251) {
         return Err(ImageError::Unsupported("UDF non-regular file type"));

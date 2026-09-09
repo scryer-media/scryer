@@ -40,6 +40,8 @@ fn allocation(bytes: &mut [u8], at: usize, block: u32, partition: u16, size: usi
 fn entry(kind: u8, block: u32, size: usize, inline: bool, payload: &[u8], version: u16) -> Vec<u8> {
     assert!(payload.len() <= BLOCK - 176);
     let mut bytes = vec![0; BLOCK];
+    word(&mut bytes, 20, 4);
+    word(&mut bytes, 24, 1);
     bytes[27] = kind;
     word(
         &mut bytes,

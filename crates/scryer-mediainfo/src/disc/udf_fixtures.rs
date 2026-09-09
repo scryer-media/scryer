@@ -57,6 +57,8 @@ fn fid(name: &str, child: u32, part: u16, directory: bool, location: u32) -> Vec
 }
 fn fe(kind: u8, block: u32, length: u64, mode: u16, data: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0; BLOCK];
+    u16_at(&mut bytes, 20, 4);
+    u16_at(&mut bytes, 24, 1);
     bytes[27] = kind;
     u16_at(&mut bytes, 34, mode);
     u64_at(&mut bytes, 56, length);
@@ -296,6 +298,54 @@ fn udf_continuation_bounds_and_crc_coverage_are_enforced() {
             "UDF CRC does not cover descriptor fields"
         ))
     ));
+}
+
+#[test]
+fn udf_file_entry_strategies_and_transformations_are_explicit() {
+    for extended in [false, true] {
+        let mut bytes = authored_udf(true);
+        let sector = 342; // File entry in the second metadata extent.
+        let original = &bytes[sector * BLOCK..(sector + 1) * BLOCK];
+        let used = if extended { 248 } else { 208 };
+        let kind = if extended { 266 } else { 261 };
+        if extended {
+            let mut entry = vec![0; BLOCK];
+            entry[16..64].copy_from_slice(&original[16..64]);
+            u64_at(&mut entry, 64, (2 * BLOCK) as u64);
+            u32_at(&mut entry, 212, 32);
+            entry[216..248].copy_from_slice(&original[176..208]);
+            tag(&mut entry, kind, 18, used);
+            put(&mut bytes, sector, &entry);
+        }
+        let inventory = image::open(&mut Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(
+            inventory.files["BDMV/STREAM/00001.M2TS"].length,
+            (2 * BLOCK) as u64
+        );
+        for (field, value) in [
+            (20, 0),
+            (21, 16), // Undefined or indirect-entry strategy.
+            (22, 1),
+            (24, 2), // Strategy parameters not implemented.
+            (35, 8),
+            (35, 16),
+            (35, 32),
+            (35, 64), // Transformed/versioned/stream/extension.
+            (50, 1),  // Record-oriented file content.
+        ] {
+            let mut unsupported = bytes.clone();
+            let entry = &mut unsupported[sector * BLOCK..(sector + 1) * BLOCK];
+            entry[field] = value;
+            tag(entry, kind, 18, used);
+            assert!(
+                matches!(
+                    image::open(&mut Cursor::new(unsupported)),
+                    Err(ImageError::Unsupported(_))
+                ),
+                "extended={extended} field={field} value={value}"
+            );
+        }
+    }
 }
 
 #[test]
