@@ -2,9 +2,7 @@ use crate::MediaInfoError;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 use isolang::Language;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::io::SeekFrom;
 
 pub(crate) const ASF_HEADER_GUID: [u8; 16] = [
     0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c,
@@ -65,9 +63,10 @@ struct StreamState {
     language_index: Option<usize>,
 }
 
-pub(crate) fn parse_asf(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let mut file = File::open(path)?;
-    let file_len = file.metadata()?.len();
+pub(crate) fn parse_asf_source(
+    mut file: &mut dyn crate::source::MediaSource,
+) -> Result<RawContainer, MediaInfoError> {
+    let file_len = file.len();
     let mut prefix = [0_u8; 24];
     file.read_exact(&mut prefix)
         .map_err(|_| parse_error("truncated ASF header"))?;
@@ -143,6 +142,7 @@ pub(crate) fn parse_asf(path: &Path) -> Result<RawContainer, MediaInfoError> {
     }
 
     Ok(RawContainer {
+        details: Default::default(),
         format_name: "asf".into(),
         duration_seconds: state.duration_seconds,
         num_chapters: state.chapters,
@@ -257,9 +257,12 @@ fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
         .and_then(|(tag, bits)| map_audio_format_tag(tag, bits))
         .map(str::to_owned);
     let mut track = raw_track(TrackKind::Audio, format!("0x{format_tag:04x}"), codec_name);
+    track.metadata = crate::audio_metadata::wave_format(data);
     track.codec_private = codec_private;
-    track.channels = Some(i32::from(channels));
-    track.bit_rate_bps = i64::from(avg_bytes_per_second).checked_mul(8);
+    track.channels = (channels > 0).then_some(i32::from(channels));
+    track.bit_rate_bps = i64::from(avg_bytes_per_second)
+        .checked_mul(8)
+        .filter(|value| *value > 0);
     Ok(track)
 }
 
@@ -420,7 +423,7 @@ fn parse_markers(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError
 }
 
 fn probe_asf_frame_rates(
-    file: &mut File,
+    file: &mut dyn crate::source::MediaSource,
     file_len: u64,
     data_offset: u64,
     packet_size: u32,
@@ -649,14 +652,10 @@ fn resolve_audio_format(
     let subformat = u32::from_le_bytes(extra[6..10].try_into().unwrap());
     let subformat = u16::try_from(subformat).ok()?;
     let valid_bits = u16::from_le_bytes(extra[0..2].try_into().unwrap());
-    Some((
-        subformat,
-        if valid_bits == 0 {
-            bits_per_sample
-        } else {
-            valid_bits
-        },
-    ))
+    if matches!(subformat, 1 | 3) && valid_bits > bits_per_sample {
+        return None;
+    }
+    Some((subformat, bits_per_sample))
 }
 
 fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> {
@@ -689,6 +688,7 @@ fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> 
 
 fn raw_track(kind: TrackKind, codec_id: String, codec_name: Option<String>) -> RawTrack {
     RawTrack {
+        metadata: Default::default(),
         kind,
         codec_id,
         codec_name,
@@ -806,6 +806,23 @@ mod tests {
                 .and_then(|(tag, bits)| map_audio_format_tag(tag, bits)),
             Some("pcm_f32le")
         );
+        extra[0..2].copy_from_slice(&20_u16.to_le_bytes());
+        extra[6..10].copy_from_slice(&1_u32.to_le_bytes());
+        assert_eq!(
+            resolve_audio_format(0xfffe, 24, Some(&extra)),
+            Some((1, 24))
+        );
+        let mut wave = vec![0_u8; 18];
+        wave[0..2].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        wave[2..4].copy_from_slice(&2_u16.to_le_bytes());
+        wave[4..8].copy_from_slice(&48_000_u32.to_le_bytes());
+        wave[14..16].copy_from_slice(&24_u16.to_le_bytes());
+        wave[16..18].copy_from_slice(&22_u16.to_le_bytes());
+        wave.extend(extra);
+        let track = parse_audio_type_data(&wave).unwrap();
+        assert_eq!(track.codec_name.as_deref(), Some("pcm_s24le"));
+        assert_eq!(track.metadata.sample_bit_depth, Some(20));
+        assert_eq!(track.metadata.sample_rate, Some(48_000));
     }
 
     #[test]

@@ -1,0 +1,47 @@
+# Native analysis fixtures
+
+Native expected-value tests run without FFprobe. `native_tests.rs` checks the authored container corpus, video sequence/color metadata, encoded audio properties, and chapter inventories. Synthetic filesystem, playlist, navigation, timing, malformed-input, and bounded-read fixtures live beside their implementations. `support/disc_image.rs` also supplies authored images to application import tests.
+
+The AV1 and HEVC sequence fixtures contain one second of black 64×64 video at 24 fps, with 10-bit 4:2:0, BT.2020 primaries/matrix, and PQ transfer. The AV1 fixture was encoded with SVT-AV1 4.1.0. HEVC also signals mastering luminance 1000/0.005 cd/m² and content light levels 1000/400. Each MKV is a remux of its MP4 video stream.
+
+`chapters_nero.mp4` and `chapters_quicktime.mp4` remux the HEVC sequence fixture with two authored chapters: “Opening” at 0–0.5 seconds and “幕間” at 0.5–1 second. FFmpeg 8.1.1 created both; `-movflags +faststart+disable_chpl` omits the Nero list in the QuickTime fixture. Neither file contains subtitle dialogue. Native tests check titles, precise start/end times, and exclusion of chapter text from subtitle scoring.
+
+The application regression `canonical_catalog_and_import_paths_preserve_the_same_analysis_contract` runs 23 fixtures through `NativeMediaAnalyzer`, the actual post-download import gate, and the rule projection. It compares the complete analysis contract, excluding elapsed probe time. Coverage includes AC-3/E-AC-3, Opus, Vorbis, FLAC, and AVI stream sampling, alongside video sequence metadata and MP4 chapters.
+
+The supplemental fixture SHA-256 values are:
+
+```text
+c8c2409bf706fc49e0b6d4e5ff487ca6a97c3e2bd3a35ebccb0819756cd76602  av1_sequence_pq.mp4
+43880e77806201ec7718734fed3acfb62db5489831cffa76e6702eb565ef33c8  av1_sequence_pq.mkv
+bfbb700dd364d80a840b36f88a7ce56fee0fe062014132ac9cd8b73b15f579c9  hevc_sequence_pq.mp4
+00f9a98d74fe4784618a5abd3f544d497e299a7c297d28d9e0323b8e7ee94e98  hevc_sequence_pq.mkv
+874da880e21134b5ee191c7a1bc52cf2c247e61c711ede03c88e7fbb32b80bf6  chapters_nero.mp4
+1344fa8f6c1fec10eda5720f2e8c4da157665c96ab0a097ff4f97daccf9a5c00  chapters_quicktime.mp4
+```
+
+## Differential checks
+
+Run the opt-in reference check explicitly:
+
+```sh
+cargo nextest run -p scryer-mediainfo --run-ignored all \
+  -E 'test(compare_fixture_corpus_against_ffprobe)' --success-output immediate
+```
+
+`SCRYER_PARITY_FIXTURES` optionally selects comma-separated fixture basenames. Empty or unset selects the entire corpus. A requested missing file fails the check. `SCRYER_PARITY_REPORT` optionally writes a JSON report containing the analysis revision, full FFprobe version, native/reference metadata, and every comparison mismatch. Missing required native values count as mismatches. The reference requests chapters and programs explicitly and samples up to 16 PQ video frames for side metadata.
+
+The `media-probe-parity` workflow is manually dispatched. It runs native expectations and production-path consistency before the reference comparison, and retains version, source revision, logs, and structured comparison evidence. The reference tools are development-only; production probing has no FFmpeg dependency.
+
+FFprobe's `sample_fmt` describes a decoder's chosen output representation. It is retained in reference reports but does not define the encoded representation of compressed audio. Native fixtures separately require PCM representation and explicit container sample bit depth; compressed decoder output formats stay unknown.
+
+E-AC-3 frame-size/block-duration bitrate in transport streams and Matroska is compared as an estimate unless explicit stream statistics are present. The native estimate remains separate from measured bitrate. MP4 sample-table accounting and Matroska BPS statistics still require measured bitrate and its provenance; omitting both measured and estimated values remains a mismatch.
+
+The differential harness is deliberately strict and is also useful for tracking remaining gaps. A successful subset run does not establish complete-corpus parity or complete-file integrity.
+
+## Disc fixture coverage
+
+The shared ISO9660 and UDF builders generate small synthetic navigation files around existing elementary-stream fixtures. UDF cases cover physical and metadata partitions, split metadata extents, large sparse files, descriptor continuations, prevailing descriptor revisions, backup anchors, and unsupported partition maps. They are parser regressions, not independently certified disc-authoring output.
+
+Blu-ray cases require CLPI clock ranges and use CPI access-point maps for trimmed payload inspection. Probe ranges include surrounding access units; exact playlist in/out times determine runtime. The same physical clip can supply distinct packet ranges without sharing a failed or incompatible cached result. A regression places scrambled and clear portions in one clip and checks each cut independently through both ISO9660 and UDF. Missing CLPI metadata remains incomplete and requires import review.
+
+Application fixtures exercise automatic review holds, intact manual imports, persisted title selection, and explicit episode mappings against one physical image. Unsupported navigation, encryption, and incomplete inspection remain separate from proven malformed structures.

@@ -6,7 +6,6 @@ use crate::scan;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 use crate::{AnalysisProfile, MediaInfoError};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
 
 /// Size of a transport payload packet without any outer framing.
 const TS_PACKET_SIZE: usize = 188;
@@ -108,13 +107,10 @@ struct TsPacketLayout {
     sync_offset: usize,
 }
 
-/// Parse an MPEG Transport Stream file and extract stream metadata.
-pub(crate) fn parse_ts(
-    path: &Path,
+pub(crate) fn parse_ts_source(
+    mut file: &mut dyn crate::source::MediaSource,
     profile: AnalysisProfile,
 ) -> Result<RawContainer, MediaInfoError> {
-    let mut file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
-
     let file_size = file
         .seek(SeekFrom::End(0))
         .map_err(|e| MediaInfoError::Io(e.to_string()))?;
@@ -124,27 +120,84 @@ pub(crate) fn parse_ts(
     let layout = detect_ts_packet_layout(&mut file)?;
     let es_entries = parse_program_map(&mut file, layout)?;
     let mut tracks: Vec<RawTrack> = es_entries.iter().map(build_track).collect();
+    let mut report = scryer_media_types::ProbeReport::default();
+    let mut caption_services = Vec::new();
 
-    let first_probe_pts = if profile == AnalysisProfile::ContentProbe {
-        None
-    } else {
-        enrich_tracks_from_probe(&mut file, &es_entries, &mut tracks, layout)?
-    };
-    let duration_seconds =
-        estimate_duration(&mut file, file_size, &es_entries, layout, first_probe_pts);
-
-    if file_size > 0
-        && let Some(duration_seconds) = duration_seconds
-        && duration_seconds > 0.0
-        && let Some(video_track) = tracks
-            .iter_mut()
-            .find(|track| track.kind == TrackKind::Video)
-        && video_track.bit_rate_bps.is_none()
+    if profile != AnalysisProfile::ContentProbe {
+        enrich_tracks_from_probe(
+            &mut file,
+            &es_entries,
+            &mut tracks,
+            layout,
+            &mut report,
+            &mut caption_services,
+        )?;
+    }
+    let selected_video = tracks.iter().find(|track| track.kind == TrackKind::Video);
+    let selected_program = selected_video.and_then(|track| track.metadata.program_id);
+    let selected_pid = selected_video
+        .and_then(|track| track.metadata.id.as_deref())
+        .and_then(|id| id.parse::<u16>().ok());
+    let selected_entries: Vec<_> = es_entries
+        .iter()
+        .filter(|entry| Some(entry.pid) == selected_pid)
+        .cloned()
+        .collect();
+    let final_frame_seconds = selected_video
+        .and_then(|track| track.frame_rate_fps)
+        .filter(|fps| is_plausible_frame_rate(Some(*fps)))
+        .map(|fps| 1.0 / fps);
+    let duration_seconds = estimate_duration(&mut file, file_size, &selected_entries, layout, None)
+        .and_then(|duration| {
+            final_frame_seconds
+                .map(|frame| duration + frame)
+                .or_else(|| (profile == AnalysisProfile::ContentProbe).then_some(duration))
+        });
+    let duration_provenance = if profile == AnalysisProfile::ContentProbe
+        && duration_seconds.is_some()
     {
-        video_track.bit_rate_bps = Some((file_size as f64 * 8.0 / duration_seconds) as i64);
+        report.status = scryer_media_types::ProbeStatus::Incomplete;
+        report.warnings.push(scryer_media_types::ProbeWarning {
+            code: "content_probe_duration_estimate".into(),
+            message: "Discovery uses the selected video's timestamp span; the final frame duration has not been inspected".into(),
+            ..Default::default()
+        });
+        scryer_media_types::Provenance::Estimated
+    } else if duration_seconds.is_some() {
+        scryer_media_types::Provenance::Observed
+    } else {
+        scryer_media_types::Provenance::Unknown
+    };
+    let mut programs: Vec<scryer_media_types::Program> = Vec::new();
+    for entry in &es_entries {
+        let id = u32::from(entry.program_id);
+        if let Some(program) = programs.iter_mut().find(|program| program.id == id) {
+            program.stream_ids.push(entry.pid.to_string());
+        } else {
+            programs.push(scryer_media_types::Program {
+                id,
+                stream_ids: vec![entry.pid.to_string()],
+                duration_seconds: (selected_program == Some(id))
+                    .then_some(duration_seconds)
+                    .flatten(),
+                ..Default::default()
+            });
+        }
     }
 
+    let overall_bitrate_bps = duration_seconds
+        .filter(|duration| *duration > 0.0)
+        .map(|duration| (file_size as f64 * 8.0 / duration) as u64);
+
     Ok(RawContainer {
+        details: scryer_media_types::AnalysisDetails {
+            duration_provenance,
+            overall_bitrate_bps,
+            programs,
+            report,
+            caption_services,
+            ..Default::default()
+        },
         format_name: "mpegts".into(),
         duration_seconds,
         num_chapters: None,
@@ -154,6 +207,7 @@ pub(crate) fn parse_ts(
 
 #[derive(Clone)]
 struct EsEntry {
+    program_id: u16,
     stream_type: u8,
     pid: u16,
     descriptors: Vec<u8>,
@@ -176,8 +230,11 @@ fn parse_program_map<T: Read + Seek>(
     let mut packet = [0u8; TS_PACKET_SIZE];
     let mut packets_scanned = 0u32;
     let mut pat = PsiSectionAssembler::new(0x00);
-    let mut pmt = PsiSectionAssembler::new(0x02);
-    let mut pmt_pid = None;
+    let mut programs = Vec::new();
+    let mut assemblers = std::collections::HashMap::new();
+    let mut entries = std::collections::HashMap::new();
+    let mut pat_sections = std::collections::BTreeSet::new();
+    let mut last_pat_section = None;
 
     loop {
         if packets_scanned >= PROGRAM_MAP_PROBE_PACKETS {
@@ -196,47 +253,58 @@ fn parse_program_map<T: Read + Seek>(
         let pid = ts_pid(&packet);
         if pid == PAT_PID {
             if let Some(section) = pat.push_packet(&packet)? {
-                let next_pid = parse_pat_pmt_pid(&section)?;
-                if pmt_pid != Some(next_pid) {
-                    pmt.reset();
-                    pmt_pid = Some(next_pid);
+                if section.len() < 12 || section[5] & 1 == 0 {
+                    continue;
+                }
+                pat_sections.insert(section[6]);
+                last_pat_section = Some(section[7]);
+                let length =
+                    3 + usize::from(((u16::from(section[1]) & 15) << 8) | u16::from(section[2]));
+                let data = section
+                    .get(8..length.saturating_sub(4))
+                    .ok_or_else(|| MediaInfoError::Parse("truncated PAT".into()))?;
+                for entry in data.chunks_exact(4) {
+                    let program = u16::from_be_bytes([entry[0], entry[1]]);
+                    let pid = u16::from_be_bytes([entry[2] & 31, entry[3]]);
+                    if program == 0 {
+                        continue;
+                    }
+                    if !programs.contains(&(program, pid)) {
+                        programs.push((program, pid));
+                    }
+                    if programs.len() > 64 {
+                        return Err(MediaInfoError::UnsupportedFormat(
+                            "TS program inventory exceeds budget".into(),
+                        ));
+                    }
+                    assemblers
+                        .entry(pid)
+                        .or_insert_with(|| PsiSectionAssembler::new(0x02));
                 }
             }
-        } else if Some(pid) == pmt_pid
-            && let Some(section) = pmt.push_packet(&packet)?
+        } else if let Some(assembler) = assemblers.get_mut(&pid)
+            && let Some(section) = assembler.push_packet(&packet)?
         {
-            return parse_pmt_section(&section);
+            let parsed = parse_pmt_section(&section)?;
+            entries.insert(pid, parsed);
+        }
+        if !programs.is_empty()
+            && programs.iter().all(|(_, pid)| entries.contains_key(pid))
+            && last_pat_section
+                .is_some_and(|last| (0..=last).all(|section| pat_sections.contains(&section)))
+        {
+            let mut ordered = Vec::new();
+            for (program, pid) in programs {
+                if let Some(mut tracks) = entries.remove(&pid) {
+                    for track in &mut tracks {
+                        track.program_id = program;
+                    }
+                    ordered.extend(tracks);
+                }
+            }
+            return Ok(ordered);
         }
     }
-}
-
-fn parse_pat_pmt_pid(section: &[u8]) -> Result<u16, MediaInfoError> {
-    if section.len() < 12 {
-        return Err(MediaInfoError::Parse("PAT section too short".into()));
-    }
-
-    let section_length = ((section[1] as u16 & 0x0F) << 8 | section[2] as u16) as usize;
-    if section_length < 9 {
-        return Err(MediaInfoError::Parse("PAT section length too short".into()));
-    }
-
-    let program_end = 3 + section_length.saturating_sub(4);
-    if program_end > section.len() || program_end < 8 {
-        return Err(MediaInfoError::Parse("PAT program table truncated".into()));
-    }
-
-    let program_data = &section[8..program_end];
-    for chunk in program_data.chunks_exact(4) {
-        let program_number = (chunk[0] as u16) << 8 | chunk[1] as u16;
-        let entry_pid = (chunk[2] as u16 & 0x1F) << 8 | chunk[3] as u16;
-        if program_number != 0 {
-            return Ok(entry_pid);
-        }
-    }
-
-    Err(MediaInfoError::Parse(
-        "PAT did not contain a program map PID".into(),
-    ))
 }
 
 fn parse_pmt_section(section: &[u8]) -> Result<Vec<EsEntry>, MediaInfoError> {
@@ -274,6 +342,7 @@ fn parse_pmt_section(section: &[u8]) -> Result<Vec<EsEntry>, MediaInfoError> {
         let descriptors = es_data[pos + 5..desc_end].to_vec();
 
         entries.push(EsEntry {
+            program_id: u16::from_be_bytes([section[3], section[4]]),
             stream_type,
             pid: es_pid,
             dovi_config: extract_dovi_config(&descriptors),
@@ -377,6 +446,12 @@ fn build_track(es: &EsEntry) -> RawTrack {
     let (kind, codec_name) = classify_stream_type(es.stream_type, &es.descriptors);
 
     RawTrack {
+        metadata: scryer_media_types::StreamMetadata {
+            id: Some(es.pid.to_string()),
+            program_id: Some(u32::from(es.program_id)),
+            language_provenance: scryer_media_types::Provenance::Container,
+            ..Default::default()
+        },
         kind,
         codec_id: format!("0x{:02X}", es.stream_type),
         codec_name: Some(codec_name.to_owned()),
@@ -559,6 +634,8 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
     es_entries: &[EsEntry],
     tracks: &mut [RawTrack],
     layout: TsPacketLayout,
+    report: &mut scryer_media_types::ProbeReport,
+    captions: &mut Vec<scryer_media_types::CaptionService>,
 ) -> Result<Option<u64>, MediaInfoError> {
     let mut states = Vec::new();
     let mut state_by_pid = [None; TS_PID_COUNT];
@@ -651,6 +728,16 @@ fn enrich_tracks_from_probe<T: Read + Seek>(
     for state in &mut states {
         let track_index = state.track_index;
         state.finish(&mut tracks[track_index]);
+        report.budget_exhausted |= state.metadata_report.budget_exhausted;
+        if state.metadata_report.status == scryer_media_types::ProbeStatus::Incomplete {
+            report.status = state.metadata_report.status;
+        }
+        report.warnings.append(&mut state.metadata_report.warnings);
+        for caption in state.caption_services.drain(..) {
+            if captions.len() < 256 && !captions.contains(&caption) {
+                captions.push(caption);
+            }
+        }
     }
 
     Ok(first_pts)
@@ -707,6 +794,8 @@ struct TsStreamProbeState {
     buffer: Vec<u8>,
     pts_values: Vec<u64>,
     complete: bool,
+    metadata_report: scryer_media_types::ProbeReport,
+    caption_services: Vec<scryer_media_types::CaptionService>,
 }
 
 impl TsStreamProbeState {
@@ -719,6 +808,8 @@ impl TsStreamProbeState {
             buffer: Vec::new(),
             pts_values: Vec::new(),
             complete: false,
+            metadata_report: Default::default(),
+            caption_services: Vec::new(),
         }
     }
 
@@ -767,6 +858,14 @@ impl TsStreamProbeState {
         if self.complete || self.buffer.is_empty() {
             return;
         }
+        if self.kind == TrackKind::Video {
+            crate::video_metadata::annex_b(
+                &self.buffer,
+                track,
+                &mut self.metadata_report,
+                &mut self.caption_services,
+            );
+        }
         if !self.track_probe_needed(track) {
             self.complete = self.probe_complete(track);
             return;
@@ -807,7 +906,8 @@ impl TsStreamProbeState {
             Some("aac") => {
                 track.channels.is_some()
                     && track.audio_profile.is_some()
-                    && track.bit_rate_bps.is_some()
+                    && (track.bit_rate_bps.is_some()
+                        || track.metadata.estimated_bitrate_bps.is_some())
             }
             Some("aac_latm") | Some("eac3") => {
                 track.channels.is_some() && track.audio_profile.is_some()
@@ -836,7 +936,8 @@ impl TsStreamProbeState {
             Some("aac") => {
                 track.channels.is_none()
                     || track.audio_profile.is_none()
-                    || track.bit_rate_bps.is_none()
+                    || (track.bit_rate_bps.is_none()
+                        && track.metadata.estimated_bitrate_bps.is_none())
             }
             Some("aac_latm") | Some("eac3") => {
                 track.channels.is_none() || track.audio_profile.is_none()
@@ -882,7 +983,8 @@ fn probe_h264_track(data: &[u8], track: &mut RawTrack) {
     let Some(sps_nal) = find_annexb_nal(data, |nal| (nal[0] & 0x1F) == 7) else {
         return;
     };
-    let Ok(sps) = scuffle_h264::Sps::parse(std::io::Cursor::new(sps_nal)) else {
+    let rbsp = crate::scan::h2645_unescape_rbsp(sps_nal);
+    let Ok(sps) = scuffle_h264::Sps::parse(std::io::Cursor::new(rbsp.as_ref())) else {
         return;
     };
 
@@ -957,8 +1059,10 @@ fn probe_aac_track(data: &[u8], track: &mut RawTrack) {
         return;
     };
     track.channels = Some(header.channels as i32);
+    track.metadata.sample_rate = Some(header.sample_rate);
+    track.metadata.channel_layout = Some(header.channel_layout.into());
     if let Some(bit_rate_bps) = header.bit_rate_bps {
-        track.bit_rate_bps = Some(bit_rate_bps as i64);
+        track.metadata.estimated_bitrate_bps = Some(u64::from(bit_rate_bps));
     }
     merge_audio_profile(
         &mut track.audio_profile,
@@ -977,6 +1081,23 @@ fn probe_latm_track(data: &[u8], track: &mut RawTrack) {
     );
 }
 
+pub(crate) fn probe_elementary_stream(data: &[u8], track: &mut RawTrack) {
+    crate::legacy_video::enrich(track, data);
+    match track.codec_name.as_deref() {
+        Some("mpeg1video" | "mpeg2video") => probe_mpeg_video_track(data, track),
+        Some("h264") => probe_h264_track(data, track),
+        Some("hevc") => probe_hevc_track(data, track),
+        Some("vc1") => probe_vc1_track(data, track),
+        Some("mp1" | "mp2" | "mp3") => probe_mpeg_audio_track(data, track),
+        Some("ac3") => probe_ac3_track(data, track),
+        Some("eac3") => probe_eac3_track(data, track),
+        Some("dts") => probe_dts_track(data, track),
+        Some("truehd") => probe_truehd_track(data, track),
+        Some("aac") => probe_aac_track(data, track),
+        _ => {}
+    }
+}
+
 fn probe_mpeg_video_track(data: &[u8], track: &mut RawTrack) {
     let Some(header) = find_mpeg_video_sequence_header(data) else {
         return;
@@ -987,6 +1108,7 @@ fn probe_mpeg_video_track(data: &[u8], track: &mut RawTrack) {
     if track.bit_rate_bps.is_none() {
         track.bit_rate_bps = header.bit_rate_bps.map(i64::from);
     }
+    crate::legacy_video::enrich(track, data);
 }
 
 fn probe_mpeg_audio_track(data: &[u8], track: &mut RawTrack) {
@@ -999,6 +1121,16 @@ fn probe_mpeg_audio_track(data: &[u8], track: &mut RawTrack) {
         track.codec_name = Some("mp2".to_owned());
     }
     track.channels = Some(header.channels as i32);
+    track.metadata.sample_rate = Some(header.sample_rate);
+    track.metadata.channel_layout = Some(
+        if header.channels == 1 {
+            "mono"
+        } else {
+            "stereo"
+        }
+        .into(),
+    );
+    track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
     track.bit_rate_bps = header.bit_rate_bps.map(i64::from);
 }
 
@@ -1032,16 +1164,14 @@ fn probe_ac3_track(data: &[u8], track: &mut RawTrack) {
     let Some(header) = find_ac3_header(data) else {
         return;
     };
-    track.channels = Some(header.channels as i32);
-    track.bit_rate_bps = header.bit_rate_bps.map(i64::from);
+    header.apply(track);
 }
 
 fn probe_eac3_track(data: &[u8], track: &mut RawTrack) {
     let Some(header) = find_eac3_header(data) else {
         return;
     };
-    track.channels = Some(header.channels as i32);
-    track.bit_rate_bps = header.bit_rate_bps.map(i64::from);
+    header.apply(track);
     merge_audio_profile(
         &mut track.audio_profile,
         detect_audio_profile_from_payload(track.codec_name.as_deref(), data),
@@ -1161,6 +1291,8 @@ fn choose_frame_cadence_delta(deltas: &[u64]) -> Option<u64> {
 
 struct AdtsHeader {
     channels: u8,
+    channel_layout: &'static str,
+    sample_rate: u32,
     bit_rate_bps: Option<u32>,
 }
 
@@ -1178,12 +1310,59 @@ struct MpegVideoSequenceHeader {
 struct MpegAudioHeader {
     layer: u8,
     channels: u8,
+    sample_rate: u32,
     bit_rate_bps: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Ac3Header {
     pub channels: u8,
+    pub sample_rate: u32,
+    pub channel_layout: &'static str,
     pub bit_rate_bps: Option<u32>,
+    pub bitrate_is_estimate: bool,
+}
+
+impl Ac3Header {
+    pub(crate) fn apply(self, track: &mut RawTrack) {
+        // An independent core does not describe additional dependent channels.
+        if track
+            .channels
+            .is_none_or(|channels| channels <= i32::from(self.channels))
+        {
+            track.channels = Some(i32::from(self.channels));
+            track.metadata.channel_layout = Some(self.channel_layout.into());
+        }
+        track.metadata.sample_rate = Some(self.sample_rate);
+        if self.bitrate_is_estimate {
+            track.metadata.estimated_bitrate_bps = self.bit_rate_bps.map(u64::from);
+        } else if track.bit_rate_bps.is_none()
+            || track.metadata.bitrate_provenance == scryer_media_types::Provenance::Observed
+        {
+            track.bit_rate_bps = self.bit_rate_bps.map(i64::from);
+            track.metadata.bitrate_provenance = scryer_media_types::Provenance::Bitstream;
+        }
+    }
+}
+
+fn ac3_channel_layout(acmod: usize, lfe: bool) -> &'static str {
+    match (acmod, lfe) {
+        (0 | 2, false) => "stereo",
+        (0 | 2, true) => "2.1",
+        (1, false) => "mono",
+        (1, true) => "FC+LFE",
+        (3, false) => "3.0",
+        (3, true) => "3.1",
+        (4, false) => "3.0(back)",
+        (4, true) => "FL+FR+LFE+BC",
+        (5, false) => "4.0",
+        (5, true) => "4.1",
+        (6, false) => "quad(side)",
+        (6, true) => "FL+FR+LFE+SL+SR",
+        (7, false) => "5.0(side)",
+        (7, true) => "5.1(side)",
+        _ => unreachable!("AC-3 channel mode is a three-bit value"),
+    }
 }
 
 pub(crate) struct DtsHeader {
@@ -1237,10 +1416,10 @@ fn find_adts_header(data: &[u8]) -> Option<AdtsHeader> {
             _ => continue,
         };
 
-        let frame_channels = ((hdr[2] & 0x01) << 2) | ((hdr[3] >> 6) & 0x03);
-        if frame_channels == 0 {
+        let channel_config = ((hdr[2] & 0x01) << 2) | ((hdr[3] >> 6) & 0x03);
+        let Some(frame_channels) = crate::codec::aac_channel_configuration(channel_config) else {
             continue;
-        }
+        };
 
         let frame_length = (((hdr[3] & 0x03) as usize) << 11)
             | ((hdr[4] as usize) << 3)
@@ -1270,7 +1449,7 @@ fn find_adts_header(data: &[u8]) -> Option<AdtsHeader> {
         }
     }
 
-    let channels = detected_channels?;
+    let (channels, channel_layout) = detected_channels?;
     let bit_rate_bps = detected_sample_rate.and_then(|sample_rate| {
         (frames >= ADTS_BITRATE_SAMPLE_FRAMES && total_samples > 0)
             .then(|| (total_frame_bytes * 8 * u64::from(sample_rate)) / total_samples)
@@ -1279,6 +1458,8 @@ fn find_adts_header(data: &[u8]) -> Option<AdtsHeader> {
 
     Some(AdtsHeader {
         channels,
+        channel_layout,
+        sample_rate: detected_sample_rate?,
         bit_rate_bps,
     })
 }
@@ -1429,8 +1610,8 @@ fn find_mpeg_audio_header(data: &[u8]) -> Option<MpegAudioHeader> {
         let bit_rate_bps = bit_rate_kbps * 1000;
         let frame_size = match (version_id == 3, layer) {
             (_, 1) => (((12 * bit_rate_bps) / sample_rate) + padding) * 4,
-            (true, 2 | 3) => ((144 * bit_rate_bps) / sample_rate) + padding,
-            (false, 2 | 3) => ((72 * bit_rate_bps) / sample_rate) + padding,
+            (_, 2) | (true, 3) => ((144 * bit_rate_bps) / sample_rate) + padding,
+            (false, 3) => ((72 * bit_rate_bps) / sample_rate) + padding,
             _ => 0,
         } as usize;
         if frame_size < 4 {
@@ -1441,13 +1622,14 @@ fn find_mpeg_audio_header(data: &[u8]) -> Option<MpegAudioHeader> {
         {
             continue;
         }
-        if i + frame_size + 1 >= data.len() && data.len().saturating_sub(i) > 4 {
-            return None;
+        if frame_size > data.len().saturating_sub(i) && data.len().saturating_sub(i) > 4 {
+            continue;
         }
 
         return Some(MpegAudioHeader {
             layer,
             channels: MPEG_AUDIO_CHANNELS[channel_mode],
+            sample_rate,
             bit_rate_bps: Some(bit_rate_bps),
         });
     }
@@ -1500,7 +1682,10 @@ pub(crate) fn find_ac3_header(data: &[u8]) -> Option<Ac3Header> {
 
         return Some(Ac3Header {
             channels: AC3_CHANNELS_BY_ACMOD[acmod] + u8::from(lfe_on),
+            sample_rate: AC3_SAMPLE_RATES[fscod] >> sr_shift,
+            channel_layout: ac3_channel_layout(acmod, lfe_on),
             bit_rate_bps: Some((AC3_BITRATES_KBPS[bit_rate_code] * 1000) >> sr_shift),
+            bitrate_is_estimate: false,
         });
     }
 
@@ -1524,16 +1709,18 @@ pub(crate) fn find_eac3_header(data: &[u8]) -> Option<Ac3Header> {
         cursor = start + 1;
 
         let bsid = data[start + 5] >> 3;
-        if bsid <= 10 {
+        if !(11..=16).contains(&bsid) {
             continue;
         }
 
         let mut bits = BitReader::new(&data[start + 2..]);
         let frame_type = bits.read_bits(2)?;
-        if frame_type == 3 {
+        if frame_type == 1 || frame_type == 3 {
             continue;
         }
-        bits.skip_bits(3)?; // substream id
+        if bits.read_bits(3)? != 0 {
+            continue;
+        }
         let frame_size = (bits.read_bits(11)? + 1) * 2;
 
         let fscod = bits.read_bits(2)? as usize;
@@ -1560,6 +1747,9 @@ pub(crate) fn find_eac3_header(data: &[u8]) -> Option<Ac3Header> {
         return Some(Ac3Header {
             channels: AC3_CHANNELS_BY_ACMOD[acmod] + u8::from(lfe_on),
             bit_rate_bps: Some((8 * frame_size * sample_rate) / (num_blocks * 256)),
+            sample_rate,
+            channel_layout: ac3_channel_layout(acmod, lfe_on),
+            bitrate_is_estimate: true,
         });
     }
 
@@ -1684,13 +1874,13 @@ fn find_start_code_payload(data: &[u8], code: u8) -> Option<&[u8]> {
     scan::find_mpeg_start_code(data, code).and_then(|i| data.get(i + 4..))
 }
 
-struct BitReader<'a> {
+pub(crate) struct BitReader<'a> {
     data: &'a [u8],
     bit_pos: usize,
 }
 
 impl<'a> BitReader<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         Self { data, bit_pos: 0 }
     }
 
@@ -1698,7 +1888,7 @@ impl<'a> BitReader<'a> {
         Some(self.read_bits(1)? as u8)
     }
 
-    fn read_bits(&mut self, count: usize) -> Option<u32> {
+    pub(crate) fn read_bits(&mut self, count: usize) -> Option<u32> {
         if count == 0 || count > 32 || self.bit_pos + count > self.data.len() * 8 {
             return None;
         }
@@ -1841,14 +2031,9 @@ fn estimate_duration_from_first_pts<T: Read + Seek>(
         layout,
     );
 
-    match last_pts {
-        Some(last) if last > first_pts => Some((last - first_pts) as f64 / PTS_HZ),
-        Some(last) if last <= first_pts => {
-            let wrapped = (1u64 << 33) - first_pts + last;
-            Some(wrapped as f64 / PTS_HZ)
-        }
-        _ => None,
-    }
+    let ticks = (last_pts? + (1_u64 << 33) - first_pts) % (1_u64 << 33);
+    // Equal timestamps and backward resets do not establish a 26-hour movie.
+    (ticks > 0 && ticks < (1_u64 << 32)).then_some(ticks as f64 / PTS_HZ)
 }
 
 fn is_pes_stream_type(stream_type: u8) -> bool {
@@ -1915,10 +2100,15 @@ fn find_pts_near<T: Read + Seek>(
         if pes_pid_lookup[usize::from(pid)] && (pkt[1] & 0x40) != 0 {
             let payload = ts_payload(pkt);
             if let Some(pts) = extract_pts_from_pes(payload) {
-                if first_match {
-                    return Some(pts);
+                if result.is_none_or(|previous| {
+                    if first_match {
+                        pts_after(previous, pts)
+                    } else {
+                        pts_after(pts, previous)
+                    }
+                }) {
+                    result = Some(pts);
                 }
-                result = Some(pts);
             }
         }
 
@@ -1926,6 +2116,11 @@ fn find_pts_near<T: Read + Seek>(
     }
 
     result
+}
+
+fn pts_after(candidate: u64, previous: u64) -> bool {
+    let delta = (candidate + (1_u64 << 33) - previous) % (1_u64 << 33);
+    delta > 0 && delta < (1_u64 << 32)
 }
 
 fn extract_pts_from_pes(payload: &[u8]) -> Option<u64> {
@@ -2153,7 +2348,36 @@ mod tests {
         }
         let header = find_adts_header(&data).unwrap();
         assert_eq!(header.channels, 2);
+        assert_eq!(header.sample_rate, 44100);
+        assert_eq!(header.channel_layout, "stereo");
         assert!(header.bit_rate_bps.is_some());
+        let mut track = RawTrack {
+            codec_name: Some("aac".into()),
+            ..Default::default()
+        };
+        probe_aac_track(&data, &mut track);
+        assert!(
+            track.bit_rate_bps.is_none(),
+            "bounded sample accounting is not a measured stream bitrate"
+        );
+        assert!(track.metadata.estimated_bitrate_bps.is_some());
+        assert_eq!(track.metadata.sample_rate, Some(44100));
+        let state = TsStreamProbeState::new(0, TrackKind::Audio, Some("aac".into()));
+        assert!(state.probe_complete(&track));
+        assert!(
+            !state.track_probe_needed(&track),
+            "bounded estimates must not force payload scanning for a measured bitrate"
+        );
+        for header in data.chunks_exact_mut(7) {
+            header[2] |= 1;
+            header[3] |= 0xc0;
+        }
+        let header = find_adts_header(&data).unwrap();
+        assert_eq!(
+            header.channels, 8,
+            "AAC configuration 7 describes eight channels"
+        );
+        assert_eq!(header.channel_layout, "7.1(wide)");
     }
 
     #[test]
@@ -2197,6 +2421,31 @@ mod tests {
         let header = find_mpeg_audio_header(&data).unwrap();
         assert_eq!(header.channels, 2);
         assert_eq!(header.bit_rate_bps, Some(128_000));
+        assert!(
+            find_mpeg_audio_header(&data[..384]).is_some(),
+            "one complete MP2 frame is sufficient"
+        );
+        assert!(
+            find_mpeg_audio_header(&data[..383]).is_none(),
+            "a truncated frame is not complete"
+        );
+        let mut mp3 = vec![0; 192];
+        mp3[..4].copy_from_slice(&[0xff, 0xfb, 0x54, 0x64]);
+        let header = find_mpeg_audio_header(&mp3).unwrap();
+        assert_eq!(header.sample_rate, 48_000);
+        assert_eq!(header.bit_rate_bps, Some(64_000));
+        let mut low_rate_mp2 = vec![0; 772];
+        low_rate_mp2[..4].copy_from_slice(&[0xff, 0xf5, 0xc4, 0xc0]);
+        low_rate_mp2[768..772].copy_from_slice(&[0xff, 0xf5, 0xc4, 0xc0]);
+        let header = find_mpeg_audio_header(&low_rate_mp2).unwrap();
+        assert_eq!(
+            (header.layer, header.sample_rate, header.bit_rate_bps),
+            (2, 24_000, Some(128_000))
+        );
+        assert!(
+            find_mpeg_audio_header(&low_rate_mp2[..384]).is_none(),
+            "MPEG-2 Layer II still uses 1152 samples per frame"
+        );
     }
 
     #[test]
@@ -2205,6 +2454,11 @@ mod tests {
         let header = find_ac3_header(&data).unwrap();
         assert_eq!(header.channels, 2);
         assert_eq!(header.bit_rate_bps, Some(80_000));
+        assert_eq!(header.sample_rate, 48_000);
+        assert_eq!(header.channel_layout, "stereo");
+        assert!(!header.bitrate_is_estimate);
+        let half_rate = [0x0B, 0x77, 0, 0, 0x0A, 0x48, 0x50];
+        assert_eq!(find_ac3_header(&half_rate).unwrap().sample_rate, 24_000);
     }
 
     #[test]
@@ -2213,6 +2467,15 @@ mod tests {
         let header = find_eac3_header(&data).unwrap();
         assert_eq!(header.channels, 2);
         assert_eq!(header.bit_rate_bps, Some(8_000));
+        assert_eq!(header.sample_rate, 48_000);
+        assert_eq!(header.channel_layout, "stereo");
+        assert!(header.bitrate_is_estimate);
+        let mut reserved = data;
+        reserved[5] = 17 << 3;
+        assert!(find_eac3_header(&reserved).is_none());
+        let mut dependent = data;
+        dependent[2] = 0x40;
+        assert!(find_eac3_header(&dependent).is_none());
     }
 
     #[test]

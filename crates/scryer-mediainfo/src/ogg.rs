@@ -2,9 +2,7 @@ use crate::MediaInfoError;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 use ogg::reading::PacketReader;
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::Path;
 
 const MAX_HEADER_BYTES: usize = 16 * 1024 * 1024;
 // PacketReader assembles continued packets internally before returning them.
@@ -35,11 +33,12 @@ struct OggStream {
     headers_needed: u8,
 }
 
-pub(crate) fn parse_ogg(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let file = File::open(path)?;
-    let file_len = file.metadata()?.len();
+pub(crate) fn parse_ogg_source(
+    file: &mut dyn crate::source::MediaSource,
+) -> Result<RawContainer, MediaInfoError> {
+    let file_len = file.len();
     let header_limit = file_len.min(MAX_HEADER_READ_BYTES);
-    let mut reader = PacketReader::new(HeaderReader::new(file, header_limit));
+    let mut reader = PacketReader::new(HeaderReader::new(&mut *file, header_limit));
     let mut streams = BTreeMap::<u32, OggStream>::new();
     let mut stream_order = Vec::<u32>::new();
     let mut packet_count = 0_usize;
@@ -90,7 +89,8 @@ pub(crate) fn parse_ogg(path: &Path) -> Result<RawContainer, MediaInfoError> {
         return Err(parse_error("truncated Ogg codec headers"));
     }
 
-    let end_granules = read_end_granules(path, file_len).unwrap_or_default();
+    drop(reader);
+    let end_granules = read_end_granules(file, file_len).unwrap_or_default();
     let mut duration_seconds = None::<f64>;
     for (serial, stream) in &streams {
         let Some(granule) = end_granules.get(serial).copied() else {
@@ -131,6 +131,7 @@ pub(crate) fn parse_ogg(path: &Path) -> Result<RawContainer, MediaInfoError> {
     video_tracks.extend(audio_tracks);
 
     Ok(RawContainer {
+        details: Default::default(),
         format_name: "ogg".into(),
         duration_seconds,
         num_chapters: Some(0),
@@ -281,14 +282,19 @@ fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), 
     };
     let fps_numerator = bits.read(32)? as u32;
     let fps_denominator = bits.read(32)? as u32;
-    let fps = if fps_numerator == 0 || fps_denominator == 0 {
-        25.0
-    } else {
-        f64::from(fps_numerator) / f64::from(fps_denominator)
-    };
-    bits.skip(24 + 24)?;
+    if fps_numerator == 0 || fps_denominator == 0 {
+        return Err(parse_error("invalid Theora frame rate"));
+    }
+    let fps = f64::from(fps_numerator) / f64::from(fps_denominator);
+    let aspect_numerator = bits.read(24)? as u32;
+    let aspect_denominator = bits.read(24)? as u32;
+    let mut color_space = None;
+    let mut nominal_bitrate = None;
     if version >= 0x030200 {
-        bits.skip(38)?;
+        color_space = Some(bits.read(8)? as u32);
+        let nominal = bits.read(24)?;
+        nominal_bitrate = (nominal > 0 && nominal < 0xff_ffff).then_some(nominal);
+        bits.skip(6)?;
     }
     if version >= 0x030400 {
         bits.skip(2)?;
@@ -297,12 +303,50 @@ fn parse_theora_identification(data: &[u8]) -> Result<(RawTrack, u32, u8, f64), 
     if granule_shift >= 63 {
         return Err(parse_error("invalid Theora granule shift"));
     }
+    let pixel_format = if (0x030200..0x030400).contains(&version) {
+        let format = match bits.read(2)? {
+            0 => "yuv420p",
+            2 => "yuv422p",
+            3 => "yuv444p",
+            _ => return Err(parse_error("reserved Theora pixel format")),
+        };
+        if bits.read(3)? != 0 {
+            return Err(parse_error("nonzero Theora reserved bits"));
+        }
+        Some(format)
+    } else {
+        None
+    };
     let width = i32::try_from(width).map_err(|_| parse_error("Theora width is too large"))?;
     let height = i32::try_from(height).map_err(|_| parse_error("Theora height is too large"))?;
     let mut track = raw_track(TrackKind::Video, "theora", None);
     track.width = Some(width);
     track.height = Some(height);
     track.frame_rate_fps = Some(fps);
+    track.metadata.declared_frame_rate =
+        scryer_media_types::Rational::new(i64::from(fps_numerator), u64::from(fps_denominator));
+    if aspect_numerator > 0 && aspect_denominator > 0 {
+        track.metadata.sample_aspect_ratio = scryer_media_types::Rational::new(
+            i64::from(aspect_numerator),
+            u64::from(aspect_denominator),
+        );
+        track.metadata.display_aspect_ratio = scryer_media_types::Rational::new(
+            i64::from(width) * i64::from(aspect_numerator),
+            height as u64 * u64::from(aspect_denominator),
+        );
+    }
+    if let Some(format) = pixel_format {
+        track.metadata.pixel_format = Some(format.into());
+        track.metadata.bit_depth = Some(8);
+        track.metadata.field_order = Some("progressive".into());
+    }
+    if let Some(space @ (1 | 2)) = color_space {
+        track.metadata.color.primaries = Some(if space == 1 { 4 } else { 5 });
+        track.metadata.color.transfer = Some(if space == 1 { 4 } else { 5 });
+        track.metadata.color.matrix = Some(if space == 1 { 6 } else { 5 });
+        track.metadata.color.provenance = scryer_media_types::Provenance::Bitstream;
+    }
+    track.metadata.estimated_bitrate_bps = nominal_bitrate;
     track.codec_private = Some(data.to_vec());
     Ok((track, version, granule_shift, fps))
 }
@@ -375,8 +419,11 @@ fn parse_comments(data: &[u8]) -> Result<Option<String>, MediaInfoError> {
     Ok(language)
 }
 
-fn read_end_granules(path: &Path, file_len: u64) -> Result<BTreeMap<u32, u64>, MediaInfoError> {
-    let mut reader = PacketReader::new(File::open(path)?);
+fn read_end_granules(
+    file: &mut dyn crate::source::MediaSource,
+    file_len: u64,
+) -> Result<BTreeMap<u32, u64>, MediaInfoError> {
+    let mut reader = PacketReader::new(file);
     let start = file_len.saturating_sub(MAX_OGG_PAGE_SIZE);
     reader
         .seek_bytes(SeekFrom::Start(start))
@@ -396,6 +443,7 @@ fn read_end_granules(path: &Path, file_len: u64) -> Result<BTreeMap<u32, u64>, M
 
 fn raw_track(kind: TrackKind, codec: &str, channels: Option<i32>) -> RawTrack {
     RawTrack {
+        metadata: Default::default(),
         kind,
         codec_id: codec.into(),
         codec_name: Some(codec.into()),
@@ -499,6 +547,58 @@ fn parse_error(message: impl Into<String>) -> MediaInfoError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theora_header_preserves_rationals_and_rejects_reserved_fields() {
+        let fixture = include_bytes!("../tests/media/ogv_theora_vorbis.ogv");
+        let offset = fixture
+            .windows(7)
+            .position(|bytes| bytes == b"\x80theora")
+            .unwrap();
+        let mut header = fixture[offset..offset + 42].to_vec();
+        let (track, _, _, _) = parse_theora_identification(&header).unwrap();
+        assert_eq!(
+            track.metadata.declared_frame_rate,
+            scryer_media_types::Rational::new(15, 1)
+        );
+        assert_eq!(
+            track.metadata.sample_aspect_ratio,
+            scryer_media_types::Rational::new(1, 1)
+        );
+        assert_eq!(
+            track.metadata.display_aspect_ratio,
+            scryer_media_types::Rational::new(20, 11)
+        );
+        assert_eq!(track.metadata.bit_depth, Some(8));
+        assert_eq!(track.metadata.pixel_format.as_deref(), Some("yuv420p"));
+        header[30..36].fill(0);
+        assert!(
+            parse_theora_identification(&header)
+                .unwrap()
+                .0
+                .metadata
+                .sample_aspect_ratio
+                .is_none()
+        );
+        header[41] = (header[41] & !0x18) | 0x10;
+        assert_eq!(
+            parse_theora_identification(&header)
+                .unwrap()
+                .0
+                .metadata
+                .pixel_format
+                .as_deref(),
+            Some("yuv422p")
+        );
+        header[41] = (header[41] & !0x18) | 0x08;
+        assert!(parse_theora_identification(&header).is_err());
+        header[41] &= !0x18;
+        header[22..26].fill(0);
+        assert!(
+            parse_theora_identification(&header).is_err(),
+            "invalid frame rate must not become 25 fps"
+        );
+    }
 
     #[test]
     fn parses_opus_identification() {

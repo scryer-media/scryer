@@ -1,9 +1,7 @@
 use crate::MediaInfoError;
 use crate::codec;
 use crate::types::{RawContainer, RawTrack, TrackKind};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::io::{Read, SeekFrom};
 
 const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TAGS: usize = 8_192;
@@ -23,9 +21,10 @@ struct FlvMetadata {
     audio_bitrate_bps: Option<i64>,
 }
 
-pub(crate) fn parse_flv(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let mut file = File::open(path)?;
-    let file_len = file.metadata()?.len();
+pub(crate) fn parse_flv_source(
+    mut file: &mut dyn crate::source::MediaSource,
+) -> Result<RawContainer, MediaInfoError> {
+    let file_len = file.len();
     let mut header = [0_u8; 9];
     file.read_exact(&mut header)
         .map_err(|_| parse_error("truncated FLV header"))?;
@@ -125,6 +124,7 @@ pub(crate) fn parse_flv(path: &Path) -> Result<RawContainer, MediaInfoError> {
         .or_else(|| (max_timestamp_ms != 0).then_some(f64::from(max_timestamp_ms) / 1_000.0));
 
     Ok(RawContainer {
+        details: Default::default(),
         format_name: "flv".into(),
         duration_seconds,
         num_chapters: Some(0),
@@ -472,7 +472,7 @@ fn find_mp3_bitrate(data: &[u8]) -> Option<i64> {
     })
 }
 
-fn read_tail_timestamp(file: &mut File, file_len: u64) -> Option<u32> {
+fn read_tail_timestamp(file: &mut dyn crate::source::MediaSource, file_len: u64) -> Option<u32> {
     if file_len < 15 {
         return None;
     }
@@ -493,7 +493,11 @@ fn read_tail_timestamp(file: &mut File, file_len: u64) -> Option<u32> {
     read_tag_timestamp_at(file, preceding_start, preceding_size)
 }
 
-fn read_tag_timestamp_at(file: &mut File, start: u64, expected_size: u64) -> Option<u32> {
+fn read_tag_timestamp_at(
+    file: &mut dyn crate::source::MediaSource,
+    start: u64,
+    expected_size: u64,
+) -> Option<u32> {
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut header = [0_u8; 11];
     file.read_exact(&mut header).ok()?;
@@ -505,7 +509,7 @@ fn read_tag_timestamp_at(file: &mut File, start: u64, expected_size: u64) -> Opt
 }
 
 fn resynchronize_tags(
-    file: &mut File,
+    file: &mut dyn crate::source::MediaSource,
     start: u64,
     file_len: u64,
     scan_end: u64,
@@ -545,6 +549,7 @@ fn tag_layout_end(data: &[u8], offset: usize) -> Option<usize> {
 
 fn raw_track(kind: TrackKind, codec: &str, channels: Option<i32>) -> RawTrack {
     RawTrack {
+        metadata: Default::default(),
         kind,
         codec_id: codec.into(),
         codec_name: Some(codec.into()),
@@ -565,7 +570,7 @@ fn raw_track(kind: TrackKind, codec: &str, channels: Option<i32>) -> RawTrack {
     }
 }
 
-fn read_u32_be(reader: &mut impl Read) -> Result<u32, MediaInfoError> {
+fn read_u32_be(reader: &mut (impl Read + ?Sized)) -> Result<u32, MediaInfoError> {
     let mut data = [0_u8; 4];
     reader.read_exact(&mut data)?;
     Ok(u32::from_be_bytes(data))

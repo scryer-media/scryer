@@ -1,4 +1,5 @@
 use std::io::{BufReader, Read, Seek, SeekFrom};
+#[cfg(test)]
 use std::path::Path;
 
 use crate::AnalysisProfile;
@@ -10,6 +11,7 @@ use crate::codec::{
     normalize_vfw_codec_name, scan_hevc_frame_for_hdr10plus, scan_itu_t35_payload_for_hdr10plus,
 };
 use crate::scan;
+mod inventory;
 use crate::ts::{find_ac3_header, find_dts_header, find_eac3_header};
 use crate::types::{RawContainer, RawTrack, TrackKind};
 
@@ -26,7 +28,7 @@ const MKV_HDR10PLUS_BLOCKADDITIONAL_PEEK_BYTES: u64 = 16;
 const MKV_CHAPTER_SCAN_MAX_BYTES: usize = 2 * 1024 * 1024;
 const MKV_AUDIO_PROFILE_SCAN_MAX_BYTES: u64 = 8 * 1024;
 const MKV_AUDIO_PROFILE_MAX_BLOCKS: usize = 48;
-const MKV_EAC3_AUDIO_PROFILE_MAX_BLOCKS: usize = 1;
+const MKV_EAC3_AUDIO_PROFILE_MAX_BLOCKS: usize = 8;
 const MKV_AUDIO_PROFILE_MAX_FILE_SCAN_BYTES: u64 = 128 * 1024 * 1024;
 const EBML_ID_EBML: u32 = 0x1A45_DFA3;
 const EBML_ID_DOC_TYPE: u32 = 0x4282;
@@ -99,48 +101,57 @@ fn next_mkv_deep_probe_depth(depth: usize) -> Option<usize> {
 }
 
 fn normalize_mkv_track_language(
-    kind: TrackKind,
-    _language_bcp47: Option<&str>,
+    _kind: TrackKind,
+    language_bcp47: Option<&str>,
     language: Option<&str>,
 ) -> Option<String> {
-    if let Some(language) = language {
+    if let Some(language) = language_bcp47.or(language) {
         return normalize_explicit_mkv_language_tag(language);
     }
-    (kind != TrackKind::Video).then_some("eng".to_owned())
+    None
 }
 
 /// Parse an MKV/WebM file into a [`RawContainer`].
+#[cfg(test)]
 pub(crate) fn parse_mkv(
     path: &Path,
     profile: AnalysisProfile,
 ) -> Result<RawContainer, MediaInfoError> {
-    let file = open_buffered_file(path)?;
+    parse_mkv_source(&mut crate::source::FileSource::open(path)?, profile)
+}
+
+pub(crate) fn parse_mkv_source(
+    source: &mut dyn crate::source::MediaSource,
+    profile: AnalysisProfile,
+) -> Result<RawContainer, MediaInfoError> {
+    let file = BufReader::new(source);
     let mut scanner = MkvRawScanner::new(file)?;
     let header = parse_mkv_header(&mut scanner)?;
     let format_name = header.format_name;
-    let duration_seconds = header.duration_seconds;
-    let num_chapters = header
-        .num_chapters
-        .or_else(|| {
-            (!profile.skips_deep_probes() && !header.chapters_known_absent)
-                .then(|| {
-                    scanner
-                        .scan_prefix_for_chapter_count(MKV_CHAPTER_SCAN_MAX_BYTES as u64)
-                        .ok()
-                        .flatten()
-                })
-                .flatten()
-        })
-        .or(Some(0));
-    let file_size_hint = header.file_size_hint.unwrap_or(0);
+    let mut duration_seconds = header.duration_seconds;
+    let num_chapters = header.num_chapters.or_else(|| {
+        (!profile.skips_deep_probes() && !header.chapters_known_absent)
+            .then(|| {
+                scanner
+                    .scan_prefix_for_chapter_count(MKV_CHAPTER_SCAN_MAX_BYTES as u64)
+                    .ok()
+                    .flatten()
+            })
+            .flatten()
+    });
+    let file_size_hint = header.file_size_hint.unwrap_or(scanner.file_len);
     let timestamp_scale_ns = header.timestamp_scale_ns;
     let mut tracks = Vec::with_capacity(header.tracks.len());
     let mut primary_video_track_num = None;
     let mut primary_video_index = None;
     let mut primary_video_signals = MkvTrackSignals::default();
     let mut audio_track_refs = Vec::new();
+    let mut track_uids = Vec::new();
 
     for parsed_track in header.tracks {
+        if let Some(uid) = parsed_track.uid {
+            track_uids.push((uid, tracks.len()));
+        }
         if parsed_track.raw.kind == TrackKind::Video && primary_video_track_num.is_none() {
             primary_video_track_num = Some(parsed_track.track_number);
             primary_video_index = Some(tracks.len());
@@ -154,17 +165,6 @@ pub(crate) fn parse_mkv(
             ));
         }
         tracks.push(parsed_track.raw);
-    }
-
-    // Use a fast overall bitrate estimate for the primary video stream instead
-    // of walking large frame ranges over networked filesystems.
-    if file_size_hint > 0
-        && let Some(duration_seconds) = duration_seconds
-        && duration_seconds > 0.0
-        && let Some(video_idx) = primary_video_index
-    {
-        tracks[video_idx].bit_rate_bps =
-            Some((file_size_hint as f64 * 8.0 / duration_seconds) as i64);
     }
 
     let mut frame_rate_probe = None;
@@ -250,10 +250,6 @@ pub(crate) fn parse_mkv(
         if let Some(has_hdr10plus) = deep_probe.has_hdr10plus {
             tracks[video_idx].has_hdr10plus = has_hdr10plus;
         }
-        if tracks[video_idx].frame_rate_fps.is_none() {
-            tracks[video_idx].frame_rate_fps =
-                fallback_frame_rate_from_timestamp_scale(timestamp_scale_ns);
-        }
     }
 
     for (track_idx, scanned) in deep_probe.audio {
@@ -262,6 +258,9 @@ pub(crate) fn parse_mkv(
             tracks[track_idx].channels =
                 merge_scanned_audio_channels(tracks[track_idx].channels, Some(channels));
         }
+        if let Some(header) = scanned.dolby_header {
+            header.apply(&mut tracks[track_idx]);
+        }
         if tracks[track_idx].audio_profile.as_deref() == Some("DTS-ES")
             && tracks[track_idx].channels == Some(6)
         {
@@ -269,18 +268,84 @@ pub(crate) fn parse_mkv(
         }
     }
     apply_unique_audio_prefix_channel_fallback(&mut scanner, &mut tracks);
+    let mut sample_report = scryer_media_types::ProbeReport::default();
+    let mut caption_services = Vec::new();
+    if !profile.skips_deep_probes()
+        && tracks.iter().any(|track| {
+            matches!(
+                track.codec_name.as_deref(),
+                Some(
+                    "h264"
+                        | "hevc"
+                        | "av1"
+                        | "vp8"
+                        | "vp9"
+                        | "mpeg1video"
+                        | "mpeg2video"
+                        | "mpeg4"
+                        | "vc1"
+                )
+            )
+        })
+    {
+        scanner.seek_to(0)?;
+        let end = scanner.file_len.min(8 * 1024 * 1024);
+        let mut samples_left = 16;
+        scanner.enrich_legacy_video_samples(
+            end,
+            0,
+            &mut tracks,
+            &mut samples_left,
+            &mut sample_report,
+            &mut caption_services,
+        )?;
+        if samples_left == 0 || end < scanner.file_len {
+            sample_report.status = scryer_media_types::ProbeStatus::Incomplete;
+            sample_report.budget_exhausted = true;
+            sample_report
+                .warnings
+                .push(scryer_media_types::ProbeWarning {
+                    code: "video_enrichment_sample_limit".into(),
+                    message: "Video enrichment sampled at most 16 blocks within an 8 MiB prefix"
+                        .into(),
+                    ..Default::default()
+                });
+        }
+    }
 
+    let mut details = if !profile.skips_deep_probes() {
+        inventory::read(
+            &mut scanner,
+            &mut tracks,
+            &track_uids,
+            timestamp_scale_ns,
+            duration_seconds.is_none(),
+        )
+    } else {
+        Default::default()
+    };
+    if sample_report.status == scryer_media_types::ProbeStatus::Incomplete {
+        details.report.status = sample_report.status;
+    }
+    details.report.budget_exhausted |= sample_report.budget_exhausted;
+    details.report.warnings.extend(sample_report.warnings);
+    details.caption_services = caption_services;
+    duration_seconds = duration_seconds.or(details.duration_seconds);
+    details.overall_bitrate_bps = duration_seconds
+        .filter(|duration| *duration > 0.0)
+        .map(|duration| (file_size_hint as f64 * 8.0 / duration) as u64);
+    let num_chapters = if details.chapters.is_empty() {
+        num_chapters
+    } else {
+        i32::try_from(details.chapters.len()).ok()
+    };
     Ok(RawContainer {
+        details,
         format_name,
         duration_seconds,
         num_chapters,
         tracks,
     })
-}
-
-fn open_buffered_file(path: &Path) -> Result<BufReader<std::fs::File>, MediaInfoError> {
-    let file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
-    Ok(BufReader::new(file))
 }
 
 #[derive(Debug)]
@@ -297,6 +362,7 @@ struct ParsedMkvHeader {
 #[derive(Debug)]
 struct ParsedMkvTrack {
     track_number: u64,
+    uid: Option<u64>,
     raw: RawTrack,
     signals: MkvTrackSignals,
 }
@@ -631,7 +697,11 @@ fn parse_mkv_track_entry(payload: &[u8]) -> Option<ParsedMkvTrack> {
 
     Some(ParsedMkvTrack {
         track_number,
+        uid: find_first_direct_ebml_child(payload, 0x73c5)
+            .and_then(parse_ebml_uint)
+            .filter(|uid| *uid != 0),
         raw: RawTrack {
+            metadata: mkv_stream_metadata(payload, track_number),
             kind,
             codec_id,
             codec_name,
@@ -656,6 +726,182 @@ fn parse_mkv_track_entry(payload: &[u8]) -> Option<ParsedMkvTrack> {
         },
         signals,
     })
+}
+
+fn mkv_stream_metadata(payload: &[u8], track_number: u64) -> scryer_media_types::StreamMetadata {
+    use scryer_media_types::{
+        ContentLight, MasteringDisplay, Provenance, Rational, StreamMetadata,
+    };
+    fn children(mut bytes: &[u8], mut visit: impl FnMut(u32, &[u8])) {
+        while let Some((id, data, consumed)) = next_ebml_element(bytes) {
+            visit(id, data);
+            bytes = &bytes[consumed..];
+        }
+    }
+    let mut metadata = StreamMetadata {
+        id: Some(track_number.to_string()),
+        ..Default::default()
+    };
+    metadata.disposition.default = Some(true);
+    metadata.disposition.forced = Some(false);
+    let mut legacy_language = None;
+    let mut modern_language = None;
+    children(payload, |id, data| {
+        let flag = || parse_ebml_uint(data).map(|value| value != 0);
+        match id {
+            EBML_ID_LANGUAGE => legacy_language = parse_ebml_string(data).ok(),
+            EBML_ID_LANGUAGE_BCP47 => modern_language = parse_ebml_string(data).ok(),
+            EBML_ID_FLAG_DEFAULT => metadata.disposition.default = flag(),
+            EBML_ID_FLAG_FORCED => metadata.disposition.forced = flag(),
+            0x55ab => metadata.disposition.hearing_impaired = flag(),
+            0x55ac => metadata.disposition.visual_impaired = flag(),
+            0x55ae => metadata.disposition.original = flag(),
+            0x55af => metadata.disposition.commentary = flag(),
+            EBML_ID_DEFAULT_DURATION => {
+                metadata.declared_frame_rate = parse_ebml_uint(data)
+                    .and_then(|duration| Rational::new(1_000_000_000, duration))
+            }
+            EBML_ID_AUDIO => children(data, |id, data| match id {
+                0xb5 | 0x78b5 => {
+                    metadata.sample_rate = parse_ebml_float(data)
+                        .filter(|value| {
+                            value.is_finite() && *value > 0.0 && *value <= f64::from(u32::MAX)
+                        })
+                        .map(|value| value as u32)
+                }
+                EBML_ID_BIT_DEPTH => {
+                    metadata.sample_bit_depth =
+                        parse_ebml_uint(data).and_then(|value| u32::try_from(value).ok())
+                }
+                _ => {}
+            }),
+            EBML_ID_VIDEO => {
+                let mut display_width = None;
+                let mut display_height = None;
+                let mut display_unit = Some(0);
+                let mut pixel_width = None;
+                let mut pixel_height = None;
+                let mut crop = [Some(0_u64); 4];
+                children(data, |id, data| match id {
+                    EBML_ID_PIXEL_WIDTH => pixel_width = parse_ebml_uint(data),
+                    EBML_ID_PIXEL_HEIGHT => pixel_height = parse_ebml_uint(data),
+                    0x54b2 => display_unit = parse_ebml_uint(data),
+                    0x54cc => crop[0] = parse_ebml_uint(data),
+                    0x54dd => crop[1] = parse_ebml_uint(data),
+                    0x54bb => crop[2] = parse_ebml_uint(data),
+                    0x54aa => crop[3] = parse_ebml_uint(data),
+                    0x9a => {
+                        metadata.field_order = parse_ebml_uint(data).and_then(|value| match value {
+                            1 => Some("interlaced".into()),
+                            2 => Some("progressive".into()),
+                            _ => None,
+                        })
+                    }
+                    0x9d => {
+                        metadata.field_order = parse_ebml_uint(data)
+                            .and_then(|value| match value {
+                                0 => Some("progressive".into()),
+                                1 => Some("top_first".into()),
+                                6 => Some("bottom_first".into()),
+                                _ => None,
+                            })
+                            .or(metadata.field_order.take())
+                    }
+                    0x54b0 => display_width = parse_ebml_uint(data),
+                    0x54ba => display_height = parse_ebml_uint(data),
+                    EBML_ID_COLOUR => {
+                        metadata.color.provenance = Provenance::Container;
+                        let mut light = ContentLight::default();
+                        children(data, |id, data| {
+                            let value =
+                                parse_ebml_uint(data).and_then(|value| u32::try_from(value).ok());
+                            match id {
+                                0x55b1 => metadata.color.matrix = value.filter(|value| *value != 2),
+                                0x55b2 => {
+                                    metadata.bit_depth =
+                                        value.and_then(|value| i32::try_from(value).ok())
+                                }
+                                0x55b9 => {
+                                    metadata.color.full_range =
+                                        value.and_then(|value| match value {
+                                            1 => Some(false),
+                                            2 => Some(true),
+                                            _ => None,
+                                        })
+                                }
+                                0x55ba => {
+                                    metadata.color.transfer = value.filter(|value| *value != 2)
+                                }
+                                0x55bb => {
+                                    metadata.color.primaries = value.filter(|value| *value != 2)
+                                }
+                                0x55bc => light.max_cll = value,
+                                0x55bd => light.max_fall = value,
+                                0x55d0 => {
+                                    let mut mastering = MasteringDisplay::default();
+                                    children(data, |id, data| {
+                                        let value = parse_ebml_float(data)
+                                            .filter(|value| value.is_finite() && *value >= 0.0);
+                                        match id {
+                                            0x55d1 => mastering.red_x = value,
+                                            0x55d2 => mastering.red_y = value,
+                                            0x55d3 => mastering.green_x = value,
+                                            0x55d4 => mastering.green_y = value,
+                                            0x55d5 => mastering.blue_x = value,
+                                            0x55d6 => mastering.blue_y = value,
+                                            0x55d7 => mastering.white_x = value,
+                                            0x55d8 => mastering.white_y = value,
+                                            0x55d9 => mastering.max_luminance = value,
+                                            0x55da => mastering.min_luminance = value,
+                                            _ => {}
+                                        }
+                                    });
+                                    metadata.color.mastering_display = Some(mastering);
+                                }
+                                _ => {}
+                            }
+                        });
+                        if light.max_cll.is_some() || light.max_fall.is_some() {
+                            metadata.color.content_light = Some(light);
+                        }
+                    }
+                    _ => {}
+                });
+                let cropped_width = pixel_width
+                    .and_then(|width| width.checked_sub(crop[0]?)?.checked_sub(crop[1]?))
+                    .filter(|value| *value > 0);
+                let cropped_height = pixel_height
+                    .and_then(|height| height.checked_sub(crop[2]?)?.checked_sub(crop[3]?))
+                    .filter(|value| *value > 0);
+                if display_unit == Some(0) {
+                    display_width = display_width.or(cropped_width);
+                    display_height = display_height.or(cropped_height);
+                }
+                if matches!(display_unit, Some(0..=3)) {
+                    metadata.display_aspect_ratio = display_width
+                        .zip(display_height)
+                        .filter(|(width, height)| *width > 0 && *height > 0)
+                        .and_then(|(width, height)| {
+                            Rational::new(i64::try_from(width).ok()?, height)
+                        });
+                    metadata.sample_aspect_ratio =
+                        metadata.display_aspect_ratio.as_ref().and_then(|ratio| {
+                            let numerator = u64::try_from(ratio.numerator)
+                                .ok()?
+                                .checked_mul(cropped_height?)?;
+                            let denominator = ratio.denominator.checked_mul(cropped_width?)?;
+                            Rational::new(i64::try_from(numerator).ok()?, denominator)
+                        });
+                }
+            }
+            _ => {}
+        }
+    });
+    metadata.original_language = modern_language.or(legacy_language);
+    if metadata.original_language.is_some() {
+        metadata.language_provenance = Provenance::Container;
+    }
+    metadata
 }
 
 fn parse_mkv_video_payload(payload: &[u8]) -> (Option<i32>, Option<i32>, Option<u32>) {
@@ -1074,6 +1320,7 @@ struct AudioProfileProbeState {
     inspected_blocks: usize,
     profile: Option<String>,
     channels: Option<i32>,
+    dolby_header: Option<crate::ts::Ac3Header>,
     dts_tentative_profile: Option<String>,
     dts_tentative_hits: usize,
     saw_dts_core: bool,
@@ -1133,6 +1380,7 @@ impl AudioProfileProbeState {
         ScannedAudioMetadata {
             profile,
             channels: self.channels,
+            dolby_header: self.dolby_header,
         }
     }
 }
@@ -1161,6 +1409,7 @@ fn audio_profile_probe_is_terminal(codec_name: &str, profile: Option<&str>) -> b
 struct ScannedAudioMetadata {
     profile: Option<String>,
     channels: Option<i32>,
+    dolby_header: Option<crate::ts::Ac3Header>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1347,6 +1596,108 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             metadata_payload_bytes: 0,
             pos: 0,
         })
+    }
+
+    fn enrich_legacy_video_samples(
+        &mut self,
+        end: u64,
+        depth: usize,
+        tracks: &mut [RawTrack],
+        samples_left: &mut usize,
+        report: &mut scryer_media_types::ProbeReport,
+        captions: &mut Vec<scryer_media_types::CaptionService>,
+    ) -> Result<(), MediaInfoError> {
+        if depth > 10 || *samples_left == 0 {
+            return Ok(());
+        }
+        while self.position()? < end && *samples_left > 0 {
+            let Some(header) = self.read_element_header()? else {
+                break;
+            };
+            let child_end = header.end(end, self.file_len);
+            match header.id {
+                EBML_ID_SEGMENT | EBML_ID_CLUSTER | EBML_ID_BLOCK_GROUP => self
+                    .enrich_legacy_video_samples(
+                        child_end,
+                        depth + 1,
+                        tracks,
+                        samples_left,
+                        report,
+                        captions,
+                    )?,
+                EBML_ID_SIMPLE_BLOCK | EBML_ID_BLOCK => {
+                    let size = child_end.saturating_sub(self.position()?);
+                    if let Some(block) = self.read_block_header(size, 32768)? {
+                        if let Some(track) = tracks.iter_mut().find(|track| {
+                            track
+                                .metadata
+                                .id
+                                .as_deref()
+                                .and_then(|id| id.parse::<u64>().ok())
+                                == Some(block.track_number)
+                                && matches!(
+                                    track.codec_name.as_deref(),
+                                    Some(
+                                        "h264"
+                                            | "hevc"
+                                            | "av1"
+                                            | "vp8"
+                                            | "vp9"
+                                            | "mpeg1video"
+                                            | "mpeg2video"
+                                            | "mpeg4"
+                                            | "vc1"
+                                    )
+                                )
+                        }) {
+                            if let Some((_, length)) = parse_first_laced_frame_from_reader(
+                                self,
+                                block.payload_size,
+                                block.lacing_type,
+                            )? {
+                                let bytes = self.read_bytes(length.min(64 * 1024))?;
+                                match track.codec_name.as_deref() {
+                                    Some("av1") => crate::av1::enrich(track, &bytes, report),
+                                    Some("h264" | "hevc") => {
+                                        let length_size =
+                                            if track.codec_name.as_deref() == Some("h264") {
+                                                track
+                                                    .codec_private
+                                                    .as_deref()
+                                                    .and_then(|bytes| bytes.get(4))
+                                                    .map_or(4, |byte| usize::from(byte & 3) + 1)
+                                            } else {
+                                                track
+                                                    .codec_private
+                                                    .as_deref()
+                                                    .map(crate::codec::hevc_nal_length_size)
+                                                    .unwrap_or(4)
+                                            };
+                                        crate::video_metadata::length_prefixed(
+                                            &bytes,
+                                            length_size,
+                                            track,
+                                            report,
+                                            captions,
+                                        );
+                                    }
+                                    _ => {
+                                        crate::legacy_video::enrich(track, &bytes);
+                                        crate::video_metadata::annex_b(
+                                            &bytes, track, report, captions,
+                                        );
+                                    }
+                                }
+                                *samples_left -= 1;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            self.seek_to(child_end)?;
+        }
+        Ok(())
     }
 
     fn read_next_segment_header(&mut self) -> Result<EbmlElementHeader, MediaInfoError> {
@@ -1741,6 +2092,18 @@ impl<R: Read + Seek> MkvRawScanner<R> {
             detect_audio_profile_from_probe_bytes(Some(codec_name), &prefix, suffix.as_deref()),
         );
         let parsed_channels = audio_channels_from_probe_bytes(codec_name, &prefix);
+        let dolby_header = match codec_name {
+            "ac3" => find_ac3_header(&prefix),
+            "eac3" => find_eac3_header(&prefix),
+            _ => None,
+        };
+        if let Some(header) = dolby_header
+            && state
+                .dolby_header
+                .is_none_or(|previous| header.channels > previous.channels)
+        {
+            state.dolby_header = Some(header);
+        }
         if parsed_channels.is_some_and(|channels| channels > state.channels.unwrap_or(0)) {
             state.channels = parsed_channels;
         }
@@ -2095,10 +2458,7 @@ fn block_addition_mapping_type(payload: &[u8]) -> Option<u64> {
 }
 
 fn should_confirm_mkv_hdr10plus(track: &RawTrack, signals: &MkvTrackSignals) -> bool {
-    if track.codec_name.as_deref() != Some("hevc")
-        || track.dovi_config.is_some()
-        || track.color_transfer == Some(18)
-    {
+    if track.codec_name.as_deref() != Some("hevc") {
         return false;
     }
 
@@ -2444,15 +2804,6 @@ fn is_plausible_frame_rate(frame_rate_fps: Option<f64>) -> bool {
     frame_rate_fps.is_some_and(|fps| (1.0..=240.0).contains(&fps))
 }
 
-fn fallback_frame_rate_from_timestamp_scale(timestamp_scale_ns: f64) -> Option<f64> {
-    if timestamp_scale_ns <= 0.0 {
-        return None;
-    }
-
-    let fps = 1e9 / timestamp_scale_ns;
-    (1.0..=1000.0).contains(&fps).then_some(fps)
-}
-
 fn should_replace_frame_rate(existing: Option<f64>, observed: f64) -> bool {
     match existing {
         None => true,
@@ -2531,6 +2882,48 @@ mod tests {
         make_ebml_element(&[0xB6], &payload)
     }
 
+    #[test]
+    fn metadata_defaults_and_cropped_display_ratios_are_explicit() {
+        let video = |extra: Vec<u8>| {
+            let mut payload = make_uint_element(&[0xb0], 720);
+            payload.extend(make_uint_element(&[0xba], 480));
+            payload.extend(extra);
+            mkv_stream_metadata(&make_ebml_element(&[0xe0], &payload), 1)
+        };
+        let default = video(Vec::new());
+        assert_eq!(default.disposition.default, Some(true));
+        assert_eq!(default.disposition.forced, Some(false));
+        assert_eq!(default.display_aspect_ratio.unwrap().as_f64(), Some(1.5));
+        assert_eq!(default.sample_aspect_ratio.unwrap().as_f64(), Some(1.0));
+
+        let mut extra = make_uint_element(&[0x54, 0xcc], 8);
+        extra.extend(make_uint_element(&[0x54, 0xdd], 8));
+        extra.extend(make_uint_element(&[0x54, 0xb2], 3));
+        extra.extend(make_uint_element(&[0x54, 0xb0], 4));
+        extra.extend(make_uint_element(&[0x54, 0xba], 3));
+        let cropped = video(extra);
+        assert_eq!(
+            cropped.display_aspect_ratio.unwrap().as_f64(),
+            Some(4.0 / 3.0)
+        );
+        assert_eq!(
+            cropped.sample_aspect_ratio.unwrap().as_f64(),
+            Some(10.0 / 11.0)
+        );
+
+        for extra in [
+            make_uint_element(&[0x54, 0xcc], 721),
+            make_uint_element(&[0x54, 0xb2], 4),
+            make_uint_element(&[0x54, 0xb2], 1),
+        ] {
+            let unknown = video(extra);
+            assert!(unknown.display_aspect_ratio.is_none());
+            assert!(unknown.sample_aspect_ratio.is_none());
+        }
+        let explicit = mkv_stream_metadata(&make_uint_element(&[0x88], 0), 1);
+        assert_eq!(explicit.disposition.default, Some(false));
+    }
+
     fn make_uint_element(id: &[u8], value: u64) -> Vec<u8> {
         let bytes = if value <= u64::from(u8::MAX) {
             vec![value as u8]
@@ -2560,6 +2953,7 @@ mod tests {
 
     fn audio_test_track(codec_name: &str, channels: Option<i32>) -> RawTrack {
         RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Audio,
             codec_id: format!("A_{}", codec_name.to_ascii_uppercase()),
             codec_name: Some(codec_name.to_owned()),
@@ -2687,14 +3081,14 @@ mod tests {
     }
 
     #[test]
-    fn normalize_track_language_preserves_scryer_mkv_policy() {
+    fn normalize_track_language_prefers_explicit_modern_tags_and_keeps_missing_unknown() {
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Video, None, None),
             None
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Audio, Some("en-US"), None),
-            Some("eng".to_string())
+            Some("en-US".to_string())
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Subtitle, None, Some("en-US")),
@@ -2702,7 +3096,7 @@ mod tests {
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Subtitle, Some("pt-BR"), Some("por")),
-            Some("por".to_string())
+            Some("pt-BR".to_string())
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Subtitle, Some("fil"), Some("fil")),
@@ -2710,7 +3104,7 @@ mod tests {
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Subtitle, Some("jad"), Some("und")),
-            None
+            Some("jad".to_string())
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Subtitle, None, Some("zxx")),
@@ -2722,11 +3116,11 @@ mod tests {
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Audio, Some("ja-JP"), Some("eng")),
-            Some("eng".to_string())
+            Some("ja-JP".to_string())
         );
         assert_eq!(
             normalize_mkv_track_language(TrackKind::Audio, None, None),
-            Some("eng".to_string())
+            None
         );
     }
 
@@ -2882,17 +3276,6 @@ mod tests {
     }
 
     #[test]
-    fn fallback_frame_rate_uses_timestamp_scale_timebase() {
-        assert_eq!(
-            fallback_frame_rate_from_timestamp_scale(1_000_000.0),
-            Some(1000.0)
-        );
-        let approx_24fps = fallback_frame_rate_from_timestamp_scale(41_666_667.0).unwrap();
-        assert!((approx_24fps - 24.0).abs() < 0.001);
-        assert_eq!(fallback_frame_rate_from_timestamp_scale(0.0), None);
-    }
-
-    #[test]
     fn plausible_frame_rate_guard_matches_expected_bounds() {
         assert!(is_plausible_frame_rate(Some(23.976)));
         assert!(is_plausible_frame_rate(Some(240.0)));
@@ -2937,6 +3320,7 @@ mod tests {
     #[test]
     fn hdr10plus_confirmation_gate_short_circuits_dovi_hlg_and_non_hevc() {
         let hevc_track = RawTrack {
+            metadata: Default::default(),
             kind: TrackKind::Video,
             codec_id: "V_MPEGH/ISO/HEVC".into(),
             codec_name: Some("hevc".into()),
@@ -2967,7 +3351,7 @@ mod tests {
 
         let mut dovi_track = hevc_track.clone();
         dovi_track.dovi_config = Some(vec![1, 0, 0x10, 0x00, 0x10]);
-        assert!(!should_confirm_mkv_hdr10plus(
+        assert!(should_confirm_mkv_hdr10plus(
             &dovi_track,
             &MkvTrackSignals {
                 has_itu_t_t35_mapping: true,
