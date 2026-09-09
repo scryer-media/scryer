@@ -92,6 +92,7 @@ export type SettingsProxiesSectionProps = {
    */
   importWireguardConfig: (text: string) => boolean;
   testProxy: (proxy: ProxyRecord) => Promise<void> | void;
+  testForm?: React.ReactNode;
   deleteProxy: (proxy: ProxyRecord) => Promise<void> | void;
   requestResetHostKey: (proxy: ProxyRecord) => void;
   copyTunnelPublicKey: (publicKey: string) => Promise<void> | void;
@@ -141,6 +142,7 @@ export function SettingsProxiesSection({
   editProxy,
   importWireguardConfig,
   testProxy,
+  testForm,
   deleteProxy,
   requestResetHostKey,
   copyTunnelPublicKey,
@@ -329,7 +331,7 @@ export function SettingsProxiesSection({
                               tone="search"
                               onClick={() => void testProxy(proxy)}
                               disabled={
-                                testingProxyId === proxy.id ||
+                                testingProxyId !== null ||
                                 mutatingProxyId === proxy.id
                               }
                               label={t("settings.proxyTest")}
@@ -379,6 +381,7 @@ export function SettingsProxiesSection({
             </Table>
           </div>
         </div>
+        {testForm}
         {isProxyEditorOpen ? (
           <Card>
             <CardHeader>
@@ -397,7 +400,7 @@ export function SettingsProxiesSection({
                 <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto]">
                   <label>
                     <Label
-                      className="mb-2 block"
+                      className="mb-2 h-5"
                       htmlFor="settings-indexer-proxy-provider-type"
                     >
                       {t("settings.provider")}
@@ -439,7 +442,7 @@ export function SettingsProxiesSection({
                     </Select>
                   </label>
                   <label>
-                    <Label className="mb-2 block" htmlFor="settings-indexer-proxy-name">
+                    <Label className="mb-2 h-5" htmlFor="settings-indexer-proxy-name">
                       {t("label.name")}
                     </Label>
                     <Input
@@ -456,7 +459,7 @@ export function SettingsProxiesSection({
                   </label>
                   <label>
                     <Label
-                      className="mb-2 flex items-center gap-1.5"
+                      className="mb-2 h-5 gap-1.5"
                       htmlFor="settings-indexer-proxy-base-url"
                     >
                       {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3"
@@ -486,7 +489,7 @@ export function SettingsProxiesSection({
                     />
                   </label>
                   <label>
-                    <Label className="mb-2 block" htmlFor="settings-indexer-proxy-timeout">
+                    <Label className="mb-2 h-5" htmlFor="settings-indexer-proxy-timeout">
                       {t("settings.proxyTimeout")} <span className="text-muted-foreground">(s)</span>
                     </Label>
                     <Input
