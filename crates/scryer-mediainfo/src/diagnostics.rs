@@ -494,7 +494,12 @@ fn inspect_program_packets(
             );
             continue;
         }
-        let Some((mut payload, timestamp)) = crate::ps::pes_payload(body) else {
+        let Some(crate::ps::PesPayload {
+            mut payload,
+            timestamp,
+            timestamps_valid,
+        }) = crate::ps::pes_payload(body)
+        else {
             program_warning(
                 result,
                 "program_pes_header",
@@ -530,10 +535,7 @@ fn inspect_program_packets(
             };
             payload = rest;
         }
-        if mpeg2
-            && (body[1] & 0xc0 == 0x40
-                || (body[1] & 0x80 != 0 && (body[2] < 5 || timestamp.is_none())))
-        {
+        if !timestamps_valid {
             program_warning(
                 result,
                 "presentation_timestamp_markers",

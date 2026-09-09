@@ -18,6 +18,7 @@ struct PesStream {
     discovery_order: usize,
     first_pts: Option<u64>,
     last_pts: Option<u64>,
+    invalid_timestamps: bool,
     payload: Vec<u8>,
 }
 
@@ -55,11 +56,23 @@ pub(crate) fn parse_ps(source: &mut dyn MediaSource) -> Result<RawContainer, Med
             ..Default::default()
         };
         track.metadata.id = Some(format!("{id:04x}"));
-        track.metadata.duration_seconds =
-            pes.first_pts.zip(pes.last_pts).and_then(|(start, end)| {
+        track.metadata.duration_seconds = pes
+            .first_pts
+            .zip(pes.last_pts)
+            .filter(|_| !pes.invalid_timestamps)
+            .and_then(|(start, end)| {
                 let ticks = end.wrapping_sub(start) & ((1_u64 << 33) - 1);
                 (ticks > 0 && ticks < 90_000 * 86_400).then_some(ticks as f64 / 90_000.0)
             });
+        if pes.invalid_timestamps {
+            report.warnings.push(scryer_media_types::ProbeWarning {
+                code: "program_invalid_timestamps".into(),
+                message: "Sampled PES timestamps are invalid; stream duration remains unknown"
+                    .into(),
+                stream_id: track.metadata.id.clone(),
+                offset: None,
+            });
+        }
         crate::ts::probe_elementary_stream(&pes.payload, &mut track);
         if kind == TrackKind::Video {
             crate::video_metadata::annex_b(
@@ -131,9 +144,9 @@ fn classify(id: u16) -> Option<(TrackKind, &'static str)> {
     }
 }
 
-fn pts(bytes: &[u8]) -> Option<u64> {
+fn pts(bytes: &[u8], prefix: u8) -> Option<u64> {
     let b = bytes.get(..5)?;
-    if b[0] & 1 == 0 || b[2] & 1 == 0 || b[4] & 1 == 0 {
+    if b[0] >> 4 != prefix || b[0] & 1 == 0 || b[2] & 1 == 0 || b[4] & 1 == 0 {
         return None;
     }
     Some(
@@ -145,16 +158,34 @@ fn pts(bytes: &[u8]) -> Option<u64> {
     )
 }
 
-pub(crate) fn pes_payload(packet: &[u8]) -> Option<(&[u8], Option<u64>)> {
+pub(crate) struct PesPayload<'a> {
+    pub payload: &'a [u8],
+    pub timestamp: Option<u64>,
+    pub timestamps_valid: bool,
+}
+
+pub(crate) fn pes_payload(packet: &[u8]) -> Option<PesPayload<'_>> {
     let mut pos = 0;
     if packet.first()? & 0xc0 == 0x80 {
         if packet.len() < 3 || packet[0] & 0x30 != 0 {
             return None;
         }
-        let timestamp = (packet[1] & 0x80 != 0)
-            .then(|| pts(packet.get(3..)?))
-            .flatten();
-        return Some((packet.get(3 + usize::from(packet[2])..)?, timestamp));
+        let end = 3 + usize::from(packet[2]);
+        let header = packet.get(3..end)?;
+        let flags = packet[1] >> 6;
+        let timestamp = match flags {
+            2 => pts(header, 2),
+            3 => header
+                .get(5..)
+                .and_then(|dts| pts(dts, 1))
+                .and_then(|_| pts(header, 3)),
+            _ => None,
+        };
+        return Some(PesPayload {
+            payload: &packet[end..],
+            timestamp,
+            timestamps_valid: flags == 0 || (flags >= 2 && timestamp.is_some()),
+        });
     }
     while packet.get(pos) == Some(&0xff) {
         pos += 1;
@@ -162,12 +193,21 @@ pub(crate) fn pes_payload(packet: &[u8]) -> Option<(&[u8], Option<u64>)> {
     if packet.get(pos)? & 0xc0 == 0x40 {
         pos += 2;
     }
-    match packet.get(pos)? >> 4 {
-        2 => Some((packet.get(pos + 5..)?, pts(&packet[pos..]))),
-        3 => Some((packet.get(pos + 10..)?, pts(&packet[pos..]))),
-        _ if packet[pos] == 0x0f => Some((packet.get(pos + 1..)?, None)),
-        _ => None,
-    }
+    let flags = packet.get(pos)? >> 4;
+    let (end, timestamp) = match flags {
+        2 => (pos + 5, pts(&packet[pos..], 2)),
+        3 => (
+            pos + 10,
+            pts(packet.get(pos + 5..)?, 1).and_then(|_| pts(&packet[pos..], 3)),
+        ),
+        _ if packet[pos] == 0x0f => (pos + 1, None),
+        _ => return None,
+    };
+    Some(PesPayload {
+        payload: packet.get(end..)?,
+        timestamp,
+        timestamps_valid: flags == 0 || timestamp.is_some(),
+    })
 }
 
 fn scan_pes(bytes: &[u8], streams: &mut BTreeMap<u16, PesStream>, collect: bool) {
@@ -192,7 +232,12 @@ fn scan_pes(bytes: &[u8], streams: &mut BTreeMap<u16, PesStream>, collect: bool)
         } else {
             (payload_start + size).min(bytes.len())
         };
-        if let Some((mut payload, timestamp)) = pes_payload(&bytes[payload_start..end]) {
+        if let Some(PesPayload {
+            mut payload,
+            timestamp,
+            timestamps_valid,
+        }) = pes_payload(&bytes[payload_start..end])
+        {
             let id = if stream_id == 0xbd {
                 let Some(&substream) = payload.first() else {
                     pos = end;
@@ -214,6 +259,7 @@ fn scan_pes(bytes: &[u8], streams: &mut BTreeMap<u16, PesStream>, collect: bool)
                     discovery_order,
                     ..Default::default()
                 });
+                stream.invalid_timestamps |= !timestamps_valid;
                 if let Some(timestamp) = timestamp {
                     if collect {
                         stream.first_pts.get_or_insert(timestamp);
@@ -240,8 +286,74 @@ mod tests {
         let mut streams = BTreeMap::new();
         scan_pes(&[0, 0, 1, 0xe0, 0, 3, 0x80, 0x80, 255], &mut streams, true);
         assert!(streams.is_empty());
-        assert!(pts(&[0; 5]).is_none());
+        assert!(pts(&[0; 5], 2).is_none());
     }
+
+    #[test]
+    fn pes_timestamp_fields_stay_inside_the_header_and_validate_dts() {
+        let timestamp = [0x21, 0, 1, 0, 1];
+        // Bytes after a zero-length optional header are payload, even when they
+        // resemble PTS. Invalid timing must not become a catalog duration.
+        for flags in [0x40, 0x80, 0xc0] {
+            let data = [&[0x80, flags, 0][..], &timestamp].concat();
+            let parsed = pes_payload(&data).unwrap();
+            assert_eq!(parsed.payload, timestamp);
+            assert_eq!(parsed.timestamp, None);
+            assert!(!parsed.timestamps_valid);
+        }
+        for mpeg2 in [false, true] {
+            let mut data = if mpeg2 {
+                vec![0x80, 0xc0, 10]
+            } else {
+                vec![0xff, 0x40, 0]
+            };
+            let start = data.len();
+            data.extend([0x31, 0, 1, 0, 1, 0x11, 0, 1, 0, 1]);
+            data.extend([0xaa, 0xbb]);
+            let parsed = pes_payload(&data).unwrap();
+            assert_eq!(parsed.timestamp, Some(0));
+            assert!(parsed.timestamps_valid);
+            assert_eq!(parsed.payload, [0xaa, 0xbb]);
+            for (index, value) in [
+                (0, if mpeg2 { 0x21 } else { 0x30 }),
+                (2, 0),
+                (5, 0x31),
+                (7, 0),
+            ] {
+                let mut invalid = data.clone();
+                invalid[start + index] = value;
+                let parsed = pes_payload(&invalid).unwrap();
+                assert_eq!(parsed.timestamp, None);
+                assert!(!parsed.timestamps_valid);
+                assert_eq!(parsed.payload, [0xaa, 0xbb]);
+            }
+        }
+    }
+    #[test]
+    fn invalid_sampled_timestamps_leave_catalog_duration_unknown() {
+        fn packet(timestamp: [u8; 5], header_length: u8) -> Vec<u8> {
+            let mut bytes = vec![0, 0, 1, 0xe0, 0, 8, 0x80, 0x80, header_length];
+            bytes.extend(timestamp);
+            bytes
+        }
+        let start = packet([0x21, 0, 1, 0, 1], 5);
+        let end = packet([0x21, 0, 5, 0xbf, 0x21], 5); // 90,000 ticks.
+        let valid = [start.clone(), end.clone()].concat();
+        let raw = parse_ps(&mut std::io::Cursor::new(valid)).unwrap();
+        assert_eq!(raw.duration_seconds, Some(1.0));
+        let invalid = [start, packet([0x21, 0, 1, 0, 1], 0), end].concat();
+        let raw = parse_ps(&mut std::io::Cursor::new(invalid)).unwrap();
+        assert_eq!(raw.duration_seconds, None);
+        assert!(
+            raw.details
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "program_invalid_timestamps"
+                    && warning.stream_id.as_deref() == Some("00e0"))
+        );
+    }
+
     #[test]
     fn catalog_selection_preserves_program_stream_discovery_order() {
         fn packet(id: u8, data: &[u8]) -> Vec<u8> {
