@@ -549,7 +549,9 @@ export function SettingsProxiesSection({
                         disabled={configText.trim() === ""}
                         onClick={() => applyConfigText(configText)}
                       >
-                        {t("settings.proxyImportConfigApply")}
+                        {configText.trim() === ""
+                          ? t("settings.proxyImportConfigApply")
+                          : t("setup.next")}
                       </Button>
                       <Button
                         id="settings-indexer-proxy-import-config-choose"
