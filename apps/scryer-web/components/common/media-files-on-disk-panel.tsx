@@ -10,6 +10,7 @@ import {
 import { IconButton } from "@/components/ui/icon-button";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { ExternalSubtitleSection } from "@/components/common/external-subtitle-section";
+import { MediaAnalysisDetailsPopover } from "@/components/common/media-analysis-details";
 import {
   MediaInfoBadges,
   SubtitleTracksPopover,
@@ -284,6 +285,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             {badge.label}
                           </span>
                         ))}
+                        {file.analysis ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
                         {selectedTitleSubtitleStreams.length > 0 ? (
                           <SubtitleTracksPopover
                             streams={selectedTitleSubtitleStreams}

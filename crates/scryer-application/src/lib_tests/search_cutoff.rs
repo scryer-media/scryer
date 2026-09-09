@@ -1588,6 +1588,117 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
         Some(incumbent.score),
         "the displayed bar must be the number the gate compares against"
     );
+
+    // A physical ISO can contain episodes with different soundtracks. Its
+    // scope-specific bars must still match admission when requested together.
+    use scryer_media_types::{
+        DiscEpisodeMapping, DiscMetadata, DiscSelection, DiscTitle, ProbeReport, ProbeStatus,
+        StreamDetail, StreamKind, StreamMetadata,
+    };
+    let disc_titles: Vec<_> = [("00001", "truehd", 8), ("00002", "aac", 2)]
+        .into_iter()
+        .map(|(id, codec, channels)| DiscTitle {
+            id: id.into(),
+            duration_seconds: Some(1440.0),
+            report: ProbeReport {
+                status: ProbeStatus::Complete,
+                ..Default::default()
+            },
+            streams: vec![
+                StreamDetail {
+                    kind: StreamKind::Video,
+                    codec: Some("hevc".into()),
+                    width: Some(1920),
+                    height: Some(1080),
+                    metadata: StreamMetadata {
+                        id: Some("v0".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                StreamDetail {
+                    kind: StreamKind::Audio,
+                    codec: Some(codec.into()),
+                    channels: Some(channels),
+                    language: Some("en".into()),
+                    metadata: StreamMetadata {
+                        channel_layout: Some(if channels == 8 { "7.1" } else { "stereo" }.into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .collect();
+    let disc = DiscMetadata {
+        selected_title_id: Some("00001".into()),
+        titles: disc_titles,
+        selection: DiscSelection {
+            episode_mappings: episode_ids
+                .iter()
+                .enumerate()
+                .map(|(index, id)| DiscEpisodeMapping {
+                    disc_title_id: format!("{:05}", index + 1),
+                    episode_ids: vec![id.clone()],
+                })
+                .collect(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    {
+        let mut store = media_files.store.lock().await;
+        for row in store.iter_mut().filter(|row| row.id == file_id) {
+            row.analysis_details.revision = scryer_media_types::ANALYSIS_REVISION;
+            row.analysis_details.disc = Some(disc.clone());
+        }
+    }
+    let scopes: Vec<_> = episode_ids
+        .iter()
+        .map(|id| crate::acquisition_workflow::LandedBarScope {
+            title_id: title.id.clone(),
+            episode_id: Some(id.clone()),
+            collection_id: None,
+            series_movie_link_id: None,
+        })
+        .collect();
+    let mut expected = Vec::new();
+    for episode_id in &episode_ids {
+        let subject = app
+            .admission_subject_for_scope(
+                &title,
+                &crate::SubmissionScope::Episode {
+                    episode_id: episode_id.clone(),
+                },
+                &scoring_context,
+                None,
+                crate::quality::canonical_context::SubjectIntent::Import,
+            )
+            .await;
+        expected.push(Some(
+            subject
+                .incumbents()
+                .first()
+                .expect("mapped disc episode")
+                .score,
+        ));
+    }
+    assert_ne!(
+        expected[0], expected[1],
+        "the authored soundtrack difference must affect this regression's scores"
+    );
+    assert_eq!(
+        app.landed_bars_for_scopes(&scopes).await,
+        expected,
+        "a file-wide cache must not replace episode-specific disc facts"
+    );
+    let reversed = [scopes[1].clone(), scopes[0].clone()];
+    assert_eq!(
+        app.landed_bars_for_scopes(&reversed).await,
+        [expected[1], expected[0]],
+        "scope order must not change the displayed score"
+    );
 }
 
 /// **F-3b-2 / D18.** A queued release is scored with the size it announced, so

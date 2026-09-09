@@ -185,12 +185,12 @@ impl AppUseCase {
                     "manual import release-evidence snapshot is invalid: {error}"
                 ))
             })?,
-            None => crate::import_workflow::resolve_release_evidence_for_completed_download(
-                self,
-                &completed,
-                None,
-            )
-            .await?,
+            None => {
+                crate::import_workflow::resolve_release_evidence_for_completed_download(
+                    self, &completed, None,
+                )
+                .await?
+            }
         };
         if let Some(submission_title_id) = release_evidence.title_id()
             && submission_title_id != selection.title_id
@@ -207,7 +207,9 @@ impl AppUseCase {
                 &selection.trusted_source_root,
             ))
         }
-        .map_err(|_| AppError::Validation("manual import files are no longer available".to_string()))?;
+        .map_err(|_| {
+            AppError::Validation("manual import files are no longer available".to_string())
+        })?;
         for candidate in selection.candidates.iter().filter(|candidate| {
             mappings
                 .iter()
@@ -237,9 +239,10 @@ impl AppUseCase {
             &source_identity.item_id,
         )
         .await?
-        && !crate::import_workflow::manual_import_record_requires_reconciliation(&existing)
+            && !crate::import_workflow::manual_import_record_requires_reconciliation(&existing)
         {
-            self.refresh_import_record_queue_snapshot(&existing.id).await;
+            self.refresh_import_record_queue_snapshot(&existing.id)
+                .await;
             return Ok(crate::QueuedManualImport {
                 import_id: existing.id,
                 source_identity,
@@ -278,6 +281,7 @@ impl AppUseCase {
                     file_path: candidate.canonical_path.clone(),
                     episode_id: mapping.episode_id,
                     series_movie_link_id: mapping.series_movie_link_id,
+                    disc_selection: mapping.disc_selection,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -367,11 +371,7 @@ impl AppUseCase {
 
         if let Some(title_id) = override_title_id {
             crate::import_workflow::import_completed_download_for_manual_review_with_title_override(
-                self,
-                actor,
-                &completed,
-                title_id,
-                None,
+                self, actor, &completed, title_id, None,
             )
             .await
         } else {

@@ -265,7 +265,12 @@ pub(crate) async fn decide_import(
     // The verdict is about the release, so it is resolved before admission.
     // Automatic failures burn; operator-queued failures are held for review.
     let mut blocklist_after_import = None;
-    if !input.operator_intent {
+    if !input.operator_intent
+        || matches!(
+            scored.truth_verdict,
+            crate::canonical_scoring::TruthVerdict::ReviewRequired { .. }
+        )
+    {
         match resolve_truth_verdict_action_for_origin(
             &scored.truth_verdict,
             &input.scoring_context.profile().criteria,
@@ -273,6 +278,12 @@ pub(crate) async fn decide_import(
             input.origin,
         ) {
             crate::post_download_gate::TruthVerdictAction::Import => {}
+            crate::post_download_gate::TruthVerdictAction::Hold(rejection) => {
+                return ImportDecisionOutcome::Reject {
+                    rejection,
+                    disposition: RejectionDisposition::Hold,
+                };
+            }
             crate::post_download_gate::TruthVerdictAction::ImportAndBlocklist { code, reason } => {
                 blocklist_after_import = Some(BlocklistDirective { code, reason });
             }
@@ -447,10 +458,9 @@ pub(crate) fn disposition_for(
 /// What a refusal raised *before* the decision — by `prepare_import_candidate`'s
 /// probe gate — costs the release.
 ///
-/// The probe gate predates the verdict model and refuses for three reasons.
-/// Bytes that are not what was claimed (a corrupt or unreadable container, a
-/// source that changed under the import) mean the release lied: `Blocklist`.
-/// The runtime band is held by the callers before they reach here. A
+/// Source changes, inconclusive media/disc inspection, and runtime-band
+/// rejections require review and preserve the source. Other refusals follow
+/// the import origin's disposition. A
 /// user/system **rule** BLOCK at the gate is the same event `classify_truth`
 /// would classify as [`crate::canonical_scoring::TruthVerdict::Vetoed`] had
 /// the gate not fired first — operator policy on the file, not a
@@ -460,7 +470,9 @@ pub(crate) fn prepare_rejection_disposition_for_origin(
     rejection: &ImportedFileRejection,
     origin: ImportOrigin,
 ) -> RejectionDisposition {
-    let _ = rejection;
+    if rejection.requires_review() {
+        return RejectionDisposition::Hold;
+    }
     origin.rejection_disposition()
 }
 

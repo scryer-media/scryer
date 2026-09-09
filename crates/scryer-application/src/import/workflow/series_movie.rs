@@ -1359,7 +1359,7 @@ async fn import_movie_download(
             .map(|runtime_minutes| runtime_minutes.saturating_mul(60)),
         manual_replacement,
     );
-    let prepared = match crate::post_download_gate::prepare_import_candidate(
+    let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
         &parsed,
@@ -1370,6 +1370,7 @@ async fn import_movie_download(
         existing_score,
         false,
         runtime_sample_validation,
+        largest.disc_selection.as_ref(),
     )
     .await
     {
@@ -1378,7 +1379,7 @@ async fn import_movie_download(
             // A band miss is held for the operator, not burned: expected
             // runtimes are estimates and legitimate outliers (extended cuts,
             // double-length specials) must stay grabbable after review.
-            if rejection.recycle_reason == crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE {
+            if rejection.requires_review() {
                 return hold_replacement_for_manual_resolution(
                     app,
                     title,
@@ -1388,7 +1389,7 @@ async fn import_movie_download(
                     &source_video,
                     source_size,
                     parsed.quality.clone(),
-                    crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE,
+                    rejection.recycle_reason,
                     rejection.message.clone(),
                     started_at,
                 )
@@ -1843,7 +1844,7 @@ async fn import_movie_download(
                 &file_id,
                 prepared.accepted.as_ref(),
             )
-            .await;
+            .await?;
             if let Err(error) = crate::subtitles::reconcile_external_subtitles_for_media_file(
                 app, &title.id, &file_id, None, &dest_path,
             )
@@ -2221,7 +2222,7 @@ async fn import_series_movie_download(
             // A band miss is held for the operator, not burned: expected
             // runtimes are estimates and legitimate outliers (extended cuts,
             // double-length specials) must stay grabbable after review.
-            if rejection.recycle_reason == crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE {
+            if rejection.requires_review() {
                 return hold_replacement_for_manual_resolution(
                     app,
                     title,
@@ -2231,7 +2232,7 @@ async fn import_series_movie_download(
                     &source_video,
                     source_size,
                     parsed.quality.clone(),
-                    crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE,
+                    rejection.recycle_reason,
                     rejection.message.clone(),
                     started_at,
                 )
@@ -2664,7 +2665,7 @@ async fn import_series_movie_download(
                 &file_id,
                 prepared.accepted.as_ref(),
             )
-            .await;
+            .await?;
             if let Err(error) = crate::subtitles::reconcile_external_subtitles_for_media_file(
                 app, &title.id, &file_id, None, &dest_path,
             )

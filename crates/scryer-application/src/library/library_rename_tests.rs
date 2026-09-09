@@ -981,6 +981,8 @@ fn test_movie_collection(path: &str) -> Collection {
 
 fn test_media_file(path: &str) -> TitleMediaFile {
     TitleMediaFile {
+        analysis_details: Default::default(),
+        analysis_attempt: None,
         id: "media-1".to_string(),
         title_id: "title-1".to_string(),
         episode_id: None,

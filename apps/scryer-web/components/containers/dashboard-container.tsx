@@ -283,6 +283,10 @@ export function DashboardContainer() {
           preview = extracted.data?.beginManualImportSelection;
         }
         const candidates: DirectMovieManualImportCandidate[] = preview?.files ?? [];
+        if (preview?.files?.some((file: { fileName: string }) => file.fileName.toLowerCase().endsWith(".iso"))) {
+          setManualImportItem(item);
+          return;
+        }
         const files = directMovieManualImportMappings(candidates);
         if (!preview?.selectionId || files.length === 0) {
           setGlobalStatus(t("queue.manualImportFailed"));
@@ -561,6 +565,7 @@ export function DashboardContainer() {
             }
           }}
           titleId={manualImportItem.titleId}
+          facet={manualImportItem.facet}
           titleName={manualImportItem.titleName}
           clientId={manualImportItem.clientId}
           clientType={manualImportItem.clientType}

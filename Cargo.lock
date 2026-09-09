@@ -3980,12 +3980,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
-name = "matroska-demuxer"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cbf36668475a45a46bf8710e927e7458b7c387e7c46ddb5457ae0c71cf5e817"
-
-[[package]]
 name = "maybe-owned"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6291,6 +6285,7 @@ dependencies = [
  "rustls-webpki",
  "scryer-domain",
  "scryer-logging",
+ "scryer-media-types",
  "scryer-mediainfo",
  "scryer-outbound-http",
  "scryer-plugin-sdk",
@@ -6486,6 +6481,7 @@ dependencies = [
  "scryer-infrastructure-library-search",
  "scryer-infrastructure-sql",
  "scryer-infrastructure-workflow",
+ "scryer-media-types",
  "scryer-outbound-http",
  "scryer-plugin-sdk",
  "serde",
@@ -6721,6 +6717,7 @@ dependencies = [
  "chrono",
  "scryer-application",
  "scryer-domain",
+ "scryer-media-types",
  "serde_json",
 ]
 
@@ -6823,15 +6820,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "scryer-media-types"
+version = "0.20.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "scryer-mediainfo"
 version = "0.20.0"
 dependencies = [
  "bytes",
  "isolang",
- "matroska-demuxer",
  "mp4parse",
  "ogg",
  "riff",
+ "scryer-media-types",
  "scuffle-h264",
  "scuffle-h265",
  "serde",
@@ -6940,6 +6944,7 @@ dependencies = [
  "blake3",
  "chrono",
  "regorus",
+ "scryer-media-types",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

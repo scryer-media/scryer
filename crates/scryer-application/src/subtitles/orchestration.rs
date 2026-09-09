@@ -1667,6 +1667,7 @@ fn build_subtitle_query(
         media_file.audio_profile.as_deref(),
         media_file.audio_channels,
         &media_file.audio_streams,
+        &media_file.analysis_details,
     );
 
     SubtitleQuery {
@@ -2403,6 +2404,8 @@ mod tests {
         grabbed_release_title: Option<&str>,
     ) -> crate::TitleMediaFile {
         crate::TitleMediaFile {
+            analysis_details: Default::default(),
+            analysis_attempt: None,
             id: "mf-1".into(),
             title_id: "title-1".into(),
             episode_id: Some("episode-1".into()),

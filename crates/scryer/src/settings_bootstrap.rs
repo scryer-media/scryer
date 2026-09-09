@@ -68,6 +68,14 @@ pub(crate) struct ServiceSettingSeed {
 pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
     &[
         ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::FULL_HASH_BACKFILL_CURSOR_KEY,
+            data_type: "object",
+            default_value_json: "{\"after_id\":null}",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SERVICE,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "nzbget.url",
@@ -2304,6 +2312,109 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("startup migration state should persist: {error}"));
         }
+    }
+
+    async fn assert_full_hash_backfill_cursor_round_trips(store: Arc<SettingsStore>) {
+        let key = scryer_application::FULL_HASH_BACKFILL_CURSOR_KEY;
+        let seed = service_setting_seeds()
+            .iter()
+            .find(|seed| seed.scope == SETTINGS_SCOPE_SYSTEM && seed.key_name == key)
+            .expect("full-hash cursor definition must be registered");
+        assert_eq!(seed.data_type, "object");
+        assert!(!seed.is_sensitive);
+        seed_service_setting_definitions(store.clone())
+            .await
+            .expect("seed definitions");
+        let initial = store
+            .get_setting_json(SETTINGS_SCOPE_SYSTEM, key, None)
+            .await
+            .expect("read default")
+            .expect("cursor default");
+        assert_eq!(
+            serde_json::from_str::<Value>(&initial).unwrap(),
+            json!({"after_id": null})
+        );
+
+        for cursor in [
+            json!({"after_id": "media-file-001"}),
+            json!({"after_id": "media-file-250"}),
+            json!({"after_id": null}),
+        ] {
+            store
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    key,
+                    None,
+                    cursor.to_string(),
+                    "typed_graphql",
+                    None,
+                )
+                .await
+                .expect("persist cursor");
+            // Startup reseeding must preserve an interrupted run's progress.
+            seed_service_setting_definitions(store.clone())
+                .await
+                .expect("reseed definitions");
+            let actual = store
+                .get_setting_json(SETTINGS_SCOPE_SYSTEM, key, None)
+                .await
+                .expect("read cursor")
+                .expect("saved cursor");
+            assert_eq!(serde_json::from_str::<Value>(&actual).unwrap(), cursor);
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_full_hash_backfill_cursor_round_trips() {
+        let (_temp, store) = bootstrap_settings_store().await;
+        assert_full_hash_backfill_cursor_round_trips(store).await;
+    }
+
+    #[tokio::test]
+    async fn postgres_full_hash_backfill_cursor_round_trips() {
+        let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            eprintln!("skipping PostgreSQL cursor test; SCRYER_TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let admin = sqlx::PgPool::connect(&raw_url)
+            .await
+            .expect("connect test database");
+        let schema = format!("cursor_settings_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin)
+            .await
+            .expect("create isolated schema");
+        let mut schema_url = url::Url::parse(&raw_url).expect("test database URL");
+        schema_url
+            .query_pairs_mut()
+            .append_pair("options", &format!("-c search_path={schema}"));
+
+        // Capture assertion failures too, so even a failed test cleans up its schema.
+        let result = tokio::spawn(async move {
+            let services =
+                scryer_infrastructure_datastore::postgres::PostgresServices::new_with_mode(
+                    schema_url.to_string(),
+                    MigrationMode::Apply,
+                )
+                .await
+                .expect("migrate PostgreSQL fixture");
+            let store = Arc::new(SettingsStore::new(
+                services.datastore(),
+                services.encryption_key_state(),
+            ));
+            assert_full_hash_backfill_cursor_round_trips(store).await;
+            services.pool().close().await;
+        })
+        .await;
+        let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin)
+            .await;
+        admin.close().await;
+        cleanup.expect("remove isolated schema");
+        result.expect("PostgreSQL cursor round trip");
     }
 
     #[tokio::test]

@@ -30,7 +30,9 @@ Stage labels:
   set `outcome="error"` even when other rules still contribute.
 - `scoring_release`: the complete canonical scoring call, including mandatory
   requirements and final score aggregation. An analyzed release can evaluate
-  both announced and file-probed evidence. This excludes evaluator creation.
+  both announced and file-probed evidence. Disc scoring includes all mapped
+  playback sequences in one timing sample, also for episode-scoped calls.
+  This excludes evaluator creation.
 - `scan_batch`: search-result processing, including context lookup, parsing,
   filtering, scoring and sorting. It excludes upstream indexer network fetches.
   It is elapsed wall time, including async waits, not CPU time.

@@ -31,6 +31,7 @@ runtime-plugin-trust = [
 ]
 
 [dependencies]
+scryer-media-types = { path = "../scryer-media-types" }
 scryer-domain = { path = "../scryer-domain" }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 scryer-release-parser = { path = "../scryer-release-parser" }

@@ -1763,6 +1763,7 @@ fn synthetic_test_input() -> UserRuleInput {
             codes: vec!["quality_tier_0".to_string(), "source_webdl".to_string()],
         },
         file: Some(FileDoc {
+            details: Default::default(),
             video_codec: Some("hevc".to_string()),
             video_width: Some(3840),
             video_height: Some(2160),

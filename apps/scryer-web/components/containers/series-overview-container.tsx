@@ -260,7 +260,7 @@ export type CollectionEpisode = {
   monitored: boolean;
   playbackLinks?: import("@/components/common/watch-in-media-server-menu").MediaServerPlaybackLink[];
   mediaAvailability: {
-    state: "AVAILABLE" | "PENDING_SCAN" | "SCAN_FAILED" | "MISSING" | "UNMONITORED";
+    state: "AVAILABLE" | "PENDING_SCAN" | "SCAN_FAILED" | "REVIEW_REQUIRED" | "MISSING" | "UNMONITORED";
     primaryQualityLabel: string | null;
   };
   createdAt: string;
@@ -281,6 +281,8 @@ export type EpisodeMediaFile = {
   videoWidth: number | null;
   videoHeight: number | null;
   videoBitrateKbps: number | null;
+  analysis?: import("@/lib/types/media-analysis").MediaAnalysisDetails;
+  analysisAttempt?: import("@/lib/types/media-analysis").MediaAnalysisAttempt | null;
   videoBitDepth: number | null;
   videoHdrFormat: string | null;
   videoFrameRate: string | null;
@@ -2232,6 +2234,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       </ConfirmDialog>
       {manualImportItem && title && (
         <ManualImportDialog
+          facet={title.facet}
           open={true}
           onOpenChange={(open) => { if (!open) setManualImportItem(null); }}
           titleId={title.id}

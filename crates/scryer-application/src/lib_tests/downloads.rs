@@ -2465,12 +2465,14 @@ async fn queued_manual_import_rejects_observed_targets_before_consuming_or_queue
         crate::ManualImportCandidateMapping {
             candidate_id: "candidate-1".to_string(),
             episode_id: Some(observed_episode.id),
+            disc_selection: None,
             series_movie_link_id: None,
         },
         crate::ManualImportCandidateMapping {
             candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: Some(observed_series_movie.id),
+            disc_selection: None,
         },
     ] {
         let error = app
@@ -6232,6 +6234,566 @@ async fn automatic_import_rejects_download_whose_only_file_matches_no_episode() 
     assert_eq!(statuses, vec![ImportStatus::Failed]);
 }
 
+#[cfg(feature = "runtime-media-analysis")]
+#[path = "../../../scryer-mediainfo/tests/support/disc_image.rs"]
+mod authored_disc_image;
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn unknown_program_video_codec_is_held_for_review_across_production_paths() {
+    let fixture = fail_closed_pack_fixture().await;
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path().join("Fail.Closed.Pack.S01E01.mpg");
+    let bytes = [
+        0, 0, 1, 0xba, 0x44, 0, 4, 0, 4, 1, 0, 0, 3, 0xf8, 0, 0, 1, 0xe0, 0, 3, 0x80, 0, 0,
+    ];
+    std::fs::write(&source, bytes).unwrap();
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let crate::MediaAnalysisOutcome::Inconclusive(analysis) =
+        analyzer.analyze_file(source.clone()).await.unwrap()
+    else {
+        panic!("detected video without codec headers must remain inconclusive");
+    };
+    assert!(analysis.video_codec.is_none());
+    assert!(analysis.details.selected_video_id.is_some());
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Fail.Closed.Pack.S01E01.mpg");
+    let decision = crate::post_download_gate::probe_and_validate_with_disc_selection(
+        &fixture.app,
+        &fixture.title,
+        &parsed,
+        &profile,
+        &source,
+        bytes.len() as i64,
+        false,
+        None,
+        false,
+        crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+        None,
+    )
+    .await;
+    let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = decision else {
+        panic!("inconclusive video must require review before import");
+    };
+    assert!(rejection.requires_review());
+    assert_eq!(
+        rejection.recycle_reason,
+        crate::post_download_gate::MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+    );
+    for origin in [
+        crate::import::decide::ImportOrigin::Automatic,
+        crate::import::decide::ImportOrigin::OperatorQueued,
+    ] {
+        assert_eq!(
+            crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+            crate::import::decide::RejectionDisposition::Hold,
+        );
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn catalog_scan_and_final_import_join_the_same_native_probe() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let size = std::fs::metadata(&path).unwrap().len() as i64;
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    let (release, references) =
+        crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let (catalog, imported, ()) = tokio::join!(
+        analyzer.analyze_file(path.clone()),
+        crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            size,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        ),
+        async {
+            // One held handle, one worker, and both production waiters.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while references() < 4 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("both production paths must join the held native probe");
+            release.send(()).unwrap();
+        },
+    );
+    let crate::MediaAnalysisOutcome::Valid(catalog) = catalog.unwrap() else {
+        panic!("catalog fixture must be valid");
+    };
+    let crate::post_download_gate::ImportedFileGateDecision::Accepted(imported) = imported else {
+        panic!("import fixture must be accepted");
+    };
+    assert_eq!(
+        serde_json::to_value(catalog).unwrap(),
+        serde_json::to_value(imported.analysis.unwrap()).unwrap()
+    );
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("changing.mkv");
+    let original = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+    )
+    .unwrap();
+    std::fs::write(&path, &original).unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    let (release, references) =
+        crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let (catalog, imported, ()) = tokio::join!(
+        analyzer.analyze_file(path.clone()),
+        crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            original.len() as i64,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        ),
+        async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while references() < 4 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("both production paths must join before changing the source");
+            let mut replacement = original.clone();
+            replacement.extend_from_slice(&[0; 16]);
+            std::fs::write(&path, replacement).unwrap();
+            release.send(()).unwrap();
+        },
+    );
+    assert!(
+        matches!(catalog, Err(AppError::Validation(message)) if message.contains("source changed"))
+    );
+    let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = imported else {
+        panic!("a changed source must not become an accepted metadata failure");
+    };
+    assert!(rejection.requires_review());
+    for origin in [
+        crate::import::decide::ImportOrigin::Automatic,
+        crate::import::decide::ImportOrigin::OperatorQueued,
+    ] {
+        assert_eq!(
+            crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+            crate::import::decide::RejectionDisposition::Hold,
+        );
+    }
+    assert!(
+        rejection
+            .blocking_rule_codes
+            .iter()
+            .any(|code| code == "source_changed_after_probe")
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().len(),
+        original.len() as u64 + 16
+    );
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    for name in [
+        "h264_aac.mkv",
+        "matrix_ts_002.m2ts",
+        "av1_sequence_pq.mp4",
+        "av1_sequence_pq.mkv",
+        "hevc_sequence_pq.mp4",
+        "hevc_hdr10plus.mp4",
+        "dv_profile5.mkv",
+        "dv_profile7.mkv",
+        "dv_profile8.mkv",
+        "hevc_hdr10plus.mkv",
+        "hevc_sequence_pq.mkv",
+        "chapters_nero.mp4",
+        "chapters_quicktime.mp4",
+        "matrix_mkv_004.mkv",
+        "matrix_mkv_005.mkv",
+        "matrix_mp4_002.m4v",
+        "matrix_mp4_011.m4v",
+        "matrix_ts_003.ts",
+        "matrix_ts_004.m2ts",
+        "matrix_mkv_003.mkv",
+        "matrix_mkv_007.mkv",
+        "matrix_mkv_020.mkv",
+        "matrix_mp4_008.m4v",
+        "ogv_theora_opus_surround.ogv",
+        "ogv_theora_vorbis.ogv",
+        "matrix_avi_001.avi",
+        "matrix_avi_009.avi",
+        "matrix_avi_013.avi",
+        "matrix_avi_005.avi",
+        "matrix_mkv_015.mkv",
+        "matrix_ts_016.m2ts",
+        "matrix_ts_005.ts",
+        "wmv_wmv1_aac_surround.wmv",
+        "wmv_wmv1_wmav1.wmv",
+        "wmv_wmv1_mp3_mono.wmv",
+        "wmv_wmv2_video_only.wmv",
+        "flv_flv1_pcm_s16le.flv",
+        "flv_flv1_pcm_u8.flv",
+        "flv_flv1_speex.flv",
+        "flv_h264_mp3.flv",
+        "ps_mpeg1_mp2.mpg",
+        "ps_mpeg2_mp2.vob",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scryer-mediainfo/tests/media")
+            .join(name);
+        let crate::MediaAnalysisOutcome::Valid(catalog) =
+            analyzer.analyze_file(path.clone()).await.unwrap()
+        else {
+            panic!("mandatory valid fixture: {name}");
+        };
+        let parsed = crate::release_parser::parse_release_metadata(name);
+        let decision = crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            std::fs::metadata(&path).unwrap().len() as i64,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        )
+        .await;
+        let crate::post_download_gate::ImportedFileGateDecision::Accepted(imported) = decision
+        else {
+            panic!("native import fixture was rejected: {name}");
+        };
+        let mut catalog = serde_json::to_value(catalog).unwrap();
+        let mut rule_file = serde_json::to_value(
+            imported
+                .rule_file_doc
+                .expect("canonical facts must reach import rules"),
+        )
+        .unwrap();
+        let mut imported = serde_json::to_value(imported.analysis.unwrap()).unwrap();
+        // Runtime instrumentation may vary between probes; metadata may not.
+        catalog["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
+        imported["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
+        rule_file["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
+        assert_eq!(
+            catalog, imported,
+            "canonical production paths diverged for {name}"
+        );
+        assert_eq!(
+            catalog["details"], rule_file["details"],
+            "rule projection lost structured facts for {name}"
+        );
+        assert_eq!(
+            catalog["details"]["revision"],
+            scryer_media_types::ANALYSIS_REVISION
+        );
+        assert!(!catalog["details"]["streams"].as_array().unwrap().is_empty());
+    }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
+    for kind in ["unmapped", "encrypted", "unknown", "missing-clpi"] {
+        let fixture = fail_closed_pack_fixture().await;
+        let source_dir = tempfile::tempdir().unwrap();
+        let mut clip = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+        )
+        .unwrap();
+        if kind == "encrypted" {
+            for packet in clip.chunks_exact_mut(192) {
+                if packet[4] == 0x47 {
+                    packet[7] |= 0x80;
+                }
+            }
+        }
+        let mut image_files = vec![(
+            "BDMV/PLAYLIST/00001.MPLS",
+            authored_disc_image::mpls(&[("00001", 0, 135_000)]),
+        )];
+        if kind != "missing-clpi" {
+            image_files.push((
+                "BDMV/CLIPINF/00001.CLPI",
+                authored_disc_image::clpi((clip.len() / 192) as u32, 135_000, &[(0, 0)]),
+            ));
+        }
+        image_files.push(("BDMV/STREAM/00001.M2TS", clip));
+        let bytes = if kind == "unknown" {
+            vec![0; 4096]
+        } else {
+            authored_disc_image::iso(&image_files)
+        };
+        let source = source_dir.path().join("Fail.Closed.Pack.S01E01.iso");
+        std::fs::write(&source, &bytes).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_len(PACK_VIDEO_SIZE_BYTES)
+            .unwrap();
+        let completed = series_pack_completed_download(
+            &format!("disc-{kind}"),
+            &fixture.title.id,
+            "Fail.Closed.Pack.S01E01",
+            source_dir.path(),
+        );
+        let result = crate::import::import::import_completed_download(
+            &fixture.app,
+            &fixture.user,
+            &completed,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("disc")),
+            "{kind}: {result:?}"
+        );
+        assert!(source.exists(), "{kind}: source must survive review hold");
+        assert!(
+            library_video_file_names(fixture.library_dir.path()).is_empty(),
+            "{kind}: no import before review"
+        );
+        assert!(
+            fixture
+                .app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(&fixture.title.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn manual_disc_import_keeps_one_image_and_explicit_episode_mappings() {
+    manual_disc_import_for_filesystem(None).await;
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn manual_udf_disc_import_keeps_one_image_and_explicit_episode_mappings() {
+    for metadata_partition in [false, true] {
+        manual_disc_import_for_filesystem(Some(metadata_partition)).await;
+    }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+async fn manual_disc_import_for_filesystem(udf_metadata_partition: Option<bool>) {
+    let fixture = fail_closed_pack_fixture().await;
+    let (app, user, title) = (&fixture.app, &fixture.user, &fixture.title);
+    let mut mapped = Vec::new();
+    for (number, duration) in [(2, 2), (3, 1)] {
+        mapped.push(
+            app.create_episode(
+                user,
+                title.id.clone(),
+                fixture.episode.collection_id.clone(),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                None,
+                Some(format!("Disc episode {number}")),
+                None,
+                Some(duration),
+                false,
+                false,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let clip = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+    )
+    .unwrap();
+    let image_files = [
+        (
+            "BDMV/PLAYLIST/00001.MPLS",
+            authored_disc_image::mpls(&[("00001", 0, 90_000)]),
+        ),
+        (
+            "BDMV/PLAYLIST/00002.MPLS",
+            authored_disc_image::mpls(&[("00001", 90_000, 135_000)]),
+        ),
+        (
+            "BDMV/CLIPINF/00001.CLPI",
+            authored_disc_image::clpi((clip.len() / 192) as u32, 135_000, &[(0, 0)]),
+        ),
+        ("BDMV/STREAM/00001.M2TS", clip),
+    ];
+    let bytes = if let Some(metadata) = udf_metadata_partition {
+        authored_disc_image::udf_image::udf(&image_files, metadata)
+    } else {
+        authored_disc_image::iso(&image_files)
+    };
+    let source_dir = tempfile::tempdir().unwrap();
+    // A deliberately misleading filename must not add the unmapped first episode.
+    let source = source_dir.path().join("Fail.Closed.Pack.S01E01.iso");
+    std::fs::write(&source, &bytes).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_len(PACK_VIDEO_SIZE_BYTES)
+        .unwrap();
+    let unmapped = crate::import_workflow::execute_manual_import(
+        app,
+        user,
+        "manual-disc-unmapped",
+        &title.id,
+        None,
+        vec![ManualImportFileMapping {
+            file_path: source.to_string_lossy().into_owned(),
+            episode_id: Some(fixture.episode.id.clone()),
+            series_movie_link_id: None,
+            disc_selection: None,
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !unmapped[0].success,
+        "filename episode matching must not bypass disc mapping"
+    );
+    assert!(
+        unmapped[0]
+            .error_message
+            .as_ref()
+            .unwrap()
+            .contains("explicit disc-title-to-episode"),
+        "{unmapped:?}"
+    );
+    assert!(source.exists());
+    assert!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let selection = scryer_media_types::DiscSelection {
+        title_id: None,
+        episode_mappings: mapped
+            .iter()
+            .enumerate()
+            .map(|(index, episode)| scryer_media_types::DiscEpisodeMapping {
+                disc_title_id: format!("{:05}", index + 1),
+                episode_ids: vec![episode.id.clone()],
+            })
+            .collect(),
+    };
+    let results = crate::import_workflow::execute_manual_import(
+        app,
+        user,
+        "manual-disc-explicit",
+        &title.id,
+        None,
+        vec![ManualImportFileMapping {
+            file_path: source.to_string_lossy().into_owned(),
+            episode_id: None,
+            series_movie_link_id: None,
+            disc_selection: Some(selection.clone()),
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].success, "{results:?}");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        files.len(),
+        1,
+        "one physical image must serve every mapped episode"
+    );
+    assert_eq!(files[0].size_bytes, PACK_VIDEO_SIZE_BYTES as i64);
+    assert_eq!(
+        files[0].analysis_details.disc.as_ref().unwrap().selection,
+        selection
+    );
+    assert_ne!(
+        files[0].episode_id.as_deref(),
+        Some(fixture.episode.id.as_str())
+    );
+    let destination = crate::stored_paths::stored_path_to_path_buf(&files[0].file_path);
+    assert_eq!(destination.extension().unwrap(), "iso");
+    assert_eq!(
+        std::fs::metadata(&destination).unwrap().len(),
+        PACK_VIDEO_SIZE_BYTES
+    );
+    let mut prefix = vec![0; bytes.len()];
+    std::io::Read::read_exact(&mut std::fs::File::open(destination).unwrap(), &mut prefix).unwrap();
+    assert_eq!(
+        prefix, bytes,
+        "import must retain the authored image intact"
+    );
+}
+
 #[tokio::test]
 async fn manual_import_still_accepts_file_whose_name_matches_no_episode() {
     // Manual imports resolve the target from the operator's mapping, not from
@@ -6257,6 +6819,7 @@ async fn manual_import_still_accepts_file_whose_name_matches_no_episode() {
         &title.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: Some(episode.id.clone()),
             series_movie_link_id: None,
@@ -6313,6 +6876,7 @@ async fn manual_import_of_a_file_already_in_place_is_satisfied_not_failed() {
         source_dir.path(),
     );
     let mappings = vec![ManualImportFileMapping {
+        disc_selection: None,
         file_path: source_file.to_string_lossy().into_owned(),
         episode_id: Some(episode.id.clone()),
         series_movie_link_id: None,
@@ -6416,6 +6980,7 @@ async fn manual_import_upgrade_reports_transfer_progress_on_its_record() {
         (
             completed,
             vec![ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file.to_string_lossy().into_owned(),
                 episode_id: Some(episode.id.clone()),
                 series_movie_link_id: None,
@@ -6574,6 +7139,7 @@ async fn scryer_manual_import_defaults_to_grabbed_scope_but_accepts_same_title_o
         vec![ManualImportFileMapping {
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: Some(selected_episode.id.clone()),
+            disc_selection: None,
             series_movie_link_id: None,
         }],
         Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
@@ -9038,6 +9604,7 @@ async fn path_manual_import_can_target_series_movie_link() {
         &title.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: None,
             series_movie_link_id: Some(link.id.clone()),
@@ -9143,6 +9710,7 @@ async fn path_manual_import_rejects_another_title_folder_before_source_mutation(
         &candidate.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: None,
             series_movie_link_id: None,
@@ -11693,6 +12261,7 @@ async fn a_manual_series_movie_link_import_never_reaches_the_verdict_gate() {
         &title.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: None,
             series_movie_link_id: Some(link.id.clone()),

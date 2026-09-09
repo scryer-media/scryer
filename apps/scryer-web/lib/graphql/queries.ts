@@ -1,3 +1,5 @@
+import { MEDIA_ANALYSIS_FIELDS, MEDIA_DISC_FIELDS } from "../types/media-analysis.ts";
+
 export const DISCOVERY_ITEM_FIELDS = `
     id
     targetKey
@@ -370,7 +372,13 @@ const SERIES_SIDE_PANEL_COLLECTION_FIELDS = `
       episodeRecordsTotal
       createdAt`;
 
-const TITLE_MEDIA_FILE_FIELDS = `
+export const TITLE_MEDIA_FILE_FIELDS = `
+      analysis { ${MEDIA_ANALYSIS_FIELDS} }
+      analysisAttempt {
+        revision attemptedAt succeeded
+        report { status bytesRead seeks elapsedMs budgetExhausted warnings { code message streamId offset } }
+        disc { ${MEDIA_DISC_FIELDS} }
+      }
       id
       titleId
       episodeId
@@ -394,6 +402,8 @@ const TITLE_MEDIA_FILE_FIELDS = `
       audioBitrateKbps
       audioLanguages
       audioStreams {
+        profile
+        name
         codec
         channels
         language

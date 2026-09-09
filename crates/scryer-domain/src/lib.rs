@@ -2213,7 +2213,8 @@ impl DownloadQueueDeleteStatus {
 }
 
 pub const VIDEO_EXTENSIONS: &[&str] = &[
-    "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv", "strm",
+    "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv", "strm", "mpg",
+    "mpeg", "vob", "iso",
 ];
 
 pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "ass", "ssa", "sub", "vtt", "idx"];
@@ -2241,6 +2242,10 @@ pub fn canonical_video_extension(path: &std::path::Path) -> Option<&'static str>
 
 pub fn is_video_file(path: &std::path::Path) -> bool {
     canonical_video_extension(path).is_some()
+}
+
+pub fn is_disc_image(path: &std::path::Path) -> bool {
+    canonical_video_extension(path) == Some("iso")
 }
 
 pub fn is_subtitle_file(path: &std::path::Path) -> bool {

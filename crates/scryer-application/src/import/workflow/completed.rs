@@ -16,35 +16,89 @@ fn maybe_trigger_subtitle_search(app: &AppUseCase, title_id: &str, media_file_id
     });
 }
 
-async fn analyze_and_persist_imported_media_file(
+pub(crate) async fn analyze_and_persist_imported_media_file(
     app: &AppUseCase,
     title_id: &str,
     media_file_id: &str,
     file_path: &std::path::Path,
 ) {
-    let acceptance = match app
+    let files = &app.services.library.media_files;
+    let Ok(Some(expected)) = files.get_media_file_by_id(media_file_id).await else {
+        return;
+    };
+    if expected.title_id != title_id
+        || crate::stored_paths::stored_path_to_path_buf(&expected.file_path) != file_path
+    {
+        return;
+    }
+    let Some(source) = crate::media::discs::MediaSourceVersion::read(file_path)
+        .await
+        .ok()
+    else {
+        return;
+    };
+    let selection = expected
+        .analysis_details
+        .disc
+        .as_ref()
+        .map(|disc| disc.selection.clone())
+        .unwrap_or_default();
+    let outcome = app
         .services
         .library
         .media_analyzer
-        .analyze_file(file_path.to_path_buf())
+        .analyze_file_with_selection(file_path.to_path_buf(), selection)
+        .await;
+    if crate::media::discs::MediaSourceVersion::read(file_path)
         .await
+        .ok()
+        .as_ref()
+        != Some(&source)
     {
-        Ok(crate::MediaAnalysisOutcome::Valid(analysis)) => {
-            crate::post_download_gate::ImportedFileAcceptance {
-                analysis: Some(*analysis),
-                scan_error: None,
-                rule_file_doc: None,
-                audio_language_warning: None,
+        tracing::warn!(
+            media_file_id,
+            "discarded imported media analysis after source changed"
+        );
+        return;
+    }
+    let failure = match outcome {
+        Ok(crate::MediaAnalysisOutcome::Valid(mut analysis)) => {
+            if analysis.details.disc.is_some() {
+                let Ok(Some(title)) = app.services.catalog.titles.get_by_id(title_id).await else {
+                    return;
+                };
+                if let Err(error) = app
+                    .validate_disc_selection_update(
+                        &title,
+                        &expected,
+                        file_path,
+                        &source,
+                        &mut analysis,
+                    )
+                    .await
+                {
+                    tracing::warn!(%error, media_file_id, "imported disc selection requires review");
+                    return;
+                }
             }
-        }
-        Ok(crate::MediaAnalysisOutcome::Invalid(error)) => {
-            crate::post_download_gate::ImportedFileAcceptance {
-                analysis: None,
-                scan_error: Some(error),
-                rule_file_doc: None,
-                audio_language_warning: None,
+            if let Err(error) = files
+                .update_media_file_analysis_if_unchanged(&expected, *analysis)
+                .await
+            {
+                tracing::warn!(%error, media_file_id, "imported media analysis requires review");
             }
+            return;
         }
+        Ok(crate::MediaAnalysisOutcome::Inconclusive(analysis)) => {
+            if let Err(error) = files
+                .record_media_analysis_attempt(&expected, &analysis)
+                .await
+            {
+                tracing::warn!(%error, file_id = %media_file_id, "failed to retain incomplete media analysis");
+            }
+            return;
+        }
+        Ok(crate::MediaAnalysisOutcome::Invalid(error)) => error,
         Err(error) => {
             tracing::warn!(
                 error = %error,
@@ -53,21 +107,13 @@ async fn analyze_and_persist_imported_media_file(
                 file_path = %file_path.display(),
                 "failed to analyze imported media file"
             );
-            crate::post_download_gate::ImportedFileAcceptance {
-                analysis: None,
-                scan_error: Some(error.to_string()),
-                rule_file_doc: None,
-                audio_language_warning: None,
-            }
+            error.to_string()
         }
     };
 
-    crate::post_download_gate::persist_media_analysis_result(
-        &app.services.library.media_files,
-        media_file_id,
-        &acceptance,
-    )
-    .await;
+    if let Err(error) = app.record_failed_analysis_refresh(&expected, failure).await {
+        tracing::warn!(%error, media_file_id, "imported media analysis requires review");
+    }
 }
 
 fn completed_download_identity(completed: &CompletedDownload) -> ClientJobLocator {
@@ -602,11 +648,8 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
 /// represented by `ImportSkipReason`, never their message text.
 fn completed_import_error_message_is_retryable(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
-    const SCRYER_TRANSIENT_PHRASES: &[&str] = &[
-        "source changed",
-        "temporarily",
-        "not found or inaccessible",
-    ];
+    const SCRYER_TRANSIENT_PHRASES: &[&str] =
+        &["source changed", "temporarily", "not found or inaccessible"];
     SCRYER_TRANSIENT_PHRASES
         .iter()
         .any(|needle| normalized.contains(needle))

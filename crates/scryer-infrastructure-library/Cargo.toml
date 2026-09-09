@@ -11,6 +11,7 @@ image-processing = ["dep:fast_image_resize", "dep:image", "dep:kamadak-exif", "d
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
 scryer-application = { path = "../scryer-application" }
+scryer-media-types = { path = "../scryer-media-types" }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }

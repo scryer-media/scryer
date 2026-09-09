@@ -534,6 +534,7 @@ impl CountingValidMediaAnalyzer {
 
 fn test_valid_media_analysis() -> MediaFileAnalysis {
     MediaFileAnalysis {
+        details: Default::default(),
         video_codec: None,
         video_width: Some(1920),
         video_height: Some(1080),
@@ -5428,6 +5429,50 @@ async fn ensure_library_scan_cancellation_token_reuses_existing_token() {
         1,
         "reusing a cancellation token should not create duplicate map entries",
     );
+}
+
+#[tokio::test]
+async fn pending_import_lists_preserve_recorded_sizes_without_filesystem_backfill() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_path = temp.path().join("Unknown.Movie.mkv");
+    std::fs::write(&file_path, b"actual file contents").expect("write media fixture");
+    let root = crate::stored_paths::path_to_stored_string(temp.path());
+    let path = crate::stored_paths::path_to_stored_string(&file_path);
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+
+    for status in [PendingImportStatus::Pending, PendingImportStatus::Ignored] {
+        for size_bytes in [None, Some(0), Some(7)] {
+            let mut item = build_test_unmatched_item(
+                "recorded-size",
+                MediaFacet::Movie,
+                &root,
+                &path,
+                "Unknown Movie",
+                "Unknown Movie",
+                None,
+            );
+            item.status = status.clone();
+            item.size_bytes = size_bytes;
+            unmatched_items
+                .upsert_library_scan_unmatched_item(&item)
+                .await
+                .expect("seed item");
+            let page = app
+                .pending_imports(&user, MediaFacet::Movie, None, status.clone(), 50, 0)
+                .await
+                .expect("list pending imports");
+            assert_eq!(page.total, 1);
+            assert_eq!(
+                page.items[0].size_bytes, size_bytes,
+                "list feedback must reflect the recorded size, not live file metadata"
+            );
+        }
+    }
 }
 
 #[tokio::test]

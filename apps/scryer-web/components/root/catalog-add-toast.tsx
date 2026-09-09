@@ -48,7 +48,7 @@ function CatalogAddToastCard({
   const posterSrc = selectPosterVariantUrl(posterUrl, "w250");
 
   return (
-    <div className="flex w-full items-stretch gap-3 overflow-hidden rounded-[12px] border border-[var(--scry-success-border)] bg-[var(--card)] shadow-[0_18px_48px_rgba(0,0,0,0.34)]">
+    <div className="flex w-full items-stretch gap-3 overflow-hidden rounded-[12px] border !border-[var(--scry-success-border)] bg-[var(--card)] shadow-[0_18px_48px_rgba(0,0,0,0.34)]">
       <div className="relative w-[68px] flex-none overflow-hidden bg-muted">
         <TitlePosterSlot
           src={posterSrc}

@@ -438,6 +438,8 @@ pub struct EpisodePayload {
 #[graphql(complex)]
 /// A title media file with raw scan data and parsed acquisition metadata.
 pub struct TitleMediaFilePayload {
+    pub analysis: scryer_interface_media_types::MediaAnalysisDetailsPayload,
+    pub analysis_attempt: Option<scryer_interface_media_types::MediaAnalysisAttemptPayload>,
     /// Stable media file identifier.
     pub id: ID,
     /// Identifier of the title owning this file.

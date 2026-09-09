@@ -1213,6 +1213,7 @@ function TitleContextPanel({
             videoWidth: file.videoWidth ?? null,
             videoHeight: file.videoHeight ?? null,
             videoBitrateKbps: file.videoBitrateKbps ?? null,
+            analysis: file.analysis,
             videoBitDepth: file.videoBitDepth ?? null,
             videoHdrFormat: file.videoHdrFormat ?? null,
             videoFrameRate: file.videoFrameRate ?? null,
@@ -1222,6 +1223,8 @@ function TitleContextPanel({
             audioBitrateKbps: file.audioBitrateKbps ?? null,
             audioLanguages: file.audioLanguages ?? [],
             audioStreams: (file.audioStreams ?? []).map((stream) => ({
+              profile: stream.profile ?? null,
+              name: stream.name ?? null,
               codec: stream.codec ?? null,
               channels: stream.channels ?? null,
               language: stream.language ?? null,

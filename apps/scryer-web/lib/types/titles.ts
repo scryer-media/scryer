@@ -119,6 +119,8 @@ export type TitleMediaFileRecord = {
   videoWidth?: number | null;
   videoHeight?: number | null;
   videoBitrateKbps?: number | null;
+  analysis?: import("@/lib/types/media-analysis").MediaAnalysisDetails;
+  analysisAttempt?: import("@/lib/types/media-analysis").MediaAnalysisAttempt | null;
   videoBitDepth?: number | null;
   videoHdrFormat?: string | null;
   videoFrameRate?: string | null;
@@ -129,6 +131,8 @@ export type TitleMediaFileRecord = {
   audioLanguages?: string[] | null;
   audioStreams?:
     | {
+        profile?: string | null;
+        name?: string | null;
         codec: string | null;
         channels: number | null;
         language: string | null;
