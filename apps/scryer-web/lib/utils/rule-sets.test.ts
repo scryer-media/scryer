@@ -55,7 +55,7 @@ test("managed rules remain guarded from user-owned edit and delete actions", () 
   assert.equal(isUserOwnedRuleSet({ ...managedRule, isManaged: false }), true);
 });
 
-test("rule input reference renders release guide facts as a string array", () => {
+test("rule input reference exposes parser tokens and retires guide facts", () => {
   const releaseSection = ruleInputContract.sections.find(
     (section) => section.path === "input.release",
   );
@@ -63,9 +63,10 @@ test("rule input reference renders release guide facts as a string array", () =>
     (field) => field.field === "guide_facts",
   );
 
-  assert.deepEqual(guideFacts, {
-    field: "guide_facts",
+  assert.equal(guideFacts, undefined);
+  assert.deepEqual(releaseSection?.fields.find((field) => field.field === "normalized_tokens"), {
+    field: "normalized_tokens",
     type: "string[]",
-    descKey: "settings.refReleaseGuideFacts",
+    descKey: "settings.refReleaseNormalizedTokens",
   });
 });

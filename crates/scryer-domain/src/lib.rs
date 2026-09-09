@@ -4364,6 +4364,31 @@ pub struct PluginCatalogStatusRecord {
 }
 
 /// A user-authored rule set definition.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleEvaluationPhase {
+    Baseline,
+    #[default]
+    Additional,
+}
+
+impl RuleEvaluationPhase {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Additional => "additional",
+            Self::Baseline => "baseline",
+        }
+    }
+
+    pub fn from_storage_str(value: &str) -> Option<Self> {
+        match value {
+            "additional" => Some(Self::Additional),
+            "baseline" => Some(Self::Baseline),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleSet {
     pub id: String,
@@ -4372,6 +4397,12 @@ pub struct RuleSet {
     pub rego_source: String,
     pub enabled: bool,
     pub priority: i32,
+    #[serde(default)]
+    pub evaluation_phase: RuleEvaluationPhase,
+    #[serde(default)]
+    pub exclusive_group: Option<String>,
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
     /// Facets this rule applies to. Empty = all facets.
     pub applied_facets: Vec<MediaFacet>,
     pub created_at: DateTime<Utc>,

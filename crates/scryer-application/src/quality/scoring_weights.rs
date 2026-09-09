@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::quality_profile::BLOCK_SCORE;
 
 /// Scoring persona — a named preset that sets all default scoring weights.
@@ -41,6 +42,7 @@ pub struct ScoringOverrides {
 /// Every numeric constant used by the scoring functions. Built from a persona
 /// preset, then patched by any active overrides.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub struct ScoringWeights {
     // ── Source bonuses ──────────────────────────────────────
     pub source_bluray: i32,
@@ -145,6 +147,7 @@ pub struct ScoringWeights {
 }
 
 /// Build a complete set of scoring weights from a persona and optional overrides.
+#[cfg(test)]
 pub fn build_weights(persona: &ScoringPersona, overrides: &ScoringOverrides) -> ScoringWeights {
     let mut weights = match persona {
         ScoringPersona::Balanced => balanced_weights(),
@@ -159,6 +162,7 @@ pub fn build_weights(persona: &ScoringPersona, overrides: &ScoringOverrides) -> 
 /// Build weights with category-aware adjustments.  Anime content never
 /// ships with Atmos audio, so the atmos missing penalty is zeroed out
 /// to avoid penalizing every anime release.
+#[cfg(test)]
 pub fn build_weights_for_category(
     persona: &ScoringPersona,
     overrides: &ScoringOverrides,
@@ -174,6 +178,7 @@ pub fn build_weights_for_category(
     weights
 }
 
+#[cfg(test)]
 struct OverrideDefaults {
     allow_x265_non4k: bool,
     block_dv_without_fallback: bool,
@@ -182,6 +187,7 @@ struct OverrideDefaults {
     block_upscaled: bool,
 }
 
+#[cfg(test)]
 fn override_defaults(persona: &ScoringPersona) -> OverrideDefaults {
     match persona {
         ScoringPersona::Balanced => OverrideDefaults {
@@ -215,6 +221,7 @@ fn override_defaults(persona: &ScoringPersona) -> OverrideDefaults {
     }
 }
 
+#[cfg(test)]
 fn apply_overrides(
     weights: &mut ScoringWeights,
     persona: &ScoringPersona,
@@ -296,6 +303,7 @@ fn apply_overrides(
 // ─── Persona presets ────────────────────────────────────────────────────────
 
 /// Balanced — mainstream quality preference without a strong remux bias.
+#[cfg(test)]
 pub(crate) fn balanced_weights() -> ScoringWeights {
     ScoringWeights {
         // Source
@@ -399,6 +407,7 @@ pub(crate) fn balanced_weights() -> ScoringWeights {
 }
 
 /// Audiophile — maximum fidelity. Bigger is better. Lossless preferred.
+#[cfg(test)]
 fn audiophile_weights() -> ScoringWeights {
     ScoringWeights {
         source_bluray: 250,
@@ -490,6 +499,7 @@ fn audiophile_weights() -> ScoringWeights {
 }
 
 /// Efficient — best quality per gigabyte. x265 is good. Compact is good.
+#[cfg(test)]
 fn efficient_weights() -> ScoringWeights {
     ScoringWeights {
         source_bluray: 80,
@@ -582,6 +592,7 @@ fn efficient_weights() -> ScoringWeights {
 }
 
 /// Compatible — plays on everything. Avoid risky formats. Universal decode.
+#[cfg(test)]
 fn compatible_weights() -> ScoringWeights {
     ScoringWeights {
         source_bluray: 120,
@@ -677,6 +688,7 @@ fn compatible_weights() -> ScoringWeights {
 ///
 /// When `is_atmos` is true, TrueHD and DDP resolve to their Atmos-specific
 /// weights (which may differ from the non-Atmos variant depending on persona).
+#[cfg(test)]
 pub fn audio_weight_for_codec(weights: &ScoringWeights, codec: &str, is_atmos: bool) -> i32 {
     match codec {
         "TRUEHD" if is_atmos => weights.audio_truehd_atmos,
@@ -696,6 +708,6 @@ pub fn audio_weight_for_codec(weights: &ScoringWeights, codec: &str, is_atmos: b
     }
 }
 
-#[cfg(test)]
 #[path = "scoring_weights_tests.rs"]
+#[cfg(test)]
 mod scoring_weights_tests;

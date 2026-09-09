@@ -1077,6 +1077,11 @@ export function SettingsRulesSection({
                     <span id={selectorId("settings-rule-name", record.name)}>
                       {record.name}
                     </span>
+                    {record.disabledReason ? (
+                      <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
+                        {record.disabledReason}
+                      </p>
+                    ) : null}
                     {record.isManaged && record.managedKey ? (
                       <ManagedBadge managedKey={record.managedKey} />
                     ) : null}
@@ -1107,7 +1112,7 @@ export function SettingsRulesSection({
                         }
                         tone={record.enabled ? "disabled" : "enabled"}
                         onClick={() => void toggleRuleSetEnabled(record)}
-                        disabled={mutatingRuleSetId === record.id}
+                        disabled={mutatingRuleSetId === record.id || (!record.enabled && Boolean(record.disabledReason))}
                       >
                         <Power className="h-4 w-4" />
                       </IconButton>
@@ -1171,6 +1176,11 @@ export function SettingsRulesSection({
             </CardHeader>
             <CardContent>
               <form id="settings-rule-form" className="space-y-3" onSubmit={submitRuleSet}>
+                {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason ? (
+                  <p role="status" className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400">
+                    {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason}
+                  </p>
+                ) : null}
                 <div className="grid gap-3 md:grid-cols-3">
                   <label>
                     <Label className="mb-2 block">{t("label.name")}</Label>

@@ -507,6 +507,7 @@ pub static SERVICE_ALIAS_RULES: &[ServiceAliasRule] = &[
     },
 ];
 
+#[cfg(test)]
 pub static FACT_RULES: &[FactRule] = &[
     FactRule {
         code: "trash.ai_enhanced",
@@ -1702,6 +1703,7 @@ pub static FACT_RULES: &[FactRule] = &[
     },
 ];
 
+#[cfg(test)]
 pub static LOCALE_GROUP_FACT_RULES: &[LocaleGroupFactRule] = &[
     LocaleGroupFactRule {
         code: "trash.locale.asian.group.tier1",
@@ -10924,6 +10926,7 @@ pub static LOCALE_GROUP_FACT_RULES: &[LocaleGroupFactRule] = &[
     },
 ];
 
+#[cfg(test)]
 pub static NO_RELEASE_GROUP_FACT_FACETS: &[RuleFacet] = &[RuleFacet::Movie, RuleFacet::Series];
 
 pub static TOKEN_SIGNAL_RULES: &[TokenSignalRule] = &[
@@ -11675,6 +11678,7 @@ pub static TOKEN_SIGNAL_RULES: &[TokenSignalRule] = &[
     },
 ];
 
+#[cfg(test)]
 pub static BLOCKED_TITLE_RULES: &[BlockedTitleRule] = &[
     BlockedTitleRule {
         code: "trash_guides_anime_raws",

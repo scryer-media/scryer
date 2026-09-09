@@ -210,9 +210,9 @@
           "descKey": "settings.refReleaseThumbsDown"
         },
         {
-          "field": "guide_facts",
+          "field": "normalized_tokens",
           "type": "string[]",
-          "descKey": "settings.refReleaseGuideFacts"
+          "descKey": "settings.refReleaseNormalizedTokens"
         },
         {
           "field": "extra",
@@ -315,7 +315,28 @@
           "field": "required_audio_languages",
           "type": "string[]",
           "descKey": "settings.refProfileRequiredLangs"
+        },
+        {
+          "field": "scoring_persona",
+          "type": "string",
+          "descKey": "settings.refProfileScoringPersona"
+        },
+        {
+          "field": "scoring_overrides",
+          "type": "object",
+          "descKey": "settings.refProfileScoringOverrides"
         }
+      ]
+    },
+    {
+      "titleKey": "settings.refSectionScoringOverrides",
+      "path": "input.profile.scoring_overrides",
+      "fields": [
+        { "field": "allow_x265_non4k", "type": "bool?", "descKey": "settings.refOverrideX265" },
+        { "field": "block_dv_without_fallback", "type": "bool?", "descKey": "settings.refOverrideDolbyVision" },
+        { "field": "prefer_compact_encodes", "type": "bool?", "descKey": "settings.refOverrideCompact" },
+        { "field": "prefer_lossless_audio", "type": "bool?", "descKey": "settings.refOverrideLossless" },
+        { "field": "block_upscaled", "type": "bool?", "descKey": "settings.refOverrideUpscaled" }
       ]
     },
     {
@@ -381,6 +402,21 @@
           "field": "runtime_minutes",
           "type": "number?",
           "descKey": "settings.refCtxRuntimeMin"
+        },
+        {
+          "field": "coverage_total_runtime_minutes",
+          "type": "number?",
+          "descKey": "settings.refCtxCoverageTotalRuntime"
+        },
+        {
+          "field": "coverage_member_runtime_minutes",
+          "type": "number?",
+          "descKey": "settings.refCtxCoverageMemberRuntime"
+        },
+        {
+          "field": "coverage_member_count",
+          "type": "number?",
+          "descKey": "settings.refCtxCoverageMemberCount"
         },
         {
           "field": "is_anime",

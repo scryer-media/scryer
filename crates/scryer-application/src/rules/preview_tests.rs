@@ -1,7 +1,8 @@
 use super::*;
+use crate::RuleSetRepository;
 use crate::lib_tests::bootstrap;
 use crate::rules::workflow::tests::TestRuleSetRepo;
-use scryer_domain::{MediaFacet, NewTitle};
+use scryer_domain::{MediaFacet, NewTitle, RuleEvaluationPhase, RuleSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -30,6 +31,15 @@ fn request(title_id: String, source: &str) -> RuleSetTestRequest {
 }
 
 fn preview_app() -> (AppUseCase, User, Arc<TestRuleSetRepo>) {
+    let (app, user) = bootstrap();
+    let rules = Arc::new(TestRuleSetRepo::new(
+        super::builtin_trash::baseline_rule_sets(),
+    ));
+    let app = app.with_test_overrides(|services| services.with_rule_sets(rules.clone()));
+    (app, user, rules)
+}
+
+fn preview_app_without_policies() -> (AppUseCase, User, Arc<TestRuleSetRepo>) {
     let (app, user) = bootstrap();
     let rules = Arc::new(TestRuleSetRepo::new(vec![]));
     let app = app.with_test_overrides(|services| services.with_rule_sets(rules.clone()));
@@ -195,6 +205,55 @@ async fn preview_replaces_edits_but_keeps_ordinary_copy_source_active() {
 }
 
 #[tokio::test]
+async fn preview_ordinary_copy_uses_create_metadata_instead_of_custom_source_metadata() {
+    let (app, user, repo) = preview_app_without_policies();
+    let title = movie(&app, &user).await;
+    let now = chrono::Utc::now();
+    let source = RuleSet {
+        id: "custom_baseline".to_string(),
+        name: "Custom baseline".to_string(),
+        description: String::new(),
+        rego_source: scryer_rules::rewrite_package_declaration(
+            "score_entry[\"source_baseline\"] := 11",
+            "custom_baseline",
+        ),
+        enabled: true,
+        priority: 0,
+        evaluation_phase: RuleEvaluationPhase::Baseline,
+        exclusive_group: Some("custom-group".to_string()),
+        disabled_reason: None,
+        applied_facets: vec![MediaFacet::Movie],
+        created_at: now,
+        updated_at: now,
+        is_managed: false,
+        managed_key: None,
+        managed_tag_filter: None,
+    };
+    repo.create_rule_set(&source)
+        .await
+        .expect("custom source should persist");
+
+    let mut copied = request(
+        title.id,
+        "score_entry[\"draft_subtotal\"] := input.builtin_score.total",
+    );
+    copied.copy_source_rule_set_id = Some(source.id.clone());
+    let result = app
+        .test_rule_set(&user, copied)
+        .await
+        .expect("ordinary copy preview should use create-rule metadata");
+
+    assert_eq!(result.draft_contribution.score, 11);
+    assert!(result.rule_sets.iter().any(|rule| {
+        rule.rule_set_id.as_deref() == Some(source.id.as_str())
+            && rule
+                .entries
+                .iter()
+                .any(|entry| entry.code == "source_baseline")
+    }));
+}
+
+#[tokio::test]
 async fn preview_rejects_invalid_title_and_oversized_release_before_any_persistence() {
     let (app, user, _) = preview_app();
     let before = app.list_rule_sets(&user).await.expect("list rules before");
@@ -342,7 +401,7 @@ async fn recoverable_scores_preview_includes_penalties_and_other_rules() {
 
 #[tokio::test]
 async fn preview_tracked_copy_excludes_source_without_changing_membership() {
-    let (app, user, repo) = preview_app();
+    let (app, user, repo) = preview_app_without_policies();
     let title = movie(&app, &user).await;
     let saved = app
         .create_rule_set(
@@ -477,7 +536,7 @@ async fn preview_preserves_cross_rule_references_and_active_engine() {
 
 #[tokio::test]
 async fn preview_surfaces_runtime_errors_and_rejects_invalid_drafts() {
-    let (app, user, repo) = preview_app();
+    let (app, user, repo) = preview_app_without_policies();
     let title = movie(&app, &user).await;
     let source = "score_entry[\"broken\"] := lower(input.release.year) if { contains(input.release.raw_title, \"Preview.Movie\") }";
     let result = app

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
+#[cfg(test)]
 use crate::model::{GuideFact, ParsedReleaseMetadata};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,12 +60,14 @@ pub(crate) struct TokenSignalRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum TitleCategoryScope {
     Any,
     Anime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub struct BlockedTitleRule {
     pub code: &'static str,
     pub facet: RuleFacet,
@@ -79,6 +82,7 @@ pub struct BlockedTitleRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct FactRule {
     pub code: &'static str,
     pub facet: RuleFacet,
@@ -87,6 +91,7 @@ pub(crate) struct FactRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum LocaleGroupMatchKind {
     Exact,
     #[allow(dead_code)]
@@ -94,6 +99,7 @@ pub(crate) enum LocaleGroupMatchKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum LocaleSourceContext {
     Web,
     BluRay,
@@ -104,6 +110,7 @@ pub(crate) enum LocaleSourceContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct LocaleGroupFactRule {
     pub code: &'static str,
     pub matcher: &'static str,
@@ -161,6 +168,7 @@ fn token_signal_index() -> &'static TokenAnchorIndex {
     })
 }
 
+#[cfg(test)]
 fn blocked_title_index() -> &'static TokenAnchorIndex {
     static INDEX: OnceLock<TokenAnchorIndex> = OnceLock::new();
     INDEX.get_or_init(|| {
@@ -173,6 +181,7 @@ fn blocked_title_index() -> &'static TokenAnchorIndex {
     })
 }
 
+#[cfg(test)]
 fn fact_index() -> &'static TokenAnchorIndex {
     static INDEX: OnceLock<TokenAnchorIndex> = OnceLock::new();
     INDEX.get_or_init(|| {
@@ -284,11 +293,13 @@ pub(crate) fn detect_token_signals(normalized_tokens: &[String]) -> TokenSignalM
     matched
 }
 
+#[cfg(test)]
 pub(crate) fn derive_facts(raw_title: &str, category_hint: Option<&str>) -> Vec<GuideFact> {
     let tokens = normalize_raw_title_tokens(raw_title);
     derive_facts_from_tokens(raw_title, &tokens, category_hint)
 }
 
+#[cfg(test)]
 pub(crate) fn derive_locale_group_facts(
     projected: &ParsedReleaseMetadata,
     category_hint: Option<&str>,
@@ -314,6 +325,7 @@ pub(crate) fn derive_locale_group_facts(
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn derive_structural_facts(
     projected: &ParsedReleaseMetadata,
     category_hint: Option<&str>,
@@ -331,6 +343,7 @@ pub(crate) fn derive_structural_facts(
         .collect()
 }
 
+#[cfg(test)]
 fn locale_group_matches(rule: &LocaleGroupFactRule, release_group: &str) -> bool {
     match rule.match_kind {
         LocaleGroupMatchKind::Exact => rule.matcher.eq_ignore_ascii_case(release_group),
@@ -340,6 +353,7 @@ fn locale_group_matches(rule: &LocaleGroupFactRule, release_group: &str) -> bool
     }
 }
 
+#[cfg(test)]
 fn locale_source_context_matches(
     source_context: LocaleSourceContext,
     projected: &ParsedReleaseMetadata,
@@ -363,10 +377,12 @@ fn locale_source_context_matches(
     }
 }
 
+#[cfg(test)]
 fn is_uhd_quality(quality: Option<&str>) -> bool {
     quality.is_some_and(|quality| quality.contains("2160"))
 }
 
+#[cfg(test)]
 fn derive_facts_from_tokens(
     raw_title: &str,
     normalized_tokens: &[String],
@@ -437,6 +453,7 @@ fn derive_facts_from_tokens(
         .collect()
 }
 
+#[cfg(test)]
 fn has_french_vf2_exclusion(raw_title: &str) -> bool {
     let upper = raw_title.to_ascii_uppercase();
     [
@@ -447,6 +464,7 @@ fn has_french_vf2_exclusion(raw_title: &str) -> bool {
     .any(|pattern| contains_ascii_bounded(&upper, pattern))
 }
 
+#[cfg(test)]
 fn matches_german_subbed(normalized_tokens: &[String]) -> bool {
     for (language_index, language) in normalized_tokens.iter().enumerate() {
         if !matches!(language.as_str(), "GER" | "GERMAN") {
@@ -472,6 +490,7 @@ fn matches_german_subbed(normalized_tokens: &[String]) -> bool {
     false
 }
 
+#[cfg(test)]
 fn contains_ascii_bounded(value: &str, pattern: &str) -> bool {
     value.match_indices(pattern).any(|(start, _)| {
         let end = start + pattern.len();
@@ -481,6 +500,7 @@ fn contains_ascii_bounded(value: &str, pattern: &str) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn project_safe_facts(projected: &mut ParsedReleaseMetadata) {
     for fact in &projected.guide_facts {
         match fact.code.as_str() {
@@ -496,11 +516,13 @@ pub(crate) fn project_safe_facts(projected: &mut ParsedReleaseMetadata) {
     }
 }
 
+#[cfg(test)]
 pub fn detect_blocked_title(raw_title: &str, category_hint: Option<&str>) -> Option<&'static str> {
     let tokens = normalize_raw_title_tokens(raw_title);
     detect_blocked_title_tokens(&tokens, category_hint)
 }
 
+#[cfg(test)]
 pub(crate) fn detect_blocked_title_tokens(
     normalized_tokens: &[String],
     category_hint: Option<&str>,
@@ -518,6 +540,7 @@ pub(crate) fn detect_blocked_title_tokens(
         .map(|rule| rule.code)
 }
 
+#[cfg(test)]
 fn rule_applies(
     rule_facet: RuleFacet,
     rule_category: TitleCategoryScope,
@@ -530,6 +553,7 @@ fn rule_applies(
                 && matches!(rule_category, TitleCategoryScope::Anime))
 }
 
+#[cfg(test)]
 fn blocked_fact_code(code: &str) -> &'static str {
     match code {
         "trash_guides_anime_raws" => "trash.blocked.anime_raws",
@@ -540,6 +564,7 @@ fn blocked_fact_code(code: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn normalize_facet(category_hint: Option<&str>) -> RuleFacet {
     match category_hint
         .map(str::trim)
@@ -552,6 +577,7 @@ fn normalize_facet(category_hint: Option<&str>) -> RuleFacet {
     }
 }
 
+#[cfg(test)]
 fn normalize_scope(category_hint: Option<&str>) -> TitleCategoryScope {
     match category_hint
         .map(str::trim)
@@ -563,6 +589,7 @@ fn normalize_scope(category_hint: Option<&str>) -> TitleCategoryScope {
     }
 }
 
+#[cfg(test)]
 fn normalize_raw_title_tokens(raw_title: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -730,104 +757,8 @@ mod tests {
     }
 
     #[test]
-    fn detects_blocked_titles_with_category_scopes() {
-        assert_eq!(
-            detect_blocked_title("Series.Name.2160p.BiTOR.WEB-DL", Some("series")),
-            Some("trash_guides_lq_release_title")
-        );
-        assert_eq!(
-            detect_blocked_title("Series.Name.2160p.BiTOR.WEB-DL", None),
-            None
-        );
-        assert_eq!(
-            detect_blocked_title("[Asuka-Raws] Anime Episode 01", Some("anime")),
-            Some("trash_guides_anime_raws")
-        );
-        assert_eq!(
-            detect_blocked_title("[Asuka-Raws] Anime Episode 01", None),
-            None
-        );
-
-        let facts = derive_facts("Series.Name.2160p.BiTOR.WEB-DL", Some("series"));
-        assert!(
-            facts
-                .iter()
-                .any(|fact| fact.code == "trash.blocked.lq_release_title")
-        );
-    }
-
-    #[test]
-    fn generated_locale_facts_match_regex_markers_without_component_false_positives() {
-        let vq = derive_facts("Movie.Title.2024.VQ.1080p.WEB-DL", Some("movie"));
-        assert!(
-            vq.iter()
-                .any(|fact| fact.code == "trash.locale.french.marker.vq")
-        );
-        let vfq = derive_facts("Movie.Title.2024.VFQ.1080p.WEB-DL", Some("movie"));
-        assert!(
-            vfq.iter()
-                .any(|fact| fact.code == "trash.locale.french.marker.vfq")
-        );
-        let vff = derive_facts("Movie.Title.2024.VFF.1080p.WEB-DL", Some("movie"));
-        assert!(
-            vff.iter()
-                .any(|fact| fact.code == "trash.locale.french.marker.vff")
-        );
-        let vf2 = derive_facts("Movie.Title.2024.VFF.VFQ.1080p.WEB-DL", Some("movie"));
-        assert!(vf2.iter().all(|fact| {
-            !matches!(
-                fact.code.as_str(),
-                "trash.locale.french.marker.vff" | "trash.locale.french.marker.vfq"
-            )
-        }));
-        let hyphenated = derive_facts("Movie.Title.2024.VFF-VFQ.1080p.WEB-DL", Some("movie"));
-        assert!(hyphenated.iter().any(|fact| {
-            matches!(
-                fact.code.as_str(),
-                "trash.locale.french.marker.vff" | "trash.locale.french.marker.vfq"
-            )
-        }));
-        let german_subbed = derive_facts(
-            "Series.Title.S01E01.German.English.Subbed.1080p.WEB-DL",
-            Some("series"),
-        );
-        assert!(
-            german_subbed
-                .iter()
-                .any(|fact| fact.code == "trash.locale.german.marker.subbed")
-        );
-        for rejected in [
-            "Series.Title.S01E01.German.Dubbed.Subbed.1080p.WEB-DL",
-            "Series.Title.S01E01.German.DL.Subbed.1080p.WEB-DL",
-            "Series.Title.S01E01.Subbed.German.1080p.WEB-DL",
-        ] {
-            assert!(
-                derive_facts(rejected, Some("series"))
-                    .iter()
-                    .all(|fact| fact.code != "trash.locale.german.marker.subbed"),
-                "{rejected}"
-            );
-        }
-        let leading_dub = derive_facts(
-            "Series.Title.S01E01.Dubbed.German.Subbed.1080p.WEB-DL",
-            Some("series"),
-        );
-        assert!(
-            leading_dub
-                .iter()
-                .any(|fact| fact.code == "trash.locale.german.marker.subbed")
-        );
-
-        let ordinary = derive_facts("Series.Title.S01E01.1080p.WEB-DL", Some("series"));
-        assert!(
-            ordinary
-                .iter()
-                .all(|fact| fact.code != "trash.locale.german.marker.dl_undefined")
-        );
-    }
-
-    #[test]
-    fn generated_group_facts_cover_scene_and_locale_lq_groups() {
+    #[allow(deprecated)]
+    fn parser_keeps_ordinary_signals_and_streaming_service_without_guide_facts() {
         let context = crate::ReleaseParseContext {
             facet_hint: crate::ContextFacetHint::Movie,
             title: crate::ContextTitle {
@@ -838,56 +769,46 @@ mod tests {
             imdb_ids: vec![],
             episodes: vec![],
         };
-        let scene = crate::best_parse_for_target(
-            "Movie.Title.2024.1080p.WEB-DL.DDP5.1.H.264-CAKES",
+        let analysis = crate::analyze_release_for_target(
+            "Movie.Title.2024.MAX.WEB-DL.REPACK.H.264-GRP",
             &context,
         );
-        assert!(
-            scene
-                .guide_facts
-                .iter()
-                .any(|fact| fact.code == "trash.scene")
-        );
+        let projected = analysis
+            .best_candidate()
+            .expect("ordinary release parses")
+            .projected
+            .clone();
 
-        let asian_lq = crate::best_parse_for_target(
-            "Movie.Title.2024.1080p.WEB-DL.DDP5.1.H.264-AppleTor",
-            &context,
+        assert_eq!(
+            projected
+                .streaming_service
+                .as_ref()
+                .map(crate::model::StreamingService::as_str),
+            Some("HBO Max")
         );
+        assert!(projected.is_proper_upload);
+        assert!(projected.is_repack);
         assert!(
-            asian_lq
-                .guide_facts
+            projected
+                .normalized_tokens
                 .iter()
-                .any(|fact| fact.code == "trash.locale.asian.lq")
+                .any(|token| token == "MAX")
         );
-
-        let obfuscated = crate::best_parse_for_target(
-            "Movie.Title.2024.1080p.WEB-DL.DDP5.1.H.264-NZBGeek",
-            &context,
-        );
-        assert!(
-            obfuscated
-                .guide_facts
-                .iter()
-                .any(|fact| fact.code == "trash.obfuscated")
-        );
+        assert!(analysis.guide_facts.is_empty());
+        assert!(projected.guide_facts.is_empty());
     }
 
     #[test]
-    fn anchor_index_matches_reference_rule_scans() {
+    fn token_signal_anchor_index_matches_reference_rule_scans() {
         for tokens in [
             vec!["THE", "UPSCALER", "REPACK"],
-            vec!["2160P", "BITOR", "WEB", "DL"],
-            vec!["ASUKA", "RAWS", "1080P"],
+            vec!["PROPER", "HARDCODED", "DUBSONLY"],
             vec!["UNRELATED", "TITLE"],
         ] {
             let tokens = tokens.into_iter().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(
                 detect_token_signals(&tokens),
                 detect_token_signals_reference(&tokens)
-            );
-            assert_eq!(
-                detect_blocked_title_tokens(&tokens, Some("anime")),
-                detect_blocked_title_tokens_reference(&tokens, Some("anime"))
             );
         }
     }
@@ -910,20 +831,5 @@ mod tests {
             }
         }
         matched
-    }
-
-    fn detect_blocked_title_tokens_reference(
-        normalized_tokens: &[String],
-        category_hint: Option<&str>,
-    ) -> Option<&'static str> {
-        let scope = normalize_scope(category_hint);
-        let facet = normalize_facet(category_hint);
-        BLOCKED_TITLE_RULES
-            .iter()
-            .find(|rule| {
-                rule_applies(rule.facet, rule.category, facet, scope)
-                    && pattern_matches(&rule.pattern, normalized_tokens)
-            })
-            .map(|rule| rule.code)
     }
 }

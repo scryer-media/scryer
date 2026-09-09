@@ -26,7 +26,7 @@ use crate::quality_profile::{
     evaluate_against_profile_for_category,
 };
 use crate::release_parser::parse_release_metadata;
-use crate::rules::managed_trash;
+use crate::rules::builtin_trash;
 use crate::rules::user_rule_input::{ReleaseRuntimeInfo, RuleContextInfo, build_rule_input};
 use crate::scoring_weights::build_weights_for_category;
 use crate::trash_scores::{TRASH_PASSTHROUGH_KNEE, normalize_trash_score};
@@ -107,13 +107,29 @@ struct LocaleCase<'a> {
     original_language: Option<&'a str>,
 }
 
+/// Return one optional locale template from the actual bundled pack.
+fn bundled_locale_template(template_id: &str) -> crate::RulePackTemplate {
+    builtin_trash::verified_pack()
+        .expect("bundled TRaSH pack parses")
+        .templates
+        .into_iter()
+        .find(|template| template.id == template_id)
+        .unwrap_or_else(|| panic!("unknown bundled locale template {template_id}"))
+}
+
+/// Return every optional locale template from the actual bundled pack.
+fn bundled_locale_templates() -> Vec<crate::RulePackTemplate> {
+    [FRENCH_VF, FRENCH_VO, FRENCH_VOSTFR, GERMAN, ASIAN]
+        .into_iter()
+        .map(bundled_locale_template)
+        .collect()
+}
+
 /// Run a case through the same two seams production uses: the builtin decision,
-/// then `build_rule_input` into a `UserRulesEngine` carrying one managed pack.
-///
-/// The pack is built with no tag filter, which is the opt-in shape: an
-/// enabled pack applies wherever its facts match.
+/// then `build_rule_input` into a `UserRulesEngine` carrying the selected
+/// bundled locale template.
 fn evaluate_locale_pack(
-    pack_key: &str,
+    template_id: &str,
     case: &LocaleCase<'_>,
 ) -> (Vec<(String, i32)>, QualityProfileDecision) {
     let profile = corpus_profile();
@@ -156,29 +172,33 @@ fn evaluate_locale_pack(
             existing_score: None,
             search_mode: "auto",
             runtime_minutes: Some(101),
+            coverage_total_runtime_minutes: Some(101),
+            coverage_member_runtime_minutes: Some(101),
+            coverage_member_count: Some(1),
             is_filler: false,
         },
         None,
     );
 
-    let pack = managed_trash::managed_trash_rule_packs()
-        .iter()
-        .find(|pack| pack.key == pack_key)
-        .unwrap_or_else(|| panic!("unknown managed pack {pack_key}"));
-    let id = pack_key.replace([':', '-'], "_");
+    let template = bundled_locale_template(template_id);
+    let id = template.id.replace('-', "_");
     let policy = scryer_rules::UserPolicy {
         id: id.clone(),
-        name: pack.name.to_string(),
-        rego_source: scryer_rules::rewrite_package_declaration(&pack.source(None), &id),
+        name: template.title,
+        rego_source: scryer_rules::rewrite_package_declaration(&template.rego_source, &id),
         origin: scryer_rules::PolicyOrigin::System,
         applied_facets: vec![],
     };
     let result = scryer_rules::UserRulesEngine::build(&[policy])
-        .expect("managed pack should compile")
+        .expect("bundled locale template should compile")
         .evaluator()
         .evaluate(&input, category.unwrap_or("movie"))
-        .expect("managed pack should evaluate");
-    assert!(result.errors.is_empty(), "{pack_key}: {:?}", result.errors);
+        .expect("bundled locale template should evaluate");
+    assert!(
+        result.errors.is_empty(),
+        "{template_id}: {:?}",
+        result.errors
+    );
 
     let mut entries = Vec::new();
     for entry in result.entries {
@@ -365,7 +385,7 @@ fn stacked_tie_breakers_can_outweigh_one_compressed_high_band_format() {
     assert!(4 * tie_breaker > german_tier_one);
 }
 
-/// Every `score_entry` a rendered managed pack declares, read straight out of
+/// Every `score_entry` a rendered locale template declares, read straight out of
 /// the generated policy so the corpus never restates a score.
 fn pack_score_entries(source: &str) -> Vec<(String, i32)> {
     source
@@ -388,9 +408,9 @@ fn pack_score_entries(source: &str) -> Vec<(String, i32)> {
 /// need revisiting.
 #[test]
 fn no_shipped_pack_can_currently_stack_its_way_across_the_knee() {
-    for pack in managed_trash::managed_trash_rule_packs() {
-        let entries = pack_score_entries(&pack.source(None));
-        assert!(!entries.is_empty(), "{} emitted no scores", pack.key);
+    for template in bundled_locale_templates() {
+        let entries = pack_score_entries(&template.rego_source);
+        assert!(!entries.is_empty(), "{} emitted no scores", template.id);
 
         let sub_knee_total: i32 = entries
             .iter()
@@ -406,7 +426,7 @@ fn no_shipped_pack_can_currently_stack_its_way_across_the_knee() {
         assert!(
             sub_knee_total < strongest,
             "{}: every sub-knee positive stacked ({sub_knee_total}) already reaches or passes the pack's strongest entry ({strongest}); the documented knee inversion is now live and TRASH_CEILING needs review\n  {entries:?}",
-            pack.key,
+            template.id,
         );
     }
 }
@@ -416,14 +436,14 @@ fn no_shipped_pack_can_currently_stack_its_way_across_the_knee() {
 /// normalization; the guard is that they still land in the right order.
 #[test]
 fn normalization_preserves_each_packs_own_tier_ordering() {
-    for pack in managed_trash::managed_trash_rule_packs() {
-        let entries = pack_score_entries(&pack.source(None));
+    for template in bundled_locale_templates() {
+        let entries = pack_score_entries(&template.rego_source);
         let tier = |name: &str| {
             entries
                 .iter()
                 .find(|(code, _)| code == name)
                 .map(|(_, score)| *score)
-                .unwrap_or_else(|| panic!("{} is missing {name}", pack.key))
+                .unwrap_or_else(|| panic!("{} is missing {name}", template.id))
         };
         let (tier_1, tier_2, tier_3) = (
             tier("trash_tier_1"),
@@ -433,7 +453,7 @@ fn normalization_preserves_each_packs_own_tier_ordering() {
         assert!(
             tier_1 >= tier_2 && tier_2 >= tier_3,
             "{}: tiers reordered after normalization: {tier_1} / {tier_2} / {tier_3}",
-            pack.key,
+            template.id,
         );
     }
 }
@@ -442,11 +462,11 @@ fn normalization_preserves_each_packs_own_tier_ordering() {
 // (c) Locale packs, through the real rules engine, one scenario per pack
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FRENCH_VF: &str = "trash-guides:locale:french-vf";
-const FRENCH_VO: &str = "trash-guides:locale:french-vo";
-const FRENCH_VOSTFR: &str = "trash-guides:locale:french-vostfr";
-const GERMAN: &str = "trash-guides:locale:german";
-const ASIAN: &str = "trash-guides:locale:asian";
+const FRENCH_VF: &str = "trash-guides-french-vf";
+const FRENCH_VO: &str = "trash-guides-french-vo";
+const FRENCH_VOSTFR: &str = "trash-guides-french-vostfr";
+const GERMAN: &str = "trash-guides-german";
+const ASIAN: &str = "trash-guides-asian";
 
 /// MOONLY is a French Movie/Web tier-1 group upstream and carries no entry in
 /// Scryer's native `GROUP_RULES`, so the tier-1 fact is the *only* difference
@@ -659,11 +679,8 @@ fn asian_pack_fires_no_language_veto_for_cjk_audio() {
 
     // The pack's rendered policy carries no language clause at all, which is the
     // membership decision itself rather than a downstream consequence of it.
-    let asian = managed_trash::managed_trash_rule_packs()
-        .iter()
-        .find(|pack| pack.key == ASIAN)
-        .expect("asian pack");
-    assert!(!asian.source(None).contains("trash_lang"));
+    let asian = bundled_locale_template(ASIAN);
+    assert!(!asian.rego_source.contains("trash_lang"));
 }
 
 /// SHiNE is an Asian-guide tier-3 group with no native `GROUP_RULES` entry, so
@@ -864,9 +881,9 @@ fn any_vetoed_release_ranks_below_every_allowed_one() {
     );
 }
 
-/// A managed locale pack's veto has the same dominance, which is the veto
-/// contract's increase in blast radius made visible: the pack is opt-in, and once opted
-/// into it can refuse a release the builtin path was happy with.
+/// A bundled locale template's veto has the same dominance, which is the veto
+/// contract's increase in blast radius made visible: the template is opt-in, and
+/// once opted into it can refuse a release the builtin path was happy with.
 #[test]
 fn a_locale_pack_veto_sinks_a_release_the_builtin_path_allowed() {
     let case = LocaleCase {

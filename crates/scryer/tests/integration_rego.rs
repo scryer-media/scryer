@@ -152,6 +152,7 @@ fn test_input() -> scryer_rules::UserRuleInput {
     scryer_rules::UserRuleInput {
         release: scryer_rules::ReleaseDoc {
             raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265.DDP.5.1-GROUP".to_string(),
+            normalized_tokens: vec![],
             quality: Some("2160P".to_string()),
             source: Some("WEB-DL".to_string()),
             video_codec: Some("H.265".to_string()),
@@ -215,6 +216,8 @@ fn test_input() -> scryer_rules::UserRuleInput {
             allow_upgrades: true,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
+            scoring_persona: "balanced".to_string(),
+            scoring_overrides: Default::default(),
         },
         context: scryer_rules::ContextDoc {
             title_id: Some("test-title-id".to_string()),
@@ -229,6 +232,9 @@ fn test_input() -> scryer_rules::UserRuleInput {
             existing_score: None,
             search_mode: "interactive".to_string(),
             runtime_minutes: Some(120),
+            coverage_total_runtime_minutes: Some(120),
+            coverage_member_runtime_minutes: Some(120),
+            coverage_member_count: Some(1),
             is_anime: false,
             is_filler: false,
         },

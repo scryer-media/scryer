@@ -1,7 +1,7 @@
 use super::*;
 use crate::plugins::plugins::VerifiedRulePack;
 use scryer_domain::{AppPermission, Id, MediaFacet, RulePackInstallation, RulePackMember, RuleSet};
-use scryer_rules::validation::validate_user_rule;
+use scryer_rules::validation::{retired_release_input_fields, validate_user_rule};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +22,103 @@ pub struct TrackedRulePackPreview {
 }
 
 impl AppUseCase {
+    /// Atomically installs the bundled pack and retires saved rules that still
+    /// depend on the removed release input. Existing installations are left to
+    /// their explicit tracked-pack update flow.
+    pub async fn bootstrap_builtin_trash_rule_pack(&self) -> AppResult<()> {
+        let pack = super::builtin_trash::verified_pack()?;
+        let _mutation = self.services.customization.rule_mutation_lock.lock().await;
+        let existing_installation = self
+            .services
+            .customization
+            .rule_sets
+            .get_rule_pack_installation(&pack.registry.id)
+            .await?;
+        let existing = self
+            .services
+            .customization
+            .rule_sets
+            .list_rule_sets()
+            .await?;
+        if let Some(mut installation) = existing_installation {
+            let retired = retired_rules(&existing)?;
+            if retired.is_empty() {
+                let engine = self.prospective_engine(&[], &[]).await?;
+                self.swap_user_rules_engine(engine);
+                return Ok(());
+            }
+            let expected_revision = installation.revision;
+            installation.revision += 1;
+            installation.last_updated = Utc::now();
+            let engine = self.prospective_engine(&retired, &[]).await?;
+            let actor = User::system_execution_actor();
+            let history = history_for(&retired, "retired_input_disabled", &actor.id);
+            if !self
+                .services
+                .customization
+                .rule_sets
+                .apply_rule_pack_installation(
+                    &installation,
+                    Some(expected_revision),
+                    &retired,
+                    &history,
+                )
+                .await?
+            {
+                return Err(stale_pack_revision());
+            }
+            self.swap_user_rules_engine(engine);
+            return Ok(());
+        }
+
+        let (prior, enabled, priorities) = adopted_legacy_locale_members(&existing, &pack)?;
+        let installation = new_installation(&pack);
+        let (installation, mut changed) =
+            prepare_pack_rules(&pack, installation, &prior, &enabled, &priorities)?;
+        for rule in &mut changed {
+            if let Some(existing) = existing.iter().find(|existing| existing.id == rule.id) {
+                preserve_adopted_metadata(rule, existing);
+            }
+        }
+
+        let adopted_ids = prior
+            .iter()
+            .map(|member| member.rule_set_id.as_str())
+            .collect::<BTreeSet<_>>();
+        changed.extend(retired_rules(
+            &existing
+                .into_iter()
+                .filter(|rule| !adopted_ids.contains(rule.id.as_str()))
+                .collect::<Vec<_>>(),
+        )?);
+
+        let engine = self.prospective_engine(&changed, &[]).await?;
+        let actor = User::system_execution_actor();
+        let mut history = history_for(&changed, "builtin_trash_seeded", &actor.id);
+        for change in &mut history {
+            if adopted_ids.contains(change.rule_set_id.as_str()) {
+                change.action = "rule_pack_adopted".to_string();
+            } else if changed.iter().any(|rule| {
+                rule.id == change.rule_set_id && !rule.enabled && rule.disabled_reason.is_some()
+            }) {
+                change.action = "retired_input_disabled".to_string();
+            }
+        }
+        if !self
+            .services
+            .customization
+            .rule_sets
+            .apply_rule_pack_installation(&installation, None, &changed, &history)
+            .await?
+        {
+            return Err(AppError::Validation(
+                "bundled rule pack installation conflicted with another change".to_string(),
+            ));
+        }
+        self.swap_user_rules_engine(engine);
+        Ok(())
+    }
+
     pub async fn list_tracked_rule_packs(
         &self,
         actor: &User,
@@ -298,12 +395,15 @@ impl AppUseCase {
             rego_source: source,
             enabled: original.enabled,
             priority,
+            evaluation_phase: original.evaluation_phase,
+            exclusive_group: original.exclusive_group.clone(),
+            disabled_reason: None,
             applied_facets: facets,
             created_at: now,
             updated_at: now,
             is_managed: false,
             managed_key: None,
-            managed_tag_filter: None,
+            managed_tag_filter: original.managed_tag_filter.clone(),
         };
         let mut disabled_original = original;
         disabled_original.enabled = false;
@@ -395,7 +495,7 @@ impl AppUseCase {
             .await
     }
 
-    async fn prospective_engine(
+    pub(crate) async fn prospective_engine(
         &self,
         changed: &[RuleSet],
         removed: &[String],
@@ -496,7 +596,7 @@ impl AppUseCase {
                 .iter()
                 .find(|existing| existing.id == rule.id)
             {
-                rule.created_at = existing.created_at;
+                preserve_adopted_metadata(rule, existing);
             }
         }
         for member in current.members.iter().filter(|member| {
@@ -544,6 +644,98 @@ fn new_installation(pack: &VerifiedRulePack) -> RulePackInstallation {
         last_error: None,
         members: Vec::new(),
     }
+}
+
+fn adopted_legacy_locale_members(
+    existing: &[RuleSet],
+    pack: &VerifiedRulePack,
+) -> AppResult<(Vec<RulePackMember>, Vec<String>, Vec<(String, i32)>)> {
+    let template_ids = pack
+        .templates
+        .iter()
+        .map(|template| template.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut by_template = BTreeMap::<String, &RuleSet>::new();
+    for rule in existing.iter().filter(|rule| rule.is_managed) {
+        let Some(template_id) = legacy_locale_template_id(rule.managed_key.as_deref()) else {
+            continue;
+        };
+        if !template_ids.contains(template_id) {
+            continue;
+        }
+        if by_template.insert(template_id.to_string(), rule).is_some() {
+            return Err(AppError::Validation(format!(
+                "cannot adopt duplicate legacy locale rules for {template_id}"
+            )));
+        }
+    }
+    let mut enabled = super::builtin_trash::default_template_ids(pack);
+    let mut members = Vec::new();
+    let mut priorities = Vec::new();
+    for (template_id, rule) in by_template {
+        if rule.enabled {
+            enabled.push(template_id.clone());
+        }
+        priorities.push((template_id.clone(), rule.priority));
+        members.push(RulePackMember {
+            template_id,
+            rule_set_id: rule.id.clone(),
+            removed: false,
+        });
+    }
+    Ok((members, enabled, priorities))
+}
+
+fn legacy_locale_template_id(managed_key: Option<&str>) -> Option<&'static str> {
+    match managed_key? {
+        "trash-guides:locale:french" | "trash-guides:locale:french-vf" => {
+            Some("trash-guides-french-vf")
+        }
+        "trash-guides:locale:french-vo" => Some("trash-guides-french-vo"),
+        "trash-guides:locale:french-vostfr" => Some("trash-guides-french-vostfr"),
+        "trash-guides:locale:german" => Some("trash-guides-german"),
+        "trash-guides:locale:asian" => Some("trash-guides-asian"),
+        _ => None,
+    }
+}
+
+fn preserve_adopted_metadata(adopted: &mut RuleSet, legacy: &RuleSet) {
+    adopted.created_at = legacy.created_at;
+    if legacy.is_managed {
+        adopted.is_managed = true;
+        adopted.applied_facets = legacy.applied_facets.clone();
+        adopted.managed_key = legacy.managed_key.clone();
+        adopted.managed_tag_filter = legacy.managed_tag_filter.clone();
+    }
+}
+
+fn retired_rules(existing: &[RuleSet]) -> AppResult<Vec<RuleSet>> {
+    existing
+        .iter()
+        .filter_map(|rule| {
+            let fields = retired_release_input_fields(&rule.rego_source)
+                .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")));
+            match fields {
+                Ok(fields) if fields.is_empty() => None,
+                Err(_) if !rule.enabled => None,
+                Ok(_) => {
+                    const REASON: &str = "uses retired input.release.guide_facts; update the rule source before enabling it";
+                    if !rule.enabled && rule.disabled_reason.as_deref().is_some_and(|reason| reason.contains(REASON)) {
+                        return None;
+                    }
+                    let mut retired = rule.clone();
+                    retired.enabled = false;
+                    retired.disabled_reason = Some(match rule.disabled_reason.as_deref() {
+                        Some(reason) if !reason.is_empty() => format!("{reason}; {REASON}"),
+                        _ => REASON.to_string(),
+                    });
+                    retired.updated_at = Utc::now();
+                    Some(Ok(retired))
+                }
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .collect()
 }
 
 fn rule_pack_preview(
@@ -654,6 +846,9 @@ fn prepare_pack_rules(
             enabled: old.is_some_and(|_| !reappearing && enabled.contains(&template.id))
                 || old.is_none() && enabled.contains(&template.id),
             priority: priorities.get(&template.id).copied().unwrap_or(0),
+            evaluation_phase: template.evaluation_phase,
+            exclusive_group: template.exclusive_group.clone(),
+            disabled_reason: None,
             applied_facets: facets,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -718,4 +913,51 @@ fn history_for(rules: &[RuleSet], action: &str, actor_id: &str) -> Vec<RuleSetHi
 }
 fn stale_pack_revision() -> AppError {
     AppError::Validation("tracked rule pack changed; reload and retry".to_string())
+}
+
+#[cfg(test)]
+mod builtin_trash_tests {
+    use super::*;
+
+    #[test]
+    fn adopting_a_managed_locale_preserves_its_scope_and_identity() {
+        let now = Utc::now();
+        let legacy = RuleSet {
+            id: "legacy-german".to_string(),
+            name: "Legacy German".to_string(),
+            description: String::new(),
+            rego_source: "package ignored".to_string(),
+            enabled: true,
+            priority: 17,
+            evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
+            exclusive_group: None,
+            disabled_reason: None,
+            applied_facets: vec![],
+            created_at: now,
+            updated_at: now,
+            is_managed: true,
+            managed_key: Some("trash-guides:locale:german".to_string()),
+            managed_tag_filter: Some(vec!["locale:german".to_string()]),
+        };
+        let pack = super::super::builtin_trash::verified_pack().expect("bundled pack parses");
+        let (members, enabled, priorities) =
+            adopted_legacy_locale_members(std::slice::from_ref(&legacy), &pack)
+                .expect("legacy locale adopts");
+
+        assert_eq!(members[0].template_id, "trash-guides-german");
+        assert_eq!(members[0].rule_set_id, legacy.id);
+        assert!(enabled.contains(&"trash-guides-german".to_string()));
+        assert_eq!(priorities, vec![("trash-guides-german".to_string(), 17)]);
+
+        let mut adopted = legacy.clone();
+        adopted.is_managed = false;
+        adopted.managed_key = None;
+        adopted.managed_tag_filter = None;
+        adopted.applied_facets = vec![];
+        preserve_adopted_metadata(&mut adopted, &legacy);
+        assert!(adopted.is_managed);
+        assert_eq!(adopted.managed_key, legacy.managed_key);
+        assert_eq!(adopted.managed_tag_filter, legacy.managed_tag_filter);
+        assert_eq!(adopted.applied_facets, legacy.applied_facets);
+    }
 }

@@ -336,26 +336,19 @@ pub(crate) fn build_import_profile_decision(
     size_bytes: Option<i64>,
     has_existing_file: bool,
 ) -> crate::QualityProfileDecision {
-    let weights = crate::scoring_weights::build_weights_for_category(
-        &profile.criteria.scoring_persona,
-        &profile.criteria.scoring_overrides,
-        Some(category_hint),
-    );
-    let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
+    let mut decision = crate::quality_profile::evaluate_profile_requirements(
         profile,
         parsed,
         has_existing_file,
-        &weights,
         Some(category_hint),
     );
-    crate::quality_profile::apply_size_scoring_for_category_with_remux_preference(
+    crate::quality_profile::apply_size_requirement(
         &mut decision,
+        profile,
         parsed,
         size_bytes,
         Some(category_hint),
         size_basis,
-        profile.criteria.prefer_remux,
-        &weights,
     );
     decision
 }
@@ -815,6 +808,9 @@ pub(crate) async fn probe_and_validate(
                 existing_score,
                 search_mode: "post_download",
                 runtime_minutes: title.runtime_minutes,
+                coverage_total_runtime_minutes: title.runtime_minutes,
+                coverage_member_runtime_minutes: title.runtime_minutes,
+                coverage_member_count: Some(1),
                 is_filler,
             },
             Some(rule_file_doc.clone()),
@@ -2099,6 +2095,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "post_download",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,

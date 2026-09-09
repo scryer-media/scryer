@@ -654,7 +654,7 @@ fn canonical_episode_import_parse_matches_grab_time_parse_for_aliased_title() {
 }
 
 #[test]
-fn canonical_import_parse_derives_title_facet_guide_facts() {
+fn canonical_import_parse_exposes_normalized_tokens_for_rego_detection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file_path = dir.path().join("4f8e2c7a91b6d3e0.mkv");
     std::fs::write(&file_path, b"episode").expect("write file");
@@ -663,14 +663,6 @@ fn canonical_import_parse_derives_title_facet_guide_facts() {
     completed.release_name = Some(release_title.to_string());
     let title = titled(MediaFacet::Series, "Test Title", Some(2024));
 
-    // The context-free parse carries no facet-specific guide facts; the
-    // canonical (grab-equivalent) parse does, in a single pass.
-    assert!(
-        !crate::parse_release_metadata(release_title)
-            .guide_facts
-            .iter()
-            .any(|fact| fact.code == "trash.blocked.lq_release_title")
-    );
     let parsed = build_augmented_episode_import_metadata_for_title(
         &file_path,
         &observation_evidence(&completed),
@@ -679,9 +671,37 @@ fn canonical_import_parse_derives_title_facet_guide_facts() {
     );
     assert!(
         parsed
-            .guide_facts
+            .normalized_tokens
             .iter()
-            .any(|fact| fact.code == "trash.blocked.lq_release_title")
+            .any(|token| token == "BITOR")
+    );
+
+    let normalized_token_rule = r#"
+package scryer.rules.user.normalized_token_detection
+import rego.v1
+
+score_entry["bitor_detection"] := 1 if {
+    "BITOR" in input.release.normalized_tokens
+}
+"#;
+    assert!(
+        scryer_rules::validation::validate_user_rule(
+            normalized_token_rule,
+            "normalized_token_detection",
+        )
+        .expect("normalized-token rule validates")
+        .valid
+    );
+    assert_eq!(
+        scryer_rules::validation::retired_release_input_fields(
+            r#"package scryer.rules.user.legacy
+import rego.v1
+
+score_entry["legacy"] := 1 if { input.release.guide_facts != [] }
+"#,
+        )
+        .expect("legacy source parses"),
+        vec!["input.release.guide_facts"],
     );
 }
 
@@ -1010,9 +1030,8 @@ fn title_evidence_candidates_from_video_files_uses_immediate_parent_for_obfuscat
         release_dir.join("aUUKqrO833LbSr7VlByumnR24y7ULADpVJ7K0FTnPhPMqpp0KIIaLSLYXJmyjm.mkv");
     std::fs::write(&file_path, b"movie").expect("write file");
 
-    let candidates = title_evidence_candidates_from_video_files(&[
-        ImportVideoFile::physical(file_path),
-    ]);
+    let candidates =
+        title_evidence_candidates_from_video_files(&[ImportVideoFile::physical(file_path)]);
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(
@@ -1030,9 +1049,8 @@ fn title_evidence_candidates_from_video_files_prefers_usable_file_name() {
     let file_path = release_dir.join("Paper.Lantern.2012.1080p.BluRay.x264-GRP.mkv");
     std::fs::write(&file_path, b"movie").expect("write file");
 
-    let candidates = title_evidence_candidates_from_video_files(&[
-        ImportVideoFile::physical(file_path),
-    ]);
+    let candidates =
+        title_evidence_candidates_from_video_files(&[ImportVideoFile::physical(file_path)]);
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].normalized_title, "PAPER LANTERN");
@@ -3067,7 +3085,9 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     std::fs::copy(&video_fixture, &tiny_extra).expect("copy extra video fixture");
     // `EP04` in a movie's own name is installment shorthand, not an episode
     // label: a movie preview must never turn it into an episode suggestion.
-    let installment = dir.path().join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
+    let installment = dir
+        .path()
+        .join("Synthetic.Feature.EP04.Subtitle.2001.1080p.mkv");
     std::fs::copy(&video_fixture, &installment).expect("copy installment video fixture");
     let mut completed = test_completed_download("Manual.Movie.2024.1080p.WEB-DL", dir.path());
     completed.release_name = Some("Manual.Movie.2024.1080p.WEB-DL".to_string());

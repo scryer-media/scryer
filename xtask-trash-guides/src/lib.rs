@@ -3489,7 +3489,32 @@ fn render_quality_output(
         rust_str(source_revision)
     )?;
     writeln!(output)?;
-    writeln!(output, "pub static GROUP_RULES: &[GroupRule] = &[")?;
+    writeln!(
+        output,
+        "pub static KNOWN_RELEASE_GROUP_RULES: &[KnownReleaseGroupRule] = &["
+    )?;
+    for (matcher, match_kind) in catalog
+        .group_rules
+        .iter()
+        .map(|rule| (rule.key.matcher.as_str(), rule.key.match_kind))
+        .collect::<BTreeSet<_>>()
+    {
+        writeln!(
+            output,
+            "    KnownReleaseGroupRule {{ matcher: {}, match_kind: GroupMatchKind::{} }},",
+            rust_str(matcher),
+            match match_kind {
+                GroupMatchKindSpec::Exact => "Exact",
+                GroupMatchKindSpec::Prefix => "Prefix",
+            },
+        )?;
+    }
+    writeln!(output, "];\n")?;
+
+    writeln!(
+        output,
+        "#[cfg(test)]\npub static GROUP_RULES: &[GroupRule] = &["
+    )?;
     for rule in &catalog.group_rules {
         writeln!(
             output,
@@ -3503,64 +3528,6 @@ fn render_quality_output(
             render_tier(rule.key.tier),
             render_facet(rule.key.facet),
             render_context(rule.key.context),
-        )?;
-    }
-    writeln!(output, "];\n")?;
-
-    writeln!(
-        output,
-        "pub static TRASH_FACT_SCORES: &[TrashFactScore] = &["
-    )?;
-    for row in collect_fact_scores(catalog) {
-        writeln!(
-            output,
-            "    TrashFactScore {{ code: {}, app: {}, score_set: {}, score: {} }},",
-            rust_str(&row.code),
-            rust_str(&row.app),
-            rust_str(&row.score_set),
-            row.score,
-        )?;
-    }
-    writeln!(output, "];\n")?;
-
-    writeln!(
-        output,
-        "pub static TRASH_SCORE_SET_VETO_MAGNITUDES: &[(&str, i64)] = &["
-    )?;
-    for (score_set, magnitude) in score_set_veto_magnitudes(records) {
-        writeln!(output, "    ({}, {magnitude}),", rust_str(&score_set))?;
-    }
-    writeln!(output, "];\n")?;
-
-    writeln!(
-        output,
-        "pub static TRASH_LANGUAGE_RULES: &[TrashLanguageRule] = &["
-    )?;
-    for rule in &catalog.language_rules {
-        let conditions = rule
-            .key
-            .conditions
-            .iter()
-            .map(|condition| {
-                format!(
-                    "TrashLanguageCondition {{ language: {}, negate: {}, required: {} }}",
-                    match &condition.language {
-                        LanguageConditionSpec::Named(code) =>
-                            format!("TrashLanguage::Named({})", rust_str(code)),
-                        LanguageConditionSpec::Original => "TrashLanguage::Original".to_string(),
-                    },
-                    condition.negate,
-                    condition.required,
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(
-            output,
-            "    TrashLanguageRule {{ code: {}, app: {}, stem: {}, conditions: &[{conditions}] }},",
-            rust_str(&rule.key.code),
-            rust_str(&rule.key.app),
-            rust_str(&rule.key.stem),
         )?;
     }
     writeln!(output, "];\n")?;
@@ -3596,7 +3563,10 @@ fn render_parser_output(catalog: &DistilledCatalog, source_revision: &str) -> Re
     }
     writeln!(output, "];\n")?;
 
-    writeln!(output, "pub static FACT_RULES: &[FactRule] = &[")?;
+    writeln!(
+        output,
+        "#[cfg(test)]\npub static FACT_RULES: &[FactRule] = &["
+    )?;
     for rule in &catalog.fact_rules {
         writeln!(
             output,
@@ -3614,7 +3584,7 @@ fn render_parser_output(catalog: &DistilledCatalog, source_revision: &str) -> Re
 
     writeln!(
         output,
-        "pub static LOCALE_GROUP_FACT_RULES: &[LocaleGroupFactRule] = &["
+        "#[cfg(test)]\npub static LOCALE_GROUP_FACT_RULES: &[LocaleGroupFactRule] = &["
     )?;
     for rule in &catalog.locale_group_fact_rules {
         writeln!(
@@ -3634,7 +3604,7 @@ fn render_parser_output(catalog: &DistilledCatalog, source_revision: &str) -> Re
 
     writeln!(
         output,
-        "pub static NO_RELEASE_GROUP_FACT_FACETS: &[RuleFacet] = &["
+        "#[cfg(test)]\npub static NO_RELEASE_GROUP_FACT_FACETS: &[RuleFacet] = &["
     )?;
     for facet in &catalog.no_release_group_facets {
         writeln!(output, "    RuleFacet::{},", render_facet(*facet))?;
@@ -3666,7 +3636,7 @@ fn render_parser_output(catalog: &DistilledCatalog, source_revision: &str) -> Re
 
     writeln!(
         output,
-        "pub static BLOCKED_TITLE_RULES: &[BlockedTitleRule] = &["
+        "#[cfg(test)]\npub static BLOCKED_TITLE_RULES: &[BlockedTitleRule] = &["
     )?;
     for rule in &catalog.blocked_title_rules {
         for provenance in &rule.provenance {

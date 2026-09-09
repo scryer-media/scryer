@@ -26,16 +26,15 @@ fn movie_profile() -> QualityProfile {
 
 fn ctx<'a>(
     profile: &'a QualityProfile,
-    weights: &'a crate::scoring_weights::ScoringWeights,
+    _weights: &'a crate::scoring_weights::ScoringWeights,
     tags: &'a [String],
 ) -> ScoringContext<'a> {
     ScoringContext {
         profile,
-        weights,
         required_audio_languages: &[],
         category: "movie",
         size_basis: CoverageSizeBasis::default(),
-        rules: None,
+        rules: Some(crate::rules::builtin_trash::baseline_engine()),
         title_id: None,
         library_name: None,
         original_language: None,
@@ -363,6 +362,46 @@ fn large_analyzed_swing_is_contradicted_and_clamped() {
     );
 }
 
+#[test]
+fn size_contradictions_require_comparable_facts_even_without_scoring_rules() {
+    let profile = movie_profile();
+    let weights = balanced_weights();
+    let mut context = ctx(&profile, &weights, &[]);
+    context.rules = None;
+    for (claim, actual, contradicts) in [
+        (Some(8 * GIB), 2 * GIB, false),
+        (Some(8 * GIB), 2 * GIB - 1, true),
+        (Some(GIB), 4 * GIB, false),
+        (Some(GIB), 4 * GIB + 1, true),
+        (None, GIB, false),
+        (Some(0), GIB, false),
+        (Some(-1), GIB, false),
+        (Some(8 * GIB), 0, false),
+    ] {
+        let mut evidence = announced(8.0).with_analysis(analyzed(1.0, None));
+        evidence.announced_size_bytes = claim;
+        evidence.analyzed.as_mut().unwrap().actual_size_bytes = actual;
+        let scored = score_release(&evidence, &context);
+        assert_eq!(
+            matches!(scored.truth_verdict, TruthVerdict::Contradicted { .. }),
+            contradicts,
+            "claim={claim:?}, actual={actual}: {:?}",
+            scored.truth_verdict
+        );
+        assert_eq!(
+            scored.truth_variance, 0,
+            "facts do not invent score contributions"
+        );
+    }
+    context.size_basis = CoverageSizeBasis::aggregate(Some(540), Some(45), 12);
+    let scored = score_release(&announced(8.0).with_analysis(analyzed(1.0, None)), &context);
+    assert_eq!(
+        scored.truth_verdict,
+        TruthVerdict::Consistent,
+        "a pack's announced bytes are not comparable to one landed member"
+    );
+}
+
 /// A small, honest difference is a variance, not a contradiction, and it lands
 /// in the persisted bar unclamped.
 #[test]
@@ -603,17 +642,16 @@ fn series_profile() -> QualityProfile {
 
 fn episode_ctx<'a>(
     profile: &'a QualityProfile,
-    weights: &'a crate::scoring_weights::ScoringWeights,
+    _weights: &'a crate::scoring_weights::ScoringWeights,
     tags: &'a [String],
     size_basis: CoverageSizeBasis,
 ) -> ScoringContext<'a> {
     ScoringContext {
         profile,
-        weights,
         required_audio_languages: &[],
         category: "series",
         size_basis,
-        rules: None,
+        rules: Some(crate::rules::builtin_trash::baseline_engine()),
         title_id: None,
         library_name: None,
         original_language: None,
@@ -1324,7 +1362,20 @@ fn rule_engine(id: &str, source: &str) -> scryer_rules::UserRulesEngine {
         origin: scryer_rules::PolicyOrigin::User,
         applied_facets: vec!["movie".to_string()],
     };
-    scryer_rules::UserRulesEngine::build(&[policy]).expect("rule fixture should compile")
+    rule_engine_with_builtin_baseline(vec![policy])
+}
+
+fn rule_engine_with_builtin_baseline(
+    policies: Vec<scryer_rules::UserPolicy>,
+) -> scryer_rules::UserRulesEngine {
+    let mut all_policies = crate::rules::builtin_trash::baseline_policies();
+    let baseline_ids = all_policies
+        .iter()
+        .map(|policy| policy.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    all_policies.extend(policies);
+    scryer_rules::UserRulesEngine::build_with_baseline_rules(&all_policies, &baseline_ids)
+        .expect("bundled baseline and rule fixture should compile")
 }
 
 #[test]
@@ -1405,7 +1456,7 @@ fn recoverable_scores_survive_analysis_and_incumbent_rederivation() {
                 applied_facets: vec!["movie".into()],
             },
         ];
-        let engine = scryer_rules::UserRulesEngine::build(&policies).unwrap();
+        let engine = rule_engine_with_builtin_baseline(policies.to_vec());
         let mut context = ctx(&profile, &weights, &[]);
         let baseline = score_release(&evidence, &context);
         context.rules = Some(&engine);

@@ -47,13 +47,6 @@ pub(crate) struct AnalysisInputs<'a> {
 }
 
 pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis {
-    let category_hint = match inputs.target.facet_hint {
-        ContextFacetHint::Movie => Some("movie"),
-        ContextFacetHint::Series => Some("series"),
-        ContextFacetHint::Anime => Some("anime"),
-        ContextFacetHint::Unknown => None,
-    };
-    let facts = crate::trash_guides::derive_facts(inputs.raw_input, category_hint);
     let mut lexed = lex_lossless(inputs.sanitized_input);
     // A fused episode label (`EP01`, `S01EP01`, `EPISODE07`) is rewritten to the
     // canonical `E01` / `S01E01` shape before annotation so that every downstream
@@ -97,19 +90,6 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         inputs.parser_version,
     );
     for candidate in &mut candidates {
-        let mut candidate_facts = facts.clone();
-        candidate_facts.extend(crate::trash_guides::derive_locale_group_facts(
-            &candidate.projected,
-            category_hint,
-        ));
-        candidate_facts.extend(crate::trash_guides::derive_structural_facts(
-            &candidate.projected,
-            category_hint,
-        ));
-        candidate_facts.sort();
-        candidate_facts.dedup();
-        candidate.projected.guide_facts = candidate_facts;
-        crate::trash_guides::project_safe_facts(&mut candidate.projected);
         if unknown_target_has_episodic_identity(candidate) {
             candidate.projected.disposition = ParseDisposition::Unparseable;
             candidate.projected.parse_confidence = 0.0;
@@ -280,15 +260,10 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         best_candidate.projected.scoring_model_version = SCORING_MODEL_VERSION;
     }
 
-    let analysis_facts = best_candidate_index
-        .and_then(|index| candidates.get(index))
-        .map(|candidate| candidate.projected.guide_facts.clone())
-        .unwrap_or(facts);
-
     ReleaseParseAnalysis {
         raw_input: inputs.raw_input.to_string(),
         sanitized_input: inputs.sanitized_input.to_string(),
-        guide_facts: analysis_facts,
+        guide_facts: Vec::new(),
         parse_hints,
         tokens: lexed.tokens,
         annotations,
@@ -4446,6 +4421,10 @@ fn build_candidate(
     let projected = ParsedReleaseMetadata {
         raw_title: raw_input.to_string(),
         guide_facts: Vec::new(),
+        normalized_tokens: tokens
+            .iter()
+            .map(|token| token.normalized.clone())
+            .collect(),
         normalized_title,
         normalized_title_variants,
         release_group: release_group.clone(),

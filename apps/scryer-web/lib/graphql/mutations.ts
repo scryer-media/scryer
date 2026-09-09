@@ -2251,6 +2251,9 @@ export const createRuleSetMutation = `mutation CreateRuleSet($input: CreateRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2268,6 +2271,9 @@ export const updateRuleSetMutation = `mutation UpdateRuleSet($input: UpdateRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2291,6 +2297,9 @@ export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey

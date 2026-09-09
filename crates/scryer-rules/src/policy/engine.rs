@@ -217,6 +217,17 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         input: &F::Input,
         ctx: &F::EvalContext,
     ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
+        self.evaluate_policies_where(input, ctx, |_| true)
+    }
+
+    /// Evaluate a selected phase using the same prepared runtime and error
+    /// handling as a complete pass. The input is replaced between phases.
+    pub(crate) fn evaluate_policies_where(
+        &mut self,
+        input: &F::Input,
+        ctx: &F::EvalContext,
+        selected: impl Fn(&F::RuleExtra) -> bool,
+    ) -> Result<EvalOutcome<F::Decision, F::EvalError>, RulesError> {
         let mut outcome = EvalOutcome::default();
 
         if self.rules.is_empty() {
@@ -236,7 +247,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
         self.engine.set_input(document.into());
 
         for rule in &self.rules {
-            if !F::applies(&rule.extra, ctx) {
+            if !selected(&rule.extra) || !F::applies(&rule.extra, ctx) {
                 continue;
             }
 

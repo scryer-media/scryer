@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult, RuleSetHistoryChange, RuleSetRepository};
-use scryer_domain::{Id, MediaFacet, RulePackInstallation, RulePackMember, RuleSet};
+use scryer_domain::{
+    Id, MediaFacet, RuleEvaluationPhase, RulePackInstallation, RulePackMember, RuleSet,
+};
 use sqlx::Row;
 use std::sync::Arc;
 
@@ -56,8 +58,8 @@ impl RuleSetRepository for RuleSetStore {
             "INSERT INTO rule_sets
                 (id, name, description, rego_source, enabled, priority,
                  applied_facets, created_at, updated_at, is_managed, managed_key,
-                 managed_tag_filter)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                 managed_tag_filter, evaluation_phase, exclusive_group, disabled_reason)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             args,
         )
         .await
@@ -71,7 +73,8 @@ impl RuleSetRepository for RuleSetStore {
             "UPDATE rule_sets
                 SET name = {}, description = {}, rego_source = {}, enabled = {},
                     priority = {}, applied_facets = {}, updated_at = {},
-                    is_managed = {}, managed_key = {}, managed_tag_filter = {}
+                    is_managed = {}, managed_key = {}, managed_tag_filter = {},
+                    evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}
               WHERE id = {}",
             vec![
                 args[1].clone(),
@@ -84,6 +87,9 @@ impl RuleSetRepository for RuleSetStore {
                 args[9].clone(),
                 args[10].clone(),
                 args[11].clone(),
+                args[12].clone(),
+                args[13].clone(),
+                args[14].clone(),
                 args[0].clone(),
             ],
         )
@@ -403,22 +409,27 @@ impl RuleSetRepository for RuleSetStore {
 }
 
 const RULE_SET_COLUMNS: &str = "id, name, description, rego_source, enabled, priority,
-    applied_facets, created_at, updated_at, is_managed, managed_key, managed_tag_filter";
+    applied_facets, created_at, updated_at, is_managed, managed_key, managed_tag_filter,
+    evaluation_phase, exclusive_group, disabled_reason";
 
 const UPSERT_RULE_SET_SQL: &str = "INSERT INTO rule_sets
     (id, name, description, rego_source, enabled, priority, applied_facets, created_at,
-     updated_at, is_managed, managed_key, managed_tag_filter)
- VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+     updated_at, is_managed, managed_key, managed_tag_filter, evaluation_phase,
+     exclusive_group, disabled_reason)
+ VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
  ON CONFLICT(id) DO UPDATE SET
     name = excluded.name, description = excluded.description, rego_source = excluded.rego_source,
     enabled = excluded.enabled, priority = excluded.priority, applied_facets = excluded.applied_facets,
     updated_at = excluded.updated_at, is_managed = excluded.is_managed,
-    managed_key = excluded.managed_key, managed_tag_filter = excluded.managed_tag_filter";
+    managed_key = excluded.managed_key, managed_tag_filter = excluded.managed_tag_filter,
+    evaluation_phase = excluded.evaluation_phase, exclusive_group = excluded.exclusive_group,
+    disabled_reason = excluded.disabled_reason";
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO rule_sets
     (id, name, description, rego_source, enabled, priority, applied_facets, created_at,
-     updated_at, is_managed, managed_key, managed_tag_filter)
- VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     updated_at, is_managed, managed_key, managed_tag_filter, evaluation_phase,
+     exclusive_group, disabled_reason)
+ VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 async fn fetch_rule_sets(
     exec: SqlExec<'_, '_>,
@@ -474,6 +485,9 @@ fn rule_set_args(rule_set: &RuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Bool(rule_set.is_managed),
         SqlArg::OptText(rule_set.managed_key.clone()),
         managed_tag_filter_arg(rule_set.managed_tag_filter.as_deref())?,
+        SqlArg::Text(rule_set.evaluation_phase.as_storage_str().to_string()),
+        SqlArg::OptText(rule_set.exclusive_group.clone()),
+        SqlArg::OptText(rule_set.disabled_reason.clone()),
     ])
 }
 
@@ -493,6 +507,9 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RuleSet> {
         rego_source: row.text("rego_source")?,
         enabled: row.bool("enabled")?,
         priority: row.i32("priority")?,
+        evaluation_phase: evaluation_phase(row)?,
+        exclusive_group: row.opt_text("exclusive_group")?,
+        disabled_reason: row.opt_text("disabled_reason")?,
         applied_facets: applied_facets(row)?,
         created_at: timestamp_or_now(row, "created_at")?,
         updated_at: timestamp_or_now(row, "updated_at")?,
@@ -500,6 +517,12 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RuleSet> {
         managed_key: row.opt_text("managed_key")?,
         managed_tag_filter: managed_tag_filter(row)?,
     })
+}
+
+fn evaluation_phase(row: &SqlRow) -> AppResult<RuleEvaluationPhase> {
+    let value = row.text("evaluation_phase")?;
+    RuleEvaluationPhase::from_storage_str(&value)
+        .ok_or_else(|| AppError::Repository(format!("invalid rule set evaluation phase: {value}")))
 }
 
 fn managed_tag_filter(row: &SqlRow) -> AppResult<Option<Vec<String>>> {
@@ -607,4 +630,215 @@ async fn insert_rule_set_history(
         .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+
+    use super::*;
+
+    const RULE_SET_MIGRATIONS: &[&str] = &[
+        include_str!("../../../scryer/src/db/migrations/0029_rule_sets.sql"),
+        include_str!("../../../scryer/src/db/migrations/0060_managed_rule_sets.sql"),
+        include_str!("../../../scryer/src/db/migrations/0149_rule_set_managed_tag_filter.sql"),
+        include_str!("../../../scryer/src/db/migrations/0224_tracked_rule_packs.sql"),
+    ];
+    const METADATA_MIGRATION: &str =
+        include_str!("../../../scryer/src/db/migrations/0228_rule_set_evaluation_metadata.sql");
+
+    async fn apply_migration(pool: &SqlitePool, migration: &'static str) {
+        for statement in migration
+            .split(';')
+            .map(str::trim)
+            .filter(|sql| !sql.is_empty())
+        {
+            sqlx::query(statement)
+                .execute(pool)
+                .await
+                .expect("rule-set migration should apply");
+        }
+    }
+
+    async fn store(with_metadata: bool) -> (RuleSetStore, SqlitePool) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        for migration in RULE_SET_MIGRATIONS {
+            apply_migration(&pool, migration).await;
+        }
+        if with_metadata {
+            apply_migration(&pool, METADATA_MIGRATION).await;
+        }
+        (
+            RuleSetStore::new(StoreDatastore::sqlite(
+                pool.clone(),
+                Arc::new(tokio::sync::Mutex::new(())),
+            )),
+            pool,
+        )
+    }
+
+    fn rule_set(source: &str) -> RuleSet {
+        let now = Utc::now();
+        RuleSet {
+            id: "rule-1".to_string(),
+            name: "Managed rule".to_string(),
+            description: "metadata fixture".to_string(),
+            rego_source: source.to_string(),
+            enabled: false,
+            priority: 7,
+            evaluation_phase: RuleEvaluationPhase::Baseline,
+            exclusive_group: Some("locale".to_string()),
+            disabled_reason: Some("retired input.release.guide_facts".to_string()),
+            applied_facets: vec![MediaFacet::Movie],
+            created_at: now,
+            updated_at: now,
+            is_managed: true,
+            managed_key: Some("trash-guides:locale:fixture".to_string()),
+            managed_tag_filter: Some(vec!["fr".to_string()]),
+        }
+    }
+
+    fn installation(revision: i64) -> RulePackInstallation {
+        RulePackInstallation {
+            pack_id: "pack-1".to_string(),
+            name: "Fixture pack".to_string(),
+            version: "1.0.0".to_string(),
+            digest: "sha256:fixture".to_string(),
+            auto_update: true,
+            revision,
+            last_updated: Utc::now(),
+            last_error: None,
+            members: vec![RulePackMember {
+                template_id: "template-1".to_string(),
+                rule_set_id: "rule-1".to_string(),
+                removed: false,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_rule_set_metadata_round_trips_through_tracked_pack_apply() {
+        let (store, pool) = store(true).await;
+        let source_v1 = "package scryer.rules.user.rule_1\nscore_entry[\"v1\"] := 1";
+        let initial = rule_set(source_v1);
+        assert!(
+            store
+                .apply_rule_pack_installation(
+                    &installation(1),
+                    None,
+                    std::slice::from_ref(&initial),
+                    &[RuleSetHistoryChange {
+                        rule_set_id: initial.id.clone(),
+                        action: "created".to_string(),
+                        rego_source: Some(source_v1.to_string()),
+                        actor_id: Some("system".to_string()),
+                    }],
+                )
+                .await
+                .expect("pack install should persist")
+        );
+
+        let persisted = store
+            .get_rule_set(&initial.id)
+            .await
+            .expect("rule lookup should succeed")
+            .expect("rule should exist");
+        assert_eq!(persisted, initial);
+
+        let source_v2 = "package scryer.rules.user.rule_1\nscore_entry[\"v2\"] := 2";
+        let mut updated = initial.clone();
+        updated.rego_source = source_v2.to_string();
+        updated.disabled_reason = None;
+        updated.updated_at = Utc::now();
+        assert!(
+            store
+                .apply_rule_pack_installation(
+                    &installation(2),
+                    Some(1),
+                    std::slice::from_ref(&updated),
+                    &[RuleSetHistoryChange {
+                        rule_set_id: updated.id.clone(),
+                        action: "updated".to_string(),
+                        rego_source: Some(source_v1.to_string()),
+                        actor_id: Some("system".to_string()),
+                    }],
+                )
+                .await
+                .expect("pack update should persist")
+        );
+
+        assert_eq!(
+            store
+                .get_rule_set(&updated.id)
+                .await
+                .expect("rule lookup should succeed"),
+            Some(updated),
+        );
+        let history = sqlx::query_scalar::<_, String>(
+            "SELECT rego_source FROM rule_set_history WHERE rule_set_id = ? ORDER BY created_at, id",
+        )
+        .bind("rule-1")
+        .fetch_all(&pool)
+        .await
+        .expect("history should load");
+        assert_eq!(history, vec![source_v1.to_string(), source_v1.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0228_defaults_old_rows_and_rejects_unknown_phases() {
+        let (store, pool) = store(false).await;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO rule_sets
+             (id, name, description, rego_source, enabled, priority, applied_facets,
+              created_at, updated_at, is_managed, managed_key, managed_tag_filter)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("old-rule")
+        .bind("Old rule")
+        .bind("")
+        .bind("package scryer.rules.user.old_rule")
+        .bind(true)
+        .bind(0_i32)
+        .bind("[]")
+        .bind(&now)
+        .bind(&now)
+        .bind(false)
+        .bind(Option::<String>::None)
+        .bind(Option::<String>::None)
+        .execute(&pool)
+        .await
+        .expect("pre-0229 row should insert");
+
+        apply_migration(&pool, METADATA_MIGRATION).await;
+        let old = store
+            .get_rule_set("old-rule")
+            .await
+            .expect("old row should load after migration")
+            .expect("old row should exist");
+        assert_eq!(old.evaluation_phase, RuleEvaluationPhase::Additional);
+        assert_eq!(old.exclusive_group, None);
+        assert_eq!(old.disabled_reason, None);
+
+        sqlx::query("UPDATE rule_sets SET evaluation_phase = 'future_phase' WHERE id = ?")
+            .bind("old-rule")
+            .execute(&pool)
+            .await
+            .expect("fixture should write unknown phase");
+        let error = store
+            .get_rule_set("old-rule")
+            .await
+            .expect_err("unknown stored phase must not silently change evaluation order");
+        assert!(matches!(
+            error,
+            AppError::Repository(message) if message.contains("invalid rule set evaluation phase: future_phase")
+        ));
+    }
 }

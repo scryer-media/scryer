@@ -3473,6 +3473,9 @@ export const ruleSetsQuery = `query RuleSets {
     description
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -3490,6 +3493,9 @@ export const ruleSetQuery = `query RuleSet($id: ID!) {
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
