@@ -95,7 +95,10 @@ type SettingsRulesSectionProps = {
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
-  testScoring?: React.ReactNode;
+  testScoring?: (options: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => React.ReactNode;
   trackedRulePacks?: React.ReactNode;
   installTrackedRulePack: (packId: string, templateIds: string[]) => Promise<void> | void;
   installingRulePackId: string | null;
@@ -1022,6 +1025,7 @@ export function SettingsRulesSection({
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
+  const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
     () => getRuleValidationDiagnostics(validationResult, ruleSetDraft.regoSource),
     [ruleSetDraft.regoSource, validationResult],
@@ -1300,9 +1304,10 @@ export function SettingsRulesSection({
                 </div>
 
                 {editorMode !== "copy" ? (
-                  <label className="flex items-center gap-2">
+                  <label className="flex h-9 items-center gap-3">
                     <Checkbox
                       id="settings-rule-enabled"
+                      className="size-9 rounded-md data-[state=checked]:border-primary data-[state=checked]:bg-primary focus-visible:border-primary focus-visible:ring-primary/30"
                       checked={ruleSetDraft.enabled}
                       onCheckedChange={(value) =>
                         setRuleSetDraft((prev) => ({
@@ -1365,6 +1370,16 @@ export function SettingsRulesSection({
                       ? t("settings.ruleValidating")
                       : t("settings.ruleValidate")}
                   </Button>
+                  {testScoring ? (
+                    <Button
+                      id="settings-rule-test"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setIsTestScoringOpen((open) => !open)}
+                    >
+                      Test
+                    </Button>
+                  ) : null}
                   <Button
                     id="settings-rule-cancel"
                     type="button"
@@ -1375,7 +1390,14 @@ export function SettingsRulesSection({
                   </Button>
                 </div>
               </form>
-              {testScoring ? <div className="mt-3">{testScoring}</div> : null}
+              {testScoring ? (
+                <div className="mt-3">
+                  {testScoring({
+                    open: isTestScoringOpen,
+                    onOpenChange: setIsTestScoringOpen,
+                  })}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           {editorMode === "edit" ? (

@@ -7,7 +7,6 @@ import { scoringEntryText, type ScoringEntryKind } from "@/lib/utils/release-dec
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -94,13 +93,6 @@ const PARSED_FIELDS = [
   ["audioLanguages", "Audio languages"],
 ] as const;
 
-function collectionLabel(collection: Collection): string {
-  return collection.label ||
-    (collection.collectionIndex != null
-      ? `Season ${collection.collectionIndex}`
-      : collection.collectionType || "Episodes");
-}
-
 function episodeLabel(episode: Episode): string {
   return episode.episodeLabel ||
     `S${String(episode.seasonNumber ?? 0).padStart(2, "0")}E${String(
@@ -121,17 +113,18 @@ export function RuleSetTestPanel({
   draft,
   editRuleSetId,
   copySourceRuleSetId,
+  open,
+  onOpenChange,
 }: {
   draft: RuleSetDraft;
   editRuleSetId: string | null;
   copySourceRuleSetId: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
   const client = useClient();
   const t = useTranslate();
-  const [open, setOpen] = React.useState(false);
   const [selectedTitle, setSelectedTitle] = React.useState<TitleRecord | null>(null);
-  const [collections, setCollections] = React.useState<Collection[]>([]);
-  const [collectionId, setCollectionId] = React.useState("");
   const [episodes, setEpisodes] = React.useState<Episode[]>([]);
   const [episodeId, setEpisodeId] = React.useState("");
   const [releaseName, setReleaseName] = React.useState("");
@@ -172,34 +165,27 @@ export function RuleSetTestPanel({
 
   React.useEffect(() => {
     if (!selectedTitle || !episodic) {
-      setCollections([]); setCollectionId(""); setEpisodes([]); setEpisodeId(""); return;
+      setEpisodes([]); setEpisodeId(""); setLoadingEpisodes(false); return;
     }
     let cancelled = false;
     void (async () => {
       setLoadingEpisodes(true);
+      setEpisodeId("");
       try {
         const { data, error: collectionsError } = await client.query(ruleSetTestTitleCollectionsQuery, { id: selectedTitle.id }).toPromise();
         if (collectionsError) throw collectionsError;
-        const next = (data?.title?.collections ?? []) as Collection[];
-        if (!cancelled) { setCollections(next); setCollectionId(next[0]?.id ?? ""); }
-      } catch (loadError) {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Unable to load seasons.");
-      } finally {
-        if (!cancelled) setLoadingEpisodes(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [client, episodic, selectedTitle]);
-
-  React.useEffect(() => {
-    if (!collectionId) { setEpisodes([]); setEpisodeId(""); setLoadingEpisodes(false); return; }
-    let cancelled = false;
-    void (async () => {
-      setLoadingEpisodes(true); setEpisodeId("");
-      try {
-        const { data, error: episodesError } = await client.query(seriesCollectionEpisodesQuery, { id: collectionId }).toPromise();
-        if (episodesError) throw episodesError;
-        if (!cancelled) setEpisodes((data?.collectionById?.episodes ?? []) as Episode[]);
+        const collections = (data?.title?.collections ?? []) as Collection[];
+        const episodeGroups = await Promise.all(collections.map(async (collection) => {
+          const { data: episodesData, error: episodesError } = await client.query(seriesCollectionEpisodesQuery, { id: collection.id }).toPromise();
+          if (episodesError) throw episodesError;
+          return (episodesData?.collectionById?.episodes ?? []) as Episode[];
+        }));
+        if (!cancelled) {
+          setEpisodes(episodeGroups.flat().sort((left, right) => (
+            (left.seasonNumber ?? 0) - (right.seasonNumber ?? 0) ||
+            (left.episodeNumber ?? 0) - (right.episodeNumber ?? 0)
+          )));
+        }
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Unable to load episodes.");
       } finally {
@@ -207,9 +193,9 @@ export function RuleSetTestPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [client, collectionId]);
+  }, [client, episodic, selectedTitle]);
 
-  const clearEpisodeChoices = () => { setCollections([]); setCollectionId(""); setEpisodes([]); setEpisodeId(""); };
+  const clearEpisodeChoices = () => { setEpisodes([]); setEpisodeId(""); };
   const handleSelectedTitleChange = (title: TitleRecord | null) => {
     setSelectedTitle(title);
     clearEpisodeChoices();
@@ -244,42 +230,37 @@ export function RuleSetTestPanel({
 
   return <Collapsible
     open={open}
-    onOpenChange={setOpen}
+    onOpenChange={onOpenChange}
     className="rounded border border-border"
   >
-    <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-left font-medium hover:bg-muted/50">
-      <span>Test scoring</span>
-      <span className="text-xs text-muted-foreground">
-        {open ? "Hide" : "Show"}
-      </span>
-    </CollapsibleTrigger>
-    <CollapsibleContent className="border-t border-border px-3 py-3">
+    <CollapsibleContent className="px-3 py-3">
       <p className="mb-3 text-xs text-muted-foreground">
         Scoring preview only. This does not save this draft, admit a download, or create history.
       </p>
-      <div className="grid gap-3 md:grid-cols-2">
-        <div>
-          <Label className="mb-1 block">Library title</Label>
-          <TitleAutocompletePicker
-            selectedTitle={selectedTitle}
-            selectedTitleId={selectedTitle?.id ?? null}
-            onSelectedTitleChange={handleSelectedTitleChange}
-            placeholder="Search movies, shows, and anime"
-            ariaLabel="Library title"
-          />
-        </div>
+      <div className="space-y-3">
         <div>
           <Label htmlFor="settings-rule-test-release" className="mb-1 block">Release name</Label>
           <Input id="settings-rule-test-release" value={releaseName} onChange={(event) => setReleaseName(event.target.value)} placeholder="Example.Show.S01E01.1080p.WEB-DL" />
         </div>
-        <div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <Label className="mb-1 block">Library title</Label>
+            <TitleAutocompletePicker
+              selectedTitle={selectedTitle}
+              selectedTitleId={selectedTitle?.id ?? null}
+              onSelectedTitleChange={handleSelectedTitleChange}
+              placeholder="Search movies, shows, and anime"
+              ariaLabel="Library title"
+            />
+          </div>
+          {episodic ? <div><Label htmlFor="settings-rule-test-episode" className="mb-1 block">Episode</Label><select id="settings-rule-test-episode" className="h-9 w-full rounded border border-input bg-background px-2 text-sm" value={episodeId} onChange={(event) => setEpisodeId(event.target.value)} disabled={loadingEpisodes}><option value="">{loadingEpisodes ? "Loading episodes…" : "Select an episode"}</option>{episodes.map((episode) => <option key={episode.id} value={episode.id}>{episodeLabel(episode)}</option>)}</select></div> : null}
+        </div>
+        <div className="max-w-sm">
           <Label htmlFor="settings-rule-test-size" className="mb-1 block">Size (GiB, optional)</Label>
           <Input id="settings-rule-test-size" inputMode="decimal" value={sizeGib} onChange={(event) => setSizeGib(event.target.value)} placeholder="Unknown" />
         </div>
-        {episodic ? <><div><Label htmlFor="settings-rule-test-season" className="mb-1 block">Season</Label><select id="settings-rule-test-season" className="h-9 w-full rounded border border-input bg-background px-2 text-sm" value={collectionId} onChange={(event) => { setCollectionId(event.target.value); setEpisodes([]); setEpisodeId(""); setLoadingEpisodes(true); }} disabled={loadingEpisodes}><option value="">Select a season</option>{collections.map((collection) => <option key={collection.id} value={collection.id}>{collectionLabel(collection)}</option>)}</select></div><div><Label htmlFor="settings-rule-test-episode" className="mb-1 block">Episode</Label><select id="settings-rule-test-episode" className="h-9 w-full rounded border border-input bg-background px-2 text-sm" value={episodeId} onChange={(event) => setEpisodeId(event.target.value)} disabled={loadingEpisodes || !collectionId}><option value="">Select an episode</option>{episodes.map((episode) => <option key={episode.id} value={episode.id}>{episodeLabel(episode)}</option>)}</select></div></> : null}
       </div>
-      {selectedTitle ? <p className="mt-2 text-xs text-muted-foreground">Selected: {selectedTitle.name} · {selectedTitle.libraryName || selectedTitle.libraryId}{loadingEpisodes ? " · Loading episodes…" : ""}</p> : null}
-      <div className="mt-3 flex items-center gap-3"><Button type="button" onClick={() => void test()} disabled={!canTest}>{testing ? "Testing…" : "Test"}</Button>{stale ? <span className="text-xs text-[var(--scry-warning-text)]">Inputs changed; result is stale.</span> : null}</div>
+      <div className="mt-3 flex items-center gap-3"><Button type="button" onClick={() => void test()} disabled={!canTest}>{testing ? "Testing…" : "Run test"}</Button>{stale ? <span className="text-xs text-[var(--scry-warning-text)]">Inputs changed; result is stale.</span> : null}</div>
       {error ? <div className="mt-3 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-sm text-[var(--scry-danger-text)]">{error}</div> : null}
       {result ? <div className="mt-3 space-y-3 rounded border border-border p-3" aria-live="polite">
         {incomplete ? <div className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]"><p className="font-medium">Incomplete scoring preview</p><p>This result includes evaluation errors, so it cannot determine download admission.</p></div> : null}

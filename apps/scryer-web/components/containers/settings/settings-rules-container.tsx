@@ -752,13 +752,15 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         translationDiagnostics={translationDiagnostics}
         focusEditor={focusImportedEditor}
         onEditorFocused={() => setFocusImportedEditor(false)}
-        testScoring={
+        testScoring={({ open, onOpenChange }) => (
           <RuleSetTestPanel
             draft={ruleSetDraft}
             editRuleSetId={editingRuleSetId}
             copySourceRuleSetId={copyingTrackedRuleSetId}
+            open={open}
+            onOpenChange={onOpenChange}
           />
-        }
+        )}
         trackedRulePacks={
           <TrackedRulePacksSection
             packs={trackedRulePacks}
