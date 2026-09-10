@@ -10,6 +10,8 @@ use scryer_application::location::merge::map::MergeBlockReason;
 use scryer_application::location::merge::roles::RoleChangeReason;
 use sqlx::sqlite::SqlitePoolOptions;
 
+mod spellfix;
+
 const SOURCE: &str = "title-source";
 const DESTINATION: &str = "title-destination";
 

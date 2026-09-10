@@ -2241,3 +2241,20 @@ kind = "sql"
 file = "postgres/migrations/0235_location_file_resolutions.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 236
+description = "keep spellfix vocabulary aligned with title search terms"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0236_title_search_spellfix_cleanup.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0236_title_search_spellfix_cleanup.sql"
+engine = "postgres"
+scope = "all"
