@@ -30,6 +30,15 @@ export type TransferTitle = {
   currentFile: string | null;
   hasException: boolean;
 };
+export type TransferFile = {
+  sourcePath: string;
+  destinationPath: string;
+  sizeBytes: LongValue;
+  state: string;
+  copyBytes: LongValue;
+  verificationBytes: LongValue;
+  detail: string | null;
+};
 export type TransferSnapshot = {
   generation: LongValue;
   revision: LongValue;
@@ -37,10 +46,12 @@ export type TransferSnapshot = {
   progressBasisPoints: number;
   etaSeconds: LongValue | null;
   titles: TransferTitle[];
+  files?: TransferFile[];
   totalCount: LongValue;
   hasMore: boolean;
 };
 export type TransferScope = {
+  titleId?: string | null;
   operationId: string;
   page: number | null;
   requestGeneration: number;
@@ -57,6 +68,7 @@ export function acceptTransferSnapshot(
 ): TransferView {
   if (
     current.scope.operationId !== scope.operationId ||
+    (current.scope.titleId ?? null) !== (scope.titleId ?? null) ||
     current.scope.page !== scope.page ||
     current.scope.requestGeneration !== scope.requestGeneration ||
     incoming.operation.id !== scope.operationId

@@ -6,6 +6,8 @@ import {
   locationTransferPageQuery,
   locationTransferSummarySubscription,
   locationTransferPageSubscription,
+  locationTransferFilesQuery,
+  locationTransferFilesSubscription,
 } from "@/lib/graphql/queries";
 import { isTerminalOperationState } from "@/lib/location-operations";
 import {
@@ -21,6 +23,7 @@ export function useLocationTransfer(
   page: number | null,
   enabled = true,
   refresh = 0,
+  titleId: string | null = null,
 ) {
   const client = useClient();
   const generation = useRef(0);
@@ -41,6 +44,7 @@ export function useLocationTransfer(
   useEffect(() => {
     const scope = {
       operationId,
+      titleId,
       page,
       requestGeneration: ++generation.current,
     };
@@ -49,6 +53,7 @@ export function useLocationTransfer(
       scope,
       snapshot:
         previous?.scope.operationId === operationId &&
+        (previous.scope.titleId ?? null) === titleId &&
         previous.scope.page === page
           ? previous.snapshot
           : null,
@@ -71,11 +76,15 @@ export function useLocationTransfer(
     let lastPoll = 0;
     let streamGeneration = 0;
     let stopStream: (() => void) | undefined;
-    const field =
-      page === null ? "locationTransferSummary" : "locationTransferPage";
-    const queryScope = JSON.stringify([operationId, page]);
-    const variables =
-      page === null
+    const field = titleId
+      ? "locationTransferFiles"
+      : page === null
+        ? "locationTransferSummary"
+        : "locationTransferPage";
+    const queryScope = JSON.stringify([operationId, titleId, page]);
+    const variables = titleId
+      ? { id: operationId, titleId, offset: (page ?? 0) * 50 }
+      : page === null
         ? { id: operationId }
         : { id: operationId, offset: page * 50 };
     const accept = (snapshot: TransferSnapshot | null | undefined) => {
@@ -106,9 +115,11 @@ export function useLocationTransfer(
       try {
         const result = await client
           .query(
-            page === null
-              ? locationTransferSummaryQuery
-              : locationTransferPageQuery,
+            titleId
+              ? locationTransferFilesQuery
+              : page === null
+                ? locationTransferSummaryQuery
+                : locationTransferPageQuery,
             variables,
             { requestPolicy: "network-only" },
           )
@@ -129,8 +140,9 @@ export function useLocationTransfer(
       stopStream?.();
       stopStream = wsClient.subscribe(
         {
-          query:
-            page === null
+          query: titleId
+            ? locationTransferFilesSubscription
+            : page === null
               ? locationTransferSummarySubscription
               : locationTransferPageSubscription,
           variables,
@@ -184,10 +196,12 @@ export function useLocationTransfer(
       clearInterval(watchdog);
       stopStream?.();
     };
-  }, [client, operationId, page, enabled, visible, refresh]);
+  }, [client, operationId, titleId, page, enabled, visible, refresh]);
   return {
     snapshot:
-      view?.scope.operationId === operationId && view.scope.page === page
+      view?.scope.operationId === operationId &&
+      view.scope.page === page &&
+      (view.scope.titleId ?? null) === titleId
         ? view.snapshot
         : null,
     connected,

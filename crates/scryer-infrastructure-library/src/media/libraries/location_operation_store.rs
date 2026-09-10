@@ -657,6 +657,32 @@ impl LocationOperationRepository for LocationOperationStore {
         Ok(())
     }
 
+    async fn location_file_verifications_for_paths(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+        paths: &[String],
+    ) -> AppResult<Vec<FileVerificationRecord>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["{}"; paths.len()].join(", ");
+        let sql = format!(
+            "SELECT {VERIFICATION_COLUMNS} FROM location_operation_verifications
+            WHERE operation_id = {{}} AND title_id = {{}} AND destination_path IN ({placeholders})"
+        );
+        let mut args = vec![
+            SqlArg::Text(operation_id.to_owned()),
+            SqlArg::Text(title_id.to_owned()),
+        ];
+        args.extend(paths.iter().cloned().map(SqlArg::Text));
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(row_to_verification)
+            .collect()
+    }
+
     async fn list_location_file_verifications(
         &self,
         operation_id: &str,
@@ -1880,6 +1906,52 @@ mod tests {
             detail: None,
             verified_at: timestamp(),
         }
+    }
+
+    #[tokio::test]
+    async fn file_page_proofs_are_scoped_to_title_and_requested_paths() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .unwrap();
+        for path in ["/destination/a.mkv", "/destination/b.mkv"] {
+            store
+                .record_location_file_verification(&verification(
+                    path,
+                    FileVerificationOutcome::Verified,
+                ))
+                .await
+                .unwrap();
+        }
+        let paths = vec!["/destination/b.mkv".into()];
+        let records = store
+            .location_file_verifications_for_paths("op-1", "title-1", &paths)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].destination_path, paths[0]);
+        assert!(
+            store
+                .location_file_verifications_for_paths("op-1", "other", &paths)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .location_file_verifications_for_paths("other", "title-1", &paths)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .location_file_verifications_for_paths("op-1", "title-1", &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

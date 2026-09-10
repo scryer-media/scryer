@@ -4898,6 +4898,15 @@ export const locationTransferSummarySubscription = `subscription LocationTransfe
 export const locationTransferPageSubscription = `subscription LocationTransferPageLive($id: ID!, $offset: Int!) {
   locationTransferPage(id: $id, offset: $offset) {${LOCATION_TRANSFER_FIELDS}}
 }`;
+const LOCATION_TRANSFER_FILE_FIELDS = `${LOCATION_TRANSFER_FIELDS}
+  files { sourcePath destinationPath sizeBytes state copyBytes verificationBytes detail }
+`;
+export const locationTransferFilesQuery = `query LocationTransferFiles($id: ID!, $titleId: ID!, $offset: Int!) {
+  locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}
+}`;
+export const locationTransferFilesSubscription = `subscription LocationTransferFilesLive($id: ID!, $titleId: ID!, $offset: Int!) {
+  locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}
+}`;
 export const locationTransferTitleDetailQuery = `query LocationTransferTitleDetail($id: ID!, $titleId: ID!) {
   locationTransferTitleDetail(id: $id, titleId: $titleId)
 }`;

@@ -5200,6 +5200,20 @@ pub trait LocationOperationRepository: Send + Sync {
         record: &FileVerificationRecord,
     ) -> AppResult<()>;
 
+    async fn location_file_verifications_for_paths(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+        paths: &[String],
+    ) -> AppResult<Vec<FileVerificationRecord>> {
+        Ok(self
+            .list_location_file_verifications(operation_id, Some(title_id))
+            .await?
+            .into_iter()
+            .filter(|record| paths.contains(&record.destination_path))
+            .collect())
+    }
+
     async fn list_location_file_verifications(
         &self,
         operation_id: &str,

@@ -28,6 +28,17 @@ pub struct LocationTransferTitlePayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct LocationTransferFilePayload {
+    pub source_path: String,
+    pub destination_path: String,
+    pub size_bytes: Long,
+    pub state: String,
+    pub copy_bytes: Long,
+    pub verification_bytes: Long,
+    pub detail: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct LocationTransferSnapshotPayload {
     pub generation: Long,
     pub revision: Long,
@@ -35,6 +46,7 @@ pub struct LocationTransferSnapshotPayload {
     pub progress_basis_points: i32,
     pub eta_seconds: Option<Long>,
     pub titles: Vec<LocationTransferTitlePayload>,
+    pub files: Vec<LocationTransferFilePayload>,
     pub total_count: Long,
     pub has_more: bool,
 }

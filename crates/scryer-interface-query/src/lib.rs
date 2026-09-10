@@ -1727,6 +1727,25 @@ impl CatalogQueries {
             .map(scryer_interface_media::mappers::from_location_transfer))
     }
 
+    async fn location_transfer_files(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        title_id: ID,
+        #[graphql(default = 0)] offset: i32,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
+        app_from_ctx(ctx)?
+            .location_transfer_files_snapshot(
+                &actor_from_ctx(ctx)?,
+                id.as_str(),
+                title_id.as_str(),
+                i64::from(offset.max(0)),
+            )
+            .await
+            .map_err(to_gql_error)
+            .map(|snapshot| snapshot.map(scryer_interface_media::mappers::from_location_transfer))
+    }
+
     async fn location_transfer_title_detail(
         &self,
         ctx: &Context<'_>,

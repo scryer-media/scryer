@@ -32,6 +32,7 @@ async fn location_transfer_stream(
     ctx: &Context<'_>,
     id: ID,
     offset: Option<i64>,
+    title_id: Option<ID>,
 ) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
     let Ok(app) = app_from_ctx(ctx) else {
         return empty_box_stream();
@@ -43,8 +44,8 @@ async fn location_transfer_stream(
     // on the watch receiver; no event/snapshot handoff can lose them.
     let receiver = app.subscribe_location_transfers();
     let stream = unfold(
-        (app, actor, id, receiver, true, false),
-        move |(app, actor, id, mut receiver, initial, terminal)| async move {
+        (app, actor, id, title_id, receiver, true, false),
+        move |(app, actor, id, title_id, mut receiver, initial, terminal)| async move {
             if terminal {
                 return None;
             }
@@ -55,15 +56,27 @@ async fn location_transfer_stream(
                 }
             }
             // Authorization and projection are identical to fallback queries.
-            match app
-                .location_transfer_snapshot(&actor, id.as_str(), offset, 50)
-                .await
-            {
+            let snapshot = match &title_id {
+                Some(title) => {
+                    app.location_transfer_files_snapshot(
+                        &actor,
+                        id.as_str(),
+                        title.as_str(),
+                        offset.unwrap_or(0),
+                    )
+                    .await
+                }
+                None => {
+                    app.location_transfer_snapshot(&actor, id.as_str(), offset, 50)
+                        .await
+                }
+            };
+            match snapshot {
                 Ok(Some(snapshot)) => {
                     let terminal = snapshot.operation.state.is_terminal();
                     Some((
                         scryer_interface_media::mappers::from_location_transfer(snapshot),
-                        (app, actor, id, receiver, false, terminal),
+                        (app, actor, id, title_id, receiver, false, terminal),
                     ))
                 }
                 _ => None,
@@ -289,7 +302,7 @@ impl SubscriptionRoot {
         ctx: &Context<'_>,
         id: ID,
     ) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
-        location_transfer_stream(ctx, id, None).await
+        location_transfer_stream(ctx, id, None, None).await
     }
 
     async fn location_transfer_page(
@@ -298,7 +311,17 @@ impl SubscriptionRoot {
         id: ID,
         #[graphql(default = 0)] offset: i32,
     ) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
-        location_transfer_stream(ctx, id, Some(i64::from(offset.max(0)))).await
+        location_transfer_stream(ctx, id, Some(i64::from(offset.max(0))), None).await
+    }
+
+    async fn location_transfer_files(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        title_id: ID,
+        #[graphql(default = 0)] offset: i32,
+    ) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
+        location_transfer_stream(ctx, id, Some(i64::from(offset.max(0))), Some(title_id)).await
     }
 
     async fn activity_events(&self, ctx: &Context<'_>) -> BoxStream<'static, ActivityEventPayload> {

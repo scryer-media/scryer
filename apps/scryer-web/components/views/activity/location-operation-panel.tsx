@@ -368,6 +368,210 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   );
 }
 
+function TitleFiles({
+  operationId,
+  titleId,
+}: {
+  operationId: string;
+  titleId: string;
+}) {
+  const t = useTranslate();
+  const [page, setPage] = React.useState(0);
+  const { snapshot, error, connected } = useLocationTransfer(
+    operationId,
+    page,
+    true,
+    0,
+    titleId,
+  );
+  const files = snapshot?.files ?? [];
+  const total = toCount(snapshot?.totalCount);
+  return (
+    <div className="space-y-2">
+      {error && <p role="alert">{t("move.operationLoadFailed")}</p>}
+      {!snapshot ? (
+        <p>{t("move.operationLoading")}</p>
+      ) : (
+        <>
+          {!connected &&
+            !isTerminalOperationState(snapshot.operation.state) && (
+              <p>{t("move.transferDisconnected")}</p>
+            )}
+          <Table
+            density="dense"
+            layout="fixed"
+            wrapperClassName="rounded-lg border border-border"
+          >
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[45%]">
+                  {t("move.transferFilePath")}
+                </TableHead>
+                <TableHead>{t("move.transferColumnStatus")}</TableHead>
+                <TableHead>{t("move.transferCopyProgress")}</TableHead>
+                <TableHead>{t("move.transferVerifyProgress")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {files.map((file) => (
+                <React.Fragment key={file.destinationPath || file.sourcePath}>
+                  <TableRow>
+                    <TableCell>
+                      <FilePath
+                        path={file.destinationPath || file.sourcePath}
+                      />
+                      <span className="text-muted-foreground">
+                        {file.state === "DUPLICATE"
+                          ? "—"
+                          : formatByteCount(toCount(file.sizeBytes))}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        tone={
+                          file.state === "FAILED" || file.state === "BLOCKED"
+                            ? "warning"
+                            : "neutral"
+                        }
+                      >
+                        {t(`move.transferFileState.${file.state}`)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {file.state === "DUPLICATE" ? (
+                        "—"
+                      ) : (
+                        <FileBytes
+                          done={toCount(file.copyBytes)}
+                          total={toCount(file.sizeBytes)}
+                          complete={file.state === "DONE"}
+                          label={t("move.transferCopyProgress")}
+                        />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {file.state === "VERIFYING" ? (
+                        <FileBytes
+                          done={toCount(file.verificationBytes)}
+                          total={toCount(file.sizeBytes)}
+                          complete={false}
+                          label={t("move.transferVerifyProgress")}
+                        />
+                      ) : file.state === "DONE" ? (
+                        t("move.transferFileState.DONE")
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  {file.detail && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={4}
+                        className="break-words text-muted-foreground"
+                      >
+                        {file.detail}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))}
+            </TableBody>
+          </Table>
+          {!files.length && <p>{t("move.transferNoFiles")}</p>}
+          {total > 50 && (
+            <div className="flex items-center justify-between">
+              <span>
+                {t("move.transferRange", {
+                  from: files.length ? page * 50 + 1 : 0,
+                  to: files.length ? page * 50 + files.length : 0,
+                  total,
+                })}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={page === 0}
+                  onClick={() => setPage(page - 1)}
+                >
+                  {t("move.transferPrevious")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!snapshot.hasMore}
+                  onClick={() => setPage(page + 1)}
+                >
+                  {t("move.transferNext")}
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function FileBytes({
+  done,
+  total,
+  complete,
+  label,
+}: {
+  done: number;
+  total: number;
+  complete: boolean;
+  label: string;
+}) {
+  const progress = complete
+    ? 100
+    : total > 0
+      ? Math.min(100, (done / total) * 100)
+      : 0;
+  return (
+    <div className="space-y-1 tabular-nums">
+      <span>
+        {formatByteCount(done)} / {formatByteCount(total)}
+      </span>
+      <Progress
+        value={progress}
+        className="h-1.5"
+        aria-label={label}
+        aria-valuetext={`${progress.toFixed(1)}%`}
+      />
+    </div>
+  );
+}
+
+function FilePath({ path }: { path: string }) {
+  const parts = splitTransferPath(path);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          aria-label={path}
+          className="flex min-w-0 font-[var(--font-code)]"
+        >
+          <span
+            aria-hidden="true"
+            className="min-w-0 truncate"
+            style={{ direction: "rtl", textAlign: "left" }}
+          >
+            {parts.directory}
+          </span>
+          <span aria-hidden="true" className="max-w-full shrink-0 truncate">
+            {parts.filename}
+          </span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xl break-all">{path}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function TitleRow({
   operationId,
   row,
@@ -413,9 +617,12 @@ function TitleRow({
       >
         <TableCell>
           <div className="flex items-start gap-1">
-            {row.hasException && (
+            {
               <button
-                aria-label={t("move.transferException", { title: row.name })}
+                aria-label={t("move.transferFilesForTitle", {
+                  title: row.name,
+                })}
+                className="shrink-0 rounded p-1 hover:bg-muted"
                 aria-expanded={expanded}
                 aria-controls={`transfer-detail-${row.titleId}`}
                 onClick={() => setExpanded(!expanded)}
@@ -426,7 +633,7 @@ function TitleRow({
                   <ChevronRight className="h-4 w-4" />
                 )}
               </button>
-            )}
+            }
             <span className="flex min-w-0 items-center gap-3">
               <span className="h-[54px] w-9 shrink-0 overflow-hidden rounded-[6px] border border-[var(--scry-border2)] bg-[var(--scry-soft)]">
                 <TitlePosterSlot
@@ -499,25 +706,38 @@ function TitleRow({
         </TableCell>
         <TableCell className="tabular-nums">
           {transferTitleProgress(row).toFixed(1)}%
+          <Progress
+            className="my-1 h-1.5"
+            value={transferTitleProgress(row)}
+            aria-label={row.name}
+          />
           {row.verifying > 0 && (
             <p className="text-muted-foreground">
-              {formatByteCount(toCount(row.verificationBytes))}
+              {t("move.transferVerificationBytes", {
+                done: formatByteCount(toCount(row.verificationBytes)),
+                total: formatByteCount(toCount(row.bytesTotal)),
+              })}
             </p>
           )}
         </TableCell>
       </TableRow>
-      {expanded && row.hasException && (
+      {expanded && (
         <TableRow id={`transfer-detail-${row.titleId}`}>
           <TableCell
             colSpan={5}
             className="break-words bg-muted/20 p-3 text-xs"
           >
-            {detail ??
-              t(
-                failed
-                  ? "move.operationLoadFailed"
-                  : "move.transferDetailPending",
-              )}
+            {row.hasException && (
+              <p className="mb-3 text-[var(--scry-warning-text)]">
+                {detail ??
+                  t(
+                    failed
+                      ? "move.operationLoadFailed"
+                      : "move.transferDetailPending",
+                  )}
+              </p>
+            )}
+            <TitleFiles operationId={operationId} titleId={row.titleId} />
           </TableCell>
         </TableRow>
       )}

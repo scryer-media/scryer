@@ -82,6 +82,19 @@ pub fn from_location_transfer(
         eta_seconds: snapshot.eta_seconds.map(Long),
         total_count: Long(snapshot.total_count),
         has_more: snapshot.has_more,
+        files: snapshot
+            .files
+            .into_iter()
+            .map(|file| crate::types::LocationTransferFilePayload {
+                source_path: display_path(&file.source_path),
+                destination_path: display_path(&file.destination_path),
+                size_bytes: bytes(file.size_bytes),
+                state: file.state,
+                copy_bytes: bytes(file.copy_bytes),
+                verification_bytes: bytes(file.verification_bytes),
+                detail: file.detail,
+            })
+            .collect(),
         titles: snapshot
             .titles
             .into_iter()

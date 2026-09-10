@@ -63,6 +63,34 @@ test("late polling cannot replace subscription snapshots, including restart and 
   assert.equal(acceptTransferSnapshot(view, scope, snapshot(2, 1)), view);
 });
 
+test("file disclosures reject other titles and stale file pages through the shared version gate", () => {
+  const fileScope = { ...scope, titleId: "title-a", page: 0 };
+  let view: TransferView = { scope: fileScope, snapshot: null };
+  view = acceptTransferSnapshot(view, fileScope, {
+    ...snapshot(2, 5),
+    files: [],
+  });
+  assert.equal(
+    acceptTransferSnapshot(
+      view,
+      { ...fileScope, titleId: "title-b" },
+      snapshot(2, 10),
+    ),
+    view,
+  );
+  assert.equal(
+    acceptTransferSnapshot(view, { ...fileScope, page: 1 }, snapshot(2, 10)),
+    view,
+  );
+  assert.equal(acceptTransferSnapshot(view, fileScope, snapshot(2, 4)), view);
+  assert.equal(acceptTransferSnapshot(view, fileScope, snapshot(1, 999)), view);
+  assert.equal(
+    acceptTransferSnapshot(view, fileScope, snapshot(3, 1)).snapshot
+      ?.generation,
+    3,
+  );
+});
+
 test("abandoned pages, previous navigation and old request generations never enter current scope", () => {
   const page = { ...scope, page: 2, requestGeneration: 3 };
   const view: TransferView = { scope: page, snapshot: null };

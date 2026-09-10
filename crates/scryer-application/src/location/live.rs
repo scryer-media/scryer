@@ -1,6 +1,8 @@
 //! Bounded wire snapshots and transient transfer telemetry. CRC offsets are
 //! deliberately never recovery checkpoints.
 
+pub mod files;
+
 use super::model::{LocationOperation, TitleCheckpointState};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -59,6 +61,7 @@ pub struct TransferSnapshot {
     pub progress_basis_points: i64,
     pub eta_seconds: Option<i64>,
     pub titles: Vec<TransferTitle>,
+    pub files: Vec<files::TransferFile>,
     pub total_count: i64,
     pub has_more: bool,
 }
@@ -166,6 +169,7 @@ struct HubState {
 #[derive(Clone, Debug)]
 pub struct TransferHub {
     state: Arc<Mutex<HubState>>,
+    manifests: Arc<tokio::sync::Mutex<files::ManifestCache>>,
     changed: tokio::sync::watch::Sender<TransferVersion>,
 }
 
@@ -174,6 +178,7 @@ impl Default for TransferHub {
         let (changed, _) = tokio::sync::watch::channel(TransferVersion::default());
         Self {
             state: Arc::new(Mutex::new(HubState::default())),
+            manifests: Arc::default(),
             changed,
         }
     }
@@ -648,6 +653,7 @@ impl crate::AppUseCase {
                 progress_basis_points,
                 eta_seconds,
                 titles,
+                files: Vec::new(),
                 total_count,
                 has_more,
             }))
