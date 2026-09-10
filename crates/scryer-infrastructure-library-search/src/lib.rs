@@ -568,6 +568,13 @@ pub async fn delete_title_search_projection_tx(
     tx: &mut Transaction<'_, Sqlite>,
     title_id: &str,
 ) -> AppResult<()> {
+    delete_title_search_projection_on_connection(tx, title_id).await
+}
+
+async fn delete_title_search_projection_on_connection(
+    connection: &mut sqlx::SqliteConnection,
+    title_id: &str,
+) -> AppResult<()> {
     sqlx::query(
         "DELETE FROM title_search_spellfix
          WHERE rowid IN (
@@ -577,13 +584,13 @@ pub async fn delete_title_search_projection_tx(
          )",
     )
     .bind(title_id)
-    .execute(&mut **tx)
+    .execute(&mut *connection)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
 
     sqlx::query("DELETE FROM title_search_terms WHERE title_id = ?")
         .bind(title_id)
-        .execute(&mut **tx)
+        .execute(&mut *connection)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -640,10 +647,10 @@ pub async fn replace_title_search_projection_pg_source_tx(
 }
 
 async fn replace_title_search_projection_source_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    connection: &mut sqlx::SqliteConnection,
     source: &TitleSearchProjectionSource,
 ) -> AppResult<()> {
-    delete_title_search_projection_tx(tx, &source.title_id).await?;
+    delete_title_search_projection_on_connection(connection, &source.title_id).await?;
 
     let facet = source.facet.as_str();
     let langid = facet_langid(&source.facet);
@@ -661,7 +668,7 @@ async fn replace_title_search_projection_source_tx(
         .bind(&term.raw_term)
         .bind(&term.normalized_term)
         .bind(term.weight)
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *connection)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -673,7 +680,7 @@ async fn replace_title_search_projection_source_tx(
         .bind(&term.normalized_term)
         .bind(spellfix_rank_for_weight(term.weight))
         .bind(langid)
-        .execute(&mut **tx)
+        .execute(&mut *connection)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
     }
@@ -694,27 +701,38 @@ pub async fn seed_title_search_projection_if_empty(pool: &SqlitePool) -> AppResu
 }
 
 pub async fn rebuild_title_search_projection(pool: &SqlitePool) -> AppResult<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))?;
+    rebuild_title_search_projection_on_connection(&mut tx).await?;
+    tx.commit()
+        .await
+        .map_err(|err| AppError::Repository(err.to_string()))
+}
+
+/// Rebuild on the caller's active transaction, including the catalog read.
+/// The caller must commit or roll back this connection; restore uses its
+/// existing BEGIN IMMEDIATE transaction so the catalog and index stay atomic.
+pub async fn rebuild_title_search_projection_on_connection(
+    connection: &mut sqlx::SqliteConnection,
+) -> AppResult<()> {
     let rows = sqlx::query(
         "SELECT id, name, facet, sort_title, slug, aliases, tagged_aliases_json
          FROM titles
          ORDER BY id ASC",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|err| AppError::Repository(err.to_string()))?;
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|err| AppError::Repository(err.to_string()))?;
-
     sqlx::query("DELETE FROM title_search_terms")
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
     sqlx::query("DELETE FROM title_search_spellfix")
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await
         .map_err(|err| AppError::Repository(err.to_string()))?;
 
@@ -743,11 +761,8 @@ pub async fn rebuild_title_search_projection(pool: &SqlitePool) -> AppResult<()>
                 .map_err(|err| AppError::Repository(err.to_string()))?,
         };
 
-        replace_title_search_projection_source_tx(&mut tx, &source).await?;
+        replace_title_search_projection_source_tx(connection, &source).await?;
     }
 
-    tx.commit()
-        .await
-        .map_err(|err| AppError::Repository(err.to_string()))?;
     Ok(())
 }

@@ -215,6 +215,8 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
             }
         }
 
+        crate::queries::title_search::rebuild_title_search_projection_on_connection(&mut conn)
+            .await?;
         AppResult::Ok(())
     }
     .await;
@@ -246,8 +248,6 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
     };
 
     transaction_result?;
-
-    crate::queries::title_search::rebuild_title_search_projection(pool).await?;
 
     Ok(
         BackupRestorePreparedBundle::from_summary_and_instance_secrets_env(
@@ -851,6 +851,9 @@ mod tests {
         .expect("migrate sqlite schema to head");
         (services.pool().clone(), temp)
     }
+
+    #[cfg(feature = "runtime-backups")]
+    mod search_rebuild;
 
     /// Every table the migrations create must be classified in the backup
     /// catalog.
