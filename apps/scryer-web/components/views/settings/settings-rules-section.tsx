@@ -33,11 +33,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Input,
-  integerInputProps,
-  sanitizeDigits,
-} from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   LazyRegoEditor,
@@ -1060,9 +1056,6 @@ export function SettingsRulesSection({
                 <TableHead>{t("settings.ruleDescription")}</TableHead>
                 <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
                 <TableHead className="text-center">
-                  {t("settings.rulePriority")}
-                </TableHead>
-                <TableHead className="text-center">
                   {t("label.enabled")}
                 </TableHead>
                 <TableHead className="text-right">
@@ -1095,9 +1088,6 @@ export function SettingsRulesSection({
                   </TableCell>
                   <TableCell>
                     <FacetBadges facets={record.appliedFacets} />
-                  </TableCell>
-                  <TableCell className="text-center">
-                    {record.priority}
                   </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
@@ -1156,7 +1146,7 @@ export function SettingsRulesSection({
               ))}
               {ruleSetRecords.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-muted-foreground">
+                  <TableCell colSpan={5} className="text-muted-foreground">
                     {t("settings.noRulesFound")}
                   </TableCell>
                 </TableRow>
@@ -1185,7 +1175,7 @@ export function SettingsRulesSection({
                     {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason}
                   </p>
                 ) : null}
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-3 md:grid-cols-2">
                   <label>
                     <Label className="mb-2 block">{t("label.name")}</Label>
                     <Input
@@ -1215,23 +1205,6 @@ export function SettingsRulesSection({
                         }))
                       }
                       placeholder="Block releases over 100 GiB"
-                    />
-                  </label>
-                  <label>
-                    <Label className="mb-2 block">
-                      {t("settings.rulePriority")}
-                    </Label>
-                    <Input
-                      id="settings-rule-priority"
-                      {...integerInputProps}
-                      value={ruleSetDraft.priority}
-                      onChange={(e) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          priority: Number(sanitizeDigits(e.target.value)) || 0,
-                        }))
-                      }
-                      placeholder="0"
                     />
                   </label>
                 </div>
