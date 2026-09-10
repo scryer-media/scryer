@@ -4,9 +4,13 @@ import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
-import { HistoryEventTable } from "@/components/common/history-event-table";
+import {
+  HISTORY_TABLE_SHELL_CLASS,
+  HistoryEventTable,
+} from "@/components/common/history-event-table";
 import type { LibraryRecord, TitleHistoryEvent, TitleRecord } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
+import { cn } from "@/lib/utils";
 import { HistoryEventIcon } from "@/components/common/history-event-icon";
 import { getTitleHistoryFilterLabel } from "@/components/common/title-history-event-meta";
 
@@ -107,7 +111,7 @@ export function TitleHistoryView({
         ) : error ? (
           <p className="py-8 text-sm text-[var(--scry-danger-text)]">{error}</p>
         ) : (
-          <div className="min-h-0 flex-1 overflow-auto rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]">
+          <div className={cn(HISTORY_TABLE_SHELL_CLASS, "min-h-0 flex-1 overflow-auto")}>
             <HistoryEventTable
               events={events}
               showTitle

@@ -22,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ActionTooltip } from "@/components/ui/tooltip";
 import type { TitleHistoryEvent } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
@@ -46,13 +47,26 @@ import {
   getTitleHistoryEventMeta,
 } from "./title-history-event-meta";
 
+/**
+ * Panel chrome for the history table — the framed surface settings tables pass
+ * to `wrapperClassName`, so the table reads as one bordered card wherever it is
+ * embedded. Callers own the frame and supply their own `overflow` (both `auto`
+ * and `hidden` clip the header gradient to the radius) because only they know
+ * whether the table is the scroller or a block inside one.
+ */
+export const HISTORY_TABLE_SHELL_CLASS =
+  "rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]";
+
+/** Stand-in rendered when an event carries no name or path to show. */
+const HISTORY_EMPTY_VALUE = "\u2014";
+
 function primarySourceLabel(event: TitleHistoryEvent): string {
   return redactHistoryApiKeys(
     event.displayTitle ??
     event.sourceTitle ??
     event.sourcePath ??
     event.destPath ??
-    "\u2014",
+    HISTORY_EMPTY_VALUE,
   );
 }
 
@@ -459,6 +473,7 @@ export function HistoryEventTable({
           {events.map((event) => {
             const meta = getTitleHistoryEventMeta(event.eventType);
             const titleHref = titleHistoryHref(event);
+            const releaseName = primarySourceLabel(event);
             const source = historySource(event);
             const isExpanded = expandedRows[event.id] ?? false;
             const detail = buildHistoryEventDetail(event);
@@ -477,6 +492,7 @@ export function HistoryEventTable({
                     event.eventType,
                     event.id,
                   )}
+                  data-ui="settings-table-row"
                 >
                   <TableCell className="align-middle text-center">
                     {hasExpandableContent ? (
@@ -534,12 +550,20 @@ export function HistoryEventTable({
                     </TableCell>
                   ) : null}
                   <TableCell className="align-middle">
-                    <div
-                      className="truncate text-sm text-foreground"
-                      title={primarySourceLabel(event)}
+                    {/* Release names are long paths that the fixed column
+                     * ellipses, so the full value lives in a hover tooltip. */}
+                    <ActionTooltip
+                      content={
+                        releaseName === HISTORY_EMPTY_VALUE ? null : releaseName
+                      }
+                      className="max-w-[32rem] break-all"
+                      wrapperClassName="block w-full min-w-0"
+                      wrapperTabIndex={0}
                     >
-                      {primarySourceLabel(event)}
-                    </div>
+                      <div className="truncate text-sm text-foreground">
+                        {releaseName}
+                      </div>
+                    </ActionTooltip>
                   </TableCell>
                   <TableCell className="align-middle text-center text-sm">
                     {source ? (

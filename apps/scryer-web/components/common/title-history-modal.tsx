@@ -12,7 +12,11 @@ import { titleHistoryQuery } from "@/lib/graphql/queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { TitleHistoryEvent, TitleHistoryPage } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
-import { HistoryEventTable } from "./history-event-table";
+import { cn } from "@/lib/utils";
+import {
+  HISTORY_TABLE_SHELL_CLASS,
+  HistoryEventTable,
+} from "./history-event-table";
 import {
   TITLE_HISTORY_FILTERS,
   getTitleHistoryFilterLabel,
@@ -254,7 +258,13 @@ export function TitleHistoryModal({
             </div>
           ) : error && events.length === 0 ? null : (
             <>
-              <HistoryEventTable events={events} showActor emptyMessage={t("history.empty")} />
+              <div className={cn(HISTORY_TABLE_SHELL_CLASS, "overflow-hidden")}>
+                <HistoryEventTable
+                  events={events}
+                  showActor
+                  emptyMessage={t("history.empty")}
+                />
+              </div>
               {!error && hasMore ? (
                 <div className="mt-4 flex justify-center pb-2">
                   <Button
