@@ -417,12 +417,26 @@ export function SettingsMediaServersSection({
       {isEditorOpen ? (
         <>
           <Card>
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle id="settings-media-server-editor" className="text-base">
                 {isEditing
                   ? t("settings.mediaServerUpdate")
                   : t("settings.mediaServerCreate")}
               </CardTitle>
+              <label className="flex shrink-0 items-center gap-3">
+                <Checkbox
+                  id="settings-media-server-enabled"
+                  size="large"
+                  checked={draft.enabled}
+                  onCheckedChange={(checked) =>
+                    setDraft((previous) => ({
+                      ...previous,
+                      enabled: checked === true,
+                    }))
+                  }
+                />
+                <span className="text-sm font-medium">{t("label.enabled")}</span>
+              </label>
             </CardHeader>
             <CardContent>
               <form
@@ -530,22 +544,6 @@ export function SettingsMediaServersSection({
                     </p>
                   </label>
                 ) : null}
-
-                <div className="rounded border border-border bg-background/40 p-3">
-                  <label className="flex items-center gap-3">
-                    <Checkbox
-                      id="settings-media-server-enabled"
-                      checked={draft.enabled}
-                      onCheckedChange={(checked) =>
-                        setDraft((previous) => ({
-                          ...previous,
-                          enabled: checked === true,
-                        }))
-                      }
-                    />
-                    <span className="text-sm font-medium">{t("settings.mediaServerEnabled")}</span>
-                  </label>
-                </div>
 
                 {draft.provider === "PLEX" ? (
                   <div className="space-y-3 rounded border border-border bg-background/40 p-3">
