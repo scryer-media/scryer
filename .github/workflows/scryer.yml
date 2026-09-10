@@ -428,12 +428,26 @@ jobs:
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: /home/runner/.cache/sccache
       SCCACHE_IDLE_TIMEOUT: "0"
+      SCRYER_WASMTIME_TEST_CACHE_ROOT: /home/runner/.cache/scryer-wasmtime-test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: ./.github/actions/download-builtins
         with:
           run-id: ${{ github.run_id }}
+
+      # Compiled plugin components, shared by every test process. Scoped to the
+      # pull request: this workflow has no branch pushes, so there is no
+      # default-branch cache to share and the first run of a PR stays cold.
+      - name: Restore Wasmtime test cache
+        if: ${{ github.event_name == 'pull_request' }}
+        id: wasmtime-test-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: /home/runner/.cache/scryer-wasmtime-test
+          key: wasmtime-test-v1-${{ hashFiles('Cargo.lock', 'crates/scryer-plugins/builtins/*.wasm.zst') }}
+          restore-keys: |
+            wasmtime-test-v1-
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
@@ -506,6 +520,14 @@ jobs:
             --exclude xtask-support \
             --all-features \
             --no-fail-fast 2>&1 | tee rust-nextest.log
+
+      # Saved whether or not tests passed: compiled components stay valid.
+      - name: Save Wasmtime test cache
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.wasmtime-test-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: /home/runner/.cache/scryer-wasmtime-test
+          key: ${{ steps.wasmtime-test-cache.outputs.cache-primary-key }}
 
       - name: Show ending disk usage
         if: always()
