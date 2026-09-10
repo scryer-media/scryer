@@ -105,7 +105,10 @@ pub fn initialize_wasm_runtime_for_tests() {
         // macOS clears on reboot; CI points the root at a restored cache.
         let root = match std::env::var_os("SCRYER_WASMTIME_TEST_CACHE_ROOT") {
             Some(root) if !root.is_empty() => std::path::PathBuf::from(root),
-            _ => std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+            // The scryer binary's own unit tests include this module too, and
+            // only integration tests are built with CARGO_TARGET_TMPDIR.
+            _ => option_env!("CARGO_TARGET_TMPDIR")
+                .map_or_else(std::env::temp_dir, std::path::PathBuf::from),
         };
         let cache_dir = root.join("scryer-wasmtime-integration-cache");
         scryer_plugins::initialize_wasm_runtime_at(cache_dir)
