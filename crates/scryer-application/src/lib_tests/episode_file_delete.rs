@@ -532,6 +532,163 @@ async fn delete_episode_files_removes_selected_files_from_disk_and_catalog() {
     );
 }
 
+async fn episode_is_monitored(app: &AppUseCase, episode_id: &str) -> bool {
+    app.services
+        .catalog
+        .shows
+        .get_episode_by_id(episode_id)
+        .await
+        .expect("read episode")
+        .expect("episode row")
+        .monitored
+}
+
+async fn collection_is_monitored(app: &AppUseCase, collection_id: &str) -> bool {
+    app.services
+        .catalog
+        .shows
+        .get_collection_by_id(collection_id)
+        .await
+        .expect("read collection")
+        .expect("collection row")
+        .monitored
+}
+
+fn summary_ids(summary: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut ids = summary[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{key} should be an array: {summary:?}"))
+        .iter()
+        .map(|value| value.as_str().expect("id").to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+/// Checking a whole season and deleting its files leaves nothing under that
+/// season monitored, so the season stops being monitored with its episodes.
+#[tokio::test]
+async fn delete_episode_files_unmonitors_deleted_episodes_and_their_drained_season() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    // Seasons 0..=2, two episodes each. Season 1 owns episodes 2 and 3.
+    let season = &setup.seasons[1];
+    let episode_ids = vec![setup.episodes[2].id.clone(), setup.episodes[3].id.clone()];
+
+    let preview = f
+        .app
+        .preview_delete_episode_files(&f.admin, &f.title_id, &episode_ids)
+        .await
+        .expect("preview");
+    let accepted = f
+        .app
+        .start_delete_episode_files_job(
+            &f.admin,
+            &f.title_id,
+            &episode_ids,
+            true,
+            Some(DeleteExecutionConfirmation {
+                preview_fingerprint: preview.preview.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+        )
+        .await
+        .expect("start episode file deletion job");
+    let run = f.wait_for_run(&accepted.job_run.id).await;
+    assert_eq!(run.status, JobRunStatus::Completed, "run: {run:?}");
+
+    for episode_id in &episode_ids {
+        assert!(
+            !episode_is_monitored(&f.app, episode_id).await,
+            "deleted episode {episode_id} should be unmonitored"
+        );
+    }
+    assert!(
+        !collection_is_monitored(&f.app, &season.id).await,
+        "a season with no monitored episodes left should be unmonitored"
+    );
+
+    // Untouched seasons and their episodes keep monitoring.
+    for index in [0usize, 1, 4, 5] {
+        assert!(
+            episode_is_monitored(&f.app, &setup.episodes[index].id).await,
+            "episode {index} was not deleted and must stay monitored"
+        );
+    }
+    for index in [0usize, 2] {
+        assert!(
+            collection_is_monitored(&f.app, &setup.seasons[index].id).await,
+            "season {index} was not deleted and must stay monitored"
+        );
+    }
+
+    let summary = f.run_summary(&run);
+    let mut expected_episodes = episode_ids.clone();
+    expected_episodes.sort();
+    assert_eq!(
+        summary_ids(&summary, "unmonitoredEpisodeIds"),
+        expected_episodes
+    );
+    assert_eq!(
+        summary_ids(&summary, "unmonitoredCollectionIds"),
+        vec![season.id.clone()]
+    );
+}
+
+/// A season that still has an episode with a file stays monitored: only the
+/// episodes whose files actually went away are unmonitored.
+#[tokio::test]
+async fn delete_episode_files_keeps_a_partly_deleted_season_monitored() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    let season = &setup.seasons[2];
+    let deleted = setup.episodes[4].id.clone();
+    let kept = setup.episodes[5].id.clone();
+    let episode_ids = vec![deleted.clone()];
+
+    let preview = f
+        .app
+        .preview_delete_episode_files(&f.admin, &f.title_id, &episode_ids)
+        .await
+        .expect("preview");
+    let accepted = f
+        .app
+        .start_delete_episode_files_job(
+            &f.admin,
+            &f.title_id,
+            &episode_ids,
+            true,
+            Some(DeleteExecutionConfirmation {
+                preview_fingerprint: preview.preview.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+        )
+        .await
+        .expect("start episode file deletion job");
+    let run = f.wait_for_run(&accepted.job_run.id).await;
+    assert_eq!(run.status, JobRunStatus::Completed, "run: {run:?}");
+
+    assert!(!episode_is_monitored(&f.app, &deleted).await);
+    assert!(
+        episode_is_monitored(&f.app, &kept).await,
+        "the sibling episode still has its file and must stay monitored"
+    );
+    assert!(
+        collection_is_monitored(&f.app, &season.id).await,
+        "a season with a monitored episode left must stay monitored"
+    );
+
+    let summary = f.run_summary(&run);
+    assert_eq!(
+        summary_ids(&summary, "unmonitoredEpisodeIds"),
+        vec![deleted]
+    );
+    assert!(
+        summary_ids(&summary, "unmonitoredCollectionIds").is_empty(),
+        "no season should be unmonitored: {summary:?}"
+    );
+}
+
 #[tokio::test]
 async fn delete_episode_files_records_per_file_failures_and_keeps_going() {
     let fixture = seed_episode_delete_fixture().await;

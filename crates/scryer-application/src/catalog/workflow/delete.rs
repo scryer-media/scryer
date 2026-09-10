@@ -89,6 +89,10 @@ struct EpisodeFileDeletionSummary {
     delete_from_disk: bool,
     deleted_file_ids: Vec<String>,
     failed: Vec<DeleteEpisodeFileFailure>,
+    /// Episodes the run stopped monitoring because their files were deleted.
+    unmonitored_episode_ids: Vec<String>,
+    /// Seasons that followed their episodes out of monitoring.
+    unmonitored_collection_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -1237,6 +1241,10 @@ impl AppUseCase {
     ) {
         let total = items.len();
         let mut outcome = DeleteEpisodeFilesOutcome::default();
+        // Tracked per episode rather than per file so a multi-file episode is
+        // only unmonitored when every one of its requested files is gone.
+        let mut deleted_episode_ids = std::collections::BTreeSet::new();
+        let mut failed_episode_ids = std::collections::BTreeSet::new();
 
         for item in &items {
             let _ = self
@@ -1261,6 +1269,7 @@ impl AppUseCase {
                 .await;
 
             if let Some(error) = item.error.as_deref() {
+                failed_episode_ids.insert(item.episode_id.clone());
                 outcome.failed.push(DeleteEpisodeFileFailure {
                     file_id: item.file_id.clone(),
                     error: error.to_string(),
@@ -1271,8 +1280,12 @@ impl AppUseCase {
                 .delete_preapproved_media_file(&actor, &item.file_id, delete_from_disk)
                 .await
             {
-                Ok(()) => outcome.deleted_file_ids.push(item.file_id.clone()),
+                Ok(()) => {
+                    deleted_episode_ids.insert(item.episode_id.clone());
+                    outcome.deleted_file_ids.push(item.file_id.clone());
+                }
                 Err(error) => {
+                    failed_episode_ids.insert(item.episode_id.clone());
                     warn!(
                         error = %error,
                         title_id = %title_id,
@@ -1288,10 +1301,20 @@ impl AppUseCase {
             }
         }
 
+        let fully_deleted_episode_ids = deleted_episode_ids
+            .difference(&failed_episode_ids)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let (unmonitored_episode_ids, unmonitored_collection_ids) = self
+            .unmonitor_deleted_episodes(&actor, &title_id, &fully_deleted_episode_ids)
+            .await;
+
         info!(
             title_id = %title_id,
             deleted = outcome.deleted_file_ids.len(),
             failed = outcome.failed.len(),
+            unmonitored_episodes = unmonitored_episode_ids.len(),
+            unmonitored_seasons = unmonitored_collection_ids.len(),
             delete_from_disk = %delete_from_disk,
             "episode media files deleted"
         );
@@ -1301,6 +1324,8 @@ impl AppUseCase {
             delete_from_disk,
             deleted_file_ids: outcome.deleted_file_ids,
             failed: outcome.failed,
+            unmonitored_episode_ids,
+            unmonitored_collection_ids,
         };
         // Same ladder as the title-deletion job: a run that deleted nothing is
         // a failure, a partial batch is a warning.
@@ -1337,6 +1362,141 @@ impl AppUseCase {
         {
             warn!(error = %error, title_id = %title_id, "failed to finish episode file deletion job");
         }
+    }
+
+    /// Stop monitoring what the run actually deleted, returning the episode and
+    /// season ids that were unmonitored.
+    ///
+    /// Deleting an episode's file is the user saying they no longer want it, so
+    /// leaving it monitored would just have the next search fetch it again. A
+    /// season follows once nothing under it is monitored any more, which is the
+    /// state that checking a whole season and deleting its files leaves behind;
+    /// a partly deleted season stays monitored for the episodes it still has.
+    /// The title is deliberately untouched — the same boundary
+    /// [`Self::unmonitor_maintenance_child`] keeps for scoped deletions.
+    ///
+    /// This is bookkeeping on top of deletions that already happened, so every
+    /// failure here is logged and skipped: the run still reports the file
+    /// outcome it achieved instead of failing over monitoring it could not
+    /// write.
+    async fn unmonitor_deleted_episodes(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &std::collections::BTreeSet<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut unmonitored_episode_ids = Vec::new();
+        if episode_ids.is_empty() {
+            return (unmonitored_episode_ids, Vec::new());
+        }
+
+        for episode_id in episode_ids {
+            match self.set_episode_monitored(actor, episode_id, false).await {
+                Ok(_) => unmonitored_episode_ids.push(episode_id.clone()),
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    episode_id = %episode_id,
+                    "failed to unmonitor episode after deleting its files"
+                ),
+            }
+        }
+
+        if unmonitored_episode_ids.is_empty() {
+            return (unmonitored_episode_ids, Vec::new());
+        }
+
+        // Read the title's episodes and seasons back after the writes above so
+        // the "nothing left monitored" check sees persisted state, including
+        // episodes this run never touched.
+        let episodes = match self
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_title(title_id)
+            .await
+        {
+            Ok(episodes) => episodes,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    "failed to read episodes back; seasons left monitored"
+                );
+                return (unmonitored_episode_ids, Vec::new());
+            }
+        };
+        let collections = match self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(title_id)
+            .await
+        {
+            Ok(collections) => collections,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    "failed to read seasons back; seasons left monitored"
+                );
+                return (unmonitored_episode_ids, Vec::new());
+            }
+        };
+
+        // Only seasons this run emptied of monitored episodes are considered, so
+        // a season that was already fully unmonitored is left alone.
+        let touched_collection_ids = episodes
+            .iter()
+            .filter(|episode| unmonitored_episode_ids.contains(&episode.id))
+            .filter_map(|episode| episode.collection_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        // Decided in full before the first write: no borrow of `episodes` or
+        // `collections` may be alive across an await, or this future stops
+        // being spawnable.
+        let mut drained_collection_ids = Vec::new();
+        for collection in collections
+            .iter()
+            .filter(|collection| collection.monitored)
+            .filter(|collection| touched_collection_ids.contains(&collection.id))
+        {
+            let mut has_episode = false;
+            let mut keeps_monitored_episode = false;
+            for episode in &episodes {
+                if episode.collection_id.as_deref() != Some(collection.id.as_str()) {
+                    continue;
+                }
+                has_episode = true;
+                if episode.monitored {
+                    keeps_monitored_episode = true;
+                    break;
+                }
+            }
+            if has_episode && !keeps_monitored_episode {
+                drained_collection_ids.push(collection.id.clone());
+            }
+        }
+        drop(episodes);
+        drop(collections);
+
+        let mut unmonitored_collection_ids = Vec::new();
+        for collection_id in drained_collection_ids {
+            match self
+                .set_collection_monitored(actor, &collection_id, false)
+                .await
+            {
+                Ok(_) => unmonitored_collection_ids.push(collection_id),
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    collection_id = %collection_id,
+                    "failed to unmonitor season after deleting its episode files"
+                ),
+            }
+        }
+
+        (unmonitored_episode_ids, unmonitored_collection_ids)
     }
 
     async fn update_episode_file_deletion_progress(
