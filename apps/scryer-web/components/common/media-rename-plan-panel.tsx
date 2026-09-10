@@ -35,12 +35,15 @@ export function MediaRenamePlanPanel({
   applying,
   applyDisabled,
   onApply,
+  onCancel,
   applyButtonId,
 }: {
   plan: MediaRenamePlan;
   applying: boolean;
   applyDisabled: boolean;
   onApply: () => void;
+  // Omit to render the plan without a way to dismiss it.
+  onCancel?: () => void;
   applyButtonId?: string;
 }) {
   const t = useTranslate();
@@ -92,7 +95,20 @@ export function MediaRenamePlanPanel({
           ))}
         </ul>
       </div>
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {onCancel ? (
+          <Button
+            id={applyButtonId ? `${applyButtonId}-cancel` : undefined}
+            data-ui="media-rename-plan-cancel"
+            size="sm"
+            type="button"
+            variant="outline"
+            onClick={onCancel}
+            disabled={applying}
+          >
+            {t("label.cancel")}
+          </Button>
+        ) : null}
         <Button id={applyButtonId} size="sm" type="button" onClick={onApply} disabled={applyDisabled}>
           {applying ? t("rename.applying") : t("rename.applyButton")}
         </Button>

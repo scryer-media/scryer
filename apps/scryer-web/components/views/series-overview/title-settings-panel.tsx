@@ -233,6 +233,7 @@ export function TitleSettingsPanel({
                   applyDisabled={renameApplying || renamePreviewing || renamePlan.renamable === 0}
                   applyButtonId="series-overview-rename-apply"
                   onApply={() => void handleApplyRename()}
+                  onCancel={() => setRenamePlan(null)}
                 />
               </div>
             ) : null}

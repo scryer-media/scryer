@@ -1692,6 +1692,7 @@ function TitleContextPanel({
                   onApply={() => {
                     void handleApplyRename();
                   }}
+                  onCancel={() => setRenamePlan(null)}
                 />
               ) : null
             }
