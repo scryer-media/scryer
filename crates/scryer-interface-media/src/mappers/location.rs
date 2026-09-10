@@ -69,6 +69,47 @@ const PLAN_ITEM_KINDS: [PlanItemKind; 10] = [
     PlanItemKind::Warning,
 ];
 
+/// Old journals may contain technical diagnostics. Keep them in storage/logs,
+/// while projecting the same plain-language copy through queries and streams.
+pub fn transfer_message(detail: &str) -> String {
+    let lower = detail.to_ascii_lowercase();
+    let technical = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|word| {
+            matches!(word, "blake3" | "crc" | "crc64_nvme" | "crc32c" | "crc64")
+                || (word.starts_with("0x") && word.len() > 8)
+                || (word.len() >= 32 && word.bytes().all(|c| c.is_ascii_hexdigit()))
+        });
+    if technical {
+        "A file could not be verified. Its source was preserved. Retry the transfer; detailed diagnostics are available in the logs.".into()
+    } else {
+        detail.to_string()
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::transfer_message;
+
+    #[test]
+    fn legacy_diagnostics_are_not_user_facing_transfer_copy() {
+        for diagnostic in [
+            "destination crc64_nvme is 0xe8b4b63689ee0365",
+            "BLAKE3 did not match",
+            "CRC read-back failed",
+        ] {
+            let message = transfer_message(diagnostic);
+            assert!(!message.to_ascii_lowercase().contains("crc"));
+            assert!(!message.to_ascii_lowercase().contains("blake3"));
+            assert!(!message.contains("0x"));
+            assert!(message.contains("source was preserved"));
+        }
+        let warning =
+            "Incoming season.nfo was preserved as season (from Anime).nfo to keep both versions.";
+        assert_eq!(transfer_message(warning), warning);
+    }
+}
+
 pub fn from_location_transfer(
     snapshot: scryer_application::location::live::TransferSnapshot,
 ) -> crate::types::LocationTransferSnapshotPayload {
@@ -86,13 +127,18 @@ pub fn from_location_transfer(
             .files
             .into_iter()
             .map(|file| crate::types::LocationTransferFilePayload {
+                reason_code: file.reason_code,
+                original_destination_path: display_path(&file.original_destination_path),
+                verification_total_bytes: Long(
+                    file.verification_total_bytes.min(i64::MAX as u64) as i64
+                ),
                 source_path: display_path(&file.source_path),
                 destination_path: display_path(&file.destination_path),
                 size_bytes: bytes(file.size_bytes),
                 state: file.state,
                 copy_bytes: bytes(file.copy_bytes),
                 verification_bytes: bytes(file.verification_bytes),
-                detail: file.detail,
+                detail: file.detail.as_deref().map(transfer_message),
             })
             .collect(),
         titles: snapshot
@@ -164,6 +210,7 @@ pub fn location_execution_mode_into_application(
     input: Option<LocationExecutionModeInput>,
 ) -> LocationExecutionMode {
     match input {
+        Some(LocationExecutionModeInput::UserMovedFiles) => LocationExecutionMode::UserMovedFiles,
         Some(LocationExecutionModeInput::FilesAlreadyThere) => {
             LocationExecutionMode::FilesAlreadyThere
         }
@@ -221,7 +268,7 @@ fn from_plan_item(item: &PlanItem) -> LocationPlanItemPayload {
         size_bytes: bytes(item.size_bytes),
         same_volume: item.same_volume,
         reason_code: item.reason_code.clone(),
-        detail: item.detail.clone(),
+        detail: item.detail.as_deref().map(transfer_message),
     }
 }
 
@@ -400,6 +447,7 @@ fn from_location_plan(
     warnings: Vec<String>,
 ) -> LocationOperationPreviewPayload {
     LocationOperationPreviewPayload {
+        folders: Vec::new(),
         plan_fingerprint: plan.fingerprint.0.clone(),
         operation_type: plan.header.operation_type.into(),
         mode: plan.header.mode.into(),
@@ -422,7 +470,10 @@ fn from_location_plan(
         free_space: from_free_space_estimate(&plan.free_space),
         verification: from_verification_statement(&plan.verification),
         confirmation: from_plan_confirmation(&plan.confirmation),
-        warnings,
+        warnings: warnings
+            .iter()
+            .map(|warning| transfer_message(warning))
+            .collect(),
         blocks_start: plan.blocks_start(),
         merges: plan.merges.iter().map(from_merge_summary).collect(),
     }
@@ -473,11 +524,22 @@ fn from_merge_summary(summary: &MergePreviewSummary) -> LocationMergePreviewPayl
 /// The complete root-move preview: the fingerprinted plan plus the grouped
 /// classification the plan only counts (FR-015, FR-080, FR-081).
 pub fn from_root_move_preview(preview: &RootMovePreview) -> LocationOperationPreviewPayload {
-    from_location_plan(
+    let mut payload = from_location_plan(
         &preview.plan,
         from_selection_classification(&preview.classification),
         preview.warnings.clone(),
-    )
+    );
+    payload.folders = preview
+        .execution
+        .titles
+        .iter()
+        .map(|title| crate::types::LocationTitleFoldersPayload {
+            title_id: ID(title.title_id.clone()),
+            source: title.source_folder_path.as_deref().map(display_path),
+            destination: title.destination_folder_path.as_deref().map(display_path),
+        })
+        .collect();
+    payload
 }
 
 // ── US4 and US5: the two root-scoped previews (FR-020 to FR-029) ─────────────
@@ -731,7 +793,7 @@ fn from_title_checkpoint(checkpoint: &TitleCheckpoint) -> LocationTitleCheckpoin
         files_verified: Long(checkpoint.files_verified),
         bytes_total: Long(checkpoint.bytes_total),
         bytes_verified: Long(checkpoint.bytes_verified),
-        detail: checkpoint.detail.clone(),
+        detail: checkpoint.detail.as_deref().map(transfer_message),
         started_at: checkpoint.started_at,
         updated_at: checkpoint.updated_at,
         completed_at: checkpoint.completed_at,
@@ -757,7 +819,7 @@ pub fn from_location_operation(
         verification_depth: from_verification_depth(operation.verification_depth),
         verification_fallback_count: Long(operation.verification_fallback_count),
         counters: from_location_operation_counters(&operation.counters),
-        detail: operation.detail.clone(),
+        detail: operation.detail.as_deref().map(transfer_message),
         job_run_id: operation.job_run_id.clone().map(ID::from),
         workflow_operation_id: operation.workflow_operation_id.clone().map(ID::from),
         cancel_requested: operation.cancel_requested,

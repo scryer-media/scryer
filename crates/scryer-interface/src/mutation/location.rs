@@ -115,6 +115,9 @@ impl LocationMutations {
                     confirmation,
                 };
                 match mode {
+                    LocationExecutionMode::UserMovedFiles => {
+                        app.start_manual_move(&actor, request).await
+                    }
                     LocationExecutionMode::FilesAlreadyThere => {
                         app.start_adoption(&actor, request).await
                     }

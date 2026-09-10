@@ -25,6 +25,7 @@ export type LocationOperationType =
 export type LocationExecutionMode =
   | "MOVE_WITH_SCRYER"
   | "FILES_ALREADY_THERE"
+  | "USER_MOVED_FILES"
   | "CATALOG_ONLY";
 
 /** The one class each selected title falls into for a requested destination. */
@@ -267,6 +268,7 @@ export type LocationMergePreview = {
 };
 
 export type LocationOperationPreview = {
+  folders?: { titleId: string; source: string | null; destination: string | null }[];
   planFingerprint: string;
   operationType: LocationOperationType;
   mode: LocationExecutionMode;
@@ -993,7 +995,7 @@ export const REQUESTABLE_MOVE_MODES = [
   "FILES_ALREADY_THERE",
 ] as const;
 
-export type RequestableMoveMode = (typeof REQUESTABLE_MOVE_MODES)[number];
+export type RequestableMoveMode = (typeof REQUESTABLE_MOVE_MODES)[number] | "USER_MOVED_FILES";
 
 /**
  * The mode to confirm a previewed plan under.
@@ -1006,6 +1008,7 @@ export type RequestableMoveMode = (typeof REQUESTABLE_MOVE_MODES)[number];
 export function startModeInput(
   preview: LocationOperationPreview | null | undefined,
 ): RequestableMoveMode {
+  if (preview?.mode === "USER_MOVED_FILES") return "USER_MOVED_FILES";
   return preview?.mode === "FILES_ALREADY_THERE"
     ? "FILES_ALREADY_THERE"
     : "MOVE_WITH_SCRYER";
@@ -1771,27 +1774,29 @@ export function isCrossLibraryDestination(
 // --------------------------------------------------------------------------
 
 /**
- * The three states of the move dialog.
- *
- * A caller that already picked a destination root (the bulk-edit path) hands
- * the dialog a plan to read; a caller that only asked to move something (the
- * title panel's "Move To…" action) has to say what kind of move it is and pick
- * a destination first, because a library with a single root can never start a
- * cross-library move from a root picker alone.
+ * Destination choices precede the transfer method. Only the managed branch
+ * discovers files; the manual branch displays catalog folder instructions.
  */
-export type MoveWizardStep = "kind" | "destination" | "plan";
+export type MoveWizardStep = "kind" | "destination" | "method" | "manual" | "plan";
+
+/** No discovery request exists until the operator chooses the managed branch. */
+export function moveWizardRequestMode(open: boolean, step: MoveWizardStep): RequestableMoveMode | null {
+  if (!open) return null;
+  if (step === "manual") return "USER_MOVED_FILES";
+  return step === "plan" ? "MOVE_WITH_SCRYER" : null;
+}
 
 /** What the user said they want to do, before they say where. */
 export type MoveDestinationKind = "root" | "library";
 
-/** Where the dialog opens: a caller-picked root skips the wizard entirely. */
+/** A caller-picked root skips destination selection, but still asks who moves files. */
 export function initialMoveStep(
   initialRootId: string | null | undefined,
 ): MoveWizardStep {
-  return initialRootId ? "plan" : "kind";
+  return initialRootId ? "method" : "kind";
 }
 
-/** Whether this dialog opening runs the wizard rather than opening on a plan. */
+/** Whether Back should include destination selection. */
 export function movesThroughWizard(
   initialRootId: string | null | undefined,
 ): boolean {
@@ -1868,14 +1873,17 @@ export function nextMoveStep(step: MoveWizardStep): MoveWizardStep {
     return "destination";
   }
   if (step === "destination") {
-    return "plan";
+    return "method";
   }
   return "plan";
 }
 
 /** The step Back leads to; "kind" is the first step, so it stays put. */
 export function previousMoveStep(step: MoveWizardStep): MoveWizardStep {
-  if (step === "plan") {
+  if (step === "plan" || step === "manual") {
+    return "method";
+  }
+  if (step === "method") {
     return "destination";
   }
   if (step === "destination") {

@@ -815,7 +815,7 @@ async fn an_adoption_cancels_at_a_title_boundary_and_leaves_finished_titles_alon
 
     fixture
         .operations
-        .cancel_at_cancel_check(title_boundary_cancel_check(2, 1));
+        .stop_after_settled_title(&first.id, false);
     let outcome = fixture
         .app
         .run_root_move(operation_id, &preview.execution)
@@ -833,12 +833,26 @@ async fn an_adoption_cancels_at_a_title_boundary_and_leaves_finished_titles_alon
         ],
         "the title that finished before the cancel stays adopted"
     );
+    let second_completed = fixture
+        .operations
+        .checkpoint(operation_id, &second.id)
+        .is_some_and(|checkpoint| {
+            matches!(
+                checkpoint.state,
+                crate::location::model::TitleCheckpointState::Completed
+                    | crate::location::model::TitleCheckpointState::CompletedWithWarnings
+            )
+        });
     assert_eq!(
         fixture.title(&second.id).await.root_folder_id,
-        fixture.root_a_id,
-        "the title the cancel stopped short of is untouched"
+        if second_completed {
+            fixture.root_b_id.clone()
+        } else {
+            fixture.root_a_id.clone()
+        },
+        "an admitted title may finish while cancellation drains; catalog ownership must match its checkpoint"
     );
-    for (title, count) in [(&first, 1), (&second, 0)] {
+    for (title, count) in [(&first, 1), (&second, i64::from(second_completed))] {
         let history = fixture
             .app
             .list_title_history_for_title(

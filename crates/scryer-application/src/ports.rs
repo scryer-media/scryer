@@ -5075,6 +5075,35 @@ pub struct LocationOperationProgress {
 /// of the ownership rows outside the runner.
 #[async_trait]
 pub trait LocationOperationRepository: Send + Sync {
+    async fn save_file_resolution(
+        &self,
+        _record: &crate::location::resolution::FileResolution,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "file resolution storage is not configured".into(),
+        ))
+    }
+
+    async fn file_resolutions_for_sources(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+        sources: &[String],
+    ) -> AppResult<Vec<crate::location::resolution::FileResolution>> {
+        Ok(self
+            .file_resolutions(operation_id, title_id)
+            .await?
+            .into_iter()
+            .filter(|row| sources.contains(&row.source_path))
+            .collect())
+    }
+    async fn file_resolutions(
+        &self,
+        _operation_id: &str,
+        _title_id: &str,
+    ) -> AppResult<Vec<crate::location::resolution::FileResolution>> {
+        Ok(Vec::new())
+    }
     async fn allocate_transfer_generation(&self) -> AppResult<i64> {
         Ok(1)
     }

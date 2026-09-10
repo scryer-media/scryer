@@ -50,6 +50,7 @@ pub mod model;
 pub mod operations;
 pub mod ownership_guard;
 pub mod preview;
+pub mod resolution;
 pub mod root_move;
 pub mod root_scope;
 pub mod root_scope_execution;

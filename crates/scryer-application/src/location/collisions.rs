@@ -622,8 +622,8 @@ impl CollisionWarning {
             } => format!(
                 "The destination's \"{canonical_name}\" stays authoritative; the incoming one was preserved as \"{preserved_as}\"."
             ),
-            Self::DedupSkippedMissingFullHash { name, detail } => format!(
-                "\"{name}\" looks identical to the destination file but was not deduplicated: {detail}."
+            Self::DedupSkippedMissingFullHash { name, .. } => format!(
+                "\"{name}\" has not had a complete content comparison, so both files were preserved."
             ),
         }
     }

@@ -1647,6 +1647,9 @@ impl CatalogQueries {
             destination: location_destination_into_application(input.destination),
         };
         let preview = match mode {
+            scryer_application::location::model::LocationExecutionMode::UserMovedFiles => {
+                app.preview_manual_move(&actor, request).await
+            }
             scryer_application::location::model::LocationExecutionMode::FilesAlreadyThere => {
                 app.preview_adoption(&actor, request).await
             }
@@ -1756,6 +1759,11 @@ impl CatalogQueries {
             .location_transfer_title_detail(&actor_from_ctx(ctx)?, id.as_str(), title_id.as_str())
             .await
             .map_err(to_gql_error)
+            .map(|detail| {
+                detail
+                    .as_deref()
+                    .map(scryer_interface_media::mappers::transfer_message)
+            })
     }
 
     /// Read one location operation with its per-title checkpoints.

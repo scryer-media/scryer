@@ -31,6 +31,9 @@ export type TransferTitle = {
   hasException: boolean;
 };
 export type TransferFile = {
+  reasonCode?: string | null;
+  originalDestinationPath?: string;
+  verificationTotalBytes?: number | string;
   sourcePath: string;
   destinationPath: string;
   sizeBytes: LongValue;

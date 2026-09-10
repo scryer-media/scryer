@@ -4705,6 +4705,7 @@ const LOCATION_PLAN_ITEM_FIELDS = `
 
 export const locationOperationPreviewQuery = `query LocationOperationPreview($input: LocationOperationPreviewInput!) {
   locationOperationPreview(input: $input) {
+    folders { titleId source destination }
     planFingerprint
     operationType
     mode
@@ -4899,7 +4900,7 @@ export const locationTransferPageSubscription = `subscription LocationTransferPa
   locationTransferPage(id: $id, offset: $offset) {${LOCATION_TRANSFER_FIELDS}}
 }`;
 const LOCATION_TRANSFER_FILE_FIELDS = `${LOCATION_TRANSFER_FIELDS}
-  files { sourcePath destinationPath sizeBytes state copyBytes verificationBytes detail }
+  files { sourcePath originalDestinationPath destinationPath sizeBytes state copyBytes verificationBytes verificationTotalBytes reasonCode detail }
 `;
 export const locationTransferFilesQuery = `query LocationTransferFiles($id: ID!, $titleId: ID!, $offset: Int!) {
   locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}

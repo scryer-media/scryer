@@ -2117,6 +2117,15 @@ fn classification_from(
     for item in title_items {
         match item.kind {
             PlanItemKind::Dedup => classification.dedup_eligible_files += 1,
+            PlanItemKind::Warning
+                if item.reason_code.as_deref() == Some("compare_during_transfer") =>
+            {
+                if item.media_file_id.is_some() {
+                    classification.media_collisions += 1;
+                } else {
+                    classification.companion_collisions += 1;
+                }
+            }
             // A folder-scoped rename is FR-025's uniquing, which is already
             // counted as a title; only a file's rename is FR-024 (4) or (6).
             PlanItemKind::Rename if !item.folder_scoped => {

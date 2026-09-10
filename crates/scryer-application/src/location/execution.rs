@@ -134,6 +134,14 @@ pub struct TitlePlacementSnapshot {
 /// path can be exercised against temp directories and a fake catalog.
 #[async_trait]
 pub trait RootMoveCatalog: Send + Sync {
+    async fn has_other_media_at_path(
+        &self,
+        _title_id: &str,
+        _path: &str,
+        _excluding_id: &str,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
     /// Where the catalog currently says the title lives. `None` when the title
     /// no longer exists.
     async fn title_placement(&self, title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>>;
@@ -258,6 +266,8 @@ pub enum SourceDisposal {
     /// Recycling was not available, so the verified-redundant source was
     /// removed. Always warned about, never silent (C3).
     RemovedRecycleUnavailable(&'static str),
+    /// The recycle bin refused the file; the extra source copy remains.
+    PreservedRecycleUnavailable,
 }
 
 /// Recycles source copies a verified destination has made redundant.
@@ -291,7 +301,9 @@ pub trait SourceRecycler: Send + Sync {
 /// operation's configured depth. The source is left exactly where it is; only
 /// [`RootMoveReconciler`] removes it, and only against a persisted verification
 /// record (FR-044).
+#[derive(Clone)]
 pub struct RootMoveFileMover {
+    resolver: Option<Arc<super::resolution::ConflictResolver>>,
     copier: VerifiedCopier,
     permissions: Arc<dyn PlacedContentPermissions>,
     /// Where the streamed hashes are persisted (FR-041, migration 0205).
@@ -312,10 +324,15 @@ pub struct RootMoveFileMover {
 }
 
 impl RootMoveFileMover {
+    pub fn with_resolver(mut self, resolver: Arc<super::resolution::ConflictResolver>) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
     pub fn new(copier: VerifiedCopier, permissions: Arc<dyn PlacedContentPermissions>) -> Self {
         Self {
             copier,
             permissions,
+            resolver: None,
             catalog: None,
             force_copies: false,
         }
@@ -385,6 +402,11 @@ impl RootMoveFileMover {
 #[async_trait]
 impl TitleFileMover for RootMoveFileMover {
     async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+        if let Some(resolver) = &self.resolver {
+            let mut placement = self.clone();
+            placement.resolver = None;
+            return resolver.resolve(&placement, request).await;
+        }
         let source = &request.file.source_path;
         let destination = &request.file.destination_path;
 
@@ -501,7 +523,7 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
     }
 }
 
-fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+pub(super) fn same_regular_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
     if !left.is_file() || !right.is_file() {
         return false;
     }
@@ -755,7 +777,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         // Destination directories are destination content: the operator's
         // configured folder modes apply before the catalog points at them
         // (FR-031).
-        if let Some(folder) = planned.destination_folder_path.as_deref() {
+        if operation.mode != crate::location::model::LocationExecutionMode::UserMovedFiles
+            && let Some(folder) = planned.destination_folder_path.as_deref()
+        {
             let folder = stored_path_to_path_buf(folder);
             if tokio::fs::symlink_metadata(&folder).await.is_ok() {
                 self.permissions.apply_to_directory(&folder).await?;
@@ -801,13 +825,54 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         // Media-file paths first, then the folder, then the root: each step is
         // individually correct, and an interruption between them leaves rows
         // pointing at real files rather than at a folder nothing lives in.
-        for file in &planned.files {
+        let resolutions = self
+            .store
+            .file_resolutions(&operation.id, &title.title_id)
+            .await?;
+        for resolution in &resolutions {
+            if !resolution.proof_is_current().await {
+                return Err(AppError::Validation("A file changed before the catalog update. Its source was preserved; resume to compare it again.".into()));
+            }
+            if let Some(warning) = &resolution.warning {
+                outcome.warnings.push(warning.clone());
+            }
+        }
+        for file in planned.files.iter().chain(
+            self.plan
+                .catalog_paths
+                .get(&title.title_id)
+                .into_iter()
+                .flatten(),
+        ) {
             let Some(media_file_id) = file.media_file_id.as_deref() else {
                 continue;
             };
-            self.catalog
-                .set_media_file_path(media_file_id, &file.destination_path)
-                .await?;
+            let resolution = resolutions
+                .iter()
+                .find(|row| row.source_path == file.source_path);
+            if let Some(row) = resolution
+                && row.disposition == super::resolution::ResolutionDisposition::Identical
+                && self
+                    .catalog
+                    .has_other_media_at_path(
+                        planned
+                            .merge_target_title_id
+                            .as_deref()
+                            .unwrap_or(&title.title_id),
+                        &row.destination_path,
+                        media_file_id,
+                    )
+                    .await?
+            {
+                self.catalog.delete_media_file(media_file_id).await?;
+            } else {
+                let destination = resolution
+                    .map(|row| row.destination_path.as_str())
+                    .unwrap_or(&file.destination_path);
+                self.catalog
+                    .set_media_file_path(media_file_id, destination)
+                    .await?;
+            }
         }
 
         // US7: for a merge there is no source title left to point anywhere —
@@ -862,6 +927,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         operation: &LocationOperation,
         title: &PlannedTitle,
     ) -> AppResult<TitleStepOutcome> {
+        if operation.mode == crate::location::model::LocationExecutionMode::UserMovedFiles {
+            return Ok(TitleStepOutcome::clean());
+        }
         let planned = self.title(&title.title_id)?;
         let mut outcome = TitleStepOutcome::clean();
 
@@ -902,11 +970,37 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     "the duplicate source {source} was removed rather than recycled: {reason}"
                 ));
             }
+            if disposal == SourceDisposal::PreservedRecycleUnavailable {
+                outcome.warnings.push(format!(
+                    "An extra copy remains at {source} because it could not be recycled. The destination copy is complete."
+                ));
+            }
         }
 
         // 2. Retire sources only after durable verification and catalog writes.
         // A no-copy placement keeps both hard links until this point.
+        let resolutions = self
+            .store
+            .file_resolutions(&operation.id, &title.title_id)
+            .await?;
         for file in &planned.files {
+            let resolution = resolutions
+                .iter()
+                .find(|row| row.source_path == file.source_path);
+            let mut resolved = file.clone();
+            if let Some(row) = resolution {
+                if tokio::fs::symlink_metadata(file.source())
+                    .await
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    continue;
+                }
+                if !row.proof_is_current().await {
+                    return Err(AppError::Validation("A file changed before source cleanup. The source was preserved; resume to compare it again.".into()));
+                }
+                resolved.destination_path = row.destination_path.clone();
+            }
+            let file = &resolved;
             let Some(record) = verified.get(&file.destination_path) else {
                 continue;
             };
@@ -974,6 +1068,19 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     "the copied source {} was removed rather than recycled: {reason}",
                     file.source_path
                 ));
+            }
+            if disposal == SourceDisposal::PreservedRecycleUnavailable {
+                let warning = format!(
+                    "An extra copy remains at {} because it could not be recycled. The destination copy is complete.",
+                    file.source_path
+                );
+                if let Some(resolution) = resolution {
+                    let mut resolution = resolution.clone();
+                    resolution.warning = Some(warning.clone());
+                    resolution.reason_code = Some("recycle_unavailable".into());
+                    self.store.save_file_resolution(&resolution).await?;
+                }
+                outcome.warnings.push(warning);
             }
         }
 
@@ -1174,6 +1281,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         let planned_media: BTreeSet<String> = planned
             .files
             .iter()
+            .chain(self.plan.catalog_paths.get(title_id).into_iter().flatten())
             .filter(|file| file.media_file_id.is_some())
             .map(|file| file.source_path.clone())
             .chain(planned.deduplicated_sources.iter().cloned())
@@ -1181,6 +1289,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         let planned_destinations: BTreeSet<String> = planned
             .files
             .iter()
+            .chain(self.plan.catalog_paths.get(title_id).into_iter().flatten())
             .filter(|file| file.media_file_id.is_some())
             .map(|file| file.destination_path.clone())
             .collect();
@@ -1280,8 +1389,8 @@ impl SourceRecycler for RemoveVerifiedSource {
     }
 }
 
-/// The production recycler: the configured recycle bin, with removal as the
-/// explicit, warned fallback when the bin cannot take the file.
+/// The production recycler retains an extra copy when the configured bin fails.
+/// A disabled bin permits cleanup of fresh placements, but preserves duplicates.
 pub struct RecycleBinSourceRecycler {
     configs: BTreeMap<String, crate::recycle_bin::RecycleBinConfig>,
 }
@@ -1316,6 +1425,13 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         }
 
         let Some(config) = self.config_for(title).filter(|config| config.enabled) else {
+            if title
+                .deduplicated_sources
+                .iter()
+                .any(|path| stored_path_to_path_buf(path) == source)
+            {
+                return Ok(SourceDisposal::PreservedRecycleUnavailable);
+            }
             return RemoveVerifiedSource
                 .recycle_source(operation_id, title, source, media_file_id, size_bytes)
                 .await;
@@ -1340,12 +1456,9 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         match crate::recycle_bin::recycle_file(config, source, manifest).await {
             Ok(Some(_)) => Ok(SourceDisposal::Recycled),
             Ok(None) => Ok(SourceDisposal::AlreadyAbsent),
-            Err(_) => {
-                // The bin refused the file. The destination copy is proven, so
-                // removing the source is safe — but it is never silent.
-                RemoveVerifiedSource
-                    .recycle_source(operation_id, title, source, media_file_id, size_bytes)
-                    .await
+            Err(error) => {
+                tracing::warn!(%operation_id, source = %source.display(), %error, "source recycling failed; retaining the source");
+                Ok(SourceDisposal::PreservedRecycleUnavailable)
             }
         }
     }

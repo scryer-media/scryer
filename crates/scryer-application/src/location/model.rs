@@ -71,6 +71,8 @@ pub enum LocationExecutionMode {
     MoveWithScryer,
     /// The user already moved the files; Scryer verifies and adopts them.
     FilesAlreadyThere,
+    /// Trust the user's external move and update catalog mappings only.
+    UserMovedFiles,
     /// No filesystem work at all: fileless titles (FR-076) and folder-match
     /// correction (FR-014).
     CatalogOnly,
@@ -81,6 +83,7 @@ impl LocationExecutionMode {
         match self {
             Self::MoveWithScryer => "move_with_scryer",
             Self::FilesAlreadyThere => "files_already_there",
+            Self::UserMovedFiles => "user_moved_files",
             Self::CatalogOnly => "catalog_only",
         }
     }
@@ -91,6 +94,7 @@ impl LocationExecutionMode {
         match value.trim() {
             "move_with_scryer" => Some(Self::MoveWithScryer),
             "files_already_there" => Some(Self::FilesAlreadyThere),
+            "user_moved_files" => Some(Self::UserMovedFiles),
             "catalog_only" => Some(Self::CatalogOnly),
             _ => None,
         }

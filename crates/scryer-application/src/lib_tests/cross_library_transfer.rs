@@ -915,10 +915,14 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
     );
     assert_eq!(
         planned.deduplicated_sources.len(),
-        1,
-        "the byte-identical incoming copy is recycled, not written twice"
+        0,
+        "existing content is resolved during execution"
     );
-    assert_eq!(planned.files.len(), 1, "only the new feature is copied");
+    assert_eq!(
+        planned.files.len(),
+        2,
+        "both files need an execution decision"
+    );
 
     // OQ7: the preview has no operation of its own to exclude.
     assert_eq!(fixture.merges.excluded_operations(), vec![None]);
@@ -938,7 +942,7 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
         .map(|title| title.deduplicated_sources.len())
         .sum();
     assert_eq!(previewed_merges, 1);
-    assert_eq!(previewed_dedups, 1);
+    assert_eq!(previewed_dedups, 0);
 
     // ── Execution ───────────────────────────────────────────────────────────
     let operation = fixture.start_and_settle(&[&title.id]).await;
@@ -985,7 +989,10 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
 
     // FR-091 / SC-004: the preview's merge count is the outcome's merge count.
     assert_eq!(operation.counters.merges, previewed_merges as i64);
-    assert_eq!(operation.counters.dedups, previewed_dedups as i64);
+    assert_eq!(
+        operation.counters.dedups, 1,
+        "the completed identity decision is counted"
+    );
     assert_eq!(operation.counters.merges, 1);
 
     // FR-073: the redundant source row does not survive as a second row on the
@@ -1416,7 +1423,7 @@ async fn a_merging_transfer_owns_the_destination_title_and_still_completes() {
         .app
         .delete_title(&fixture.user, &destination.id, false, None)
         .await;
-    let Err(crate::AppError::Validation(message)) = deleted else {
+    let Err(crate::AppError::LocationOperationBusy(message)) = deleted else {
         panic!("deleting a merge target under a running operation must be refused: {deleted:?}");
     };
     assert!(
@@ -1603,9 +1610,7 @@ async fn an_interrupted_transfer_resumes_and_converges_on_the_destination_librar
         .await
         .expect("persist the operation");
 
-    fixture
-        .operations
-        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
+    fixture.operations.stop_after_settled_title(&first.id, true);
     let crashed = fixture
         .app
         .run_root_move(operation_id, &preview.execution)
@@ -1615,14 +1620,22 @@ async fn an_interrupted_transfer_resumes_and_converges_on_the_destination_librar
         "the injected store failure aborts the run"
     );
 
-    // The first title's flip already landed; the second has not started.
+    // Concurrent work may finish before the injected stop is observed.
     assert_eq!(
         fixture.title(&first.id).await.library_id,
         fixture.destination_library_id
     );
     assert_eq!(
         fixture.title(&second.id).await.library_id,
-        fixture.source_library_id
+        if fixture
+            .operations
+            .checkpoint(operation_id, &second.id)
+            .is_some_and(|checkpoint| checkpoint.state.is_settled())
+        {
+            fixture.destination_library_id.clone()
+        } else {
+            fixture.source_library_id.clone()
+        }
     );
 
     let resumed_plan = fixture

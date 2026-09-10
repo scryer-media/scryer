@@ -71,6 +71,10 @@ pub struct LocationOperationStore {
     datastore: StoreDatastore,
 }
 
+#[cfg(test)]
+#[path = "location_operation_store/tests.rs"]
+mod resolution_tests;
+
 impl LocationOperationStore {
     pub fn new(datastore: StoreDatastore) -> Self {
         Self { datastore }
@@ -79,6 +83,47 @@ impl LocationOperationStore {
 
 #[async_trait]
 impl LocationOperationRepository for LocationOperationStore {
+    async fn save_file_resolution(
+        &self,
+        record: &scryer_application::location::resolution::FileResolution,
+    ) -> AppResult<()> {
+        let json = serde_json::to_string(record)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        SqlRuntime::execute_write(&self.datastore, "save_file_resolution",
+            "INSERT INTO location_file_resolutions (operation_id, title_id, source_path, resolution_json) VALUES ({}, {}, {}, {}) ON CONFLICT (operation_id, title_id, source_path) DO UPDATE SET resolution_json = excluded.resolution_json",
+            vec![SqlArg::Text(record.operation_id.clone()), SqlArg::Text(record.title_id.clone()), SqlArg::Text(record.source_path.clone()), SqlArg::Text(json)]).await?;
+        Ok(())
+    }
+
+    async fn file_resolutions_for_sources(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+        sources: &[String],
+    ) -> AppResult<Vec<scryer_application::location::resolution::FileResolution>> {
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut args = vec![
+            SqlArg::Text(operation_id.into()),
+            SqlArg::Text(title_id.into()),
+        ];
+        args.extend(sources.iter().cloned().map(SqlArg::Text));
+        let placeholders = vec!["{}"; sources.len()].join(", ");
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &format!("SELECT resolution_json FROM location_file_resolutions WHERE operation_id = {{}} AND title_id = {{}} AND source_path IN ({placeholders})"), &args).await?
+            .into_iter().map(|row| serde_json::from_str(&row.text("resolution_json")?).map_err(|error| AppError::Repository(error.to_string()))).collect()
+    }
+
+    async fn file_resolutions(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_application::location::resolution::FileResolution>> {
+        SqlRuntime::fetch_all(self.datastore.read_exec(),
+            "SELECT resolution_json FROM location_file_resolutions WHERE operation_id = {} AND title_id = {}",
+            &[SqlArg::Text(operation_id.into()), SqlArg::Text(title_id.into())]).await?
+            .into_iter().map(|row| serde_json::from_str(&row.text("resolution_json")?).map_err(|error| AppError::Repository(error.to_string()))).collect()
+    }
     async fn allocate_transfer_generation(&self) -> AppResult<i64> {
         SqlRuntime::execute_write(
             &self.datastore,

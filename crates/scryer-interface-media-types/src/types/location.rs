@@ -29,6 +29,9 @@ pub struct LocationTransferTitlePayload {
 
 #[derive(SimpleObject, Clone)]
 pub struct LocationTransferFilePayload {
+    pub reason_code: Option<String>,
+    pub original_destination_path: String,
+    pub verification_total_bytes: Long,
     pub source_path: String,
     pub destination_path: String,
     pub size_bytes: Long,
@@ -83,6 +86,7 @@ pub enum LocationExecutionModeValue {
     MoveWithScryer,
     /// The user already moved the files; Scryer verifies and adopts them.
     FilesAlreadyThere,
+    UserMovedFiles,
     /// No filesystem work at all: fileless titles and folder-match correction.
     CatalogOnly,
 }
@@ -102,6 +106,7 @@ pub enum LocationExecutionModeInput {
     /// The user already moved the files; Scryer accounts for them at the
     /// destination and adopts them where they lie.
     FilesAlreadyThere,
+    UserMovedFiles,
 }
 
 /// Lifecycle state of a confirmed location operation, as shown in Activity.
@@ -493,6 +498,7 @@ pub struct LocationPlanConfirmationPayload {
 #[derive(SimpleObject, Clone)]
 /// A read-only preview of a location operation; nothing is changed.
 pub struct LocationOperationPreviewPayload {
+    pub folders: Vec<LocationTitleFoldersPayload>,
     /// Fingerprint over the full plan, echoed back to confirm it.
     pub plan_fingerprint: String,
     /// Which location workflow this plan belongs to.
@@ -528,6 +534,13 @@ pub struct LocationOperationPreviewPayload {
     /// One summary per title that merges into an existing destination title.
     /// Empty for every plan with no merge in it.
     pub merges: Vec<LocationMergePreviewPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LocationTitleFoldersPayload {
+    pub title_id: ID,
+    pub source: Option<String>,
+    pub destination: Option<String>,
 }
 
 /// Why one record stops a merge from running (FR-066).

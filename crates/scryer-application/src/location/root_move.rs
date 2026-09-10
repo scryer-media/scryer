@@ -269,21 +269,25 @@ impl RootMoveTitleExecution {
 
     /// The runner's view of this title.
     pub fn to_planned_title(&self) -> PlannedTitle {
+        // Companion paths may depend on a tracked media file's resolved name.
+        // Admit media first so that waiting companions cannot occupy every slot.
+        let mut files: Vec<_> = self
+            .files
+            .iter()
+            .map(|file| PlannedFile {
+                media_file_id: file.media_file_id.clone(),
+                source_path: file.source(),
+                destination_path: file.destination(),
+                size_bytes: file.size_bytes,
+            })
+            .collect();
+        files.sort_by_key(|file| file.media_file_id.is_none());
         PlannedTitle {
             title_id: self.title_id.clone(),
             sequence: self.sequence,
             classification: Some(self.class),
             placement: self.placement(),
-            files: self
-                .files
-                .iter()
-                .map(|file| PlannedFile {
-                    media_file_id: file.media_file_id.clone(),
-                    source_path: file.source(),
-                    destination_path: file.destination(),
-                    size_bytes: file.size_bytes,
-                })
-                .collect(),
+            files,
             outcomes: TitleOutcomeCounts {
                 dedups: self.deduplicated_sources.len() as i64,
                 renames: self.renamed_destinations.len() as i64,
@@ -309,6 +313,9 @@ pub struct DeduplicationSurvivor {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RootMoveExecutionPlan {
     pub titles: Vec<RootMoveTitleExecution>,
+    /// Catalog path updates confirmed by a user who moved files externally.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub catalog_paths: BTreeMap<String, Vec<RootMoveFileExecution>>,
     /// Surviving destination for every source the confirmed plan will recycle.
     #[serde(default)]
     pub deduplication_destinations: BTreeMap<String, DeduplicationSurvivor>,
@@ -625,7 +632,31 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
     let mut plan_warnings: Vec<String> = Vec::new();
 
     for (index, draft) in request.titles.iter().enumerate() {
-        let (title_execution, items, warnings) = plan_title(request, draft, index as i64);
+        let (mut title_execution, mut items, warnings) = plan_title(request, draft, index as i64);
+        if mode == LocationExecutionMode::UserMovedFiles {
+            if let Some(title) = title_execution.as_mut() {
+                items.insert(
+                    0,
+                    PlanItem::new(PlanItemKind::CatalogChange)
+                        .with_title(title.title_id.clone())
+                        .with_paths(
+                            title.source_folder_path.clone(),
+                            title.destination_folder_path.clone(),
+                        )
+                        .with_reason_code("title_folder_mapping"),
+                );
+                execution
+                    .catalog_paths
+                    .insert(title.title_id.clone(), std::mem::take(&mut title.files));
+                title.prune_directories.clear();
+            }
+            for item in &mut items {
+                if matches!(item.kind, PlanItemKind::Move | PlanItemKind::Rename) {
+                    item.kind = PlanItemKind::CatalogChange;
+                    item.detail = Some("Update the catalog after you move this file, keeping its name and relative folder.".into());
+                }
+            }
+        }
         execution.record_deduplication_destinations(&items);
         builder.extend(items);
         plan_warnings.extend(warnings.iter().cloned());
@@ -693,6 +724,9 @@ fn execution_mode_for(
     requested: LocationExecutionMode,
     titles: &[RootMoveTitleDraft],
 ) -> LocationExecutionMode {
+    if requested == LocationExecutionMode::UserMovedFiles {
+        return requested;
+    }
     if !titles.iter().any(|title| title.class.moves_files()) {
         return LocationExecutionMode::CatalogOnly;
     }
@@ -783,10 +817,16 @@ pub(super) fn plan_title(
                     .map(path_to_stored_string),
                 destination_library_id: draft.destination_library_id.clone(),
                 destination_root_id: draft.destination_root_id.clone(),
-                // A fileless title keeps no folder: there is nothing on disk to
-                // own, and inventing a folder here would make the next scan
-                // claim an empty directory.
-                destination_folder_path: None,
+                // Trusted manual moves remap an existing catalog folder even
+                // when it contains no tracked media. Other modes invent none.
+                destination_folder_path: if request.mode == LocationExecutionMode::UserMovedFiles {
+                    draft
+                        .destination_folder_path
+                        .as_deref()
+                        .map(path_to_stored_string)
+                } else {
+                    None
+                },
                 destination_root_path: draft
                     .destination_root_path
                     .as_deref()
@@ -897,28 +937,54 @@ pub(super) fn plan_title(
     let mut renamed_destinations = Vec::new();
     for file in &draft.files {
         let item_id = collision_item_id(file);
-        let decision = collisions
+        let mut decision = collisions
             .as_ref()
             .and_then(|plan| plan.decision(&item_id).cloned());
+        if let Some(decision) = decision.as_mut()
+            && decision.collided_with.is_some()
+            && decision.disposition != CollisionDisposition::CaseOnlyRename
+        {
+            let detail = "Files will be compared during transfer. Identical content will be consolidated; different content will be preserved with a source-library suffix.";
+            let mut comparison = PlanItem::new(PlanItemKind::Warning)
+                .with_title(draft.title_id.clone())
+                .with_paths(
+                    Some(path_to_stored_string(&file.path)),
+                    Some(path_to_stored_string(
+                        destination_folder.join(&decision.proposed_name),
+                    )),
+                )
+                .with_reason_code("compare_during_transfer")
+                .with_detail(detail);
+            comparison.media_file_id = file.media_file_id.clone();
+            items.push(comparison);
+            decision.disposition = CollisionDisposition::PlaceAsIs;
+            decision.final_name = decision.proposed_name.clone();
+            decision.recycle_source = false;
+            decision.merge_catalog_associations = false;
+            decision.warnings.clear();
+        }
         let final_name = decision
             .as_ref()
             .map(|decision| decision.final_name.clone())
             .unwrap_or_else(|| file_name_or(&file.path, &draft.title_id));
 
-        let destination_path = match file.relative_path.as_ref() {
-            Some(relative) => match relative.parent() {
-                Some(parent) if !parent.as_os_str().is_empty() => {
-                    destination_folder.join(parent).join(&final_name)
-                }
-                _ => destination_folder.join(&final_name),
-            },
-            None => {
-                warnings.push(format!(
+        let destination_path = if decision.is_some() {
+            destination_folder.join(&final_name)
+        } else {
+            match file.relative_path.as_ref() {
+                Some(relative) => match relative.parent() {
+                    Some(parent) if !parent.as_os_str().is_empty() => {
+                        destination_folder.join(parent).join(&final_name)
+                    }
+                    _ => destination_folder.join(&final_name),
+                },
+                None => {
+                    warnings.push(format!(
                     "\"{}\" tracks {} outside its folder; it moves into the destination folder root",
                     draft.title_name,
                     file.path.display()
                 ));
-                items.push(
+                    items.push(
                     PlanItem::new(PlanItemKind::Warning)
                         .with_title(draft.title_id.clone())
                         .with_paths(
@@ -931,10 +997,10 @@ pub(super) fn plan_title(
                                 .to_string(),
                         ),
                 );
-                destination_folder.join(&final_name)
+                    destination_folder.join(&final_name)
+                }
             }
         };
-
         let source_display = path_to_stored_string(&file.path);
         let destination_display = path_to_stored_string(&destination_path);
 
@@ -1620,7 +1686,11 @@ pub(super) fn plan_collisions_for_files(
 
     let mut incoming = Vec::with_capacity(files.len());
     for file in files {
-        let name = file_name_or(&file.path, fallback_name);
+        let name = file
+            .relative_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| file_name_or(&file.path, fallback_name));
         let id = collision_item_id(file);
         let item = if file.media_file_id.is_some() {
             IncomingItem::media(id, name, file.size_bytes)
@@ -1964,10 +2034,8 @@ mod tests {
         assert_eq!(planned.plan.verification.bytes, 1_000);
     }
 
-    /// A proven-identical destination copy deduplicates: no bytes are written
-    /// and the source copy is recycled (FR-073).
     #[test]
-    fn identical_destination_content_deduplicates_instead_of_copying() {
+    fn unproven_collisions_defer_their_name_and_disposition_to_execution() {
         let mut title = draft(TitleLocationClass::RootMove);
         title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
         title.files = vec![SourceFile {
@@ -1982,33 +2050,21 @@ mod tests {
         let planned = build_root_move_plan(&request(vec![title]));
         let execution = planned.execution.title("title-1").expect("planned");
 
-        // Content facts carry no full BLAKE3 on either side, so the dedup gate
-        // refuses to call them identical (D4) and the incoming file is renamed
-        // rather than deduplicated.
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
         assert!(execution.deduplicated_sources.is_empty());
-        assert_ne!(
+        assert_eq!(
             execution.files[0].destination_path,
             "/b/Some Movie/movie.mkv"
         );
-        // The rename reaches the runner as an outcome to count (FR-091).
-        assert_eq!(
-            execution.renamed_destinations,
-            vec![execution.files[0].destination_path.clone()]
-        );
+        assert!(execution.renamed_destinations.is_empty());
         let work = planned.work_plan();
-        assert_eq!(work.titles[0].outcomes.renames, 1);
+        assert_eq!(work.titles[0].outcomes.renames, 0);
         assert_eq!(work.titles[0].outcomes.dedups, 0);
     }
 
-    /// D4, unlocked by FR-047: once the backfill job has hashed both sides, the
-    /// same look-alike collision that could only be renamed above resolves as a
-    /// proven duplicate. This is the whole point of persisting the hash — the
-    /// planner does no IO, so a dedup it cannot read off the catalog is a dedup
-    /// that never happens.
     #[test]
-    fn matching_persisted_hashes_turn_a_look_alike_into_a_proven_dedup() {
+    fn matching_persisted_hashes_still_require_execution_identity_proof() {
         const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
         let mut title = draft(TitleLocationClass::RootMove);
@@ -2028,18 +2084,17 @@ mod tests {
         let planned = build_root_move_plan(&request(vec![title]));
         let execution = planned.execution.title("title-1").expect("planned");
 
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 1);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
+        assert!(execution.deduplicated_sources.is_empty());
+        assert!(planned.execution.deduplication_destinations.is_empty());
         assert_eq!(
-            execution.deduplicated_sources,
-            vec!["/a/Some Movie/movie.mkv".to_string()]
+            execution.files[0].destination_path,
+            "/b/Some Movie/movie.mkv"
         );
-        let survivor = &planned.execution.deduplication_destinations["/a/Some Movie/movie.mkv"];
-        assert_eq!(survivor.destination_path, "/b/Some Movie/movie.mkv");
-        assert_eq!(survivor.source_media_file_id.as_deref(), Some("mf-1"));
         assert!(execution.renamed_destinations.is_empty());
         let work = planned.work_plan();
-        assert_eq!(work.titles[0].outcomes.dedups, 1);
+        assert_eq!(work.titles[0].outcomes.dedups, 0);
         assert_eq!(work.titles[0].outcomes.renames, 0);
     }
 
@@ -2067,7 +2122,8 @@ mod tests {
         let planned = build_root_move_plan(&request(vec![title]));
 
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
+        assert_eq!(planned.execution.titles[0].files.len(), 1);
     }
 
     /// FR-085: hardlinked sources warn about the broken link and the recycle

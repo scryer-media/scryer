@@ -224,6 +224,29 @@ fn write_file(path: &Path, contents: &[u8]) {
     std::fs::write(path, contents).expect("write fixture");
 }
 
+#[tokio::test]
+async fn legacy_duplicates_remain_when_recycling_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        8,
+    );
+    let title = &mut plan.titles[0];
+    let source = title.files[0].source();
+    write_file(&source, b"incoming");
+    title
+        .deduplicated_sources
+        .push(path_to_stored_string(&source));
+    let disposal = RecycleBinSourceRecycler::new(BTreeMap::new())
+        .recycle_source("operation", title, &source, None, 8)
+        .await
+        .unwrap();
+    assert_eq!(disposal, SourceDisposal::PreservedRecycleUnavailable);
+    assert_eq!(std::fs::read(source).unwrap(), b"incoming");
+}
+
 /// One title, one media file, moving from `<root>/a/Movie` to
 /// `<root>/b/Movie`.
 fn single_title_plan(
@@ -1183,13 +1206,13 @@ async fn a_destination_left_unrecorded_by_a_crash_is_proven_and_the_move_continu
     let records = store.verifications();
     assert_eq!(records.len(), 1);
     assert!(records[0].outcome.permits_source_removal());
+    assert_eq!(
+        records[0].destination_path,
+        plan.titles[0].files[0].destination_path
+    );
     assert!(
-        records[0]
-            .detail
-            .as_deref()
-            .is_some_and(|detail| detail.contains("movie.mkv")),
-        "the record says the destination was proven in place: {:?}",
-        records[0].detail
+        records[0].detail.is_none(),
+        "successful comparison needs no diagnostic message"
     );
     assert!(
         records[0].hashes.is_some(),
@@ -1254,6 +1277,61 @@ async fn a_destination_that_does_not_prove_fails_its_title_and_names_the_path() 
     );
     assert!(catalog.writes().is_empty());
     assert!(recycler.recycled().is_empty());
+}
+
+#[tokio::test]
+async fn trusted_manual_completion_updates_missing_paths_without_file_work() {
+    struct NoFileWork;
+    #[async_trait]
+    impl TitleFileMover for NoFileWork {
+        async fn move_file(&self, _: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            panic!("manual completion attempted file work");
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut plan = single_title_plan(
+        &temp.path().join("unavailable-source"),
+        &temp.path().join("unavailable-destination"),
+        "Season 1/episode.mkv",
+        100,
+    );
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let paths = std::mem::take(&mut plan.titles[0].files);
+    let expected = paths[0].destination_path.clone();
+    plan.catalog_paths.insert("title-1".into(), paths);
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::UserMovedFiles,
+        VerificationDepth::Full,
+    ));
+    let recycler = RecordingRecycler::default();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let result = LocationOperationRunner::new(&store, &NoFileWork, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .unwrap();
+    assert_eq!(result.state, LocationOperationState::Completed);
+    assert!(store.verifications().is_empty());
+    assert!(
+        store
+            .file_resolutions("op-1", "title-1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(recycler.recycled().is_empty());
+    assert!(
+        catalog
+            .writes()
+            .iter()
+            .any(|write| write.contains(&expected)),
+        "catalog paths changed: {:?}",
+        catalog.writes()
+    );
+    assert!(!temp.path().join("unavailable-destination").exists());
 }
 
 /// T033: a fileless title completes with no filesystem work at all — no

@@ -24,6 +24,7 @@ use crate::ports::{
 
 #[derive(Default)]
 struct State {
+    resolutions: BTreeMap<(String, String, String), super::resolution::FileResolution>,
     operations: BTreeMap<String, LocationOperation>,
     plans: BTreeMap<String, String>,
     checkpoints: BTreeMap<(String, String), TitleCheckpoint>,
@@ -39,6 +40,7 @@ struct State {
     /// The cancel check at which a user's cancel lands, for a test that needs
     /// the request to arrive at a known title boundary.
     cancel_at_cancel_check: Option<usize>,
+    stop_after_settled_title: Option<(String, bool)>,
     /// Once a checkpoint write in this state is attempted, every checkpoint
     /// write fails until the fault is cleared.
     fail_checkpoint_writes_from: Option<crate::location::model::TitleCheckpointState>,
@@ -55,6 +57,10 @@ pub(crate) struct InMemoryLocationOperationStore {
 }
 
 impl InMemoryLocationOperationStore {
+    pub(crate) fn stop_after_settled_title(&self, title_id: &str, crash: bool) {
+        self.state.lock().expect("lock").stop_after_settled_title = Some((title_id.into(), crash));
+    }
+
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -166,6 +172,35 @@ pub(crate) fn title_boundary_cancel_check(nth: usize, files_per_title: usize) ->
 
 #[async_trait]
 impl LocationOperationRepository for InMemoryLocationOperationStore {
+    async fn save_file_resolution(
+        &self,
+        record: &super::resolution::FileResolution,
+    ) -> AppResult<()> {
+        self.state.lock().expect("lock").resolutions.insert(
+            (
+                record.operation_id.clone(),
+                record.title_id.clone(),
+                record.source_path.clone(),
+            ),
+            record.clone(),
+        );
+        Ok(())
+    }
+    async fn file_resolutions(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+    ) -> AppResult<Vec<super::resolution::FileResolution>> {
+        Ok(self
+            .state
+            .lock()
+            .expect("lock")
+            .resolutions
+            .values()
+            .filter(|row| row.operation_id == operation_id && row.title_id == title_id)
+            .cloned()
+            .collect())
+    }
     async fn create_location_operation(
         &self,
         operation: &LocationOperation,
@@ -287,6 +322,20 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
     async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool> {
         let mut state = self.state.lock().expect("lock");
         state.cancel_checks += 1;
+        if let Some((title_id, crash)) = state.stop_after_settled_title.clone()
+            && state
+                .checkpoints
+                .get(&(operation_id.into(), title_id))
+                .is_some_and(|row| row.state.is_settled())
+        {
+            state.stop_after_settled_title = None;
+            if crash {
+                return Err(crate::AppError::Repository(
+                    "the store went away after a title settled".into(),
+                ));
+            }
+            state.cancel_requested.insert(operation_id.into());
+        }
         if state.crash_on_cancel_check == Some(state.cancel_checks) {
             state.crash_on_cancel_check = None;
             return Err(crate::AppError::Repository(

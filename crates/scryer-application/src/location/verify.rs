@@ -220,16 +220,30 @@ pub fn partial_destination_path(destination: &Path) -> PathBuf {
 pub struct CopyProgress(
     Option<Arc<dyn Fn(u64) + Send + Sync>>,
     Option<Arc<dyn Fn(scryer_domain::ImportTransferPhase, u64) + Send + Sync>>,
+    Option<Arc<dyn Fn(u64, u64) + Send + Sync>>,
 );
 
 impl CopyProgress {
     /// A copy nobody is watching.
     pub fn none() -> Self {
-        Self(None, None)
+        Self(None, None, None)
     }
 
     pub fn from_fn(sink: impl Fn(u64) + Send + Sync + 'static) -> Self {
-        Self(Some(Arc::new(sink)), None)
+        Self(Some(Arc::new(sink)), None, None)
+    }
+
+    pub fn with_comparison_sink(mut self, sink: impl Fn(u64, u64) + Send + Sync + 'static) -> Self {
+        self.2 = Some(Arc::new(sink));
+        self
+    }
+
+    pub fn comparison(&self, bytes: u64, total: u64) {
+        if let Some(sink) = &self.2 {
+            sink(bytes, total);
+        } else {
+            self.phase(scryer_domain::ImportTransferPhase::Verifying, bytes);
+        }
     }
 
     pub fn with_transfer_sink(
@@ -619,28 +633,8 @@ impl VerifiedCopier {
         destination: &Path,
         requested: VerificationDepth,
     ) -> AppResult<VerifiedFile> {
-        self.progress
-            .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
-        let hashes = {
-            let source = source.to_path_buf();
-            spawn_verify_blocking(move || hash_source(&source)).await?
-        }?;
-        let assessment = self.verify(source, destination, &hashes, requested).await?;
-
-        Ok(VerifiedFile {
-            source_path: source.to_path_buf(),
-            destination_path: destination.to_path_buf(),
-            hashes: Some(hashes),
-            depth: assessment.depth,
-            outcome: assessment.outcome,
-            detail: join_details(
-                Some(format!(
-                    "{} was already in place with no verification record and was proven against the source",
-                    destination.display()
-                )),
-                assessment.detail,
-            ),
-        })
+        let _ = requested;
+        super::resolution::compare_existing(source, destination, &self.progress).await
     }
 
     /// Prove `destination` against the hashes streamed while it was written.
@@ -987,13 +981,15 @@ fn full_read_back(
 
     let read_back_crc = digest.finalize();
     if read_back_crc != hashes.move_crc {
+        tracing::warn!(
+            algorithm = hashes.crc_algorithm.as_str(),
+            expected = hashes.move_crc,
+            actual = read_back_crc,
+            "copy read-back mismatch"
+        );
         return Ok((
             FileVerificationOutcome::Mismatch,
-            Some(format!(
-                "destination {} read-back is {read_back_crc:#018x}; the copy streamed {:#018x}",
-                hashes.crc_algorithm.as_str(),
-                hashes.move_crc
-            )),
+            Some("The copied file did not match the source. The source was preserved; retry the transfer.".into()),
         ));
     }
 

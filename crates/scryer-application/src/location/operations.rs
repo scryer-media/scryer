@@ -220,6 +220,24 @@ impl AppUseCase {
             .await
     }
 
+    pub async fn preview_manual_move(
+        &self,
+        actor: &User,
+        request: RootMovePreviewRequest,
+    ) -> AppResult<RootMovePreview> {
+        self.preview_location_change(actor, request, LocationExecutionMode::UserMovedFiles)
+            .await
+    }
+
+    pub async fn start_manual_move(
+        &self,
+        actor: &User,
+        request: StartRootMoveRequest,
+    ) -> AppResult<LocationOperationAccepted> {
+        self.start_location_change(actor, request, LocationExecutionMode::UserMovedFiles)
+            .await
+    }
+
     async fn preview_location_change(
         &self,
         actor: &User,
@@ -785,7 +803,9 @@ impl AppUseCase {
         // closed, so nothing below can change either. A run that stopped short
         // of terminal notifies nothing — its checkpoints are durable and the
         // terminal run that follows covers them.
-        if let Ok(outcome) = outcome.as_ref() {
+        if mode != LocationExecutionMode::UserMovedFiles
+            && let Ok(outcome) = outcome.as_ref()
+        {
             notify_media_servers_for_operation(
                 self.services.library.location_operations.as_ref(),
                 &AppUseCaseMediaServerRefresh { app: self.clone() },
@@ -806,8 +826,17 @@ impl AppUseCase {
     ) -> AppResult<OperationRunOutcome> {
         let adopting = mode == LocationExecutionMode::FilesAlreadyThere;
         let catalog = AppUseCaseRootMoveCatalog { app: self.clone() };
-        let recycler = self.root_move_recycler(plan).await;
-        let permissions = self.root_move_permissions(plan).await?;
+        let manual = mode == LocationExecutionMode::UserMovedFiles;
+        let recycler = if manual {
+            RecycleBinSourceRecycler::new(BTreeMap::new())
+        } else {
+            self.root_move_recycler(plan).await
+        };
+        let permissions: Arc<dyn crate::location::execution::PlacedContentPermissions> = if manual {
+            Arc::new(crate::location::execution::NoPlacedContentPermissions)
+        } else {
+            self.root_move_permissions(plan).await?
+        };
         // US3: adoption copies nothing. The same runner walks the same plan and
         // the same reconciler flips catalog ownership at the same per-title
         // checkpoint; only the per-file step differs, because there is nothing
@@ -826,8 +855,35 @@ impl AppUseCase {
             // hashes land on the media file as they are produced (FR-041,
             // migration 0205), instead of the backfill job reading every moved
             // file a second time.
+            let mut contexts = BTreeMap::new();
+            for title in plan.titles.iter().filter(|_| !manual) {
+                let label = self
+                    .services
+                    .catalog
+                    .libraries
+                    .get_by_id(&title.source_library_id)
+                    .await?
+                    .map(|library| library.name)
+                    .unwrap_or_else(|| "source".into());
+                let config = self
+                    .recycle_bin_config_for_media_root(title.source_root_path.as_deref())
+                    .await;
+                contexts.insert(
+                    title.title_id.clone(),
+                    (
+                        label,
+                        config.enabled
+                            && config.validation_error.is_none()
+                            && title.source_root_path.is_some(),
+                    ),
+                );
+            }
             copy_mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
-                .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }));
+                .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }))
+                .with_resolver(Arc::new(super::resolution::ConflictResolver::new(
+                    self.services.library.location_operations.clone(),
+                    contexts,
+                )));
             &copy_mover
         };
         let admission = {
@@ -1318,6 +1374,9 @@ async fn unavailable_plan_root(
     plan: &RootMoveExecutionPlan,
     mode: LocationExecutionMode,
 ) -> Option<String> {
+    if mode == LocationExecutionMode::UserMovedFiles {
+        return None;
+    }
     let requires_source = mode != LocationExecutionMode::FilesAlreadyThere;
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for title in &plan.titles {
@@ -1722,7 +1781,10 @@ impl AppUseCase {
                 adoption: None,
             };
 
-            if !classified.class.moves_files() {
+            let manual_folder_mapping = mode == LocationExecutionMode::UserMovedFiles
+                && classified.class == TitleLocationClass::CatalogOnly
+                && source_folder_path.is_some();
+            if !classified.class.moves_files() && !manual_folder_mapping {
                 drafts.push(draft);
                 continue;
             }
@@ -1803,6 +1865,64 @@ impl AppUseCase {
             // the tracked media is accounted for against it (FR-050/051), and
             // none of the collision, hardlink, or free-space machinery applies —
             // no bytes are written.
+            if mode == LocationExecutionMode::UserMovedFiles {
+                draft.destination_folder_path = Some(destination_folder.clone());
+                let mut mapped_paths = std::collections::BTreeSet::new();
+                if let Some(destination_title) = merge_destination {
+                    for media in self
+                        .services
+                        .library
+                        .media_files
+                        .list_media_files_for_title(&destination_title.id)
+                        .await?
+                    {
+                        mapped_paths.insert(
+                            PathCaseRule::platform_default()
+                                .fold(&media.file_path)
+                                .into_owned(),
+                        );
+                    }
+                }
+                for media in media_files_by_title.get(&title.id).into_iter().flatten() {
+                    let path = stored_path_to_path_buf(&media.file_path);
+                    let relative = source_folder_path
+                        .as_ref()
+                        .and_then(|folder| path.strip_prefix(folder).ok());
+                    let Some(relative) = relative else {
+                        return Err(AppError::Validation(format!(
+                            "The catalog cannot map a file outside the recorded folder for {}. Correct its folder mapping first.",
+                            title.name
+                        )));
+                    };
+                    if relative.as_os_str().is_empty()
+                        || relative
+                            .components()
+                            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                    {
+                        return Err(AppError::Validation(format!(
+                            "The catalog path for {} is ambiguous. Correct its folder mapping before moving it.",
+                            title.name
+                        )));
+                    }
+                    let mapped = path_to_stored_string(&destination_folder.join(relative));
+                    if !mapped_paths
+                        .insert(PathCaseRule::platform_default().fold(&mapped).into_owned())
+                    {
+                        return Err(AppError::Validation(format!(
+                            "More than one catalog record would point at {mapped}. Resolve that catalog conflict before confirming the manual move."
+                        )));
+                    }
+                    draft.files.push(SourceFile {
+                        media_file_id: Some(media.id.clone()),
+                        relative_path: Some(relative.to_path_buf()),
+                        path,
+                        size_bytes: media.size_bytes.max(0) as u64,
+                        full_blake3: FullHash::Absent,
+                    });
+                }
+                drafts.push(draft);
+                continue;
+            }
             if mode == LocationExecutionMode::FilesAlreadyThere {
                 let adoption_folder = resolve_adoption_folder(
                     destination_folder.clone(),
@@ -2133,7 +2253,8 @@ impl AppUseCase {
         destination_folder: Option<&Path>,
         merge_target_title_id: Option<&str>,
     ) -> AppResult<TitleMoveFacts> {
-        let (files, source_directories) = collect_source_files(source_folder, media_files).await?;
+        let (mut files, source_directories) =
+            collect_source_files(source_folder, media_files).await?;
         let hardlinks =
             detect_hardlinks(files.iter().map(|file| file.path.clone()).collect()).await?;
         // FR-073 needs a *proven* hash on both sides, and the catalog is the
@@ -2146,10 +2267,58 @@ impl AppUseCase {
             Some(title_id) => self.persisted_hashes_for_title(title_id).await?,
             None => BTreeMap::new(),
         };
-        let destination_entries = match destination_folder {
+        let mut destination_entries = match destination_folder {
             Some(folder) => read_destination_entries(folder, &destination_hashes).await,
             None => Vec::new(),
         };
+        let case_rule = PathCaseRule::platform_default();
+        let by_name: BTreeMap<String, usize> = destination_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (case_rule.fold(&entry.name).into_owned(), index))
+            .collect();
+        for file in &mut files {
+            let name = file
+                .relative_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| {
+                    file.path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                });
+            let Some(&index) = by_name.get::<str>(case_rule.fold(&name).as_ref()) else {
+                continue;
+            };
+            let existing = &mut destination_entries[index];
+            let Some(path) = existing.path.as_deref() else {
+                continue;
+            };
+            let destination = stored_path_to_path_buf(path);
+            file.full_blake3 = FullHash::Absent;
+            existing.content.full_blake3 = FullHash::Absent;
+            if let (Ok(source), Ok(target)) = (
+                tokio::fs::symlink_metadata(&file.path).await,
+                tokio::fs::symlink_metadata(&destination).await,
+            ) && super::execution::same_regular_file(&source, &target)
+            {
+                continue;
+            }
+            if file.size_bytes <= 10_000_000 && existing.content.size_bytes <= 10_000_000 {
+                if let Ok(Some(hash)) = super::resolution::preview_hash(&file.path).await {
+                    file.full_blake3 = FullHash::known(hash);
+                }
+                if let Ok(Some(hash)) = super::resolution::preview_hash(&destination).await {
+                    existing.content.full_blake3 = FullHash::known(hash);
+                }
+            } else {
+                // Preview samples never authorize consolidation or cleanup.
+                let _source_sample = sampled_proof_of(&file.path).await;
+                let _destination_sample = sampled_proof_of(&destination).await;
+            }
+        }
         Ok(TitleMoveFacts {
             files,
             source_directories,
@@ -2684,26 +2853,36 @@ pub(super) async fn read_destination_entries(
     destination_folder: &Path,
     known_hashes: &BTreeMap<String, FullHash>,
 ) -> Vec<DestinationItem> {
-    let Ok(mut entries) = tokio::fs::read_dir(destination_folder).await else {
-        return Vec::new();
-    };
     let mut items = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let Ok(metadata) = entry.metadata().await else {
+    let mut pending = vec![destination_folder.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&folder).await else {
             continue;
         };
-        if metadata.is_dir() {
-            continue;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(metadata) = tokio::fs::symlink_metadata(entry.path()).await else {
+                continue;
+            };
+            if metadata.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            let name = entry
+                .path()
+                .strip_prefix(destination_folder)
+                .expect("walked child")
+                .to_string_lossy()
+                .to_string();
+            let path = path_to_stored_string(entry.path());
+            let full_hash = known_hashes.get(&path).cloned().unwrap_or(FullHash::Absent);
+            items.push(
+                DestinationItem::companion(name, metadata.len())
+                    .with_content(ContentFacts::new(metadata.len()).with_full_hash(full_hash))
+                    .with_path(path),
+            );
         }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let path = path_to_stored_string(entry.path());
-        let full_hash = known_hashes.get(&path).cloned().unwrap_or(FullHash::Absent);
-        items.push(
-            DestinationItem::companion(name, metadata.len())
-                .with_content(ContentFacts::new(metadata.len()).with_full_hash(full_hash))
-                .with_path(path),
-        );
     }
+    items.sort_by(|left, right| left.name.cmp(&right.name));
     items
 }
 
@@ -2771,6 +2950,22 @@ struct AppUseCaseRootMoveCatalog {
 
 #[async_trait::async_trait]
 impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
+    async fn has_other_media_at_path(
+        &self,
+        title_id: &str,
+        path: &str,
+        excluding_id: &str,
+    ) -> AppResult<bool> {
+        Ok(self
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(title_id)
+            .await?
+            .iter()
+            .any(|file| file.id != excluding_id && file.file_path == path))
+    }
     async fn title_placement(&self, title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>> {
         let Some(title) = self.app.services.catalog.titles.get_by_id(title_id).await? else {
             return Ok(None);

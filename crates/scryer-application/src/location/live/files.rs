@@ -10,6 +10,9 @@ pub(super) type ManifestCache = VecDeque<(String, Arc<Manifest>)>;
 
 #[derive(Clone, Debug)]
 pub struct TransferFile {
+    pub reason_code: Option<String>,
+    pub original_destination_path: String,
+    pub verification_total_bytes: u64,
     pub source_path: String,
     pub destination_path: String,
     pub size_bytes: u64,
@@ -252,9 +255,22 @@ impl crate::AppUseCase {
         let files = manifest.get(title_id).map(Vec::as_slice).unwrap_or(&[]);
         let offset = usize::try_from(offset.max(0)).unwrap_or(usize::MAX);
         let page: Vec<_> = files.iter().skip(offset).take(50).collect();
+        let sources: Vec<_> = page.iter().map(|file| file.source_path.clone()).collect();
+        let resolutions = store
+            .file_resolutions_for_sources(operation_id, title_id, &sources)
+            .await?;
+        let resolved: BTreeMap<_, _> = resolutions
+            .iter()
+            .map(|row| (row.source_path.as_str(), row))
+            .collect();
         let paths: Vec<_> = page
             .iter()
-            .map(|file| file.destination_path.clone())
+            .map(|file| {
+                resolved.get(file.source_path.as_str()).map_or_else(
+                    || file.destination_path.clone(),
+                    |row| row.destination_path.clone(),
+                )
+            })
             .collect();
         let proofs: BTreeMap<_, _> = store
             .location_file_verifications_for_paths(operation_id, title_id, &paths)
@@ -271,11 +287,16 @@ impl crate::AppUseCase {
                 let key = (title_id.to_owned(), file.destination_path.clone());
                 let live = telemetry.and_then(|op| op.files.get(&key));
                 let failed = telemetry.is_some_and(|op| op.abandoned_work.contains_key(&key));
-                let proof = proofs.get(&file.destination_path);
+                let resolution = resolved.get(file.source_path.as_str());
+                let destination = resolution.map_or(file.destination_path.as_str(), |row| {
+                    row.destination_path.as_str()
+                });
+                let proof = proofs.get(destination);
                 let active = live.filter(|live| !live.done);
                 let verified =
                     proof.is_some_and(|proof| proof.outcome == FileVerificationOutcome::Verified);
                 let status = match active.and_then(|file| file.phase) {
+                    _ if active.is_some_and(|file| file.comparing) => "COMPARING",
                     _ if file.destination_path.is_empty() => "DUPLICATE",
                     Some(scryer_domain::ImportTransferPhase::Verifying) => "VERIFYING",
                     Some(scryer_domain::ImportTransferPhase::Copying) => "MOVING",
@@ -294,18 +315,38 @@ impl crate::AppUseCase {
                     _ => "QUEUED",
                 };
                 TransferFile {
+                    reason_code: resolution
+                        .and_then(|row| row.reason_code.clone())
+                        .or_else(|| {
+                            (failed
+                                || proof
+                                    .is_some_and(|proof| !proof.outcome.permits_source_removal()))
+                            .then(|| "file_transfer_failed".into())
+                        }),
+                    original_destination_path: file.destination_path.clone(),
+                    verification_total_bytes: active
+                        .filter(|file| file.comparing)
+                        .map_or(file.size_bytes, |file| file.comparison_total),
                     source_path: file.source_path.clone(),
-                    destination_path: file.destination_path.clone(),
+                    destination_path: destination.to_owned(),
                     size_bytes: file.size_bytes,
                     state: status.to_owned(),
                     copy_bytes: live.map_or(if verified { file.size_bytes } else { 0 }, |file| {
                         file.copied
                     }),
-                    verification_bytes: live
-                        .map_or(if verified { file.size_bytes } else { 0 }, |file| {
-                            file.verified
-                        }),
-                    detail: proof.and_then(|proof| proof.detail.clone()),
+                    verification_bytes: live.map_or(
+                        if verified { file.size_bytes } else { 0 },
+                        |file| {
+                            if file.comparing && !file.done {
+                                file.compared
+                            } else {
+                                file.verified
+                            }
+                        },
+                    ),
+                    detail: resolution
+                        .and_then(|row| row.warning.clone())
+                        .or_else(|| proof.and_then(|proof| proof.detail.clone())),
                 }
             })
             .collect();

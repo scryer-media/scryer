@@ -27,6 +27,7 @@ import {
   crossLibraryDestinations,
   eligibleSameLibraryRoots,
   initialMoveStep,
+  moveWizardRequestMode,
   moveWizardCanAdvance,
   movesThroughWizard,
   nextMoveStep,
@@ -1838,13 +1839,25 @@ test("a file the stored plan cannot fully name still says what it can", () => {
 // Move wizard steps
 // --------------------------------------------------------------------------
 
-test("the dialog opens on the plan only when the caller already picked a root", () => {
-  assert.equal(initialMoveStep("root-2"), "plan");
+test("a preselected destination still requires a transfer method before discovery", () => {
+  assert.equal(initialMoveStep("root-2"), "method");
   assert.equal(initialMoveStep(null), "kind");
   assert.equal(initialMoveStep(undefined), "kind");
   assert.equal(initialMoveStep(""), "kind");
   assert.equal(movesThroughWizard("root-2"), false);
   assert.equal(movesThroughWizard(null), true);
+});
+
+test("Back, close, and method selection stop managed discovery; manual instructions only request catalog data", () => {
+  for (const step of ["kind", "destination", "method"] as const) {
+    assert.equal(moveWizardRequestMode(true, step), null);
+  }
+  assert.equal(moveWizardRequestMode(true, "plan"), "MOVE_WITH_SCRYER");
+  assert.equal(moveWizardRequestMode(true, "manual"), "USER_MOVED_FILES");
+  assert.equal(moveWizardRequestMode(true, previousMoveStep("plan")), null);
+  assert.equal(moveWizardRequestMode(true, previousMoveStep("manual")), null);
+  assert.equal(moveWizardRequestMode(false, "plan"), null);
+  assert.equal(moveWizardRequestMode(false, "manual"), null);
 });
 
 test("a same-library move never offers a root the selection already sits on", () => {
@@ -1944,11 +1957,14 @@ test("each wizard step advances only once its own pick is made", () => {
   );
 });
 
-test("wizard navigation walks kind → destination → plan and back again", () => {
+test("wizard navigation requires a method and returns both branches to that choice", () => {
   assert.equal(nextMoveStep("kind"), "destination");
-  assert.equal(nextMoveStep("destination"), "plan");
+  assert.equal(nextMoveStep("destination"), "method");
+  assert.equal(nextMoveStep("method"), "plan");
   assert.equal(nextMoveStep("plan"), "plan");
-  assert.equal(previousMoveStep("plan"), "destination");
+  assert.equal(previousMoveStep("plan"), "method");
+  assert.equal(previousMoveStep("manual"), "method");
+  assert.equal(previousMoveStep("method"), "destination");
   assert.equal(previousMoveStep("destination"), "kind");
   assert.equal(previousMoveStep("kind"), "kind");
 });

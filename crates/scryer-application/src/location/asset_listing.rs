@@ -349,7 +349,7 @@ impl AppUseCase {
         else {
             return Ok(LocationOperationAssetListing::empty(operation_id));
         };
-        let plan: RootMoveExecutionPlan = match serde_json::from_str(&plan_json) {
+        let mut plan: RootMoveExecutionPlan = match serde_json::from_str(&plan_json) {
             Ok(plan) => plan,
             Err(error) => {
                 tracing::warn!(
@@ -366,6 +366,38 @@ impl AppUseCase {
             .location_operations
             .list_location_title_checkpoints(operation_id)
             .await?;
+        for title in &mut plan.titles {
+            let resolutions = self
+                .services
+                .library
+                .location_operations
+                .file_resolutions(operation_id, &title.title_id)
+                .await?;
+            for resolution in resolutions.into_iter().filter(|row| row.completed) {
+                if resolution.original_destination != resolution.destination_path {
+                    if !title
+                        .renamed_destinations
+                        .contains(&resolution.destination_path)
+                    {
+                        title
+                            .renamed_destinations
+                            .push(resolution.destination_path.clone());
+                    }
+                    if let Some(file) = title
+                        .files
+                        .iter_mut()
+                        .find(|file| file.source_path == resolution.source_path)
+                    {
+                        file.destination_path = resolution.destination_path;
+                    }
+                } else if resolution.disposition
+                    == super::resolution::ResolutionDisposition::Identical
+                    && !title.deduplicated_sources.contains(&resolution.source_path)
+                {
+                    title.deduplicated_sources.push(resolution.source_path);
+                }
+            }
+        }
         Ok(build_asset_listing(operation_id, &plan, &checkpoints))
     }
 }

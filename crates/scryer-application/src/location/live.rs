@@ -138,6 +138,10 @@ impl TransferEta {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileTelemetry {
+    pub comparing: bool,
+    pub compared: u64,
+    pub comparison_total: u64,
+    pub comparison_credit: u64,
     pub copied: u64,
     pub verified: u64,
     pub copy_credit: u64,
@@ -239,6 +243,40 @@ impl TransferHub {
         self.changed.send_replace(state.version);
     }
 
+    pub fn file_comparing(
+        &self,
+        operation: &str,
+        title: &str,
+        path: &str,
+        size: u64,
+        bytes: u64,
+        total: u64,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let telemetry = state.operations.entry(operation.into()).or_default();
+        let file = telemetry
+            .files
+            .entry((title.into(), path.into()))
+            .or_default();
+        let changed = !file.comparing || file.done;
+        file.comparing = true;
+        file.done = false;
+        file.size = size;
+        file.phase = Some(scryer_domain::ImportTransferPhase::Verifying);
+        file.compared = bytes.min(total);
+        file.comparison_total = total;
+        let useful = file.compared.saturating_sub(file.comparison_credit);
+        file.comparison_credit = file.comparison_credit.max(file.compared);
+        telemetry
+            .abandoned_work
+            .remove(&(title.into(), path.into()));
+        telemetry.eta.add_useful(useful, Instant::now());
+        if changed {
+            state.version.revision = state.version.revision.saturating_add(1);
+            self.changed.send_replace(state.version);
+        }
+    }
+
     pub fn file_update(
         &self,
         operation: &str,
@@ -260,7 +298,8 @@ impl TransferHub {
             .abandoned_work
             .remove(&(title.to_owned(), path.to_owned()));
         file.done = false;
-        let phase_changed = file.phase != Some(phase);
+        let phase_changed = file.phase != Some(phase) || file.comparing;
+        file.comparing = false;
         file.size = size;
         file.phase = Some(phase);
         let bytes = bytes.min(size);
@@ -409,7 +448,15 @@ impl TransferHub {
         let remaining = total
             .saturating_mul(2)
             .saturating_sub(processed)
-            .saturating_sub(abandoned);
+            .saturating_sub(abandoned)
+            .saturating_add(
+                telemetry
+                    .files
+                    .values()
+                    .filter(|file| !file.done && file.comparing)
+                    .map(|file| file.comparison_total.saturating_sub(file.compared))
+                    .sum::<u64>(),
+            );
         let metadata_tail = if telemetry.finalized > 0 {
             ((operation.counters.titles_total - operation.counters.titles_processed).max(0) as f64
                 * telemetry.finalization_seconds
@@ -664,6 +711,25 @@ impl crate::AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn comparison_retries_restart_visible_bytes_without_earning_placement_or_duplicate_throughput()
+    {
+        let hub = TransferHub::default();
+        hub.file_comparing("op", "title", "file", 100, 150, 200);
+        let initial_credit = hub.state.lock().unwrap().operations["op"].files
+            [&("title".into(), "file".into())]
+            .comparison_credit;
+        hub.file_failed("op", "title", "file", 100);
+        hub.file_comparing("op", "title", "file", 100, 0, 200);
+        let state = hub.state.lock().unwrap();
+        let file = &state.operations["op"].files[&("title".into(), "file".into())];
+        assert!(file.comparing && !file.done);
+        assert!(state.operations["op"].abandoned_work.is_empty());
+        assert_eq!(file.compared, 0);
+        assert_eq!(file.comparison_credit, initial_credit);
+        assert_eq!(file.copied, 0);
+        assert_eq!(file.verified, 0);
+    }
     use crate::location::model::{
         LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
     };

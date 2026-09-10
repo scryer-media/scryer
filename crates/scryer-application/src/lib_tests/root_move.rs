@@ -344,6 +344,172 @@ impl RootMoveFixture {
     }
 }
 
+#[tokio::test]
+async fn manual_instructions_and_completion_trust_confirmation_without_discovering_files() {
+    for media in [&[][..], &[("movie.mkv", 32)][..]] {
+        let fixture = RootMoveFixture::new().await;
+        let title = fixture
+            .seed_title(
+                "Manual",
+                2024,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Manual (2024)",
+                media,
+            )
+            .await;
+        std::fs::remove_dir_all(fixture.root_a()).unwrap();
+        std::fs::remove_dir_all(fixture.root_b()).unwrap();
+        let instructions = fixture
+            .app
+            .preview_manual_move(
+                &fixture.user,
+                RootMovePreviewRequest {
+                    title_ids: vec![title.id.clone()],
+                    destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            instructions.plan.header.mode,
+            LocationExecutionMode::UserMovedFiles
+        );
+        assert!(instructions.execution.titles[0].files.is_empty());
+        assert!(!instructions.plan.verification.applies());
+        assert!(
+            fixture
+                .operations
+                .list_active_location_operations()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .operations
+                .location_ownership_holder(&crate::location::ownership_guard::OwnedEntity::Title(
+                    title.id.clone()
+                ))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let expected: Vec<_> = instructions.execution.catalog_paths[&title.id]
+            .iter()
+            .map(|file| file.destination_path.clone())
+            .collect();
+        let expected_folder = instructions.execution.titles[0]
+            .destination_folder_path
+            .clone();
+        assert!(expected_folder.is_some());
+        let accepted = fixture
+            .app
+            .start_manual_move(
+                &fixture.user,
+                StartRootMoveRequest {
+                    title_ids: vec![title.id.clone()],
+                    destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                    confirmation: PlanConfirmationRequest {
+                        fingerprint: instructions.plan.fingerprint,
+                        typed_confirmation: None,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let operation = fixture.settle(&accepted.operation.id).await;
+        assert_eq!(
+            operation.state,
+            LocationOperationState::Completed,
+            "{:?}",
+            operation.detail
+        );
+        assert_eq!(fixture.media_paths(&title.id).await, expected);
+        assert_eq!(fixture.title(&title.id).await.folder_path, expected_folder);
+        assert_eq!(
+            fixture.title(&title.id).await.root_folder_id,
+            fixture.root_b_id
+        );
+        assert!(fixture.operations.verifications().is_empty());
+        assert!(!fixture.root_a().exists() && !fixture.root_b().exists());
+        let history = fixture
+            .app
+            .list_title_history_for_title(
+                &fixture.user,
+                &title.id,
+                Some(&[TitleHistoryEventType::TitleMoved]),
+                50,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(history.total_count, 1);
+        let data: serde_json::Value =
+            serde_json::from_str(history.records[0].data_json.as_ref().unwrap()).unwrap();
+        assert_eq!(data["mode"], "user_moved_files");
+        assert_eq!(history.records[0].dest_path, expected_folder);
+    }
+}
+
+#[tokio::test]
+async fn manual_completion_rejects_catalog_mapping_changes_before_acceptance() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Manual",
+            2024,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Manual (2024)",
+            &[("movie.mkv", 32)],
+        )
+        .await;
+    let request = RootMovePreviewRequest {
+        title_ids: vec![title.id.clone()],
+        destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+    };
+    let instructions = fixture
+        .app
+        .preview_manual_move(&fixture.user, request.clone())
+        .await
+        .unwrap();
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .set_folder_path(
+            &title.id,
+            &fixture.root_a().join("Changed").to_string_lossy(),
+        )
+        .await
+        .unwrap();
+    let result = fixture
+        .app
+        .start_manual_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: request.title_ids,
+                destination: request.destination,
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: instructions.plan.fingerprint,
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        fixture
+            .operations
+            .list_active_location_operations()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 fn move_items(
     preview: &crate::location::operations::RootMovePreview,
 ) -> Vec<&crate::location::preview::PlanItem> {
@@ -870,11 +1036,8 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
         .await
         .expect("persist the operation");
 
-    // The runner checks the cancel flag once per unprocessed title, so the
-    // second check is the boundary right after the first title settled.
-    fixture
-        .operations
-        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
+    // Target a durable boundary, independently of concurrent copy admission.
+    fixture.operations.stop_after_settled_title(&first.id, true);
     let crashed = fixture
         .app
         .run_root_move(operation_id, &preview.execution)
@@ -903,21 +1066,26 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
         settled_checkpoint.state,
         crate::location::model::TitleCheckpointState::Completed
     );
+    let second_settled = fixture
+        .operations
+        .checkpoint(operation_id, &second.id)
+        .is_some_and(|checkpoint| checkpoint.state.is_settled());
     assert!(
-        fixture
-            .operations
-            .checkpoint(operation_id, &second.id)
-            .is_none_or(|checkpoint| !checkpoint.state.is_settled()),
-        "the second title never got its turn"
+        (1..=2).contains(&fixture.verifications().len()),
+        "in-flight verification drains before the error returns"
     );
-    assert_eq!(fixture.verifications().len(), 1);
     assert_eq!(
         fixture.title(&first.id).await.root_folder_id,
         fixture.root_b_id
     );
     assert_eq!(
         fixture.title(&second.id).await.root_folder_id,
-        fixture.root_a_id
+        if second_settled {
+            fixture.root_b_id.clone()
+        } else {
+            fixture.root_a_id.clone()
+        },
+        "another in-flight title may settle first, but its catalog must match its checkpoint"
     );
 
     // Resume: the plan comes back out of the store, not out of the caller.
@@ -1899,7 +2067,7 @@ async fn a_canceled_move_closes_its_activity_run_as_a_warning_rather_than_a_fail
     // where a user's request would be read.
     fixture
         .operations
-        .cancel_at_cancel_check(title_boundary_cancel_check(2, 1));
+        .stop_after_settled_title(&first.id, false);
     let accepted = fixture
         .app
         .start_root_move(
@@ -1940,14 +2108,22 @@ async fn a_canceled_move_closes_its_activity_run_as_a_warning_rather_than_a_fail
         "the summary explains the stop, got {summary}"
     );
 
-    // The safe stop is real: the first title moved, the second never did.
+    // Already admitted titles may finish before cancellation is observed.
     assert_eq!(
         fixture.title(&first.id).await.root_folder_id,
         fixture.root_b_id
     );
     assert_eq!(
         fixture.title(&second.id).await.root_folder_id,
-        fixture.root_a_id
+        if fixture
+            .operations
+            .checkpoint(&accepted.operation.id, &second.id)
+            .is_some_and(|checkpoint| checkpoint.state.is_settled())
+        {
+            fixture.root_b_id.clone()
+        } else {
+            fixture.root_a_id.clone()
+        }
     );
 }
 

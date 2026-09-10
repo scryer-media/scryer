@@ -2224,3 +2224,20 @@ kind = "sql"
 file = "postgres/migrations/0234_location_transfer_progress.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 235
+description = "durable location file conflict resolutions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0235_location_file_resolutions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0235_location_file_resolutions.sql"
+engine = "postgres"
+scope = "all"

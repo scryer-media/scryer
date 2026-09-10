@@ -673,7 +673,7 @@ impl<'a> LocationOperationRunner<'a> {
                 operation_id: operation_id.to_string(),
                 state: operation.state,
                 stop_reason: None,
-                counters: progress.counters(plan),
+                counters: operation.counters,
                 cursor: progress.cursor(operation_id),
                 warnings: Vec::new(),
                 detail: operation.detail.clone(),
@@ -682,6 +682,17 @@ impl<'a> LocationOperationRunner<'a> {
 
         let checkpoints = self.load_checkpoints(operation_id).await?;
         let mut progress = RunProgress::resume(plan, &checkpoints);
+        for title in plan.titles.iter().filter(|title| {
+            checkpoints
+                .get(&title.title_id)
+                .is_some_and(|row| row.state.is_settled())
+        }) {
+            let resolutions = self
+                .store
+                .file_resolutions(operation_id, &title.title_id)
+                .await?;
+            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+        }
         progress.verification_fallbacks = operation.verification_fallback_count;
 
         // Preparing: ownership before any byte moves, so nothing else can touch
@@ -967,14 +978,22 @@ impl<'a> LocationOperationRunner<'a> {
         self.write_title_checkpoint(
             operation,
             title,
-            TitleCheckpointState::Moving,
+            if operation.mode == super::model::LocationExecutionMode::UserMovedFiles {
+                TitleCheckpointState::Reconciling
+            } else {
+                TitleCheckpointState::Moving
+            },
             None,
             progress,
         )
         .await?;
         self.write_progress(
             operation,
-            LocationOperationState::Moving,
+            if operation.mode == super::model::LocationExecutionMode::UserMovedFiles {
+                LocationOperationState::Reconciling
+            } else {
+                LocationOperationState::Moving
+            },
             progress,
             plan,
             None,
@@ -1076,12 +1095,35 @@ impl<'a> LocationOperationRunner<'a> {
             .store
             .verified_destination_paths(&operation.id, &title.title_id)
             .await?;
+        let resolutions = self
+            .store
+            .file_resolutions(&operation.id, &title.title_id)
+            .await?;
+        let resolutions: BTreeMap<_, _> = resolutions
+            .iter()
+            .map(|resolution| (resolution.source_path.as_str(), resolution))
+            .collect();
         for file in &title.files {
-            if !verified_now.contains(&file.stored_destination()) {
+            let original = file.stored_destination();
+            let source = crate::stored_paths::path_to_stored_string(&file.source_path);
+            let destination = if let Some(resolution) = resolutions.get(source.as_str()) {
+                if !resolution.completed
+                    || resolution.original_destination != original
+                    || !resolution.proof_is_current().await
+                {
+                    return Err(AppError::Validation(format!(
+                        "The transferred file {} needs to be verified again before its catalog entry can be updated.",
+                        resolution.destination_path
+                    )));
+                }
+                &resolution.destination_path
+            } else {
+                &original
+            };
+            if !verified_now.contains(destination) {
                 return Err(AppError::Validation(format!(
-                    "{} has no verification record, so the catalog must not be updated for title {}",
-                    file.destination_path.display(),
-                    title.title_id
+                    "The transferred file {} has not finished verification. Its catalog entry was left unchanged.",
+                    destination
                 )));
             }
         }
@@ -1590,6 +1632,7 @@ fn describe_ownership_conflicts(
 #[derive(Debug, Default)]
 struct RunProgress {
     settled: BTreeMap<String, TitleCheckpointState>,
+    resolved_outcomes: BTreeMap<String, TitleOutcomeCounts>,
     files_done: BTreeMap<String, i64>,
     bytes_done: BTreeMap<String, i64>,
     last_settled_sequence: i64,
@@ -1618,6 +1661,33 @@ struct RunProgress {
 }
 
 impl RunProgress {
+    fn record_resolved_outcomes(
+        &mut self,
+        title_id: &str,
+        resolutions: &[super::resolution::FileResolution],
+    ) {
+        if resolutions.is_empty() {
+            return;
+        }
+        self.resolved_outcomes.insert(
+            title_id.into(),
+            TitleOutcomeCounts {
+                dedups: resolutions
+                    .iter()
+                    .filter(|row| {
+                        row.completed
+                            && row.disposition
+                                == super::resolution::ResolutionDisposition::Identical
+                    })
+                    .count() as i64,
+                renames: resolutions
+                    .iter()
+                    .filter(|row| row.completed && row.original_destination != row.destination_path)
+                    .count() as i64,
+            },
+        );
+    }
+
     fn resume(plan: &OperationWorkPlan, checkpoints: &BTreeMap<String, TitleCheckpoint>) -> Self {
         let mut progress = Self::default();
         for title in &plan.titles {
@@ -1737,8 +1807,12 @@ impl RunProgress {
             if title.placement.merged_into_title_id.is_some() {
                 merges += 1;
             }
-            dedups += title.outcomes.dedups;
-            renames += title.outcomes.renames;
+            let outcomes = self
+                .resolved_outcomes
+                .get(&title.title_id)
+                .unwrap_or(&title.outcomes);
+            dedups += outcomes.dedups;
+            renames += outcomes.renames;
         }
 
         LocationOperationCounters {
@@ -2461,7 +2535,11 @@ mod tests {
             }
         }
         for files in [0, 1] {
-            let store = FakeStore::with_operation(operation());
+            // Validated adoption retains its existing verification records;
+            // managed copies additionally need a durable identity resolution.
+            let mut adoption = operation();
+            adoption.mode = super::super::model::LocationExecutionMode::FilesAlreadyThere;
+            let store = FakeStore::with_operation(adoption);
             let plan = OperationWorkPlan::new(vec![
                 planned_title("first", 0, files),
                 planned_title("second", 1, files),
@@ -2493,6 +2571,32 @@ mod tests {
             assert_eq!(*reconciler.inner.cleaned.lock().unwrap(), vec!["first"]);
             assert!(mover.moved().is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn managed_recovery_does_not_trust_a_legacy_copy_record_as_identity() {
+        let store = FakeStore::with_operation(operation());
+        let title = planned_title("first", 0, 1);
+        store.seed_verification(verified_record(
+            &title.title_id,
+            &title.files[0].stored_destination(),
+        ));
+        let plan = OperationWorkPlan::new(vec![title]);
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let result = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub)
+            .run("op-1", &plan)
+            .await
+            .unwrap();
+        assert_eq!(result.state, LocationOperationState::Completed);
+        assert_eq!(
+            mover.moved().len(),
+            1,
+            "the existing-file resolver must run again without a completed identity record"
+        );
     }
 
     #[tokio::test]
@@ -3637,6 +3741,9 @@ mod tests {
     async fn a_terminal_operation_is_never_run_again() {
         let mut finished = operation();
         finished.state = LocationOperationState::Completed;
+        finished.counters.files_processed = 7;
+        finished.counters.bytes_processed = 1234;
+        let completed_counters = finished.counters;
         let store = FakeStore::with_operation(finished);
         let mover = FakeMover::default();
         let admission = ScriptedAdmission::new(&[]);
@@ -3648,6 +3755,7 @@ mod tests {
             .expect("a terminal operation reports its state");
 
         assert_eq!(outcome.state, LocationOperationState::Completed);
+        assert_eq!(outcome.counters, completed_counters);
         assert!(mover.moved().is_empty());
         assert!(store.operation_states().is_empty());
     }

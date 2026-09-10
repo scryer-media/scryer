@@ -7,10 +7,12 @@ import {
   Merge,
   ShieldCheck,
   TriangleAlert,
+  User,
   X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -52,6 +54,7 @@ import {
   destinationLibraryDisabledReasonKey,
   eligibleSameLibraryRoots,
   initialMoveStep,
+  moveWizardRequestMode,
   isAmbiguousDestinationBlock,
   isCrossLibraryDestination,
   isSameNameWarning,
@@ -70,7 +73,6 @@ import {
   previewCanStart,
   previousMoveStep,
   remainingSelection,
-  REQUESTABLE_MOVE_MODES,
   sameNamedDestinationTitle,
   settledDestinationPick,
   startModeInput,
@@ -131,17 +133,9 @@ function sortRoots(roots: LibraryRootRecord[]): LibraryRootRecord[] {
 }
 
 /**
- * Move workflow for FR-010–FR-017 and FR-086: pick a destination, read the
- * whole plan (every classification group, including the empty and the
- * no-op ones), deselect what blocks the start, then confirm the fingerprint.
- *
- * Two ways in. A caller that already picked a destination root (the overview's
- * bulk edit) hands `initialRootId` over and the dialog opens straight on the
- * plan. A caller that only asked to move something (the title panel's
- * "Move To…" action) opens the wizard instead: what kind of move this is, then
- * where it goes, then the same plan. The wizard exists because a root picker
- * alone cannot express a cross-library move — a library with one root offers no
- * other value to pick, and reselecting the current one fires nothing.
+ * Choose a destination and who moves the files before requesting a plan.
+ * A preselected destination opens at the method step. Manual instructions
+ * use catalog data; only the managed preview discovers files.
  */
 export function MoveTitlesDialog({
   open,
@@ -160,20 +154,22 @@ export function MoveTitlesDialog({
   );
   const soleSourceLibraryId =
     sourceLibraryIds.length === 1 ? sourceLibraryIds[0] : null;
+  const initialLibraryId = libraries.find((library) =>
+    library.roots.some((root) => root.id === initialRootId),
+  )?.id ?? soleSourceLibraryId ?? "";
 
-  // The wizard is the entry point without a pre-picked root; with one, the
-  // dialog is exactly what it was before this step existed.
+  // A preselected root skips destination selection, never method selection.
   const throughWizard = movesThroughWizard(initialRootId);
   const [step, setStep] = React.useState<MoveWizardStep>(() =>
     initialMoveStep(initialRootId),
   );
   const [kind, setKind] = React.useState<MoveDestinationKind | null>(null);
   const [libraryId, setLibraryId] = React.useState<string>(
-    soleSourceLibraryId ?? "",
+    initialLibraryId,
   );
   const [rootId, setRootId] = React.useState<string>(initialRootId ?? "");
-  const [mode, setMode] =
-    React.useState<RequestableMoveMode>("MOVE_WITH_SCRYER");
+  const mode = moveWizardRequestMode(open, step);
+  const chosenMethod = React.useRef<RequestableMoveMode | null>(null);
   const [deselected, setDeselected] = React.useState<Set<string>>(new Set());
   const [preview, setPreview] = React.useState<LocationOperationPreview | null>(
     null,
@@ -244,21 +240,21 @@ export function MoveTitlesDialog({
 
   // Reopening on a different selection must never inherit the previous plan.
   React.useEffect(() => {
+    chosenMethod.current = null;
     if (!open) {
       return;
     }
     setStep(initialMoveStep(initialRootId));
     setKind(null);
-    setLibraryId(soleSourceLibraryId ?? "");
+    setLibraryId(initialLibraryId);
     setRootId(initialRootId ?? "");
-    setMode("MOVE_WITH_SCRYER");
     setDeselected(new Set());
     setPreview(null);
     setPreviewError(null);
     setTypedConfirmation("");
     setPreviewNonce(0);
     resetStartAll();
-  }, [open, soleSourceLibraryId, initialRootId, resetStartAll]);
+  }, [open, initialLibraryId, initialRootId, resetStartAll]);
 
   const selection = React.useMemo(
     () =>
@@ -275,12 +271,15 @@ export function MoveTitlesDialog({
   React.useEffect(() => {
     // The wizard's earlier steps are picks, not requests: nothing is planned
     // until the destination is settled and the plan step is on screen.
-    if (!open || step !== "plan" || !rootId || selection.length === 0) {
+    // On reopen, the previous step may render before its reset takes effect.
+    // Only an explicit choice in this wizard session can start discovery.
+    if (!mode || chosenMethod.current !== mode || !rootId || selection.length === 0) {
       setPreview(null);
       setPreviewLoading(false);
       return undefined;
     }
     let active = true;
+    setPreview(null);
     setPreviewLoading(true);
     setPreviewError(null);
     clearStartError();
@@ -390,6 +389,7 @@ export function MoveTitlesDialog({
         });
       }
     }
+    for (const folder of preview?.folders ?? []) folders.set(folder.titleId, folder);
     return folders;
   }, [preview]);
 
@@ -482,6 +482,25 @@ export function MoveTitlesDialog({
     setStep((current) => nextMoveStep(current));
   }, []);
 
+  const [manualPage, setManualPage] = React.useState(0);
+  const [manualMappingChanged, setManualMappingChanged] = React.useState(false);
+  React.useEffect(() => {
+    if (open && step === "manual" && planChanged) {
+      setManualMappingChanged(true);
+      setPreview(null);
+      clearPlanChanged();
+      refreshPreview();
+    }
+  }, [open, step, planChanged, clearPlanChanged, refreshPreview]);
+  const chooseMethod = (selected: RequestableMoveMode) => {
+    chosenMethod.current = selected;
+    setPreview(null);
+    setPreviewError(null);
+    setManualPage(0);
+    setManualMappingChanged(false);
+    setStep(selected === "USER_MOVED_FILES" ? "manual" : "plan");
+  };
+
   const goBack = React.useCallback(() => {
     setStep((current) => {
       const previous = previousMoveStep(current);
@@ -507,7 +526,7 @@ export function MoveTitlesDialog({
   const libraryOptions =
     step === "destination" && kind === "library" ? otherLibraries : libraries;
   const rootOptions = step === "destination" ? wizardRoots : destinationRoots;
-  const pickingDestination = open && (step === "destination" || step === "plan");
+  const pickingDestination = open && step === "destination";
 
   // The pickers open on a usable destination instead of a placeholder: the
   // first library on offer, then that library's first root. This settles
@@ -731,127 +750,68 @@ export function MoveTitlesDialog({
               ) : null}
             </div>
           </div>
-        ) : (
-        <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="min-w-0">
-              <label
-                className="mb-1 block text-xs font-medium text-muted-foreground"
-                htmlFor="move-titles-destination-library"
-              >
-                {t("move.destinationLibrary")}
-              </label>
-              <Select
-                value={libraryId}
-                onValueChange={(value) => {
-                  setLibraryId(value);
-                  setRootId("");
-                }}
-                disabled={starting}
-              >
-                <SelectTrigger
-                  id="move-titles-destination-library"
-                  className="h-9 w-full"
-                >
-                  <SelectValue placeholder={t("move.destinationLibrary")} />
-                </SelectTrigger>
-                <SelectContent>
-                  {libraries.map((library) => (
-                    <SelectItem
-                      key={library.id}
-                      value={library.id}
-                      disabled={destinationDisabledReasonKey !== null}
-                    >
-                      {destinationDisabledReasonKey === null
-                        ? library.name
-                        : `${library.name} — ${t(destinationDisabledReasonKey)}`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {sourceLibraryIds.length > 1 ? (
-                <p
-                  id="move-titles-mixed-libraries"
-                  className="mt-1 text-xs text-[var(--scry-warning-text)]"
-                >
-                  {t("move.destinationMixedSourceLibraries")}
-                </p>
-              ) : null}
-              {crossLibrary ? (
-                <p
-                  id="move-titles-cross-library-notice"
-                  className="mt-1 text-xs text-muted-foreground"
-                >
-                  {t("move.destinationCrossLibraryNotice", {
-                    library: libraryName(libraryId) ?? libraryId,
-                  })}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="min-w-0">
-              <label
-                className="mb-1 block text-xs font-medium text-muted-foreground"
-                htmlFor="move-titles-destination-root"
-              >
-                {t("move.destinationRoot")}
-              </label>
-              <Select
-                value={rootId}
-                onValueChange={setRootId}
-                disabled={starting || destinationRoots.length === 0}
-              >
-                <SelectTrigger
-                  id="move-titles-destination-root"
-                  className="h-9 w-full font-[var(--font-code)] text-sm"
-                >
-                  <SelectValue placeholder={t("move.destinationRootPlaceholder")} />
-                </SelectTrigger>
-                <SelectContent>
-                  {destinationRoots.map((root) => (
-                    <SelectItem key={root.id} value={root.id}>
-                      {root.path}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+        ) : step === "method" ? (
+          /* Who does the work, given a face each: Scryer's own mark against a
+             person. `has-[>svg]:px-6` restates the padding the button's default
+             size tightens as soon as it holds an icon -- without it the manual
+             card, whose icon is an svg, would sit narrower than the managed
+             one, whose icon is an img. */
+          <div className="grid min-h-48 content-center gap-3 sm:grid-cols-2">
+            <Button variant="outline" className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6" onClick={() => chooseMethod("MOVE_WITH_SCRYER")}>
+              <img src={`${import.meta.env.BASE_URL}scryer-icon-192.png`} alt="" aria-hidden="true" className="size-10" />
+              {t("move.methodManaged")}
+            </Button>
+            <Button variant="outline" className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6" onClick={() => chooseMethod("USER_MOVED_FILES")}>
+              <User aria-hidden="true" className="size-10 text-[var(--scry-muted2)]" />
+              {t("move.methodManual")}
+            </Button>
           </div>
-
-          {/* FR-076: a fileless selection never presents a move-mode choice. */}
-          {preview && offersModeSelection(preview) ? (
-            <div className="rounded-lg border border-border bg-muted/20 px-3 py-3">
-              <p className="mb-2 text-sm font-medium text-foreground">
-                {t("move.modeHeading")}
-              </p>
-              <RadioGroup
-                value={mode}
-                onValueChange={(value) =>
-                  setMode(value as RequestableMoveMode)
-                }
-                disabled={starting}
-              >
-                {REQUESTABLE_MOVE_MODES.map((option) => (
-                  <label key={option} className="flex items-start gap-2 text-sm">
-                    <RadioGroupItem
-                      value={option}
-                      disabled={starting}
-                      id={`move-titles-mode-${option}`}
-                      className="mt-0.5"
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-foreground">
-                        {t(`move.mode.${option}`)}
-                      </span>
-                      <span className="block text-xs text-muted-foreground">
-                        {t(`move.modeHelp.${option}`)}
-                      </span>
-                    </span>
-                  </label>
-                ))}
-              </RadioGroup>
+        ) : previewLoading ? (
+          <div role="status" aria-live="polite" className="flex min-h-64 flex-col items-center justify-center gap-4">
+            <Loader2 aria-hidden="true" className="h-9 w-9 animate-spin text-primary" />
+            <p className="text-sm text-muted-foreground">{t(step === "manual" ? "move.manualLoading" : "move.gatheringInfo")}</p>
+          </div>
+        ) : step === "manual" ? (
+          <div className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto">
+            <p className="font-medium">{t("move.manualInstructions")}</p>
+            <p className="text-sm text-muted-foreground">{t("move.manualStructure")}</p>
+            <LocationOperationErrorNotice id="move-manual-preview-error" message={previewError ?? startError} />
+            {manualMappingChanged && <p role="status" className="text-sm text-[var(--scry-warning-text)]">{t("move.manualMappingChanged")}</p>}
+            {(previewError || planChanged) && <Button variant="outline" onClick={rePreview}>{t("move.retryInstructions")}</Button>}
+            <Table>
+              <TableHeader><TableRow><TableHead>{t("label.title")}</TableHead><TableHead>{t("move.manualSource")}</TableHead><TableHead>{t("move.manualDestination")}</TableHead></TableRow></TableHeader>
+              <TableBody>{selection.slice(manualPage * 50, (manualPage + 1) * 50).map((id) => {
+                const folders = foldersByTitle.get(id);
+                const summary = mergesByTitle.get(id);
+                const entry = groups.flatMap((group) => group.titles).find((row) => row.titleId === id);
+                return <React.Fragment key={id}><TableRow>
+                  <TableCell>{titleName(id) ?? id}</TableCell>
+                  <TableCell className="break-all">{folders?.source ?? entry?.sourceFolderPath ?? "—"}</TableCell>
+                  <TableCell className="break-all">{folders?.destination ?? (entry?.class === "NO_OP" ? entry.sourceFolderPath : null) ?? "—"}</TableCell>
+                </TableRow>{summary && entry && <TableRow><TableCell colSpan={3}><MergeNote summary={mergeSummaryPresentation(entry, summary, { resolveTitleName: titleName })} t={t} /></TableCell></TableRow>}</React.Fragment>;
+              })}</TableBody>
+            </Table>
+            {selection.length > 50 && <div className="flex items-center justify-between text-sm">
+              <Button variant="outline" disabled={manualPage === 0} onClick={() => setManualPage((page) => page - 1)}>{t("move.transferPrevious")}</Button>
+              <span>{manualPage * 50 + 1}–{Math.min((manualPage + 1) * 50, selection.length)} / {selection.length}</span>
+              <Button variant="outline" disabled={(manualPage + 1) * 50 >= selection.length} onClick={() => setManualPage((page) => page + 1)}>{t("move.transferNext")}</Button>
+            </div>}
+            {preview?.warnings.map((warning) => <p key={warning} className="text-sm text-[var(--scry-warning-text)]">{warning}</p>)}
+            {blocked.map((row) => <p key={row.titleId} className="text-sm text-[var(--scry-danger-text)]">{row.reason}</p>)}
+          </div>
+        ) : (
+        <div className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto pr-1">
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+            <div className="min-w-0 text-sm">
+              <p className="font-medium">{libraryName(libraryId) ?? libraryId}</p>
+              <p className="break-all text-muted-foreground">{rootPathById.get(rootId) ?? rootId}</p>
             </div>
-          ) : null}
+            <Button variant="outline" size="sm" disabled={starting} onClick={() => {
+              setPreview(null);
+              setKind(libraryId === soleSourceLibraryId ? "root" : "library");
+              setStep("destination");
+            }}>{t("move.changeDestination")}</Button>
+          </div>
 
           {/* FR-051: adoption states what it found before it states what it
               would do, so a refusal is legible without opening the plan. */}
@@ -1202,8 +1162,7 @@ export function MoveTitlesDialog({
               {/* Back exists wherever there is a step behind this one: always on
                   the destination step, and on the plan step only when the
                   wizard is what got us there (a bulk edit opened on the plan). */}
-              {step === "destination" ||
-              (step === "plan" && throughWizard) ? (
+              {step === "destination" || step === "plan" || step === "manual" || (step === "method" && throughWizard) ? (
                 <Button
                   id="move-titles-back"
                   type="button"
@@ -1214,15 +1173,15 @@ export function MoveTitlesDialog({
                   {t("move.back")}
                 </Button>
               ) : null}
-              {step === "plan" ? (
+              {step === "plan" || step === "manual" ? (
                 <LocationDialogPrimaryButton
                   id="move-titles-confirm"
-                  label={t("move.confirm")}
+                  label={t(step === "manual" ? "move.next" : "move.confirm")}
                   busy={starting}
                   disabled={!canStart}
                   onClick={() => void handleStart()}
                 />
-              ) : (
+              ) : step !== "method" ? (
                 <Button
                   id="move-titles-next"
                   type="button"
@@ -1232,7 +1191,7 @@ export function MoveTitlesDialog({
                 >
                   {t("move.next")}
                 </Button>
-              )}
+              ) : null}
             </>
           )}
         </DialogFooter>

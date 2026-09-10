@@ -1,5 +1,6 @@
 use super::*;
 use crate::location::live::{TransferHub, TransferTitle};
+use crate::location::model::LocationExecutionMode;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use std::sync::atomic::AtomicBool;
 
@@ -103,10 +104,26 @@ impl LocationOperationRunner<'_> {
                     }
                     if !admitted.contains(&title.title_id) {
                         let admission = async {
-                            let paths = self
+                            let mut paths = self
                                 .store
                                 .verified_destination_paths(&operation.id, &title.title_id)
                                 .await?;
+                            if operation.mode == LocationExecutionMode::MoveWithScryer {
+                                let resolutions = self
+                                    .store
+                                    .file_resolutions(&operation.id, &title.title_id)
+                                    .await?;
+                                // A prior copy record alone is not an existing-file identity proof.
+                                let mut current = BTreeSet::new();
+                                for resolution in resolutions {
+                                    if paths.contains(&resolution.destination_path)
+                                        && resolution.proof_is_current().await
+                                    {
+                                        current.insert(resolution.original_destination);
+                                    }
+                                }
+                                paths = current;
+                            }
                             let admission = self
                                 .admission
                                 .admit_title(TitleAdmissionContext {
@@ -430,6 +447,12 @@ impl LocationOperationRunner<'_> {
             let phase_ready = ready.clone();
             let phase_notify = notify.clone();
             let previous_phase = AtomicU64::new(0);
+            let compare_hub = hub.clone();
+            let compare_operation = operation_id.clone();
+            let compare_title = title_id.clone();
+            let compare_path = path.clone();
+            let compare_ready = ready.clone();
+            let compare_notify = notify.clone();
             let sink = CopyProgress::from_fn(move |bytes| {
                 let bytes = copied
                     .fetch_add(bytes, Ordering::Relaxed)
@@ -450,6 +473,20 @@ impl LocationOperationRunner<'_> {
                 }
                 if previous_phase.swap(phase as u64 + 1, Ordering::Relaxed) != phase as u64 + 1 {
                     phase_notify.notify_one();
+                }
+            });
+            let sink = sink.with_comparison_sink(move |bytes, total| {
+                compare_hub.file_comparing(
+                    &compare_operation,
+                    &compare_title,
+                    &compare_path,
+                    size,
+                    bytes,
+                    total,
+                );
+                compare_ready.store(true, Ordering::Release);
+                if bytes == 0 || bytes == total {
+                    compare_notify.notify_one();
                 }
             });
             let result = self
@@ -493,10 +530,20 @@ impl LocationOperationRunner<'_> {
             .transfer_title(&operation.id, &title.title_id)
             .await?
             .and_then(|row| row.detail);
-        let paths = self
+        let mut paths = self
             .store
             .verified_destination_paths(&operation.id, &title.title_id)
             .await?;
+        let resolutions = self
+            .store
+            .file_resolutions(&operation.id, &title.title_id)
+            .await?;
+        progress.record_resolved_outcomes(&title.title_id, &resolutions);
+        for resolution in resolutions {
+            if resolution.completed && paths.contains(&resolution.destination_path) {
+                paths.insert(resolution.original_destination);
+            }
+        }
         // The completeness gate reconstructs these counts from durable proofs.
         progress.files_done.remove(&title.title_id);
         progress.bytes_done.remove(&title.title_id);

@@ -977,9 +977,17 @@ async fn an_identical_file_deduplicates_through_the_recycle_bin() {
     let source_file = fixture.source().join("Twin (2015)").join("Twin.mkv");
 
     let preview = fixture.preview().await;
-    assert_eq!(preview.classification.dedup_eligible_files, 1);
-    assert_eq!(preview.classification.media_collisions, 0);
-    assert_eq!(preview.plan.counts.for_kind(PlanItemKind::Dedup), 1);
+    assert_eq!(preview.classification.dedup_eligible_files, 0);
+    assert_eq!(preview.classification.media_collisions, 1);
+    assert_eq!(preview.plan.counts.for_kind(PlanItemKind::Dedup), 0);
+    assert!(
+        preview
+            .plan
+            .sections
+            .iter()
+            .flat_map(|section| &section.items.items)
+            .any(|item| item.reason_code.as_deref() == Some("compare_during_transfer"))
+    );
 
     let operation = fixture.start_and_settle().await;
     // Recycling during the run creates the bin under the source root, and the
@@ -1065,9 +1073,17 @@ async fn an_identical_file_is_preserved_and_renamed_when_the_recycle_bin_is_off(
     );
     assert!(
         preview
-            .warnings
+            .plan
+            .sections
             .iter()
-            .any(|warning| warning.contains("preserved")),
+            .flat_map(|section| &section.items.items)
+            .any(
+                |item| item.reason_code.as_deref() == Some("compare_during_transfer")
+                    && item
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.contains("preserved"))
+            ),
         "the user is told before confirming: {:?}",
         preview.warnings
     );
