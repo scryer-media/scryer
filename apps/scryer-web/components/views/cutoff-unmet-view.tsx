@@ -264,7 +264,7 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
 
   return (
     <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none">
-      <CardHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-surfD),transparent)] px-4 py-4 sm:px-5">
+      <CardHeader className="px-4 pt-4 pb-0 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             {jobRunning && searchJob ? (
@@ -310,7 +310,7 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5">
+      <CardContent className="p-4 sm:p-5">
         <div className="mb-4 flex flex-col gap-3 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-3 sm:flex-row sm:flex-wrap sm:items-center">
           <LibraryMultiSelect
             libraries={libraries}

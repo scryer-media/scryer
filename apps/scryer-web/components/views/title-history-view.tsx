@@ -65,7 +65,7 @@ export function TitleHistoryView({
 
   return (
     <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent shadow-none">
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4 sm:p-5">
         <div className="flex flex-col gap-3 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <TitleAutocompletePicker

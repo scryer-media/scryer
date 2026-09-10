@@ -628,8 +628,8 @@ function WantedItemsCard({
       <CardContent
         className={
           shouldScrollDesktopTable
-            ? "flex min-h-0 flex-1 flex-col space-y-3 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5"
-            : "space-y-4 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5"
+            ? "flex min-h-0 flex-1 flex-col space-y-3 p-4 sm:p-5"
+            : "space-y-4 p-4 sm:p-5"
         }
       >
         <div className="flex flex-col gap-3 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -1277,7 +1277,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
 
   return (
     <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none">
-      <CardContent className="bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5">
+      <CardContent className="p-4 sm:p-5">
         {isMobile ? (
           items.length === 0 && !loading ? (
             <p className="text-center text-[var(--scry-muted3)]">{t("pending.noItems")}</p>
