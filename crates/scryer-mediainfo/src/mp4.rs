@@ -418,7 +418,8 @@ fn prepare_mp4_metadata(
     file: &mut dyn crate::source::MediaSource,
 ) -> Result<PreparedMp4, MediaInfoError> {
     let mut reader = TrackedReader::new(file);
-    let (metadata, file_len_hint, budget_exhausted) = prepare_mp4_metadata_from_reader(&mut reader)?;
+    let (metadata, file_len_hint, budget_exhausted) =
+        prepare_mp4_metadata_from_reader(&mut reader)?;
     Ok(PreparedMp4 {
         metadata,
         file_len_hint,
@@ -473,7 +474,11 @@ fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
         }
 
         if keep {
-            let retained_size = if header.size == 0 { input_len - start } else { header.size };
+            let retained_size = if header.size == 0 {
+                input_len - start
+            } else {
+                header.size
+            };
             if retained_size > (16 * 1024 * 1024_u64).saturating_sub(output.len() as u64) {
                 budget_exhausted = true;
                 break;
@@ -2521,15 +2526,32 @@ mod tests {
     #[test]
     fn partial_fragment_walk_preserves_headers_without_using_partial_timing() {
         let mut bytes = include_bytes!("../tests/media/hevc_hdr10plus.mp4").to_vec();
-        let baseline = parse_mp4_source(&mut Cursor::new(bytes.clone()), "mp4", AnalysisProfile::DefaultRich).unwrap();
+        let baseline = parse_mp4_source(
+            &mut Cursor::new(bytes.clone()),
+            "mp4",
+            AnalysisProfile::DefaultRich,
+        )
+        .unwrap();
         for index in 0..200_u32 {
-            let tfhd = [0x18_u32.to_be_bytes(), 1_u32.to_be_bytes(), 1_000_000_u32.to_be_bytes(), 10_000_u32.to_be_bytes()].concat();
+            let tfhd = [
+                0x18_u32.to_be_bytes(),
+                1_u32.to_be_bytes(),
+                1_000_000_u32.to_be_bytes(),
+                10_000_u32.to_be_bytes(),
+            ]
+            .concat();
             let tfdt = [0_u32.to_be_bytes(), (index * 1_000_000).to_be_bytes()].concat();
             let trun = [0_u32.to_be_bytes(), 1_u32.to_be_bytes()].concat();
-            let traf = [make_box(b"tfhd", &tfhd), make_box(b"tfdt", &tfdt), make_box(b"trun", &trun)].concat();
+            let traf = [
+                make_box(b"tfhd", &tfhd),
+                make_box(b"tfdt", &tfdt),
+                make_box(b"trun", &trun),
+            ]
+            .concat();
             bytes.extend_from_slice(&make_box(b"moof", &make_box(b"traf", &traf)));
         }
-        let raw = parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
+        let raw =
+            parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
         assert!(raw.details.report.budget_exhausted);
         assert_eq!(raw.duration_seconds, baseline.duration_seconds);
         assert_eq!(raw.tracks[0].codec_name, baseline.tracks[0].codec_name);
@@ -2737,7 +2759,12 @@ mod tests {
             assert_eq!(length, (count * 8) as u64);
             assert!(reader.stats().bytes_read <= 128 * 8);
             assert!(reader.stats().seeks <= 260);
-            let raw = parse_mp4_source(&mut Cursor::new(make_box(b"free", &[]).repeat(count)), "mp4", AnalysisProfile::DefaultRich).unwrap();
+            let raw = parse_mp4_source(
+                &mut Cursor::new(make_box(b"free", &[]).repeat(count)),
+                "mp4",
+                AnalysisProfile::DefaultRich,
+            )
+            .unwrap();
             assert!(raw.details.report.budget_exhausted);
             assert_eq!(raw.duration_seconds, None);
         }
@@ -2752,7 +2779,8 @@ mod tests {
         let file = [ftyp.clone(), mdat.clone(), moov.clone()].concat();
 
         let mut reader = TrackedReader::new(Cursor::new(file));
-        let (metadata, file_len_hint, exhausted) = prepare_mp4_metadata_from_reader(&mut reader).unwrap();
+        let (metadata, file_len_hint, exhausted) =
+            prepare_mp4_metadata_from_reader(&mut reader).unwrap();
         assert!(!exhausted);
         let stats = reader.stats();
 

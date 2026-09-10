@@ -78,6 +78,24 @@ MKV supplemental inventory searches at most an 8 MiB prefix and 128 sequential e
 
 `catalog_mkv_inventory_io_is_independent_of_remux_size` runs the catalog profile on virtual 1 GiB and 30 GiB MKVs with tail-indexed chapters, attachments, and stream statistics. Both use 47 reads, 67 seeks, and 475,944 bytes at this checkpoint. The test caps operations and requires identical costs across file sizes; these are deterministic parser I/O measurements, not live NAS throughput measurements. Unindexed large-file duration and chapter absence remain unknown.
 
+The other production paths have these additional bounds:
+
+| Path | Catalog I/O policy |
+| --- | --- |
+| All ordinary files | At most 64 MiB read and 1,024 underlying read/seek calls across all enrichment passes |
+| MP4 | At most 128 top-level boxes and 16 MiB retained metadata; still seeks over `mdat` to a tail `moov`; incomplete fragment timing cannot determine duration or bitrate |
+| AVI | Skip index-derived bitrate when `idx1` exceeds 4 MiB; keep header facts and bounded stream samples |
+| TS/M2TS | Coalesce packet reads in a 64 KiB buffer, including program discovery and timestamp sampling |
+| ISO | At most 128 MiB read and 4,096 physical read/seek calls; inspect payloads only for title selection and saved episode mappings; retain unselected navigation inventory as explicitly unsampled |
+
+PS already reads an 8 MiB prefix and 2 MiB tail. ASF bounds its header at 16 MiB and frame sampling at 1 MiB/256 packets. Ogg bounds header reads at 16 MiB and tail inspection to the last 65,307 bytes. FLV bounds its prefix scan at 16 MiB and 8,192 tags. The shared operation limit also stops repeated tiny reads or seeks within those byte bounds. Limits describe attempted work, not a wall-clock timeout on a blocked filesystem call.
+
+Regression checks cover equal MP4 traversal cost with 1,000 and 100,000 boxes, preservation of header facts after an incomplete fragment walk, skipping an 8 MiB AVI index, fewer than 200 underlying reads with a TS program map delayed by 10,000 packets, and extra ISO payload reads only when an additional title is mapped. A source test proves exhaustion rejects reads and seeks before touching the underlying source.
+
+The production coordinator permits at most four canonical native analyses across all title groups, with at most three catalog readers to leave capacity for foreground imports. Permits remain held until blocking readers finish, including request cancellation. The concurrency regression queues 24 catalog files and verifies a foreground job can still run. Stale refresh retains its existing single-flight guard, 20-file maximum batch, 24-hour retry suppression, and foreground-work checks.
+
+The focused parser suite, production import/scan/rule contract, and full 269-file FFprobe 8.1.1 comparison passed after these changes. No live NAS throughput claim is made. Workspace sweeps and Clippy remain deferred under the repository validation cadence.
+
 ## Differential checks
 
 Run the opt-in reference check explicitly:

@@ -82,18 +82,26 @@ impl<T: Clone + Send + Sync + 'static> AnalysisFlights<T> {
         // initiating request must not allow a second reader to start its work.
         tokio::spawn(async move {
             let catalog_permit = if catalog {
-                Some(catalog_slots.acquire_owned().await.expect("probe semaphore stays open"))
+                Some(
+                    catalog_slots
+                        .acquire_owned()
+                        .await
+                        .expect("probe semaphore stays open"),
+                )
             } else {
                 None
             };
-            let permit = slots.acquire_owned().await.expect("probe semaphore stays open");
+            let permit = slots
+                .acquire_owned()
+                .await
+                .expect("probe semaphore stays open");
             let result = tokio::task::spawn_blocking(move || {
                 let _permits = (permit, catalog_permit);
                 operation()
             })
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|result| result.map_err(|error| error.to_string()));
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result.map_err(|error| error.to_string()));
             running.result.send_replace(Some(result));
         });
         flight
@@ -134,24 +142,28 @@ pub(crate) async fn probe_native_catalog(
         source: super::discs::MediaSourceVersion::read(&path).await.ok(),
         selection: selection.clone(),
     };
-    let flight = NATIVE_PROBE_FLIGHTS.start_with_priority(key.clone(), matches!(operation, super::metrics::ProbeOperation::Catalog), move || {
-        nice_thread();
-        let started = std::time::Instant::now();
-        let result = if scryer_domain::is_disc_image(&path) {
-            scryer_mediainfo::analyze_disc_file(&path, selection)
-        } else {
-            scryer_mediainfo::analyze_catalog_file(&path)
-        };
-        crate::media::metrics::record_probe(
-            operation,
-            started.elapsed(),
-            result
-                .as_ref()
-                .ok()
-                .map(|analysis| &analysis.details.report),
-        );
-        Ok(result.map_err(|error| error.to_string()))
-    });
+    let flight = NATIVE_PROBE_FLIGHTS.start_with_priority(
+        key.clone(),
+        matches!(operation, super::metrics::ProbeOperation::Catalog),
+        move || {
+            nice_thread();
+            let started = std::time::Instant::now();
+            let result = if scryer_domain::is_disc_image(&path) {
+                scryer_mediainfo::analyze_disc_file(&path, selection)
+            } else {
+                scryer_mediainfo::analyze_catalog_file(&path)
+            };
+            crate::media::metrics::record_probe(
+                operation,
+                started.elapsed(),
+                result
+                    .as_ref()
+                    .ok()
+                    .map(|analysis| &analysis.details.report),
+            );
+            Ok(result.map_err(|error| error.to_string()))
+        },
+    );
     let outcome = flight.outcome().await?;
     if key.source
         != super::discs::MediaSourceVersion::read(&source_path)
@@ -301,29 +313,46 @@ mod tests {
         for id in 0..24 {
             let entered = entered.clone();
             let mut released = release.subscribe();
-            jobs.push(flights.start_with_priority(AnalysisKey {
-                path: PathBuf::from(format!("catalog-{id}.mkv")),
-                source: None,
-                selection: Default::default(),
-            }, true, move || {
-                entered.send(id).unwrap();
-                // Sender drop also releases workers if an assertion fails.
-                let _ = tokio::runtime::Handle::current().block_on(released.wait_for(|released| *released));
-                Ok(id)
-            }));
+            jobs.push(flights.start_with_priority(
+                AnalysisKey {
+                    path: PathBuf::from(format!("catalog-{id}.mkv")),
+                    source: None,
+                    selection: Default::default(),
+                },
+                true,
+                move || {
+                    entered.send(id).unwrap();
+                    // Sender drop also releases workers if an assertion fails.
+                    let _ = tokio::runtime::Handle::current()
+                        .block_on(released.wait_for(|released| *released));
+                    Ok(id)
+                },
+            ));
         }
         for _ in 0..3 {
-            tokio::time::timeout(std::time::Duration::from_secs(5), entries.recv()).await.unwrap().unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), entries.recv())
+                .await
+                .unwrap()
+                .unwrap();
         }
         assert_eq!(flights.catalog_slots.available_permits(), 0);
         assert_eq!(flights.slots.available_permits(), 1);
         assert!(entries.try_recv().is_err());
-        let foreground = flights.start(AnalysisKey {
-            path: PathBuf::from("foreground.mkv"),
-            source: None,
-            selection: Default::default(),
-        }, || Ok(99));
-        assert_eq!(tokio::time::timeout(std::time::Duration::from_secs(5), foreground.outcome()).await.unwrap().unwrap(), 99);
+        let foreground = flights.start(
+            AnalysisKey {
+                path: PathBuf::from("foreground.mkv"),
+                source: None,
+                selection: Default::default(),
+            },
+            || Ok(99),
+        );
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), foreground.outcome())
+                .await
+                .unwrap()
+                .unwrap(),
+            99
+        );
         release.send(true).unwrap();
         for job in jobs {
             job.outcome().await.unwrap();

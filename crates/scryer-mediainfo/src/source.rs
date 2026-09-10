@@ -260,8 +260,8 @@ mod tests {
     }
     #[test]
     fn operation_budget_stops_tiny_reads_and_seeks_before_touching_source() {
-        let mut source = BoundedSource::new(io::Cursor::new(vec![0; 100]), 1_000_000)
-            .with_io_limit(3);
+        let mut source =
+            BoundedSource::new(io::Cursor::new(vec![0; 100]), 1_000_000).with_io_limit(3);
         source.read_exact(&mut [0]).unwrap();
         source.seek(SeekFrom::Start(10)).unwrap();
         source.read_exact(&mut [0]).unwrap();

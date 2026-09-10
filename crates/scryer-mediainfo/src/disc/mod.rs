@@ -365,14 +365,27 @@ fn inspect(
         let mapped = disc.selection.episode_mappings.iter().any(|mapping| {
             mapping.disc_title_id == title.id || title.aliases.contains(&mapping.disc_title_id)
         });
-        let could_replace_selection = disc.automatic_selection && selected_analysis.as_ref().is_none_or(|selected: &MediaAnalysis| {
-            title.duration_seconds.unwrap_or(0.0) > selected.details.duration_seconds.unwrap_or(0.0)
-                || (title.duration_seconds == selected.details.duration_seconds
-                    && numeric_id(&title.id) < resolved_title_id.as_deref().map(numeric_id).unwrap_or(u32::MAX))
-        });
-        if !mapped && disc.selected_title_id.as_ref() != Some(&title.id) && !could_replace_selection {
+        let could_replace_selection = disc.automatic_selection
+            && selected_analysis
+                .as_ref()
+                .is_none_or(|selected: &MediaAnalysis| {
+                    title.duration_seconds.unwrap_or(0.0)
+                        > selected.details.duration_seconds.unwrap_or(0.0)
+                        || (title.duration_seconds == selected.details.duration_seconds
+                            && numeric_id(&title.id)
+                                < resolved_title_id
+                                    .as_deref()
+                                    .map(numeric_id)
+                                    .unwrap_or(u32::MAX))
+                });
+        if !mapped && disc.selected_title_id.as_ref() != Some(&title.id) && !could_replace_selection
+        {
             title.report.status = ProbeStatus::Incomplete;
-            warning(&mut title.report, "disc_title_not_sampled", "Navigation inventoried; media inspection is deferred until this title is selected or mapped");
+            warning(
+                &mut title.report,
+                "disc_title_not_sampled",
+                "Navigation inventoried; media inspection is deferred until this title is selected or mapped",
+            );
             continue;
         }
         for (key, file) in title_files.get(&title.id).into_iter().flatten() {

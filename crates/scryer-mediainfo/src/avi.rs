@@ -978,11 +978,22 @@ mod tests {
         bytes.resize(bytes.len() + 8 * 1024 * 1024, 0);
         let riff_length = (bytes.len() - 8) as u32;
         bytes[4..8].copy_from_slice(&riff_length.to_le_bytes());
-        let mut source = BoundedSource::new(std::io::Cursor::new(bytes), 1024 * 1024).with_io_limit(1024);
+        let mut source =
+            BoundedSource::new(std::io::Cursor::new(bytes), 1024 * 1024).with_io_limit(1024);
         let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
-        assert!(raw.tracks.iter().any(|track| track.metadata.profile.as_deref() == Some("Simple Profile")));
+        assert!(
+            raw.tracks
+                .iter()
+                .any(|track| track.metadata.profile.as_deref() == Some("Simple Profile"))
+        );
         assert!(raw.duration_seconds.is_some());
-        assert!(raw.details.report.warnings.iter().any(|warning| warning.code == "avi_index_budget"));
+        assert!(
+            raw.details
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "avi_index_budget")
+        );
         assert!(!source.exhausted);
         assert!(source.bytes_read < 1024 * 1024);
     }

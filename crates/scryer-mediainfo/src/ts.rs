@@ -2391,16 +2391,29 @@ mod tests {
             }
         }
         impl crate::source::MediaSource for Metered {
-            fn len(&self) -> u64 { self.input.get_ref().len() as u64 }
+            fn len(&self) -> u64 {
+                self.input.get_ref().len() as u64
+            }
         }
         let mut null = [0xff; TS_PACKET_SIZE];
         null[..4].copy_from_slice(&[0x47, 0x1f, 0xff, 0x10]);
         let mut bytes = null.repeat(10_000);
         bytes.extend_from_slice(include_bytes!("../tests/media/h264_aac.ts"));
-        let mut source = Metered { input: std::io::Cursor::new(bytes), reads: 0 };
+        let mut source = Metered {
+            input: std::io::Cursor::new(bytes),
+            reads: 0,
+        };
         let raw = parse_ts_source(&mut source, AnalysisProfile::ContentProbe).unwrap();
-        assert!(raw.tracks.iter().any(|track| track.codec_name.as_deref() == Some("h264")));
-        assert!(source.reads < 200, "{} underlying reads for delayed PSI", source.reads);
+        assert!(
+            raw.tracks
+                .iter()
+                .any(|track| track.codec_name.as_deref() == Some("h264"))
+        );
+        assert!(
+            source.reads < 200,
+            "{} underlying reads for delayed PSI",
+            source.reads
+        );
     }
 
     #[test]
