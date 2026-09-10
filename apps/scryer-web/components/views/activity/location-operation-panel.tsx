@@ -440,6 +440,10 @@ function TitleFiles({
                     <TableCell>
                       {file.state === "DUPLICATE" ? (
                         "—"
+                      ) : file.state === "COMPARING" ? (
+                        <span className="text-muted-foreground">
+                          {t("move.transferPlacementAwaitingComparison")}
+                        </span>
                       ) : (
                         <FileBytes
                           done={toCount(file.copyBytes)}
@@ -450,12 +454,13 @@ function TitleFiles({
                       )}
                     </TableCell>
                     <TableCell>
-                      {file.state === "VERIFYING" ? (
+                      {file.state === "VERIFYING" || file.state === "COMPARING" ? (
                         <FileBytes
                           done={toCount(file.verificationBytes)}
-                          total={toCount(file.sizeBytes)}
+                          total={toCount(file.verificationTotalBytes ?? file.sizeBytes)}
                           complete={false}
                           label={t("move.transferVerifyProgress")}
+                          showBytes={false}
                         />
                       ) : file.state === "DONE" ? (
                         t("move.transferFileState.DONE")
@@ -519,11 +524,13 @@ function FileBytes({
   total,
   complete,
   label,
+  showBytes = true,
 }: {
   done: number;
   total: number;
   complete: boolean;
   label: string;
+  showBytes?: boolean;
 }) {
   const progress = complete
     ? 100
@@ -532,9 +539,11 @@ function FileBytes({
       : 0;
   return (
     <div className="space-y-1 tabular-nums">
-      <span>
-        {formatByteCount(done)} / {formatByteCount(total)}
-      </span>
+      {showBytes && (
+        <span>
+          {formatByteCount(done)} / {formatByteCount(total)}
+        </span>
+      )}
       <Progress
         value={progress}
         className="h-1.5"
@@ -711,14 +720,6 @@ function TitleRow({
             value={transferTitleProgress(row)}
             aria-label={row.name}
           />
-          {row.verifying > 0 && (
-            <p className="text-muted-foreground">
-              {t("move.transferVerificationBytes", {
-                done: formatByteCount(toCount(row.verificationBytes)),
-                total: formatByteCount(toCount(row.bytesTotal)),
-              })}
-            </p>
-          )}
         </TableCell>
       </TableRow>
       {expanded && (

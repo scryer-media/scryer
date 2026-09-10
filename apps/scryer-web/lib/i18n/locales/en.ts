@@ -4666,6 +4666,7 @@ const en: LocaleDictionary = {
   "move.transferFilesForTitle": "Show files for {{title}}",
   "move.transferFilePath": "File",
   "move.transferCopyProgress": "Placement",
+  "move.transferPlacementAwaitingComparison": "Awaiting comparison",
   "move.transferVerifyProgress": "Verification",
   "move.transferVerificationBytes": "Verified {{done}} / {{total}}",
   "move.transferNoFiles": "No file transfers for this title.",
