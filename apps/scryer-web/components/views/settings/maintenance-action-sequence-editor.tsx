@@ -14,7 +14,6 @@ import type {
   MaintenanceActionStep,
   MaintenanceActionStepDescriptor,
   MaintenanceActionStepKind,
-  MaintenanceRiskClass,
   MaintenanceRuleScope,
 } from "@/lib/types/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -22,8 +21,6 @@ import {
   actionStepKindLabelKey,
   effectArmingLabelKey,
   maintenanceActionSequenceStepId,
-  riskClassBadgeTone,
-  riskClassLabelKey,
 } from "@/lib/utils/maintenance-rule-sets";
 import { Badge } from "@/components/ui/badge";
 
@@ -83,13 +80,6 @@ function supportsRuleScope(
       return descriptor.supportedSubjects.includes("EPISODE");
   }
 }
-
-const RISK_ORDER: Record<MaintenanceRiskClass, number> = {
-  NONE: 0,
-  LOW: 1,
-  MEDIUM: 2,
-  HIGH: 3,
-};
 
 function sequenceTargetLabelKey(
   sequence: MaintenanceActionSequence,
@@ -226,9 +216,6 @@ function ActionSequenceStep({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{t(stepKindLabelKey(step.kind))}</span>
-            <Badge tone={riskClassBadgeTone(descriptor.riskClass)}>
-              {descriptor.riskClass}
-            </Badge>
             {descriptor.terminal ? (
               <Badge tone="negative">{t("settings.maintenanceSequenceTerminal")}</Badge>
             ) : null}
@@ -422,17 +409,14 @@ export function MaintenanceActionSequenceEditor({
     const selected = sequence.steps
       .map((step) => descriptors.find((descriptor) => descriptor.kind === step.kind))
       .filter((descriptor): descriptor is MaintenanceActionStepDescriptor => Boolean(descriptor));
-    const risk = selected.reduce<MaintenanceRiskClass>(
-      (highest, descriptor) =>
-        RISK_ORDER[descriptor.riskClass] > RISK_ORDER[highest]
-          ? descriptor.riskClass
-          : highest,
-      "NONE",
-    );
     const effects = [...new Set(selected.flatMap((descriptor) => descriptor.effectClasses))];
     const arming =
-      risk === "HIGH" ? "DESTRUCTIVE" : risk === "NONE" ? "NONE" : "REVERSIBLE";
-    return { risk, effects, arming };
+      effects.includes("DELETE_FILES")
+        ? "DESTRUCTIVE"
+        : selected.length === 0
+          ? "NONE"
+          : "REVERSIBLE";
+    return { effects, arming };
   }, [descriptors, sequence.steps]);
 
   React.useEffect(() => {
@@ -496,11 +480,6 @@ export function MaintenanceActionSequenceEditor({
             target: t(sequenceTargetLabelKey(sequence, subjectKind)),
           })}
         </span>
-        <Badge tone={riskClassBadgeTone(summary.risk)}>
-          {t("settings.maintenanceSequenceSummaryRisk", {
-            risk: t(riskClassLabelKey(summary.risk) ?? summary.risk),
-          })}
-        </Badge>
         <span>
           {t("settings.maintenanceSequenceSummaryArming", {
             arming: t(effectArmingLabelKey(summary.arming) ?? summary.arming),

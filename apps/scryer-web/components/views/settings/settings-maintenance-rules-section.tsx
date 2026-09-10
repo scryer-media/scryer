@@ -51,7 +51,6 @@ import type {
   MaintenancePreviewResult,
   MaintenancePreviewSource,
   MaintenancePreviewTitle,
-  MaintenanceRiskClass,
   MaintenanceRuleScope,
   MaintenanceTestSubject,
   MaintenanceRuleSetDraft,
@@ -63,7 +62,6 @@ import {
   actionKindLabelKey,
   actionStepKindLabelKey,
   armingOptionsFor,
-  descriptorForActionKind,
   effectArmingBadgeTone,
   effectArmingLabelKey,
   evaluationModeHelpKey,
@@ -72,8 +70,6 @@ import {
   maintenanceStatusBannerKeys,
   previewOutcomeBadgeTone,
   previewOutcomeLabelKey,
-  riskClassBadgeTone,
-  riskClassLabelKey,
 } from "@/lib/utils/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
 
@@ -193,41 +189,10 @@ function ArmingBadge({ arming }: { arming: string }) {
   );
 }
 
-function RiskBadge({ risk }: { risk: string }) {
-  const t = useTranslate();
-  const labelKey = riskClassLabelKey(risk);
-  return (
-    <Badge tone={riskClassBadgeTone(risk)}>{labelKey ? t(labelKey) : risk}</Badge>
-  );
-}
-
 function ActionLabel({ kind }: { kind: string }) {
   const t = useTranslate();
   const labelKey = actionKindLabelKey(kind);
   return <>{labelKey ? t(labelKey) : kind}</>;
-}
-
-const RISK_ORDER: Record<MaintenanceRiskClass, number> = {
-  NONE: 0,
-  LOW: 1,
-  MEDIUM: 2,
-  HIGH: 3,
-};
-
-function aggregateSequenceRisk(
-  record: MaintenanceRuleSetRecord,
-  descriptors: MaintenanceActionStepDescriptor[],
-): MaintenanceRiskClass | null {
-  if (!record.actionSequence) return null;
-  let risk: MaintenanceRiskClass = "NONE";
-  for (const step of record.actionSequence.steps) {
-    const descriptor = descriptors.find((item) => item.kind === step.kind);
-    if (!descriptor) return null;
-    if (RISK_ORDER[descriptor.riskClass] > RISK_ORDER[risk]) {
-      risk = descriptor.riskClass;
-    }
-  }
-  return risk;
 }
 
 function ActionSummary({
@@ -866,8 +831,8 @@ export function SettingsMaintenanceRulesSection({
 
   return (
     <div id="settings-maintenance-rules-section" className="space-y-4 text-sm">
-      <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
-        <div className="min-w-0 flex-1">
+      <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 2xl:flex-row 2xl:items-start">
+        <div className="min-w-0 basis-[900px] flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
             <MaintenanceStatusBanner
               gates={gates}
@@ -881,13 +846,12 @@ export function SettingsMaintenanceRulesSection({
                 </CardTitle>
               </div>
               <div className="overflow-x-auto">
-                <Table>
+                <Table className="min-w-[min(900px,100%)]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t("label.name")}</TableHead>
                       <TableHead>{t("settings.ruleDescription")}</TableHead>
                       <TableHead>{t("settings.maintenanceRuleAction")}</TableHead>
-                      <TableHead>{t("settings.maintenanceRuleRisk")}</TableHead>
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleGraceDays")}
                       </TableHead>
@@ -907,18 +871,15 @@ export function SettingsMaintenanceRulesSection({
                   </TableHeader>
                   <TableBody>
                     {ruleSetRecords.map((record) => {
-                      const descriptor = descriptorForActionKind(
-                        actionDescriptors,
-                        record.actionSpec.kind,
-                      );
-                      const sequenceRisk = aggregateSequenceRisk(
-                        record,
-                        actionStepDescriptors,
-                      );
-                      const actionRisk = sequenceRisk ?? descriptor?.riskClass;
+                      const sequenceAllowsFileDeletion =
+                        record.actionSequence?.steps.some((step) =>
+                          actionStepDescriptors
+                            .find((descriptor) => descriptor.kind === step.kind)
+                            ?.effectClasses.includes("DELETE_FILES"),
+                        ) ?? false;
                       const modeHelpKey = evaluationModeHelpKey(record.evaluationMode);
                       const armingOptions = record.actionSequence
-                        ? actionRisk === "HIGH"
+                        ? sequenceAllowsFileDeletion
                           ? ["NONE", "REVERSIBLE", "DESTRUCTIVE"]
                           : ["NONE", "REVERSIBLE"]
                         : armingOptionsFor(actionDescriptors, record.actionSpec.kind);
@@ -944,13 +905,6 @@ export function SettingsMaintenanceRulesSection({
                           </TableCell>
                           <TableCell>
                             <ActionSummary record={record} />
-                          </TableCell>
-                          <TableCell>
-                            {actionRisk ? (
-                              <RiskBadge risk={actionRisk} />
-                            ) : (
-                              "—"
-                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             {record.graceDays}
@@ -1010,17 +964,6 @@ export function SettingsMaintenanceRulesSection({
                                 })}
                               />
                               <ArmingBadge arming={record.effectArming} />
-                              {record.destructiveRearmRequired ? (
-                                <p
-                                  id={selectorId(
-                                    "settings-maintenance-rule-review-required",
-                                    record.id,
-                                  )}
-                                  className="text-xs text-[var(--scry-warning-text)]"
-                                >
-                                  {t("settings.maintenanceRuleReviewRequired")}
-                                </p>
-                              ) : null}
                             </div>
                           </TableCell>
                           <TableCell className="text-center">
@@ -1377,7 +1320,7 @@ export function SettingsMaintenanceRulesSection({
             {operationsPanels}
           </div>
         </div>
-        <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
+        <div className="@container w-full space-y-4 2xl:w-[44%] 2xl:max-w-[880px] 2xl:shrink-0">
           <MaintenanceTemplateGallery onApply={applyTemplate} />
           <MaintenanceContextReference />
         </div>
