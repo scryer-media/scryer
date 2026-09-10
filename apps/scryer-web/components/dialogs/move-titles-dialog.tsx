@@ -37,6 +37,7 @@ import {
   LocationDialogPrimaryButton,
   LocationOperationErrorNotice,
   LocationOperationStartedPanel,
+  ViewOperationButton,
   useLocationOperationStart,
 } from "@/components/dialogs/location-operation-start";
 import {
@@ -560,10 +561,7 @@ export function MoveTitlesDialog({
         {startedOperationId ? (
           <LocationOperationStartedPanel
             idPrefix="move-titles"
-            operationId={startedOperationId}
             heading={t("move.startedHeading")}
-            viewLabel={t("move.viewInActivity")}
-            onNavigated={() => onOpenChange(false)}
           />
         ) : step === "kind" ? (
           /* Step 1: which of the two moves this is. The destination controls
@@ -1192,7 +1190,14 @@ export function MoveTitlesDialog({
             disabled={starting}
             onDismiss={() => onOpenChange(false)}
           />
-          {startedOperationId ? null : (
+          {startedOperationId ? (
+            <ViewOperationButton
+              id="move-titles-view-operation"
+              operationId={startedOperationId}
+              label={t("move.viewInActivity")}
+              onNavigated={() => onOpenChange(false)}
+            />
+          ) : (
             <>
               {/* Back exists wherever there is a step behind this one: always on
                   the destination step, and on the plan step only when the

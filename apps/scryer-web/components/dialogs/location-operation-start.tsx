@@ -167,7 +167,8 @@ export function useLocationOperationStart(options: {
  * dialogs themselves must render outside a router (the title settings panels
  * are server-rendered in tests without one).
  */
-function ViewOperationButton({
+/** The way into Activity, rendered beside a location dialog's dismiss. */
+export function ViewOperationButton({
   id,
   operationId,
   label,
@@ -195,38 +196,24 @@ function ViewOperationButton({
 }
 
 /**
- * What a location dialog becomes once its operation is accepted: the heading,
- * the operation id, and the way into Activity.
+ * What a location dialog becomes once its operation is accepted. The operation
+ * id is deliberately absent: Activity is where an operation is identified, and
+ * the way there sits with the dialog's other actions in the footer.
  */
 export function LocationOperationStartedPanel({
   idPrefix,
-  operationId,
   heading,
-  viewLabel,
-  onNavigated,
 }: {
   /** `root-change` or `move-titles`; every id below is built from it. */
   idPrefix: string;
-  operationId: string;
   heading: string;
-  viewLabel: string;
-  onNavigated: () => void;
 }) {
   return (
-    <div id={`${idPrefix}-started`} className="space-y-3">
+    <div id={`${idPrefix}-started`}>
       <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-3 py-3 text-sm text-[var(--scry-success-text)]">
         <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
         <span>{heading}</span>
       </p>
-      <p className="font-[var(--font-code)] text-xs break-all text-muted-foreground">
-        {operationId}
-      </p>
-      <ViewOperationButton
-        id={`${idPrefix}-view-operation`}
-        operationId={operationId}
-        label={viewLabel}
-        onNavigated={onNavigated}
-      />
     </div>
   );
 }

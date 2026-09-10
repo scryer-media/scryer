@@ -33,6 +33,7 @@ import {
   LocationDialogPrimaryButton,
   LocationOperationErrorNotice,
   LocationOperationStartedPanel,
+  ViewOperationButton,
   useLocationOperationStart,
 } from "@/components/dialogs/location-operation-start";
 import {
@@ -274,10 +275,7 @@ export function ChangeRootDialog({
         {startedOperationId ? (
           <LocationOperationStartedPanel
             idPrefix="root-change"
-            operationId={startedOperationId}
             heading={t("rootChange.startedHeading")}
-            viewLabel={t("rootChange.viewInActivity")}
-            onNavigated={() => onOpenChange(false)}
           />
         ) : (
           <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
@@ -631,7 +629,14 @@ export function ChangeRootDialog({
             disabled={starting}
             onDismiss={() => onOpenChange(false)}
           />
-          {startedOperationId ? null : plan ? (
+          {startedOperationId ? (
+            <ViewOperationButton
+              id="root-change-view-operation"
+              operationId={startedOperationId}
+              label={t("rootChange.viewInActivity")}
+              onNavigated={() => onOpenChange(false)}
+            />
+          ) : plan ? (
             <LocationDialogPrimaryButton
               id="root-change-confirm"
               label={t("rootChange.confirm")}
