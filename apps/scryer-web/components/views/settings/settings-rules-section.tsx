@@ -1159,7 +1159,7 @@ export function SettingsRulesSection({
       {isEditorOpen ? (
         <>
           <Card>
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle className="text-base">
                 {editorMode === "copy"
                   ? t("settings.ruleCopyAsCustom")
@@ -1167,6 +1167,25 @@ export function SettingsRulesSection({
                   ? t("settings.ruleUpdate")
                   : t("settings.ruleCreate")}
               </CardTitle>
+              {/* A copy is always created enabled, so the toggle would be a
+                  control over nothing. */}
+              {editorMode !== "copy" ? (
+                <label className="flex shrink-0 items-center gap-3">
+                  <Checkbox
+                    id="settings-rule-enabled"
+                    /* The oversized treatment, at 85% of its in-form size. */
+                    className="size-[31px] rounded-md data-[state=checked]:border-primary data-[state=checked]:bg-primary focus-visible:border-primary focus-visible:ring-primary/30"
+                    checked={ruleSetDraft.enabled}
+                    onCheckedChange={(value) =>
+                      setRuleSetDraft((prev) => ({
+                        ...prev,
+                        enabled: value === true,
+                      }))
+                    }
+                  />
+                  <span className="text-sm">{t("label.enabled")}</span>
+                </label>
+              ) : null}
             </CardHeader>
             <CardContent>
               <form id="settings-rule-form" className="space-y-3" onSubmit={submitRuleSet}>
@@ -1275,23 +1294,6 @@ export function SettingsRulesSection({
                     ))}
                   </div>
                 </div>
-
-                {editorMode !== "copy" ? (
-                  <label className="flex h-9 items-center gap-3">
-                    <Checkbox
-                      id="settings-rule-enabled"
-                      className="size-9 rounded-md data-[state=checked]:border-primary data-[state=checked]:bg-primary focus-visible:border-primary focus-visible:ring-primary/30"
-                      checked={ruleSetDraft.enabled}
-                      onCheckedChange={(value) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          enabled: value === true,
-                        }))
-                      }
-                    />
-                    <span className="text-sm">{t("label.enabled")}</span>
-                  </label>
-                ) : null}
 
                 {validationResult ? (
                   <div
