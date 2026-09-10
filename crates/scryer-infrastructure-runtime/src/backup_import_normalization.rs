@@ -50,14 +50,16 @@ pub fn validate_restore_manifest_table_set(
         .cloned()
         .collect::<Vec<_>>();
     if unexpected.is_empty()
-        && missing
-            == [
-                "rule_pack_installations".to_string(),
-                "rule_pack_members".to_string(),
-            ]
         && source_migration_key
             .and_then(migration_number)
-            .is_some_and(|number| number < 225)
+            .is_some_and(|number| {
+                missing.iter().all(|table| match table.as_str() {
+                    "rule_pack_installations" | "rule_pack_members" => number < 225,
+                    "location_transfer_progress" | "location_transfer_titles" => number < 234,
+                    "location_file_resolutions" => number < 235,
+                    _ => false,
+                })
+            })
     {
         return Ok(());
     }
@@ -626,6 +628,48 @@ mod tests {
         let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
             .expect_err("unknown tables should stay invalid");
         assert!(error.to_string().contains("mystery_cache"));
+    }
+
+    #[test]
+    fn restore_manifest_validation_dates_missing_transfer_tables_and_combines_legacy_changes() {
+        let introduced = [
+            ("rule_pack_installations", 225),
+            ("rule_pack_members", 225),
+            ("location_transfer_progress", 234),
+            ("location_transfer_titles", 234),
+            ("location_file_resolutions", 235),
+        ];
+        let mut export_tables = vec!["titles".to_string()];
+        export_tables.extend(introduced.iter().map(|(table, _)| table.to_string()));
+        for source_version in [224, 225, 233, 234, 235, 236] {
+            let mut row_counts = BTreeMap::from_iter([("titles".to_string(), 1)]);
+            row_counts.extend(introduced.iter().filter_map(|(table, version)| {
+                (source_version >= *version).then(|| (table.to_string(), 0))
+            }));
+            let key = format!("{source_version:04}_fixture");
+            validate_restore_manifest_table_set(&row_counts, &export_tables, Some(&key))
+                .expect("only tables introduced after this backup may be absent");
+            for (table, version) in introduced {
+                if source_version >= version {
+                    let mut incomplete = row_counts.clone();
+                    incomplete.remove(table);
+                    assert!(
+                        validate_restore_manifest_table_set(
+                            &incomplete,
+                            &export_tables,
+                            Some(&key)
+                        )
+                        .is_err(),
+                        "{table} must be present at migration {source_version}"
+                    );
+                }
+            }
+            row_counts.remove("titles");
+            assert!(
+                validate_restore_manifest_table_set(&row_counts, &export_tables, Some(&key))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

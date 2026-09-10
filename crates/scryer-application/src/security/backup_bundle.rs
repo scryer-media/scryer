@@ -788,6 +788,24 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "location_file_resolutions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_transfer_progress",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_transfer_titles",
+        classification: BackupTableClassification::Export,
+    },
+    // Stream generations belong to the target instance. Keep its seeded row
+    // and never restore an older generation from another instance's backup.
+    BackupTableCatalogEntry {
+        table: "location_transfer_runtime",
+        classification: BackupTableClassification::Ignore,
+    },
+    BackupTableCatalogEntry {
         table: "login_verification_challenges",
         classification: BackupTableClassification::Ignore,
     },
