@@ -71,6 +71,7 @@ import {
   remainingSelection,
   REQUESTABLE_MOVE_MODES,
   sameNamedDestinationTitle,
+  settledDestinationPick,
   startModeInput,
   toCount,
   transferStatement,
@@ -499,6 +500,32 @@ export function MoveTitlesDialog({
   // The destination step's root list: the source library's other roots for a
   // same-library move, the chosen library's roots for a transfer.
   const wizardRoots = kind === "root" ? sameLibraryRoots : destinationRoots;
+
+  // What each destination picker actually offers. The defaults below read from
+  // these, so a default can never be a value its own list lacks.
+  const libraryOptions =
+    step === "destination" && kind === "library" ? otherLibraries : libraries;
+  const rootOptions = step === "destination" ? wizardRoots : destinationRoots;
+  const pickingDestination = open && (step === "destination" || step === "plan");
+
+  // The pickers open on a usable destination instead of a placeholder: the
+  // first library on offer, then that library's first root. This settles
+  // whenever the options change rather than only at open, because `libraries`
+  // can arrive after the dialog is already up, and because changing the
+  // library clears the root to be refilled from the new library.
+  React.useEffect(() => {
+    if (!pickingDestination) {
+      return;
+    }
+    setLibraryId((current) => settledDestinationPick(libraryOptions, current));
+  }, [libraryOptions, pickingDestination]);
+
+  React.useEffect(() => {
+    if (!pickingDestination) {
+      return;
+    }
+    setRootId((current) => settledDestinationPick(rootOptions, current));
+  }, [pickingDestination, rootOptions]);
 
   // Naming the destination library is what makes a cross-library transfer
   // readable: every row otherwise states only paths (FR-016, US6).

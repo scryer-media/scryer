@@ -1825,6 +1825,24 @@ export function crossLibraryDestinations<T extends { id: string }>(
   return libraries.filter((library) => library.id !== sourceLibraryId);
 }
 
+/**
+ * What a destination picker should hold: the current pick when the options
+ * still offer it, and otherwise the first option, so a picker opens on a
+ * usable destination rather than a placeholder. Empty options leave the pick
+ * alone, so a picker still waiting on its libraries does not clear itself.
+ */
+export function settledDestinationPick<T extends { id: string }>(
+  options: readonly T[],
+  current: string,
+): string {
+  if (options.length === 0) {
+    return current;
+  }
+  return options.some((option) => option.id === current)
+    ? current
+    : options[0].id;
+}
+
 /** Picks the step's Next button enables, per step. */
 export function moveWizardCanAdvance(
   step: MoveWizardStep,

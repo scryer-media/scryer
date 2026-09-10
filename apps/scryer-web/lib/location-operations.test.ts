@@ -31,6 +31,7 @@ import {
   movesThroughWizard,
   nextMoveStep,
   previousMoveStep,
+  settledDestinationPick,
   isActiveWorkBlock,
   isAmbiguousDestinationBlock,
   isBlockedSelectionMessage,
@@ -1880,6 +1881,23 @@ test("a cross-library move never offers the source library", () => {
     crossLibraryDestinations(libraries, null).map((library) => library.id),
     ["lib-1", "lib-2"],
   );
+});
+
+test("a destination picker settles on the first option it offers", () => {
+  const options = [{ id: "root-1" }, { id: "root-2" }];
+
+  // Nothing picked yet, so the picker opens on the first option rather than a
+  // placeholder.
+  assert.equal(settledDestinationPick(options, ""), "root-1");
+  // A pick the list still offers survives; the picker never overrides a
+  // deliberate choice.
+  assert.equal(settledDestinationPick(options, "root-2"), "root-2");
+  // A pick the list no longer offers -- the library changed underneath it --
+  // falls back to the new list's first option.
+  assert.equal(settledDestinationPick(options, "root-9"), "root-1");
+  // Options that have not loaded leave the pick alone, so a picker waiting on
+  // its libraries does not clear a caller-supplied root.
+  assert.equal(settledDestinationPick([], "root-2"), "root-2");
 });
 
 test("each wizard step advances only once its own pick is made", () => {
