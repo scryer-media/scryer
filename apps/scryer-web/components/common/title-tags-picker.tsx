@@ -138,7 +138,7 @@ export function TitleTagsPicker({
     >
       <SelectTrigger
         id={`${idPrefix}-tags-add`}
-        className={layout === "table" ? "h-9 w-[70%]" : "h-9 w-full"}
+        className={layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full"}
       >
         <SelectValue placeholder={t("title.tagsAdd")} />
       </SelectTrigger>

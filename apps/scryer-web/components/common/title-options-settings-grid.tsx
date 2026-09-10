@@ -282,7 +282,7 @@ export function TitleOptionsSettingsGrid({
               }
               disabled={saving || qualityProfiles.length === 0}
             >
-              <SelectTrigger id={`${idPrefix}-quality-profile`} className="h-9 w-[70%]">
+              <SelectTrigger id={`${idPrefix}-quality-profile`} className="ml-auto h-9 w-[70%]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -341,7 +341,7 @@ export function TitleOptionsSettingsGrid({
               >
                 <SelectTrigger
                   id={`${idPrefix}-root-folder`}
-                  className="h-9 w-[70%] font-[var(--font-code)] text-sm"
+                  className="ml-auto h-9 w-[70%] font-[var(--font-code)] text-sm"
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -380,7 +380,7 @@ export function TitleOptionsSettingsGrid({
                 }
                 disabled={saving}
               >
-                <SelectTrigger id={`${idPrefix}-season-folder`} className="h-9 w-[70%]">
+                <SelectTrigger id={`${idPrefix}-season-folder`} className="ml-auto h-9 w-[70%]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -398,7 +398,7 @@ export function TitleOptionsSettingsGrid({
             effective={effectiveAudioLanguages}
           >
             <div className="space-y-1">
-              <div id={`${idPrefix}-required-audio-languages`}>
+              <div id={`${idPrefix}-required-audio-languages`} className="flex justify-end">
                 <AudioLanguagePicker
                   value={requiredAudioLanguages}
                   onChange={(codes) => void handleRequiredAudioChange(codes)}
@@ -435,7 +435,7 @@ export function TitleOptionsSettingsGrid({
               }
               disabled={saving}
             >
-              <SelectTrigger id={`${idPrefix}-metadata-language`} className="h-9 w-[70%]">
+              <SelectTrigger id={`${idPrefix}-metadata-language`} className="ml-auto h-9 w-[70%]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -465,7 +465,7 @@ export function TitleOptionsSettingsGrid({
                   }
                   disabled={saving}
                 >
-                  <SelectTrigger id={`${idPrefix}-filler-policy`} className="h-9 w-[70%]">
+                  <SelectTrigger id={`${idPrefix}-filler-policy`} className="ml-auto h-9 w-[70%]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -490,7 +490,7 @@ export function TitleOptionsSettingsGrid({
                   }
                   disabled={saving}
                 >
-                  <SelectTrigger id={`${idPrefix}-recap-policy`} className="h-9 w-[70%]">
+                  <SelectTrigger id={`${idPrefix}-recap-policy`} className="ml-auto h-9 w-[70%]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
