@@ -1026,6 +1026,8 @@ function TitleContextPanel({
   onClearAdvancedFilters,
   view,
   blocklistEntries,
+  clearingBlocklistEntryId,
+  onClearBlocklistEntry,
   externalSubtitles,
   isTogglingMonitored,
   isDeleting,
@@ -1083,6 +1085,8 @@ function TitleContextPanel({
   onClearAdvancedFilters: () => void;
   view: ViewId;
   blocklistEntries: TitleReleaseBlocklistEntry[];
+  clearingBlocklistEntryId: string | null;
+  onClearBlocklistEntry: (entryId: string) => Promise<void> | void;
   externalSubtitles: ExternalSubtitleRecord[];
   isTogglingMonitored: boolean;
   isDeleting: boolean;
@@ -1795,6 +1799,29 @@ function TitleContextPanel({
                                 ) : null}
                               </div>
                             </div>
+                            {canManageTitle ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={t("title.clearBlockedRelease", {
+                                  releaseName: releaseLabel,
+                                })}
+                                title={t("title.clearBlockedReleaseHint")}
+                                className="h-7 shrink-0 gap-1.5 px-2 text-[11px] font-semibold text-[var(--scry-muted)] hover:bg-[var(--scry-danger-bg)] hover:text-[var(--scry-danger-text)]"
+                                disabled={clearingBlocklistEntryId === entry.id}
+                                onClick={() => {
+                                  void onClearBlocklistEntry(entry.id);
+                                }}
+                              >
+                                {clearingBlocklistEntryId === entry.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                )}
+                                <span>{t("label.remove")}</span>
+                              </Button>
+                            ) : null}
                           </div>
                           {entry.errorMessage ? (
                             <p className="mt-2 line-clamp-3 rounded-[8px] bg-[var(--scry-danger-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--scry-danger-text)]">
@@ -2152,6 +2179,10 @@ export function MediaContentView({
     routeOverviewPending: boolean;
     routeOverviewEpisodeId: string | null;
     selectedOverviewBlocklistEntries: TitleReleaseBlocklistEntry[];
+    clearingSelectedOverviewBlocklistEntryId: string | null;
+    clearSelectedOverviewBlocklistEntry: (
+      entryId: string,
+    ) => Promise<void> | void;
     selectedOverviewExternalSubtitles: ExternalSubtitleRecord[];
     refreshSelectedOverviewExternalSubtitles: () => Promise<void> | void;
     deleteSelectedOverviewMediaFile: (
@@ -2374,6 +2405,8 @@ export function MediaContentView({
     routeOverviewPending,
     routeOverviewEpisodeId,
     selectedOverviewBlocklistEntries,
+    clearingSelectedOverviewBlocklistEntryId,
+    clearSelectedOverviewBlocklistEntry,
     selectedOverviewExternalSubtitles,
     refreshSelectedOverviewExternalSubtitles,
     deleteSelectedOverviewMediaFile,
@@ -4136,6 +4169,12 @@ export function MediaContentView({
                       onClearAdvancedFilters={clearAdvancedTitleFilters}
                       view={view}
                       blocklistEntries={selectedOverviewBlocklistEntries}
+                      clearingBlocklistEntryId={
+                        clearingSelectedOverviewBlocklistEntryId
+                      }
+                      onClearBlocklistEntry={
+                        clearSelectedOverviewBlocklistEntry
+                      }
                       externalSubtitles={selectedOverviewExternalSubtitles}
                       isTogglingMonitored={
                         activeOverviewTitle

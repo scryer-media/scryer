@@ -1336,6 +1336,9 @@ const en: LocaleDictionary = {
   "title.dubCastLanguage": "Language",
   "title.contextMoreLikeThis": "More like this",
   "title.contextBlockedReleases": "Blocked Releases",
+  "title.clearBlockedRelease": "Remove {{releaseName}} from the blocklist",
+  "title.clearBlockedReleaseHint":
+    "Remove this release from the blocklist so it can be grabbed again",
   "title.contextAdded": "Added",
   "title.columns": "Columns",
   "title.toggleColumns": "Toggle columns",
@@ -2652,6 +2655,7 @@ const en: LocaleDictionary = {
   "status.requestSubmitted": "Request submitted for {{name}}.",
   "status.queueSuccess": "Queued {{name}}",
   "status.primaryMovieFileUpdated": "Primary movie file updated",
+  "status.blocklistEntryCleared": "Blocked release removed",
   "status.episodeFilesDeleteQueued": "Queued deletion of {{count}} episode files",
   "status.episodeFilesDeleted": "Deleted {{count}} episode files",
   "status.queuedLatest": "Queued latest release for {{name}}",

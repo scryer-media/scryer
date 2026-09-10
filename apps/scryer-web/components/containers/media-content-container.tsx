@@ -15,6 +15,7 @@ import {
   createLibraryMutation,
   deleteMediaFileMutation,
   deleteLibraryMutation,
+  clearTitleReleaseBlocklistEntryMutation,
   queueBestReleaseMutation,
   queueExistingMutation,
   queueReplacementMutation,
@@ -199,6 +200,8 @@ const TITLE_DELETION_JOB_FALLBACK_DELAYS_MS = [
 const TITLE_CATALOG_PAGE_SIZE = 72;
 const TITLE_CATALOG_FILTER_DEBOUNCE_MS = 250;
 const LIBRARY_SCAN_TITLE_REFRESH_THROTTLE_MS = 5_000;
+// The title panel shows a recent-blocks window, not the whole blocklist.
+const SELECTED_OVERVIEW_BLOCKLIST_LIMIT = 6;
 const ALL_LIBRARIES_VALUE = "__all__";
 
 const EMPTY_TITLE_CATALOG_FILTER_OPTIONS: TitleCatalogFilterOptionsRecord = {
@@ -1071,6 +1074,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedOverviewBlocklistState.titleId === selectedOverviewTitleId
       ? selectedOverviewBlocklistState.entries
       : [];
+  const [
+    clearingSelectedOverviewBlocklistEntryId,
+    setClearingSelectedOverviewBlocklistEntryId,
+  ] = React.useState<string | null>(null);
   const [
     selectedOverviewExternalSubtitleState,
     setSelectedOverviewExternalSubtitleState,
@@ -3293,6 +3300,63 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ],
   );
 
+  const loadSelectedOverviewBlocklist = React.useCallback(
+    async (titleId: string) => {
+      const { data, error } = await client
+        .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
+          titleReleaseBlocklistQuery,
+          { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (error) {
+        throw error;
+      }
+      return data?.titleReleaseBlocklist ?? [];
+    },
+    [client],
+  );
+  const clearSelectedOverviewBlocklistEntry = React.useCallback(
+    async (entryId: string) => {
+      // Key the refresh off the title the visible entries belong to, so a
+      // panel switch mid-flight cannot write another title's blocklist.
+      const titleId = selectedOverviewBlocklistState.titleId;
+      setClearingSelectedOverviewBlocklistEntryId(entryId);
+      try {
+        const { error } = await client
+          .mutation(clearTitleReleaseBlocklistEntryMutation, { id: entryId })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+        setGlobalStatus(t("status.blocklistEntryCleared"));
+        if (titleId) {
+          // Refetch instead of splicing: the panel shows a capped window, so
+          // clearing one entry can uncover an older blocked release.
+          const entries = await loadSelectedOverviewBlocklist(titleId);
+          setSelectedOverviewBlocklistState((current) =>
+            current.titleId === titleId ? { titleId, entries } : current,
+          );
+        }
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+        );
+      } finally {
+        setClearingSelectedOverviewBlocklistEntryId((current) =>
+          current === entryId ? null : current,
+        );
+      }
+    },
+    [
+      client,
+      loadSelectedOverviewBlocklist,
+      selectedOverviewBlocklistState.titleId,
+      setGlobalStatus,
+      t,
+    ],
+  );
+
   React.useEffect(() => {
     if (!shouldLoadCatalogTitles || !selectedPanelHydrationTitleId) {
       selectedPanelHydrationKeyRef.current = null;
@@ -3357,7 +3421,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       client
         .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
           titleReleaseBlocklistQuery,
-          { titleId, limit: 6 },
+          { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
         )
         .toPromise(),
     ] as const).then(
@@ -5386,6 +5450,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           routeOverviewPending,
           routeOverviewEpisodeId,
           selectedOverviewBlocklistEntries,
+          clearingSelectedOverviewBlocklistEntryId,
+          clearSelectedOverviewBlocklistEntry,
           selectedOverviewExternalSubtitles,
           refreshSelectedOverviewExternalSubtitles,
           deleteSelectedOverviewMediaFile:
