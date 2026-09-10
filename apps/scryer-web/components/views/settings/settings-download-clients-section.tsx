@@ -477,12 +477,27 @@ export function SettingsDownloadClientsSection({
       {isEditorOpen ? (
         <>
           <Card>
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle id="settings-download-client-editor" className="text-base">
                 {editingDownloadClientId
                   ? t("settings.downloadClientUpdate")
                   : t("settings.downloadClientCreate")}
               </CardTitle>
+              <label className="flex shrink-0 items-center gap-3">
+                <Checkbox
+                  id="settings-download-client-enabled"
+                  size="large"
+                  checked={downloadClientDraft.isEnabled}
+                  disabled={mutatingDownloadClientId !== null}
+                  onCheckedChange={(checked) =>
+                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
+                      ...prev,
+                      isEnabled: checked === true,
+                    }))
+                  }
+                />
+                <span className="text-sm font-medium">{t("label.enabled")}</span>
+              </label>
             </CardHeader>
             <CardContent>
               <form
@@ -861,27 +876,6 @@ export function SettingsDownloadClientsSection({
               >
                 {t("label.cancel")}
               </Button>
-              <label className="flex h-9 items-center gap-3">
-                <Checkbox
-                  id="settings-download-client-enabled"
-                  className="size-9 rounded-md data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-500 focus-visible:border-emerald-400 focus-visible:ring-emerald-400/30"
-                  checked={downloadClientDraft.isEnabled}
-                  disabled={mutatingDownloadClientId !== null}
-                  onCheckedChange={(checked) =>
-                    setDownloadClientDraft((prev: DownloadClientDraft) => ({
-                      ...prev,
-                      isEnabled: checked === true,
-                    }))
-                  }
-                />
-                <span className="inline-flex items-center gap-2 text-sm font-medium">
-                  {t("settings.downloadClientEnabledLabel")}
-                  <InfoHelp
-                    ariaLabel={t("settings.downloadClientEnabledLabel")}
-                    text={t("settings.downloadClientEnabledInfo")}
-                  />
-                </span>
-              </label>
             </div>
               </form>
             </CardContent>

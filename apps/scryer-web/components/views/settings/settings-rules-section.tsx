@@ -1173,8 +1173,7 @@ export function SettingsRulesSection({
                 <label className="flex shrink-0 items-center gap-3">
                   <Checkbox
                     id="settings-rule-enabled"
-                    /* The oversized treatment, at 85% of its in-form size. */
-                    className="size-[31px] rounded-md data-[state=checked]:border-primary data-[state=checked]:bg-primary focus-visible:border-primary focus-visible:ring-primary/30"
+                    size="large"
                     checked={ruleSetDraft.enabled}
                     onCheckedChange={(value) =>
                       setRuleSetDraft((prev) => ({

@@ -1284,12 +1284,27 @@ export function SettingsIndexersSection({
       {isEditorOpen ? (
         <>
           <Card>
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle className="text-base">
                 {editingIndexerId
                   ? t("settings.indexerUpdate")
                   : t("settings.indexerCreate")}
               </CardTitle>
+              <label className="flex shrink-0 items-center gap-3">
+                <Checkbox
+                  id="settings-indexer-enabled"
+                  size="large"
+                  checked={indexerDraft.isEnabled}
+                  disabled={mutatingIndexerId !== null}
+                  onCheckedChange={(checked) =>
+                    setIndexerDraft((prev) => ({
+                      ...prev,
+                      isEnabled: checked === true,
+                    }))
+                  }
+                />
+                <span className="text-sm font-medium">{t("label.enabled")}</span>
+              </label>
             </CardHeader>
             <CardContent>
               <form id="settings-indexer-form" className="space-y-3" onSubmit={submitIndexer}>

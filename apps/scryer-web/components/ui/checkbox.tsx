@@ -6,7 +6,13 @@ import { Checkbox as CheckboxPrimitive } from "radix-ui"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 
-type CheckboxSize = "default" | "compact" | "table"
+/**
+ * `large` is the prominent on/off treatment: an oversized box for a single
+ * toggle that speaks for a whole form -- an editor's Enabled switch, say --
+ * rather than one field among many. It takes the same accent as every other
+ * checkbox, so a form never invents its own colour for "on".
+ */
+type CheckboxSize = "default" | "compact" | "table" | "large"
 
 type CheckboxProps = Omit<
   React.ComponentProps<typeof CheckboxPrimitive.Root>,
@@ -19,12 +25,16 @@ const CHECKBOX_SIZE_CLASS: Record<CheckboxSize, string> = {
   default: "size-5 rounded-[6px]",
   compact: "size-[18px] rounded-[5px]",
   table: "size-[18px] rounded-[5px]",
+  large: "size-[31px] rounded-md",
 }
 
 const CHECKBOX_ICON_CLASS: Record<CheckboxSize, string> = {
   default: "size-3.5",
   compact: "size-3",
   table: "size-3",
+  // Deliberately not scaled with the box: the large treatment reads as a
+  // panel that fills, not as a bigger tick.
+  large: "size-3.5",
 }
 
 function Checkbox({
