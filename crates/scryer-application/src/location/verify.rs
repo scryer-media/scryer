@@ -217,16 +217,35 @@ pub fn partial_destination_path(destination: &Path) -> PathBuf {
 /// nothing but bookkeeping — the runner accumulates into an atomic and does the
 /// persisting on its own, throttled, schedule.
 #[derive(Clone, Default)]
-pub struct CopyProgress(Option<Arc<dyn Fn(u64) + Send + Sync>>);
+pub struct CopyProgress(
+    Option<Arc<dyn Fn(u64) + Send + Sync>>,
+    Option<Arc<dyn Fn(scryer_domain::ImportTransferPhase, u64) + Send + Sync>>,
+);
 
 impl CopyProgress {
     /// A copy nobody is watching.
     pub fn none() -> Self {
-        Self(None)
+        Self(None, None)
     }
 
     pub fn from_fn(sink: impl Fn(u64) + Send + Sync + 'static) -> Self {
-        Self(Some(Arc::new(sink)))
+        Self(Some(Arc::new(sink)), None)
+    }
+
+    pub fn with_transfer_sink(
+        mut self,
+        sink: impl Fn(scryer_domain::ImportTransferPhase, u64) + Send + Sync + 'static,
+    ) -> Self {
+        self.1 = Some(Arc::new(sink));
+        self
+    }
+
+    /// Absolute bytes for this phase. This is transient telemetry, never a
+    /// resumable CRC checkpoint.
+    pub fn phase(&self, phase: scryer_domain::ImportTransferPhase, bytes: u64) {
+        if let Some(sink) = &self.1 {
+            sink(phase, bytes);
+        }
     }
 
     /// Report `bytes` newly written to the destination.
@@ -401,6 +420,7 @@ pub type ReadBackOpener = Arc<dyn Fn(&Path) -> ReadBackHandle + Send + Sync>;
 #[derive(Clone)]
 pub struct VerifiedCopier {
     read_back_opener: ReadBackOpener,
+    progress: CopyProgress,
 }
 
 impl std::fmt::Debug for VerifiedCopier {
@@ -421,6 +441,7 @@ impl VerifiedCopier {
     pub fn new() -> Self {
         Self {
             read_back_opener: Arc::new(open_cache_bypassed as fn(&Path) -> ReadBackHandle),
+            progress: CopyProgress::none(),
         }
     }
 
@@ -429,7 +450,13 @@ impl VerifiedCopier {
     pub fn with_read_back_opener(opener: ReadBackOpener) -> Self {
         Self {
             read_back_opener: opener,
+            progress: CopyProgress::none(),
         }
+    }
+
+    pub fn with_progress(mut self, progress: CopyProgress) -> Self {
+        self.progress = progress;
+        self
     }
 
     /// Copy `source` onto `destination`, then prove the destination at
@@ -441,6 +468,7 @@ impl VerifiedCopier {
     /// are outcomes, not errors — a mismatched destination is a fact to record
     /// and surface, not an exception.
     pub async fn copy_and_verify(&self, request: VerifiedCopyRequest) -> AppResult<VerifiedFile> {
+        let copier = self.clone().with_progress(request.progress.clone());
         let hashes = self
             .copy_with_progress(
                 &request.source,
@@ -449,7 +477,7 @@ impl VerifiedCopier {
                 &request.progress,
             )
             .await?;
-        let assessment = self
+        let assessment = copier
             .verify(
                 &request.source,
                 &request.destination,
@@ -494,6 +522,11 @@ impl VerifiedCopier {
         claim: DestinationClaim,
         progress: &CopyProgress,
     ) -> AppResult<StreamedContentHashes> {
+        progress.phase(scryer_domain::ImportTransferPhase::Waiting, 0);
+        let _permit = super::transfer::CopyCoordinator::shared()
+            .acquire_destination(destination)
+            .await;
+        progress.phase(scryer_domain::ImportTransferPhase::Copying, 0);
         match claim {
             DestinationClaim::AlreadyHeld => {
                 let source = source.to_path_buf();
@@ -586,6 +619,8 @@ impl VerifiedCopier {
         destination: &Path,
         requested: VerificationDepth,
     ) -> AppResult<VerifiedFile> {
+        self.progress
+            .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
         let hashes = {
             let source = source.to_path_buf();
             spawn_verify_blocking(move || hash_source(&source)).await?
@@ -635,6 +670,8 @@ impl VerifiedCopier {
         hashes: &StreamedContentHashes,
         requested: VerificationDepth,
     ) -> VerificationAssessment {
+        self.progress
+            .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
         match requested {
             VerificationDepth::Quick => {
                 let (outcome, detail) = quick_check(source, destination, hashes);
@@ -663,14 +700,16 @@ impl VerifiedCopier {
             ReadBackHandle::Unsupported(reason) => {
                 quick_floor_fallback(source, destination, hashes, &reason)
             }
-            ReadBackHandle::Ready { file, bypass } => match full_read_back(file, hashes) {
-                Ok((outcome, detail)) => VerificationAssessment {
-                    depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
-                    outcome,
-                    detail: join_details(bypass_note(bypass), detail),
-                },
-                Err(reason) => quick_floor_fallback(source, destination, hashes, &reason),
-            },
+            ReadBackHandle::Ready { file, bypass } => {
+                match full_read_back(file, hashes, &self.progress) {
+                    Ok((outcome, detail)) => VerificationAssessment {
+                        depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+                        outcome,
+                        detail: join_details(bypass_note(bypass), detail),
+                    },
+                    Err(reason) => quick_floor_fallback(source, destination, hashes, &reason),
+                }
+            }
         }
     }
 }
@@ -683,6 +722,14 @@ impl VerifiedCopier {
 pub async fn hash_existing_file(path: &Path) -> AppResult<StreamedContentHashes> {
     let path = path.to_path_buf();
     spawn_verify_blocking(move || hash_source(&path)).await?
+}
+
+pub async fn hash_existing_file_with_progress(
+    path: &Path,
+    progress: CopyProgress,
+) -> AppResult<StreamedContentHashes> {
+    let path = path.to_path_buf();
+    spawn_verify_blocking(move || hash_source_with_progress(&path, &progress)).await?
 }
 
 /// Runs one blocking filesystem step off the async runtime, the way
@@ -747,6 +794,13 @@ async fn sync_parent_directory_after_promotion(destination: &Path) {
 /// already-placed destination can be compared against what a copy of that
 /// source would have produced.
 fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
+    hash_source_with_progress(source, &CopyProgress::none())
+}
+
+fn hash_source_with_progress(
+    source: &Path,
+    progress: &CopyProgress,
+) -> AppResult<StreamedContentHashes> {
     let mut input = File::open(source).map_err(|error| {
         AppError::Repository(format!(
             "failed to open copy source: {}: {error}",
@@ -754,6 +808,7 @@ fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
         ))
     })?;
 
+    let mut bytes = 0u64;
     let mut hasher = StreamedContentHasher::new();
     let mut buffer = vec![0u8; COPY_CHUNK_BYTES];
     loop {
@@ -767,6 +822,8 @@ fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
             break;
         }
         hasher.update(&buffer[..read]);
+        bytes = bytes.saturating_add(read as u64);
+        progress.phase(scryer_domain::ImportTransferPhase::Verifying, bytes);
     }
     Ok(hasher.finalize())
 }
@@ -901,6 +958,7 @@ fn carry_source_mode_best_effort(_source: &Path, _destination: &Path) {}
 fn full_read_back(
     mut file: File,
     hashes: &StreamedContentHashes,
+    progress: &CopyProgress,
 ) -> Result<(FileVerificationOutcome, Option<String>), String> {
     let mut digest = crc_fast::Digest::new(crc_algorithm_for(hashes.crc_algorithm));
     let mut read_bytes: u64 = 0;
@@ -914,6 +972,7 @@ fn full_read_back(
         }
         digest.update(&buffer[..read]);
         read_bytes = read_bytes.saturating_add(read as u64);
+        progress.phase(scryer_domain::ImportTransferPhase::Verifying, read_bytes);
     }
 
     if read_bytes != hashes.size_bytes {

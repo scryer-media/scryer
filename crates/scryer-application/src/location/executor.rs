@@ -3,8 +3,8 @@
 //! (FR-030–033, FR-089, FR-092).
 //!
 //! Execution order per operation (FR-031): validate → fingerprinted preview →
-//! explicit confirmation → move one title at a time → verify each copy at the
-//! configured depth → apply destination permissions → flip catalog ownership →
+//! explicit confirmation → pipeline copies and verification at the configured
+//! depth → apply destination permissions → serialize catalog ownership changes →
 //! recycle or preserve redundant sources → remove only empty source directories
 //! → finalize root or source-title removal.
 //!
@@ -68,6 +68,8 @@
 //! not-yet-processed source is stale. [`crate::location::preview::PlanInputChange`]
 //! is the shared vocabulary for that decision; the runner never hardcodes one
 //! workflow's rules.
+
+mod pipeline;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -546,6 +548,7 @@ pub trait OperationEpilogue: Send + Sync {
 
 /// The operation runner (D5).
 pub struct LocationOperationRunner<'a> {
+    transfers: Option<&'a super::live::TransferHub>,
     store: &'a dyn LocationOperationRepository,
     mover: &'a dyn TitleFileMover,
     admission: &'a dyn TitleAdmissionCheck,
@@ -558,6 +561,11 @@ pub struct LocationOperationRunner<'a> {
 }
 
 impl<'a> LocationOperationRunner<'a> {
+    pub fn with_transfers(mut self, transfers: &'a super::live::TransferHub) -> Self {
+        self.transfers = Some(transfers);
+        self
+    }
+
     pub fn new(
         store: &'a dyn LocationOperationRepository,
         mover: &'a dyn TitleFileMover,
@@ -570,6 +578,7 @@ impl<'a> LocationOperationRunner<'a> {
             admission,
             reconciler,
             registry: None,
+            transfers: None,
             observer: None,
             epilogue: None,
             pulse_interval: PROGRESS_PULSE_INTERVAL,
@@ -654,6 +663,7 @@ impl<'a> LocationOperationRunner<'a> {
 
         let checkpoints = self.load_checkpoints(operation_id).await?;
         let mut progress = RunProgress::resume(plan, &checkpoints);
+        progress.verification_fallbacks = operation.verification_fallback_count;
 
         // Preparing: ownership before any byte moves, so nothing else can touch
         // the titles or roots this operation is about to change (FR-084).
@@ -702,8 +712,32 @@ impl<'a> LocationOperationRunner<'a> {
         // hashes.
         let mut failures: Vec<String> = Vec::new();
 
+        if let Some(hub) = self.transfers {
+            let outcome = self
+                .run_pipeline(&operation, plan, &mut progress, hub)
+                .await?;
+            failures.extend(outcome.failures);
+            if let Some((reason, detail)) = outcome.stop {
+                let state = if reason == StopReason::UserCanceled {
+                    LocationOperationState::Canceled
+                } else {
+                    LocationOperationState::Failed
+                };
+                return self
+                    .finish(
+                        &operation,
+                        plan,
+                        &progress,
+                        state,
+                        Some(reason),
+                        Some(detail),
+                    )
+                    .await;
+            }
+        }
+
         for title in &plan.titles {
-            if progress.is_settled(&title.title_id) {
+            if progress.is_settled(&title.title_id) || progress.failed.contains(&title.title_id) {
                 continue;
             }
 
@@ -992,26 +1026,27 @@ impl<'a> LocationOperationRunner<'a> {
             .await?;
         }
 
-        // Verifying is the completeness gate, not a second pass: every planned
-        // file must have a verified destination before any catalog row moves
-        // (FR-031, FR-044).
-        self.write_title_checkpoint(
-            operation,
-            title,
-            TitleCheckpointState::Verifying,
-            None,
-            progress,
-        )
-        .await?;
-        self.write_progress(
-            operation,
-            LocationOperationState::Verifying,
-            progress,
-            plan,
-            None,
-            false,
-        )
-        .await?;
+        // The pipeline reports actual read-back, never a synthetic verification
+        // phase for identity-validated hardlinks. Both runners keep this gate.
+        if self.transfers.is_none() {
+            self.write_title_checkpoint(
+                operation,
+                title,
+                TitleCheckpointState::Verifying,
+                None,
+                progress,
+            )
+            .await?;
+            self.write_progress(
+                operation,
+                LocationOperationState::Verifying,
+                progress,
+                plan,
+                None,
+                false,
+            )
+            .await?;
+        }
         let verified_now = self
             .store
             .verified_destination_paths(&operation.id, &title.title_id)
@@ -1290,12 +1325,35 @@ impl<'a> LocationOperationRunner<'a> {
                 files_verified,
                 bytes_total: title.bytes_total(),
                 bytes_verified,
-                detail,
+                detail: detail.clone(),
                 started_at: Some(now),
                 updated_at: now,
                 completed_at: state.is_settled().then_some(now),
             })
-            .await
+            .await?;
+        if let Some(hub) = self.transfers {
+            if let Some(mut row) = self
+                .store
+                .transfer_title(&operation.id, &title.title_id)
+                .await?
+            {
+                row.state = state;
+                row.detail = detail;
+                row.files_done = files_verified;
+                row.copy_bytes = bytes_verified.max(0) as u64;
+                row.verification_bytes = row.copy_bytes;
+                if state.is_settled() || state == TitleCheckpointState::Failed {
+                    row.copying = 0;
+                    row.verifying = 0;
+                    row.current_file = None;
+                }
+                self.store
+                    .upsert_transfer_title(&operation.id, &row)
+                    .await?;
+            }
+            hub.changed();
+        }
+        Ok(())
     }
 
     async fn write_progress(
@@ -1319,7 +1377,22 @@ impl<'a> LocationOperationRunner<'a> {
                 started_at: started.then(Utc::now),
                 completed_at: state.is_terminal().then(Utc::now),
             })
-            .await
+            .await?;
+        if let Some(hub) = self.transfers {
+            let mut latest = operation.clone();
+            latest.state = state;
+            latest.counters = progress.counters(plan);
+            let previous = self.store.transfer_high_water(&operation.id).await?;
+            let (high_water, _) = hub.progress(&latest, previous);
+            self.store
+                .save_transfer_high_water(&operation.id, high_water)
+                .await?;
+            hub.changed();
+            if state.is_terminal() {
+                hub.finish(&operation.id);
+            }
+        }
+        Ok(())
     }
 
     async fn finish(
@@ -1663,7 +1736,7 @@ impl RunProgress {
 mod tests {
     use super::*;
 
-    use std::sync::Mutex;
+    use std::sync::{Mutex, atomic::AtomicBool};
 
     use crate::location::model::{
         AppliedVerificationDepth, FileVerificationOutcome, LocationExecutionMode,
@@ -2200,6 +2273,164 @@ mod tests {
                 .collect(),
             outcomes: TitleOutcomeCounts::default(),
         }
+    }
+
+    struct PipelinedMover {
+        copies: crate::location::transfer::CopyCoordinator,
+        copying: AtomicU64,
+        max_copying: AtomicU64,
+        verifying: AtomicU64,
+        max_verifying: AtomicU64,
+        started: AtomicU64,
+        release_at: u64,
+        release: tokio::sync::Semaphore,
+        entered: tokio::sync::Notify,
+    }
+
+    impl PipelinedMover {
+        fn new(release_at: u64) -> Self {
+            Self {
+                copies: crate::location::transfer::CopyCoordinator::new(2),
+                copying: AtomicU64::new(0),
+                max_copying: AtomicU64::new(0),
+                verifying: AtomicU64::new(0),
+                max_verifying: AtomicU64::new(0),
+                started: AtomicU64::new(0),
+                release_at,
+                release: tokio::sync::Semaphore::new(0),
+                entered: tokio::sync::Notify::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TitleFileMover for PipelinedMover {
+        async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+            let copy = self.copies.acquire("volume", "library").await;
+            let active = self.copying.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_copying.fetch_max(active, Ordering::SeqCst);
+            request
+                .progress
+                .phase(scryer_domain::ImportTransferPhase::Copying, 0);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            request.progress.phase(
+                scryer_domain::ImportTransferPhase::Copying,
+                request.file.size_bytes,
+            );
+            self.copying.fetch_sub(1, Ordering::SeqCst);
+            drop(copy);
+            let active = self.verifying.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_verifying.fetch_max(active, Ordering::SeqCst);
+            let started = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+            request
+                .progress
+                .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
+            self.entered.notify_one();
+            if started == self.release_at {
+                self.release.add_permits(started as usize);
+            }
+            self.release.acquire().await.unwrap().forget();
+            self.verifying.fetch_sub(1, Ordering::SeqCst);
+            Ok(VerifiedFile {
+                source_path: request.file.source_path.clone(),
+                destination_path: request.file.destination_path.clone(),
+                hashes: None,
+                depth: AppliedVerificationDepth::exact(request.depth),
+                outcome: FileVerificationOutcome::Verified,
+                detail: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_copies_continue_while_more_than_two_files_verify() {
+        let store = FakeStore::with_operation(operation());
+        let mover = PipelinedMover::new(6);
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let plan = OperationWorkPlan::new(vec![
+            planned_title("first", 0, 3),
+            planned_title("second", 1, 3),
+        ]);
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let result = tokio::time::timeout(Duration::from_secs(5), runner.run("op-1", &plan))
+            .await
+            .expect("copies must continue during CRC")
+            .unwrap();
+        assert_eq!(result.state, LocationOperationState::Completed);
+        assert_eq!(result.counters.files_processed, 6);
+        assert_eq!(mover.max_copying.load(Ordering::SeqCst), 2);
+        assert_eq!(mover.max_verifying.load(Ordering::SeqCst), 6);
+        assert_eq!(reconciler.cleaned.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pipeline_cancel_drains_verifiers_before_returning_and_keeps_sources() {
+        let store = FakeStore::with_operation(operation());
+        let mover = PipelinedMover::new(u64::MAX);
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let plan = OperationWorkPlan::new(vec![planned_title("first", 0, 100)]);
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let finished = AtomicBool::new(false);
+        let run = async {
+            let result = runner.run("op-1", &plan).await;
+            finished.store(true, Ordering::SeqCst);
+            result
+        };
+        let cancel = async {
+            while mover.started.load(Ordering::SeqCst) < 3 {
+                mover.entered.notified().await;
+            }
+            store.request_cancel("op-1");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(!finished.load(Ordering::SeqCst));
+            assert!(mover.started.load(Ordering::SeqCst) < 100);
+            mover.release.add_permits(100);
+        };
+        let (result, ()) =
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(run, cancel) })
+                .await
+                .unwrap();
+        assert_eq!(result.unwrap().state, LocationOperationState::Canceled);
+        assert_eq!(mover.verifying.load(Ordering::SeqCst), 0);
+        assert!(reconciler.cleaned.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pipeline_stale_plan_admits_no_file_and_failed_title_does_not_block_others() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission =
+            ScriptedAdmission::new(&[("title-1", TitleAdmission::Stale("preview again".into()))]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub)
+            .run("op-1", &two_title_plan())
+            .await
+            .unwrap();
+        assert_eq!(outcome.stop_reason, Some(StopReason::StalePlan));
+        assert!(mover.moved().is_empty());
+
+        let store = FakeStore::with_operation(operation());
+        let admission = ScriptedAdmission::new(&[]);
+        let mut mover = FakeMover::default();
+        mover.failures.insert(
+            "/destination/title-1/0.mkv".into(),
+            FileVerificationOutcome::Mismatch,
+        );
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub)
+            .run("op-1", &two_title_plan())
+            .await
+            .unwrap();
+        assert_eq!(outcome.state, LocationOperationState::Failed);
+        assert_eq!(*reconciler.cleaned.lock().unwrap(), vec!["title-2"]);
     }
 
     fn two_title_plan() -> OperationWorkPlan {

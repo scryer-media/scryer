@@ -1199,8 +1199,12 @@ impl RecapPolicyValue {
 pub enum ImportTransferPhaseValue {
     /// Archive contents are being extracted before file transfer.
     Extracting,
+    /// Waiting for a destination-volume copy slot.
+    Waiting,
     /// File bytes are being copied.
     Copying,
+    /// Reading back the destination to validate its contents.
+    Verifying,
     /// Transfer is finalizing metadata and filesystem state.
     Finalizing,
 }
@@ -1209,7 +1213,9 @@ impl From<ImportTransferPhase> for ImportTransferPhaseValue {
     fn from(value: ImportTransferPhase) -> Self {
         match value {
             ImportTransferPhase::Extracting => Self::Extracting,
+            ImportTransferPhase::Waiting => Self::Waiting,
             ImportTransferPhase::Copying => Self::Copying,
+            ImportTransferPhase::Verifying => Self::Verifying,
             ImportTransferPhase::Finalizing => Self::Finalizing,
         }
     }

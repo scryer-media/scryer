@@ -79,6 +79,132 @@ impl LocationOperationStore {
 
 #[async_trait]
 impl LocationOperationRepository for LocationOperationStore {
+    async fn allocate_transfer_generation(&self) -> AppResult<i64> {
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "advance_transfer_generation",
+            "UPDATE location_transfer_runtime SET generation = generation + 1 WHERE id = 1",
+            vec![],
+        )
+        .await?;
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT generation FROM location_transfer_runtime WHERE id = 1",
+            &[],
+        )
+        .await?
+        .ok_or_else(|| AppError::Repository("transfer generation is missing".into()))?;
+        row.i64("generation")
+    }
+
+    async fn transfer_titles_initialized(&self, operation_id: &str) -> AppResult<bool> {
+        SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT titles_initialized FROM location_transfer_progress WHERE operation_id = {}",
+            &[SqlArg::Text(operation_id.to_owned())],
+        )
+        .await?
+        .map(|row| row.bool("titles_initialized"))
+        .transpose()
+        .map(|value| value.unwrap_or(false))
+    }
+
+    async fn mark_transfer_titles_initialized(&self, operation_id: &str) -> AppResult<()> {
+        SqlRuntime::execute_write(&self.datastore, "mark_transfer_titles_initialized",
+            "INSERT INTO location_transfer_progress (operation_id, progress_basis_points, titles_initialized) VALUES ({}, 0, TRUE)
+             ON CONFLICT(operation_id) DO UPDATE SET titles_initialized = TRUE", vec![SqlArg::Text(operation_id.to_owned())]).await?;
+        Ok(())
+    }
+
+    async fn transfer_high_water(&self, operation_id: &str) -> AppResult<i64> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT progress_basis_points FROM location_transfer_progress WHERE operation_id = {}",
+            &[SqlArg::Text(operation_id.to_owned())],
+        )
+        .await?;
+        row.map(|row| row.i64("progress_basis_points"))
+            .transpose()
+            .map(|value| value.unwrap_or(0))
+    }
+
+    async fn save_transfer_high_water(
+        &self,
+        operation_id: &str,
+        basis_points: i64,
+    ) -> AppResult<()> {
+        SqlRuntime::execute_write(&self.datastore, "save_transfer_high_water",
+            "INSERT INTO location_transfer_progress (operation_id, progress_basis_points) VALUES ({}, {})
+             ON CONFLICT(operation_id) DO UPDATE SET progress_basis_points = CASE
+             WHEN excluded.progress_basis_points > location_transfer_progress.progress_basis_points
+             THEN excluded.progress_basis_points ELSE location_transfer_progress.progress_basis_points END",
+            vec![SqlArg::Text(operation_id.to_owned()), SqlArg::I64(basis_points.clamp(0, 10_000))]).await?;
+        Ok(())
+    }
+
+    async fn upsert_transfer_title(
+        &self,
+        operation_id: &str,
+        title: &scryer_application::location::live::TransferTitle,
+    ) -> AppResult<()> {
+        let json = serde_json::to_string(title)
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        SqlRuntime::execute_write(&self.datastore, "upsert_transfer_title",
+            "INSERT INTO location_transfer_titles (operation_id, title_id, sequence, hot_rank, summary_json)
+             VALUES ({}, {}, {}, {}, {}) ON CONFLICT(operation_id, title_id) DO UPDATE SET
+             sequence = excluded.sequence, hot_rank = excluded.hot_rank, summary_json = excluded.summary_json",
+            vec![SqlArg::Text(operation_id.to_owned()), SqlArg::Text(title.title_id.clone()),
+                SqlArg::I64(title.sequence), SqlArg::I64(title.rank()), SqlArg::Text(json)]).await?;
+        Ok(())
+    }
+
+    async fn transfer_title_page(
+        &self,
+        operation_id: &str,
+        offset: i64,
+        limit: i64,
+    ) -> AppResult<Vec<scryer_application::location::live::TransferTitle>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT summary_json FROM location_transfer_titles WHERE operation_id = {}
+             ORDER BY hot_rank, sequence, title_id LIMIT {} OFFSET {}",
+            &[
+                SqlArg::Text(operation_id.to_owned()),
+                SqlArg::I64(limit.clamp(1, 200)),
+                SqlArg::I64(offset.max(0)),
+            ],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            serde_json::from_str(&row.text("summary_json")?)
+                .map_err(|error| AppError::Repository(error.to_string()))
+        })
+        .collect()
+    }
+
+    async fn transfer_title_count(&self, operation_id: &str) -> AppResult<i64> {
+        SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM location_transfer_titles WHERE operation_id = {}",
+            &[SqlArg::Text(operation_id.to_owned())],
+        )
+        .await?
+        .ok_or_else(|| AppError::Repository("transfer title count is missing".into()))?
+        .i64("count")
+    }
+
+    async fn transfer_title(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+    ) -> AppResult<Option<scryer_application::location::live::TransferTitle>> {
+        SqlRuntime::fetch_optional(self.datastore.read_exec(),
+            "SELECT summary_json FROM location_transfer_titles WHERE operation_id = {} AND title_id = {}",
+            &[SqlArg::Text(operation_id.to_owned()), SqlArg::Text(title_id.to_owned())]).await?
+            .map(|row| serde_json::from_str(&row.text("summary_json")?).map_err(|error| AppError::Repository(error.to_string()))).transpose()
+    }
+
     async fn create_location_operation(
         &self,
         operation: &LocationOperation,
@@ -217,7 +343,7 @@ impl LocationOperationRepository for LocationOperationStore {
                  started_at = COALESCE(started_at, {{}}),
                  completed_at = COALESCE({{}}, completed_at),
                  updated_at = {{}}
-             WHERE id = {{}}"
+             WHERE id = {{}} AND NOT (state = 'canceled' AND started_at IS NULL)"
         );
 
         let updated = SqlRuntime::execute_write(
@@ -287,7 +413,9 @@ impl LocationOperationRepository for LocationOperationStore {
     async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool> {
         let sql = format!(
             "UPDATE location_operations
-             SET cancel_requested = {{}}, cancel_requested_at = {{}}, updated_at = {{}}
+             SET cancel_requested = {{}}, cancel_requested_at = {{}}, updated_at = {{}},
+                 completed_at = CASE WHEN state = 'queued' THEN {{}} ELSE completed_at END,
+                 state = CASE WHEN state = 'queued' THEN 'canceled' ELSE state END
              WHERE id = {{}} AND state NOT IN ({TERMINAL_STATES})"
         );
         let now = Utc::now();
@@ -297,6 +425,7 @@ impl LocationOperationRepository for LocationOperationStore {
             &sql,
             vec![
                 SqlArg::Bool(true),
+                SqlArg::Timestamp(now),
                 SqlArg::Timestamp(now),
                 SqlArg::Timestamp(now),
                 SqlArg::Text(operation_id.to_string()),
@@ -974,6 +1103,114 @@ mod tests {
     }
 
     /// Second-resolution instants, so a sqlite text round-trip compares equal.
+    #[tokio::test]
+    async fn transfer_pages_bound_thousands_of_titles_and_sort_hot_work_durably() {
+        use scryer_application::location::live::TransferTitle;
+        let store = test_store().await;
+        store
+            .create_location_operation(
+                &operation("op", LocationOperationState::Moving),
+                Some("not a plan"),
+            )
+            .await
+            .unwrap();
+        let mut row = TransferTitle {
+            title_id: String::new(),
+            name: "Title".into(),
+            sequence: 0,
+            state: TitleCheckpointState::Pending,
+            files_total: 1,
+            files_done: 0,
+            bytes_total: 100,
+            copy_bytes: 0,
+            verification_bytes: 0,
+            current_file: None,
+            copying: 0,
+            verifying: 0,
+            detail: None,
+        };
+        for index in 0..2000 {
+            row.title_id = format!("title-{index:04}");
+            row.sequence = index;
+            store.upsert_transfer_title("op", &row).await.unwrap();
+        }
+        row.state = TitleCheckpointState::Verifying;
+        row.verifying = 3;
+        row.copying = 1;
+        store.upsert_transfer_title("op", &row).await.unwrap();
+        let page = store.transfer_title_page("op", 0, 50).await.unwrap();
+        assert_eq!(page.len(), 50);
+        assert_eq!(page[0].title_id, "title-1999");
+        assert_eq!(page[1].title_id, "title-0000");
+        assert_eq!(store.transfer_title_count("op").await.unwrap(), 2000);
+        assert_eq!(
+            store
+                .transfer_title_page("op", 1950, 50)
+                .await
+                .unwrap()
+                .len(),
+            50
+        );
+        assert!(
+            store
+                .transfer_title_page("op", 2000, 50)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .transfer_title("op", "title-1999")
+                .await
+                .unwrap()
+                .unwrap()
+                .verifying,
+            3
+        );
+        store.save_transfer_high_water("op", 8100).await.unwrap();
+        store.save_transfer_high_water("op", 100).await.unwrap();
+        assert_eq!(store.transfer_high_water("op").await.unwrap(), 8100);
+        let first = store.allocate_transfer_generation().await.unwrap();
+        assert!(store.allocate_transfer_generation().await.unwrap() > first);
+    }
+
+    #[tokio::test]
+    async fn transfer_queued_cancel_is_immediate_and_cannot_be_revived_by_preparation() {
+        let store = test_store().await;
+        let mut operation = operation("queued", LocationOperationState::Queued);
+        operation.started_at = None;
+        store
+            .create_location_operation(&operation, None)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .request_location_operation_cancel("queued")
+                .await
+                .unwrap()
+        );
+        let canceled = store
+            .get_location_operation("queued")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(canceled.state, LocationOperationState::Canceled);
+        assert!(canceled.completed_at.is_some());
+        assert!(
+            store
+                .list_active_location_operations()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store
+                .request_location_operation_cancel("queued")
+                .await
+                .unwrap()
+        );
+    }
+
     fn timestamp() -> DateTime<Utc> {
         DateTime::from_timestamp(1_756_600_000, 0).expect("a valid instant")
     }

@@ -28,6 +28,51 @@ use scryer_interface_media::types::{
 
 pub struct SubscriptionRoot;
 
+async fn location_transfer_stream(
+    ctx: &Context<'_>,
+    id: ID,
+    offset: Option<i64>,
+) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
+    let Ok(app) = app_from_ctx(ctx) else {
+        return empty_box_stream();
+    };
+    let Ok(actor) = actor_from_ctx(ctx) else {
+        return empty_box_stream();
+    };
+    // Register first. Changes during the initial database read remain pending
+    // on the watch receiver; no event/snapshot handoff can lose them.
+    let receiver = app.subscribe_location_transfers();
+    let stream = unfold(
+        (app, actor, id, receiver, true, false),
+        move |(app, actor, id, mut receiver, initial, terminal)| async move {
+            if terminal {
+                return None;
+            }
+            if !initial {
+                tokio::select! {
+                    result = receiver.changed() => { if result.is_err() { return None; } },
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {},
+                }
+            }
+            // Authorization and projection are identical to fallback queries.
+            match app
+                .location_transfer_snapshot(&actor, id.as_str(), offset, 50)
+                .await
+            {
+                Ok(Some(snapshot)) => {
+                    let terminal = snapshot.operation.state.is_terminal();
+                    Some((
+                        scryer_interface_media::mappers::from_location_transfer(snapshot),
+                        (app, actor, id, receiver, false, terminal),
+                    ))
+                }
+                _ => None,
+            }
+        },
+    );
+    guard_subscription_stream(ctx, Box::pin(stream))
+}
+
 fn empty_box_stream<T: Send + 'static>() -> BoxStream<'static, T> {
     Box::pin(stream::empty())
 }
@@ -239,6 +284,23 @@ fn active_import_stream_sync_stream(
 
 #[Subscription]
 impl SubscriptionRoot {
+    async fn location_transfer_summary(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
+        location_transfer_stream(ctx, id, None).await
+    }
+
+    async fn location_transfer_page(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        #[graphql(default = 0)] offset: i32,
+    ) -> BoxStream<'static, types::LocationTransferSnapshotPayload> {
+        location_transfer_stream(ctx, id, Some(i64::from(offset.max(0)))).await
+    }
+
     async fn activity_events(&self, ctx: &Context<'_>) -> BoxStream<'static, ActivityEventPayload> {
         let app = match app_from_ctx(ctx) {
             Ok(app) => app,

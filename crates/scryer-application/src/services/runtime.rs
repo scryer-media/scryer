@@ -1544,6 +1544,7 @@ pub enum ActiveImportStreamPhase {
     Extracting,
     Placing,
     Copying,
+    Verifying,
     Finalizing,
 }
 
@@ -1661,7 +1662,9 @@ impl ActiveImportStreamHandle {
     ) {
         let phase = match phase {
             scryer_domain::ImportTransferPhase::Extracting => ActiveImportStreamPhase::Extracting,
+            scryer_domain::ImportTransferPhase::Waiting => ActiveImportStreamPhase::Queued,
             scryer_domain::ImportTransferPhase::Copying => ActiveImportStreamPhase::Copying,
+            scryer_domain::ImportTransferPhase::Verifying => ActiveImportStreamPhase::Verifying,
             scryer_domain::ImportTransferPhase::Finalizing => ActiveImportStreamPhase::Finalizing,
         };
         self.tracker

@@ -688,7 +688,9 @@ pub enum ActiveImportStreamPhaseValue {
     Placing,
     /// File content is being copied to its destination.
     Copying,
-    /// The destination is being verified and promoted.
+    /// Destination content is being read back and verified.
+    Verifying,
+    /// Filesystem placement metadata is being finalized.
     Finalizing,
 }
 

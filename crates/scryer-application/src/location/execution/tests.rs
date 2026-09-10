@@ -313,6 +313,53 @@ async fn no_copy_placement_refuses_a_self_move_without_removing_the_file() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn valid_hardlink_performs_zero_content_reads_even_after_unjournaled_restart() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let plan = single_title_plan(
+        &temp.path().join("source"),
+        &temp.path().join("dest"),
+        "movie.mkv",
+        11,
+    );
+    let file = &plan.titles[0].files[0];
+    write_file(&file.source(), b"hello world");
+    std::fs::set_permissions(file.source(), std::fs::Permissions::from_mode(0)).unwrap();
+    let copier = VerifiedCopier::with_read_back_opener(Arc::new(|_| {
+        panic!("hardlink attempted a verification read")
+    }));
+    let mover = RootMoveFileMover::new(copier, Arc::new(NoPlacedContentPermissions));
+    let work = plan.to_work_plan();
+    let progress =
+        crate::location::verify::CopyProgress::from_fn(|_| panic!("hardlink copied content"))
+            .with_transfer_sink(|_, _| panic!("hardlink entered a copy or verification phase"));
+    for _ in 0..2 {
+        let verified = mover
+            .move_file(FileMoveRequest {
+                operation_id: "op",
+                title: &work.titles[0],
+                file: &work.titles[0].files[0],
+                depth: VerificationDepth::Full,
+                progress: &progress,
+            })
+            .await
+            .unwrap();
+        assert!(verified.permits_source_removal());
+        assert!(verified.hashes.is_none());
+        assert!(
+            file.source().exists(),
+            "no cleanup before catalog reconciliation"
+        );
+        assert_eq!(
+            std::fs::metadata(file.source()).unwrap().ino(),
+            std::fs::metadata(file.destination()).unwrap().ino()
+        );
+    }
+    std::fs::set_permissions(file.source(), std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn same_filesystem_placement_resumes_after_crash_before_verification_journal() {
     for symlink in [false, true] {
         let temp = tempfile::tempdir().unwrap();

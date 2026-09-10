@@ -11,6 +11,34 @@ use super::{Long, MediaFacetValue, VerificationDepthValue};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
+#[derive(SimpleObject, Clone)]
+pub struct LocationTransferTitlePayload {
+    pub title_id: ID,
+    pub name: String,
+    pub state: LocationTitleCheckpointStateValue,
+    pub files_total: Long,
+    pub files_done: Long,
+    pub bytes_total: Long,
+    pub copy_bytes: Long,
+    pub verification_bytes: Long,
+    pub copying: i32,
+    pub verifying: i32,
+    pub current_file: Option<String>,
+    pub has_exception: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct LocationTransferSnapshotPayload {
+    pub generation: Long,
+    pub revision: Long,
+    pub operation: LocationOperationPayload,
+    pub progress_basis_points: i32,
+    pub eta_seconds: Option<Long>,
+    pub titles: Vec<LocationTransferTitlePayload>,
+    pub total_count: Long,
+    pub has_more: bool,
+}
+
 /// Which location workflow an operation belongs to.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(

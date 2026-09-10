@@ -415,6 +415,8 @@ impl TitleFileMover for RootMoveFileMover {
             // way it is proven against the source rather than replaced or
             // trusted (FR-033, C4).
             self.copier
+                .clone()
+                .with_progress(request.progress.clone())
                 .verify_existing_destination(source, destination, request.depth)
                 .await?
         } else {

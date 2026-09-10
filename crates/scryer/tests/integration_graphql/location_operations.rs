@@ -888,6 +888,84 @@ async fn graphql_location_operation_assets_split_settled_work_from_planned_work(
 }
 
 #[tokio::test]
+async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped() {
+    use scryer_application::location::live::TransferTitle;
+    let ctx = TestContext::new().await;
+    let root = tempfile::tempdir().unwrap();
+    let root_id = configure_default_library_root(&ctx, MediaFacet::Movie, root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let operation_id = seed_queued_operation(&ctx, &library_id, &root_id).await;
+    let store = LocationOperationStore::new(ctx.db.datastore());
+    for sequence in 0..51 {
+        store
+            .upsert_transfer_title(
+                &operation_id,
+                &TransferTitle {
+                    title_id: format!("title-{sequence}"),
+                    name: format!("Title {sequence}"),
+                    sequence,
+                    state: if sequence == 50 {
+                        TitleCheckpointState::Blocked
+                    } else {
+                        TitleCheckpointState::Pending
+                    },
+                    files_total: 1,
+                    files_done: 0,
+                    bytes_total: 100,
+                    copy_bytes: 0,
+                    verification_bytes: 0,
+                    current_file: None,
+                    copying: 0,
+                    verifying: 0,
+                    detail: (sequence == 50).then(|| "destination conflict".into()),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    store
+        .mark_transfer_titles_initialized(&operation_id)
+        .await
+        .unwrap();
+    let query = r#"query($id: ID!) {
+        locationTransferSummary(id: $id) { generation revision progressBasisPoints etaSeconds totalCount titles { titleId } }
+        locationTransferPage(id: $id, offset: 0) { generation revision totalCount hasMore titles { titleId state hasException } }
+        locationTransferTitleDetail(id: $id, titleId: "title-50")
+    }"#;
+    let body = gql(&ctx, query, json!({"id": operation_id})).await;
+    assert_no_errors(&body);
+    let summary = &body["data"]["locationTransferSummary"];
+    let page = &body["data"]["locationTransferPage"];
+    assert_eq!(summary["totalCount"], 51);
+    assert!(summary["titles"].as_array().unwrap().is_empty());
+    assert_eq!(page["titles"].as_array().unwrap().len(), 50);
+    assert_eq!(page["titles"][0]["titleId"], "title-50");
+    assert_eq!(page["titles"][0]["hasException"], true);
+    assert_eq!(page["hasMore"], true);
+    assert_eq!(page["generation"], summary["generation"]);
+    assert!(summary["etaSeconds"].is_null());
+    assert_eq!(
+        body["data"]["locationTransferTitleDetail"],
+        "destination conflict"
+    );
+    let denied = schema_exec(
+        &ctx,
+        &format!(r#"query {{ locationTransferSummary(id: "{operation_id}") {{ revision }} }}"#),
+        Some(location_outsider()),
+    )
+    .await;
+    assert_graphql_field_denied(&denied, "locationTransferSummary");
+    let next = gql(&ctx, query, json!({"id": operation_id})).await;
+    assert_no_errors(&next);
+    assert!(
+        next["data"]["locationTransferSummary"]["revision"]
+            .as_i64()
+            .unwrap()
+            > summary["revision"].as_i64().unwrap()
+    );
+}
+
+#[tokio::test]
 async fn graphql_location_operation_cancel_and_resume_report_what_they_did() {
     let ctx = TestContext::new().await;
     let media_root = tempfile::tempdir().expect("media root tempdir");
@@ -895,8 +973,7 @@ async fn graphql_location_operation_cancel_and_resume_report_what_they_did() {
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let operation_id = seed_queued_operation(&ctx, &library_id, &root_id).await;
 
-    // FR-092: the cancel is persisted; the runner honors it at its next title
-    // checkpoint rather than stopping mid-file.
+    // Queued work cancels immediately, before a filesystem task starts.
     let canceled = gql(&ctx, CANCEL_MUTATION, json!({ "id": operation_id })).await;
     assert_no_errors(&canceled);
     assert_eq!(
@@ -911,6 +988,7 @@ async fn graphql_location_operation_cancel_and_resume_report_what_they_did() {
     let row = gql(&ctx, OPERATION_QUERY, json!({ "id": operation_id })).await;
     assert_no_errors(&row);
     assert_eq!(row["data"]["locationOperation"]["cancelRequested"], true);
+    assert_eq!(row["data"]["locationOperation"]["state"], "CANCELED");
 
     // FR-033: an operation stored without its plan cannot be resumed, and says
     // so rather than restarting from the beginning.
@@ -920,7 +998,7 @@ async fn graphql_location_operation_cancel_and_resume_report_what_they_did() {
     assert!(
         resumed["data"]["resumeLocationOperation"]["detail"]
             .as_str()
-            .is_some_and(|detail| detail.contains("nothing to resume")),
+            .is_some_and(|detail| detail.contains("finished")),
         "an unresumable operation should explain itself: {resumed}"
     );
 

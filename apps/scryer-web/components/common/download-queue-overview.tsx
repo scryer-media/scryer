@@ -178,6 +178,12 @@ function queueStatusLabel(
   if (queueItem.importTransferPhase === "FINALIZING") {
     return t("queue.transfer.finalizing");
   }
+  if (queueItem.importTransferPhase === "VERIFYING") {
+    return t("move.checkpointState.VERIFYING");
+  }
+  if (queueItem.importTransferPhase === "WAITING") {
+    return t("move.checkpointState.PENDING");
+  }
   return t(queueStateLabels[stateKey] ?? "queue.state.unknown");
 }
 

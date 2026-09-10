@@ -4881,6 +4881,27 @@ export const locationOperationQuery = `query LocationOperation($id: ID!) {
   }
 }`;
 
+const LOCATION_TRANSFER_FIELDS = `
+  generation revision progressBasisPoints etaSeconds totalCount hasMore
+  operation {${LOCATION_OPERATION_FIELDS}}
+  titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying currentFile hasException }
+`;
+export const locationTransferSummaryQuery = `query LocationTransferSummary($id: ID!) {
+  locationTransferSummary(id: $id) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferPageQuery = `query LocationTransferPage($id: ID!, $offset: Int!) {
+  locationTransferPage(id: $id, offset: $offset) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferSummarySubscription = `subscription LocationTransferSummaryLive($id: ID!) {
+  locationTransferSummary(id: $id) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferPageSubscription = `subscription LocationTransferPageLive($id: ID!, $offset: Int!) {
+  locationTransferPage(id: $id, offset: $offset) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferTitleDetailQuery = `query LocationTransferTitleDetail($id: ID!, $titleId: ID!) {
+  locationTransferTitleDetail(id: $id, titleId: $titleId)
+}`;
+
 /**
  * Which files the operation renamed and deduplicated (FR-091). Read separately
  * from the operation row because the per-file identities live in the stored

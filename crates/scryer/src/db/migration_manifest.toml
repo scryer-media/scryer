@@ -2207,3 +2207,20 @@ kind = "sql"
 file = "postgres/migrations/0233_pending_title_tag_deletions.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 234
+description = "location transfer progress and paginated title summaries"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0234_location_transfer_progress.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0234_location_transfer_progress.sql"
+engine = "postgres"
+scope = "all"

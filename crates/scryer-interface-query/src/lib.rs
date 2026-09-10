@@ -1698,6 +1698,47 @@ impl CatalogQueries {
         Ok(from_root_scope_preview(&preview))
     }
 
+    async fn location_transfer_summary(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .location_transfer_snapshot(&actor, id.as_str(), None, 50)
+            .await
+            .map_err(to_gql_error)?
+            .map(scryer_interface_media::mappers::from_location_transfer))
+    }
+
+    async fn location_transfer_page(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        #[graphql(default = 0)] offset: i32,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .location_transfer_snapshot(&actor, id.as_str(), Some(i64::from(offset.max(0))), 50)
+            .await
+            .map_err(to_gql_error)?
+            .map(scryer_interface_media::mappers::from_location_transfer))
+    }
+
+    async fn location_transfer_title_detail(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        title_id: ID,
+    ) -> GqlResult<Option<String>> {
+        app_from_ctx(ctx)?
+            .location_transfer_title_detail(&actor_from_ctx(ctx)?, id.as_str(), title_id.as_str())
+            .await
+            .map_err(to_gql_error)
+    }
+
     /// Read one location operation with its per-title checkpoints.
     async fn location_operation(
         &self,

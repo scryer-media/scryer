@@ -119,7 +119,7 @@ impl KeyedImportPermitTable {
 struct ImportPlacementCoordinator {
     preparation: Arc<tokio::sync::Semaphore>,
     fast: KeyedImportPermitTable,
-    copy: KeyedImportPermitTable,
+    copy: scryer_application::location::transfer::CopyCoordinator,
 }
 
 impl ImportPlacementCoordinator {
@@ -138,14 +138,18 @@ impl ImportPlacementCoordinator {
                 ),
             )
         });
-        Self::new(fast_workers, copy_workers)
+        let mut coordinator = Self::new(fast_workers, copy_workers);
+        coordinator.copy = scryer_application::location::transfer::CopyCoordinator::shared();
+        coordinator
     }
 
     fn new(fast_workers_per_client: usize, copy_workers_per_volume: usize) -> Self {
         Self {
             preparation: Arc::new(tokio::sync::Semaphore::new(IMPORT_PREPARATION_WORKERS)),
             fast: KeyedImportPermitTable::new(fast_workers_per_client),
-            copy: KeyedImportPermitTable::new(copy_workers_per_volume),
+            copy: scryer_application::location::transfer::CopyCoordinator::new(
+                copy_workers_per_volume,
+            ),
         }
     }
 
@@ -1502,7 +1506,25 @@ fn copy_regular_source_to_destination(
     // `Full` degrades to the quick floor by itself when the destination cannot
     // be read back (FR-042), which is why a filesystem that refuses a
     // cache-bypassed re-read still imports rather than failing.
-    let assessment = verified_copier_for(&options).verify_blocking(source, dest, &hashes, depth);
+    let sender = progress.cloned();
+    let last_report = std::sync::Mutex::new(None::<Instant>);
+    let verification_progress = scryer_application::location::verify::CopyProgress::none()
+        .with_transfer_sink(move |phase, bytes| {
+            let mut last = last_report
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if bytes == 0
+                || bytes >= size
+                || last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+            {
+                report_import_transfer_progress(sender.as_ref(), phase, bytes, size);
+                *last = Some(Instant::now());
+            }
+        });
+    let assessment = verified_copier_for(&options)
+        .with_progress(verification_progress)
+        .verify_blocking(source, dest, &hashes, depth);
+    report_import_transfer_progress(progress, ImportTransferPhase::Finalizing, size, size);
     let verification = ImportVerification {
         hashes,
         depth: assessment.depth,
@@ -1685,24 +1707,8 @@ fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
 
 #[cfg(windows)]
 fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
-    use std::path::{Component, Prefix};
-
-    let root = match guard.approved_parent_canonical.components().next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
-                format!("{}:", char::from(letter).to_ascii_lowercase())
-            }
-            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!(
-                "//{}/{}",
-                server.to_string_lossy().to_ascii_lowercase(),
-                share.to_string_lossy().to_ascii_lowercase()
-            ),
-            other => format!("{other:?}"),
-        },
-        _ => "unknown-root".to_string(),
-    };
     format!(
-        "windows-volume:{}:{root}",
+        "windows-volume:{}",
         guard.approved_parent_fingerprint.volume_serial_number
     )
 }
@@ -3158,6 +3164,9 @@ impl FsFileImporter {
                             copy_finalizing = true;
                             context.mark_active_import_finalizing().await;
                         }
+                        if phase == ImportTransferPhase::Verifying {
+                            drop(copy_permit.take());
+                        }
                         if let Some(progress) = &progress {
                             let _ = progress.send(ImportFileTransferProgress {
                                 phase,
@@ -3262,7 +3271,7 @@ impl FsFileImporter {
 
         match fast_result {
             FastPlacementResult::Finished(result) => Ok(result),
-            FastPlacementResult::CopyRequired(prepared) => {
+            FastPlacementResult::CopyRequired(mut prepared) => {
                 let volume_key = prepared.volume_key.clone();
                 drop(fast_permit);
                 tracing::debug!(
@@ -3270,17 +3279,40 @@ impl FsFileImporter {
                     volume_key = %opaque_lane_key(&volume_key),
                     "released fast import lane before copy fallback"
                 );
-                let _copy_permit = wait_for_import_operation_or_cancel(
-                    cancellation.as_ref(),
-                    self.placement.copy.acquire(&volume_key, "copy"),
-                )
-                .await?;
+                report_import_transfer_progress(
+                    prepared.progress.as_ref(),
+                    ImportTransferPhase::Waiting,
+                    0,
+                    prepared.size,
+                );
+                let mut copy_permit = Some(
+                    wait_for_import_operation_or_cancel(
+                        cancellation.as_ref(),
+                        self.placement.copy.acquire(&volume_key, "copy"),
+                    )
+                    .await?,
+                );
                 context.mark_active_import_copying().await;
-                tokio::task::spawn_blocking(move || copy_prepared_import_blocking(prepared))
-                    .await
-                    .map_err(|error| {
-                        AppError::Repository(format!("copy import task panicked: {error}"))
-                    })?
+                let forward = prepared.progress.take();
+                let (sender, mut receiver) =
+                    tokio::sync::mpsc::unbounded_channel::<ImportFileTransferProgress>();
+                prepared.progress = Some(sender);
+                let mut task =
+                    tokio::task::spawn_blocking(move || copy_prepared_import_blocking(prepared));
+                loop {
+                    tokio::select! {
+                        result = &mut task => break result.map_err(|error| AppError::Repository(format!("copy import task panicked: {error}")))?,
+                        Some(update) = receiver.recv() => {
+                            if update.phase == ImportTransferPhase::Finalizing {
+                                context.mark_active_import_finalizing().await;
+                            }
+                            if update.phase == ImportTransferPhase::Verifying {
+                                drop(copy_permit.take());
+                            }
+                            if let Some(sender) = &forward { let _ = sender.send(update); }
+                        }
+                    }
+                }
             }
         }
     }

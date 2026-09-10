@@ -17,8 +17,8 @@
 //!                       persist the operation row + the execution plan JSON
 //!                       spawn the runner  ─▶ LocationOperationRunner
 //!
-//! cancel_location_operation ─▶ persists the request; the runner stops at the
-//!                              next title checkpoint (FR-092)
+//! cancel_location_operation ─▶ persists the request; stops file admission and
+//!                              drains in-flight work to safe boundaries
 //!
 //! resume_interrupted_location_operations ─▶ boot hook: every non-terminal
 //!                              operation picks up from its checkpoints (FR-033)
@@ -391,10 +391,24 @@ impl AppUseCase {
                 .library
                 .location_operations
                 .create_location_operation(&operation, Some(&plan_json))
+                .await?;
+            self.seed_transfer_titles(&operation.id, &execution, &plan.header.selection)
+                .await?;
+            self.services
+                .library
+                .location_operations
+                .mark_transfer_titles_initialized(&operation.id)
                 .await
         }
         .await;
         if let Err(error) = persisted {
+            // A partially accepted request must not occupy FIFO indefinitely.
+            let _ = self
+                .services
+                .library
+                .location_operations
+                .request_location_operation_cancel(&operation.id)
+                .await;
             // The run was opened first so the payload could name it; an
             // operation that never reached the database must not leave a
             // running row in Activity forever.
@@ -409,13 +423,14 @@ impl AppUseCase {
             return Err(error);
         }
 
+        self.runtime.library.location_runners.transfers.changed();
         self.spawn_location_operation(operation.id.clone(), execution);
 
         Ok(LocationOperationAccepted { operation, plan })
     }
 
-    /// Request cancellation. The runner stops at the next safe title checkpoint
-    /// (FR-092); completed titles stay consistent.
+    /// Cancel queued work immediately; executing work drains admitted files
+    /// to safe boundaries while completed titles stay consistent.
     pub async fn cancel_location_operation(
         &self,
         actor: &User,
@@ -427,11 +442,32 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("location operation {operation_id}")))?;
         self.require_location_operation_permission(actor, &operation)
             .await?;
-        self.services
+        let requested = self
+            .services
             .library
             .location_operations
             .request_location_operation_cancel(operation_id)
-            .await
+            .await?;
+        // A queued task may wait hours for the execution slot. Close its
+        // Activity run as soon as the store confirms it never started.
+        if requested
+            && let Some(canceled) = self.location_operation(operation_id).await?
+            && canceled.state == LocationOperationState::Canceled
+            && canceled.started_at.is_none()
+            && let Some(job_run_id) = canceled.job_run_id.as_deref()
+            && let Some(run) = self.location_operation_job_run(job_run_id).await
+        {
+            self.close_location_operation_job_run(
+                &run,
+                crate::JobRunStatus::Warning,
+                "The queued location operation was canceled.".into(),
+                None,
+                Some(&canceled.counters),
+            )
+            .await;
+        }
+        self.runtime.library.location_runners.transfers.changed();
+        Ok(requested)
     }
 
     /// Read one operation row.
@@ -650,6 +686,7 @@ impl AppUseCase {
     /// left alone and logged rather than failed here, because a startup path
     /// must not decide on its own that a user's half-finished move is over.
     pub async fn resume_interrupted_location_operations(&self) -> AppResult<usize> {
+        self.initialize_transfer_generation().await?;
         // Before anything is picked back up: claims held by operations that
         // already finished are nobody's, and no later path releases them
         // (FR-084). A failure here is logged rather than propagated — it must
@@ -714,6 +751,17 @@ impl AppUseCase {
         operation_id: &str,
         plan: &RootMoveExecutionPlan,
     ) -> AppResult<OperationRunOutcome> {
+        // Every workflow using this execution entry point shares the same
+        // instance slot, including synchronous callers and resumed work.
+        let _execution = self
+            .runtime
+            .library
+            .location_runners
+            .wait_for_turn(
+                self.services.library.location_operations.as_ref(),
+                operation_id,
+            )
+            .await?;
         let row = self.location_operation(operation_id).await.ok().flatten();
         let job_run_id = row
             .as_ref()
@@ -827,7 +875,8 @@ impl AppUseCase {
             &admission,
             &reconciler,
         )
-        .with_ownership_registry(&self.runtime.library.location_ownership);
+        .with_ownership_registry(&self.runtime.library.location_ownership)
+        .with_transfers(&self.runtime.library.location_runners.transfers);
         if let Some(observer) = observer.as_ref() {
             runner = runner.with_progress_observer(observer);
         }

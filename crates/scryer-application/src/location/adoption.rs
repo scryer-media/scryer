@@ -55,7 +55,7 @@ use crate::location::collisions::FullHash;
 use crate::location::execution::RootMoveCatalog;
 use crate::location::executor::{FileMoveRequest, TitleFileMover};
 use crate::location::root_move::RootMoveExecutionPlan;
-use crate::location::verify::{VerifiedFile, hash_existing_file};
+use crate::location::verify::VerifiedFile;
 
 /// How one file at the destination is accounted for during adoption (FR-051).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -796,7 +796,15 @@ impl TitleFileMover for AdoptionFileVerifier {
         if request.depth == VerificationDepth::Full
             && let Some(expected) = persisted
         {
-            return match hash_existing_file(destination).await {
+            request
+                .progress
+                .phase(scryer_domain::ImportTransferPhase::Verifying, 0);
+            return match crate::location::verify::hash_existing_file_with_progress(
+                destination,
+                request.progress.clone(),
+            )
+            .await
+            {
                 Ok(hashes) => {
                     if hashes.full_blake3.eq_ignore_ascii_case(&expected) {
                         self.persist_hashes(request.file.media_file_id.as_deref(), &hashes)

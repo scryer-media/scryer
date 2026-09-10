@@ -2364,7 +2364,9 @@ impl ImportStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ImportTransferPhase {
     Extracting,
+    Waiting,
     Copying,
+    Verifying,
     Finalizing,
 }
 
@@ -2372,7 +2374,9 @@ impl ImportTransferPhase {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Extracting => "extracting",
+            Self::Waiting => "waiting",
             Self::Copying => "copying",
+            Self::Verifying => "verifying",
             Self::Finalizing => "finalizing",
         }
     }

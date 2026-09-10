@@ -184,10 +184,55 @@ impl LocationOwnershipRegistry {
 /// never refused by its own predecessor.
 #[derive(Clone, Default)]
 pub struct LocationRunnerRegistry {
+    pub transfers: super::live::TransferHub,
+    pub transfer_generation: Arc<tokio::sync::OnceCell<i64>>,
     live: Arc<std::sync::Mutex<HashSet<String>>>,
+    execution: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl LocationRunnerRegistry {
+    /// Held through draining and cleanup, not merely while copies run.
+    pub async fn execution_slot(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.execution.clone().lock_owned().await
+    }
+
+    pub async fn wait_for_turn(
+        &self,
+        store: &dyn crate::LocationOperationRepository,
+        operation_id: &str,
+    ) -> AppResult<tokio::sync::OwnedMutexGuard<()>> {
+        loop {
+            let slot = self.execution_slot().await;
+            let mut pending = store.list_active_location_operations().await?;
+            // Include accepted requests whose compact summaries are still
+            // being persisted. Task wake order cannot overtake durable FIFO.
+            pending.retain(|operation| {
+                operation.state == super::model::LocationOperationState::Queued
+                    || self.is_live(&operation.id)
+                    || operation.id == operation_id
+            });
+            pending.sort_by_key(|operation| {
+                (
+                    operation.started_at.is_none(),
+                    operation.created_at,
+                    operation.id.clone(),
+                )
+            });
+            if pending
+                .first()
+                .is_none_or(|operation| operation.id == operation_id)
+                || store
+                    .get_location_operation(operation_id)
+                    .await?
+                    .is_some_and(|operation| operation.state.is_terminal())
+            {
+                return Ok(slot);
+            }
+            drop(slot);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -713,6 +758,48 @@ impl crate::AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn transfer_dispatch_is_fifo_and_holds_one_instance_slot() {
+        use crate::location::model::{
+            LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
+        };
+        use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+        let store = InMemoryLocationOperationStore::new();
+        let mut first = queued_operation(
+            "first",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        let mut second = first.clone();
+        second.id = "second".into();
+        second.created_at += chrono::Duration::seconds(1);
+        store.insert_operation(first.clone());
+        store.insert_operation(second);
+        let registry = LocationRunnerRegistry::new();
+        let _first_live = registry.begin("first").unwrap();
+        let _second_live = registry.begin("second").unwrap();
+        let second_wait = registry.wait_for_turn(&store, "second");
+        tokio::pin!(second_wait);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut second_wait)
+                .await
+                .is_err()
+        );
+        let first_slot = registry.wait_for_turn(&store, "first").await.unwrap();
+        first.state = LocationOperationState::Completed;
+        store.insert_operation(first);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut second_wait)
+                .await
+                .is_err()
+        );
+        drop(first_slot);
+        let _second_slot = tokio::time::timeout(std::time::Duration::from_secs(1), second_wait)
+            .await
+            .unwrap()
+            .unwrap();
+    }
     use crate::ports::{
         LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
     };

@@ -254,6 +254,9 @@ pub fn from_active_import_stream(
         scryer_application::ActiveImportStreamPhase::Finalizing => {
             ActiveImportStreamPhaseValue::Finalizing
         }
+        scryer_application::ActiveImportStreamPhase::Verifying => {
+            ActiveImportStreamPhaseValue::Verifying
+        }
     };
     let cancellable = stream.cancellable();
     ActiveImportStreamPayload {

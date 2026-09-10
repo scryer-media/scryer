@@ -69,6 +69,46 @@ const PLAN_ITEM_KINDS: [PlanItemKind; 10] = [
     PlanItemKind::Warning,
 ];
 
+pub fn from_location_transfer(
+    snapshot: scryer_application::location::live::TransferSnapshot,
+) -> crate::types::LocationTransferSnapshotPayload {
+    use crate::types::{LocationTransferSnapshotPayload, LocationTransferTitlePayload};
+    use scryer_application::location::model::TitleCheckpointState;
+    LocationTransferSnapshotPayload {
+        generation: Long(snapshot.version.generation),
+        revision: Long(snapshot.version.revision),
+        operation: from_location_operation(&snapshot.operation, &[]),
+        progress_basis_points: snapshot.progress_basis_points as i32,
+        eta_seconds: snapshot.eta_seconds.map(Long),
+        total_count: Long(snapshot.total_count),
+        has_more: snapshot.has_more,
+        titles: snapshot
+            .titles
+            .into_iter()
+            .map(|row| LocationTransferTitlePayload {
+                has_exception: row.detail.is_some()
+                    || matches!(
+                        row.state,
+                        TitleCheckpointState::Failed
+                            | TitleCheckpointState::Blocked
+                            | TitleCheckpointState::CompletedWithWarnings
+                    ),
+                title_id: ID(row.title_id),
+                name: row.name,
+                state: row.state.into(),
+                files_total: Long(row.files_total),
+                files_done: Long(row.files_done),
+                bytes_total: bytes(row.bytes_total),
+                copy_bytes: bytes(row.copy_bytes),
+                verification_bytes: bytes(row.verification_bytes),
+                copying: row.copying.min(i32::MAX as usize) as i32,
+                verifying: row.verifying.min(i32::MAX as usize) as i32,
+                current_file: row.current_file.as_deref().map(display_path),
+            })
+            .collect(),
+    }
+}
+
 /// Every class a selection is grouped into, so the preview can present all six
 /// groups whether or not the selection populated them (FR-015).
 const TITLE_LOCATION_CLASSES: [TitleLocationClass; 6] = [

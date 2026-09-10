@@ -121,7 +121,7 @@ export type DownloadQueueItem = {
   state: DownloadQueueState;
   displayState: DownloadDisplayState;
   progressPercent: number;
-  importTransferPhase: "EXTRACTING" | "COPYING" | "FINALIZING" | null;
+  importTransferPhase: "WAITING" | "EXTRACTING" | "COPYING" | "VERIFYING" | "FINALIZING" | null;
   importTransferBytes: number | null;
   importTransferTotalBytes: number | null;
   importTransferStartedAt: string | null;
@@ -164,7 +164,7 @@ export type ActiveImportStream = {
   facet: string;
   sourcePath: string;
   destinationPath: string;
-  phase: "QUEUED" | "EXTRACTING" | "PLACING" | "COPYING" | "FINALIZING";
+  phase: "QUEUED" | "EXTRACTING" | "PLACING" | "COPYING" | "VERIFYING" | "FINALIZING";
   bytes: number;
   totalBytes: number;
   queuedAt: string;

@@ -165,6 +165,12 @@ pub(crate) async fn import_file_with_record_progress(
                     progress_stream
                         .update_transfer(progress.phase, progress.bytes, progress.total_bytes)
                         .await;
+                    // Read-back offsets are transient telemetry, never restart
+                    // checkpoints. Persist the phase once with a zero offset.
+                    let mut progress = progress;
+                    if progress.phase == scryer_domain::ImportTransferPhase::Verifying {
+                        progress.bytes = 0;
+                    }
                     last_progress = Some(progress.clone());
                     if !should_persist_import_transfer_progress(
                         &progress, last_phase, last_bytes, last_emit,

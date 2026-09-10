@@ -1,11 +1,20 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { Loader2, TriangleAlert, X } from "lucide-react";
-
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  TriangleAlert,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
@@ -13,348 +22,200 @@ import {
   cancelLocationOperationMutation,
   resumeLocationOperationMutation,
 } from "@/lib/graphql/mutations";
+import { locationTransferTitleDetailQuery } from "@/lib/graphql/queries";
+import { useLocationTransfer } from "@/lib/hooks/use-location-transfer";
 import {
-  locationOperationAssetsQuery,
-  locationOperationQuery,
-} from "@/lib/graphql/queries";
-import {
-  assetLineTextKey,
-  assetLines,
-  assetsByTitle,
   canCancelOperation,
   canResumeOperation,
-  checkpointMergeTarget,
-  checkpointNeedsAttention,
   checkpointStateLabelKey,
-  classificationLabelKey,
   isTerminalOperationState,
-  OPERATION_POLL_INTERVAL_MS,
-  operationByteProgress,
   operationStateLabelKey,
-  orderedCheckpoints,
-  showsAssetPlannedState,
   toCount,
-  type LocationOperation,
-  type LocationOperationAssetListing,
-  type LocationTitleAssets,
-  type LocationTitleCheckpoint,
 } from "@/lib/location-operations";
+import {
+  splitTransferPath,
+  transferTitleProgress,
+  type TransferTitle,
+} from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
-import { cn } from "@/lib/utils";
 
-type Props = {
-  operationId: string;
-  /** Clears `?operation=` and returns the user to the queue. */
-  onDismiss?: () => void;
-};
+type Props = { operationId: string; onDismiss?: () => void };
+export function LocationOperationPanel(props: Props) {
+  return <OperationPanel key={props.operationId} {...props} />;
+}
 
-const CHECKPOINT_DISCLOSURE_LIMIT = 5;
-
-/**
- * Activity view for one location operation (FR-091): lifecycle state, volume
- * and outcome counters with each per-title checkpoint and its
- * blocked/failed/warning detail.
- *
- * It polls `locationOperation(id)` because checkpoints do not exist at accept
- * time — they are written as each title enters the run — and because the
- * operation is not yet linked to a job run, so nothing else pushes it.
- */
-export function LocationOperationPanel({ operationId }: Props) {
+function OperationPanel({ operationId }: Props) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
-
-  const [operation, setOperation] = React.useState<LocationOperation | null>(
-    null,
-  );
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
-  const [missing, setMissing] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  const [page, setPage] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
-  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
-  const [allTitlesDisclosed, setAllTitlesDisclosed] = React.useState(false);
-  const [assets, setAssets] =
-    React.useState<LocationOperationAssetListing | null>(null);
-  const [refreshNonce, setRefreshNonce] = React.useState(0);
-  const [nowMs, setNowMs] = React.useState(() => Date.now());
-
-  const polling =
-    operation === null || !isTerminalOperationState(operation.state);
-
+  const [refresh, setRefresh] = React.useState(0);
+  const [now, setNow] = React.useState(() => Date.now());
+  const summary = useLocationTransfer(operationId, null, true, refresh);
+  const titles = useLocationTransfer(operationId, page, open, refresh);
+  const operation = summary.snapshot?.operation;
   React.useEffect(() => {
-    setOperation(null);
-    setMissing(false);
-    setError(null);
-    setLoading(true);
-    setExpanded(new Set());
-    setAllTitlesDisclosed(false);
-    setAssets(null);
-  }, [operationId]);
+    setNow(Date.now());
+  }, [summary.snapshot]);
 
-  React.useEffect(() => {
-    if (!operationId) {
-      return undefined;
-    }
-    let active = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const read = () => {
-      client
-        .query(
-          locationOperationQuery,
+  async function act(resume: boolean) {
+    setBusy(true);
+    try {
+      const result = await client
+        .mutation(
+          resume
+            ? resumeLocationOperationMutation
+            : cancelLocationOperationMutation,
           { id: operationId },
-          { requestPolicy: "network-only" },
         )
-        .toPromise()
-        .then(({ data, error: queryError }) => {
-          if (!active) {
-            return;
-          }
-          if (queryError) {
-            setError(
-              userFacingGraphQlErrorMessage(
-                queryError,
-                t("move.operationLoadFailed"),
-              ),
-            );
-            return;
-          }
-          const next = data?.locationOperation as LocationOperation | null;
-          setError(null);
-          setMissing(next == null);
-          setOperation(next ?? null);
-          setNowMs(Date.now());
-        })
-        .catch((caught: unknown) => {
-          if (active) {
-            setError(
-              userFacingGraphQlErrorMessage(
-                caught,
-                t("move.operationLoadFailed"),
-              ),
-            );
-          }
-        })
-        .finally(() => {
-          if (!active) {
-            return;
-          }
-          setLoading(false);
-          if (polling) {
-            timer = setTimeout(read, OPERATION_POLL_INTERVAL_MS);
-          }
-        });
-    };
-
-    read();
-    return () => {
-      active = false;
-      if (timer) {
-        clearTimeout(timer);
-      }
-    };
-  }, [client, operationId, polling, refreshNonce, t]);
-
-  // The asset listing is read separately from the operation row and only once
-  // the user opens a title: the per-file identities live in the operation's
-  // stored plan, and loading it on every two-second progress poll would be a
-  // plan read per tick for a section nobody is looking at (FR-091).
-  const wantsAssets = expanded.size > 0;
-  const operationUpdatedAt = operation?.updatedAt ?? null;
-  React.useEffect(() => {
-    if (!operationId || !wantsAssets) {
-      return undefined;
-    }
-    let active = true;
-    client
-      .query(
-        locationOperationAssetsQuery,
-        { id: operationId },
-        { requestPolicy: "network-only" },
-      )
-      .toPromise()
-      .then(({ data }) => {
-        if (!active) {
-          return;
-        }
-        setAssets(
-          (data?.locationOperationAssets as LocationOperationAssetListing | null) ??
-            null,
-        );
-      })
-      .catch(() => {
-        // The listing is detail beside the counters, which are already on
-        // screen. A failed read leaves the section saying it has nothing
-        // rather than replacing the whole panel with an error.
-        if (active) {
-          setAssets(null);
-        }
-      });
-    return () => {
-      active = false;
-    };
-    // Re-read whenever the operation itself was written: a title that settles
-    // flips its entries from planned to done.
-  }, [client, operationId, wantsAssets, operationUpdatedAt, refreshNonce]);
-
-  const refresh = React.useCallback(() => {
-    setRefreshNonce((current) => current + 1);
-  }, []);
-
-  const handleCancel = React.useCallback(async () => {
-    setBusy(true);
-    try {
-      const { data, error: mutationError } = await client
-        .mutation(cancelLocationOperationMutation, { id: operationId })
         .toPromise();
-      if (mutationError) {
-        throw mutationError;
-      }
-      const requested = Boolean(
-        (data?.cancelLocationOperation as { cancelRequested?: boolean })
-          ?.cancelRequested,
-      );
+      if (result.error) throw result.error;
+      const payload = resume
+        ? result.data?.resumeLocationOperation
+        : result.data?.cancelLocationOperation;
       setGlobalStatus(
-        requested ? t("move.cancelRequested") : t("move.cancelNotPossible"),
+        resume
+          ? payload?.resumed
+            ? t("move.resumeRequested")
+            : (payload?.detail ?? t("move.resumeNotPossible"))
+          : payload?.cancelRequested
+            ? t("move.cancelRequested")
+            : t("move.cancelNotPossible"),
       );
-      // The cancel payload carries only {id, cancelRequested}; the refreshed
-      // row comes from the operation query.
-      refresh();
-    } catch (caught: unknown) {
+      setRefresh((value) => value + 1);
+    } catch (error) {
       setGlobalStatus(
-        userFacingGraphQlErrorMessage(caught, t("move.cancelFailed")),
+        userFacingGraphQlErrorMessage(
+          error,
+          t(resume ? "move.resumeFailed" : "move.cancelFailed"),
+        ),
       );
     } finally {
       setBusy(false);
     }
-  }, [client, operationId, refresh, setGlobalStatus, t]);
+  }
 
-  const handleResume = React.useCallback(async () => {
-    setBusy(true);
-    try {
-      const { data, error: mutationError } = await client
-        .mutation(resumeLocationOperationMutation, { id: operationId })
-        .toPromise();
-      if (mutationError) {
-        throw mutationError;
-      }
-      const payload = data?.resumeLocationOperation as
-        | { resumed?: boolean; detail?: string | null }
-        | undefined;
-      setGlobalStatus(
-        payload?.resumed
-          ? t("move.resumeRequested")
-          : (payload?.detail ?? t("move.resumeNotPossible")),
-      );
-      refresh();
-    } catch (caught: unknown) {
-      setGlobalStatus(
-        userFacingGraphQlErrorMessage(caught, t("move.resumeFailed")),
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, [client, operationId, refresh, setGlobalStatus, t]);
-
-  const toggleCheckpoint = React.useCallback((titleId: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(titleId)) {
-        next.delete(titleId);
-      } else {
-        next.add(titleId);
-      }
-      return next;
-    });
-  }, []);
-
-  if (loading && !operation) {
+  if (!operation || !summary.snapshot)
     return (
       <Card id="location-operation-panel">
         <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          {t("move.operationLoading")}
+          {!summary.error && <Loader2 className="h-4 w-4 animate-spin" />}
+          {t(
+            summary.error === "missing"
+              ? "move.operationMissing"
+              : summary.error
+                ? "move.operationLoadFailed"
+                : "move.operationLoading",
+          )}
         </CardContent>
       </Card>
     );
-  }
 
-  if (missing || !operation) {
-    return (
-      <Card id="location-operation-panel">
-        <CardContent className="py-6 text-sm text-muted-foreground">
-          <span>{error ?? t("move.operationMissing")}</span>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const counters = operation.counters;
-  const progress = Math.round(operationByteProgress(counters) * 100);
-  const checkpoints = orderedCheckpoints(operation.titleCheckpoints);
-  const visibleCheckpoints = allTitlesDisclosed
-    ? checkpoints
-    : checkpoints.slice(0, CHECKPOINT_DISCLOSURE_LIMIT);
-  const titleAssets = assetsByTitle(assets);
-  // FR-091: while some of what the plan describes has not happened yet, every
-  // asset row says which side of that line it is on.
-  const showPlannedState = showsAssetPlannedState(operation, assets);
   const terminal = isTerminalOperationState(operation.state);
+  const counters = operation.counters;
+  const progress = Math.floor(summary.snapshot.progressBasisPoints / 10) / 10;
+  const eta =
+    summary.connected && operation.state !== "QUEUED" && !terminal
+      ? summary.snapshot.etaSeconds
+      : null;
+  const total = toCount(
+    titles.snapshot?.totalCount ?? summary.snapshot.totalCount,
+  );
+  const rows = titles.snapshot?.titles ?? [];
+  const countKeys = [
+    "merges",
+    "dedups",
+    "renames",
+    "noOps",
+    "unresolved",
+    "titlesBlocked",
+  ] as const;
+  const countLabels = [
+    "Merges",
+    "Dedups",
+    "Renames",
+    "NoOps",
+    "Unresolved",
+    "Blocked",
+  ];
 
   return (
     <Card id="location-operation-panel">
       <CardContent className="space-y-4 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <span
-                id="location-operation-type"
-                data-operation-type={operation.operationType}
-              >
-                {t(`move.operationType.${operation.operationType}`)}
-              </span>
-              <Badge id="location-operation-state" tone={operationTone(operation)}>
-                {t(operationStateLabelKey(operation.state))}
-              </Badge>
-              {operation.cancelRequested && !terminal ? (
-                <Badge tone="warning" id="location-operation-cancel-requested">
-                  {t("move.cancelDraining")}
-                </Badge>
-              ) : null}
-            </p>
+          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+            <span
+              id="location-operation-type"
+              data-operation-type={operation.operationType}
+            >
+              {t(`move.operationType.${operation.operationType}`)}
+            </span>
+            <Badge
+              id="location-operation-state"
+              tone={
+                operation.state === "FAILED"
+                  ? "negative"
+                  : operation.state === "COMPLETED"
+                    ? "positive"
+                    : "neutral"
+              }
+            >
+              {t(operationStateLabelKey(operation.state))}
+            </Badge>
+            {operation.cancelRequested && !terminal && (
+              <Badge tone="warning">{t("move.cancelDraining")}</Badge>
+            )}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {canCancelOperation(operation) ? (
+          <div className="flex gap-2">
+            {canCancelOperation(operation) && (
               <Button
-                type="button"
+                id="location-operation-cancel"
                 variant="destructive"
                 size="sm"
-                id="location-operation-cancel"
-                onClick={() => void handleCancel()}
                 disabled={busy}
+                onClick={() => void act(false)}
               >
-                <X className="mr-1 h-3.5 w-3.5" />
                 {t("move.cancelAction")}
               </Button>
-            ) : null}
-            {canResumeOperation(operation, nowMs) ? (
+            )}
+            {canResumeOperation(operation, now) && (
               <Button
-                type="button"
+                id="location-operation-resume"
                 variant="outline"
                 size="sm"
-                id="location-operation-resume"
-                onClick={() => void handleResume()}
                 disabled={busy}
+                onClick={() => void act(true)}
               >
                 {t("move.resumeAction")}
               </Button>
-            ) : null}
+            )}
           </div>
         </div>
-
-        <div className="space-y-1">
-          <Progress value={progress} />
-          <p id="location-operation-progress" className="text-xs text-muted-foreground">
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>{progress.toFixed(1)}%</span>
+            <span>
+              {terminal || operation.state === "QUEUED"
+                ? ""
+                : !summary.connected
+                  ? t("move.transferDisconnected")
+                  : eta === null
+                    ? t("move.transferEstimating")
+                    : t("move.transferEta", {
+                        minutes: Math.max(1, Math.ceil(toCount(eta) / 60)),
+                      })}
+            </span>
+          </div>
+          <Progress
+            value={progress}
+            aria-label={t("move.transferOverallProgress")}
+          />
+          <p
+            id="location-operation-progress"
+            className="text-xs text-muted-foreground"
+          >
             {t("move.operationProgress", {
               titles: `${toCount(counters.titlesProcessed)}/${toCount(counters.titlesTotal)}`,
               files: `${toCount(counters.filesProcessed)}/${toCount(counters.filesTotal)}`,
@@ -362,288 +223,257 @@ export function LocationOperationPanel({ operationId }: Props) {
             })}
           </p>
         </div>
-
-        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          <Counter
-            counterKey="merges"
-            label={t("move.counterMerges")}
-            value={toCount(counters.merges)}
-          />
-          <Counter
-            counterKey="dedups"
-            label={t("move.counterDedups")}
-            value={toCount(counters.dedups)}
-          />
-          <Counter
-            counterKey="renames"
-            label={t("move.counterRenames")}
-            value={toCount(counters.renames)}
-          />
-          <Counter
-            counterKey="no-ops"
-            label={t("move.counterNoOps")}
-            value={toCount(counters.noOps)}
-          />
-          <Counter
-            counterKey="unresolved"
-            label={t("move.counterUnresolved")}
-            value={toCount(counters.unresolved)}
-          />
-          <Counter
-            counterKey="blocked"
-            label={t("move.counterBlocked")}
-            value={toCount(counters.titlesBlocked)}
-          />
-        </dl>
-
-        {operation.detail ? (
-          <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{operation.detail}</span>
-          </p>
-        ) : null}
-
-        {error ? (
-          <p className="text-xs text-[var(--scry-danger-text)]">{error}</p>
-        ) : null}
-
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-foreground">
-            {t("move.checkpointsHeading")}
-          </p>
-          {checkpoints.length === 0 ? (
-            <p
-              id="location-operation-no-checkpoints"
-              className="text-xs text-muted-foreground"
-            >
-              {t("move.checkpointsPending")}
-            </p>
-          ) : (
-            <>
-            <ul id="location-operation-checkpoints" className="space-y-1">
-              {visibleCheckpoints.map((checkpoint) => (
-                <CheckpointRow
-                  key={checkpoint.titleId}
-                  checkpoint={checkpoint}
-                  assets={titleAssets.get(checkpoint.titleId) ?? null}
-                  showPlannedState={showPlannedState}
-                  expanded={expanded.has(checkpoint.titleId)}
-                  onToggle={() => toggleCheckpoint(checkpoint.titleId)}
-                  t={t}
-                />
-              ))}
-            </ul>
-            {checkpoints.length > CHECKPOINT_DISCLOSURE_LIMIT ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-auto px-0 text-xs"
-                aria-controls="location-operation-checkpoints"
-                aria-expanded={allTitlesDisclosed}
-                onClick={() => setAllTitlesDisclosed((current) => !current)}
-              >
-                {allTitlesDisclosed
-                  ? t("move.checkpointsShowLess")
-                  : t("move.checkpointsShowAll", {
-                      count: checkpoints.length,
-                    })}
-              </Button>
-            ) : null}
-            </>
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="px-0"
+            aria-expanded={open}
+            aria-controls="location-transfer-titles"
+            onClick={() => setOpen(!open)}
+          >
+            {open ? (
+              <ChevronDown className="mr-1 h-4 w-4" />
+            ) : (
+              <ChevronRight className="mr-1 h-4 w-4" />
+            )}
+            {t(open ? "move.transferShowLess" : "move.transferShowMore")}
+          </Button>
+          {open && (
+            <div id="location-transfer-titles" className="space-y-2">
+              {titles.error && (
+                <p className="text-xs text-muted-foreground">
+                  {t("move.operationLoadFailed")}
+                </p>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full table-fixed text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border">
+                      {[
+                        "Title",
+                        "Status",
+                        "Files",
+                        "CurrentFile",
+                        "Progress",
+                      ].map((column, index) => (
+                        <th
+                          key={column}
+                          className={`p-2 ${index === 3 ? "w-[30%]" : index === 2 || index === 4 ? "w-[12%]" : "w-[23%]"}`}
+                        >
+                          {t(`move.transferColumn${column}`)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <TitleRow
+                        key={row.titleId}
+                        operationId={operationId}
+                        row={row}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {!titles.snapshot && (
+                <p className="text-xs text-muted-foreground">
+                  {t("move.operationLoading")}
+                </p>
+              )}
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>
+                  {t("move.transferRange", {
+                    from: rows.length ? page * 50 + 1 : 0,
+                    to: rows.length ? page * 50 + rows.length : 0,
+                    total,
+                  })}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page === 0}
+                    onClick={() => setPage(page - 1)}
+                  >
+                    {t("move.transferPrevious")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!titles.snapshot?.hasMore}
+                    onClick={() => setPage(page + 1)}
+                  >
+                    {t("move.transferNext")}
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          {countKeys.map((key, i) => (
+            <div
+              key={key}
+              className="rounded-lg border border-border px-2 py-1"
+            >
+              <dt className="text-xs text-muted-foreground">
+                {t(`move.counter${countLabels[i]}`)}
+              </dt>
+              <dd className="text-sm">{toCount(counters[key])}</dd>
+            </div>
+          ))}
+        </dl>
+        {operation.detail && (
+          <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-warning-border)] p-3 text-sm">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            <span>{operation.detail}</span>
+          </p>
+        )}
+        {summary.error && (
+          <p className="text-xs text-[var(--scry-danger-text)]">
+            {t("move.operationLoadFailed")}
+          </p>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function operationTone(
-  operation: LocationOperation,
-): "neutral" | "positive" | "warning" | "negative" | "info" {
-  switch (operation.state) {
-    case "COMPLETED":
-      return "positive";
-    case "COMPLETED_WITH_WARNINGS":
-      return "warning";
-    case "FAILED":
-      return "negative";
-    case "CANCELED":
-      return "neutral";
-    default:
-      return "info";
-  }
-}
-
-function Counter({
-  counterKey,
-  label,
-  value,
+function TitleRow({
+  operationId,
+  row,
 }: {
-  counterKey: string;
-  label: string;
-  value: number;
+  operationId: string;
+  row: TransferTitle;
 }) {
+  const client = useClient();
+  const t = useTranslate();
+  const [expanded, setExpanded] = React.useState(false);
+  const [detail, setDetail] = React.useState<string | null>(null);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    if (!expanded || !row.hasException) return;
+    let active = true;
+    client
+      .query(
+        locationTransferTitleDetailQuery,
+        { id: operationId, titleId: row.titleId },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise()
+      .then((result) => {
+        if (!active) return;
+        setFailed(Boolean(result.error));
+        setDetail(result.data?.locationTransferTitleDetail ?? null);
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [client, expanded, operationId, row.titleId, row.state, row.hasException]);
+  const path = row.currentFile ? splitTransferPath(row.currentFile) : null;
   return (
-    <div
-      id={`location-operation-counter-${counterKey}`}
-      className="min-w-0 rounded-lg border border-border bg-muted/10 px-2 py-1"
-    >
-      <dt className="truncate text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-sm text-foreground">{value}</dd>
-    </div>
-  );
-}
-
-function CheckpointRow({
-  checkpoint,
-  assets,
-  showPlannedState,
-  expanded,
-  onToggle,
-  t,
-}: {
-  checkpoint: LocationTitleCheckpoint;
-  assets: LocationTitleAssets | null;
-  showPlannedState: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  t: (key: string, values?: Record<string, string | number>) => string;
-}) {
-  const attention = checkpointNeedsAttention(checkpoint);
-  const mergeTarget = checkpointMergeTarget(checkpoint);
-  const lines = assetLines(assets);
-  return (
-    <li
-      id={`location-operation-checkpoint-${checkpoint.titleId}`}
-      className={cn(
-        "rounded-lg border px-2 py-1",
-        attention
-          ? "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)]"
-          : "border-border bg-muted/10",
-      )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between gap-2 text-left"
+    <React.Fragment>
+      <tr
+        id={`location-operation-checkpoint-${row.titleId}`}
+        className="border-b border-border align-top"
       >
-        <span className="min-w-0 truncate text-sm text-foreground">
-          {checkpoint.destinationFolderPath ??
-            checkpoint.sourceFolderPath ??
-            checkpoint.titleId}
-        </span>
-        <Badge tone={attention ? "warning" : "neutral"}>
-          {t(checkpointStateLabelKey(checkpoint.state))}
-        </Badge>
-      </button>
-      {expanded ? (
-        <dl className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-          <div>
-            <dt className="inline">{t("move.checkpointClass")}: </dt>
-            <dd className="inline">
-              {checkpoint.classification
-                ? t(classificationLabelKey(checkpoint.classification))
-                : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="inline">{t("move.checkpointFrom")}: </dt>
-            <dd className="inline font-[var(--font-code)] break-all">
-              {checkpoint.sourceFolderPath ?? "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="inline">{t("move.checkpointTo")}: </dt>
-            <dd className="inline font-[var(--font-code)] break-all">
-              {checkpoint.destinationFolderPath ?? "—"}
-            </dd>
-          </div>
-          {/* A merged title has no destination folder of its own: it became
-              part of another title, and that is the fact to state (FR-071). */}
-          {mergeTarget ? (
-            <div id={`location-operation-checkpoint-merged-${checkpoint.titleId}`}>
-              <dt className="inline">{t("move.checkpointMergedInto")}: </dt>
-              {/* The surviving title's name when the catalog still has it; the
-                  id, in a code face, when it does not. */}
-              <dd
-                className={
-                  mergeTarget.isIdFallback
-                    ? "inline font-[var(--font-code)] break-all"
-                    : "inline break-words"
-                }
+        <td className="p-2">
+          <div className="flex items-start gap-1">
+            {row.hasException && (
+              <button
+                aria-label={t("move.transferException", { title: row.name })}
+                aria-expanded={expanded}
+                aria-controls={`transfer-detail-${row.titleId}`}
+                onClick={() => setExpanded(!expanded)}
               >
-                {mergeTarget.label}
-              </dd>
-            </div>
-          ) : null}
-          <div>
-            <dt className="inline">{t("move.checkpointVerified")}: </dt>
-            <dd className="inline">
-              {t("move.checkpointVerifiedValue", {
-                files: `${toCount(checkpoint.filesVerified)}/${toCount(checkpoint.filesTotal)}`,
-                bytes: `${formatByteCount(toCount(checkpoint.bytesVerified))} / ${formatByteCount(toCount(checkpoint.bytesTotal))}`,
-              })}
-            </dd>
+                {expanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </button>
+            )}
+            <span className="break-words">{row.name}</span>
           </div>
-          {checkpoint.detail ? (
-            <div>
-              <dt className="inline">{t("move.checkpointDetail")}: </dt>
-              <dd className="inline">{checkpoint.detail}</dd>
-            </div>
-          ) : null}
-          {/* FR-091: the counters say how many files were renamed and
-              deduplicated; this says which ones, and whether it has happened
-              yet. A title with no collisions shows nothing rather than an
-              empty heading. */}
-          {lines.length > 0 ? (
-            <div id={`location-operation-assets-${checkpoint.titleId}`}>
-              <dt>{t("move.assetsHeading")}</dt>
-              <dd>
-                <ul className="mt-0.5 space-y-0.5">
-                  {lines.map((line) => (
-                    <li
-                      key={line.key}
-                      id={`location-operation-asset-${checkpoint.titleId}-${line.key}`}
-                      data-asset-kind={line.kind}
-                      data-asset-done={line.done ? "true" : "false"}
-                      className="break-words"
-                    >
-                      <span className="font-[var(--font-code)] break-all">
-                        {t(assetLineTextKey(line.kind), {
-                          from: line.from,
-                          to: line.to ?? t("move.assetUnknownCounterpart"),
-                        })}
-                      </span>
-                      {line.provenanceLabel ? (
-                        <span className="ml-1 text-muted-foreground">
-                          {t("move.assetProvenance", {
-                            library: line.provenanceLabel,
-                          })}
-                        </span>
-                      ) : null}
-                      {showPlannedState ? (
-                        <span
-                          className="ml-1"
-                          id={`location-operation-asset-state-${checkpoint.titleId}-${line.key}`}
-                        >
-                          <Badge tone={line.done ? "neutral" : "info"}>
-                            {t(
-                              line.done
-                                ? "move.assetStateDone"
-                                : "move.assetStatePlanned",
-                            )}
-                          </Badge>
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-      ) : null}
-    </li>
+        </td>
+        <td className="p-2">
+          <Badge tone={row.hasException ? "warning" : "neutral"}>
+            {t(
+              checkpointStateLabelKey(
+                row.verifying > 0 ? "VERIFYING" : row.state,
+              ),
+            )}
+          </Badge>
+          {(row.copying > 0 || row.verifying > 0) && (
+            <p className="mt-1 text-muted-foreground">
+              {t("move.transferActive", {
+                copying: row.copying,
+                verifying: row.verifying,
+              })}
+            </p>
+          )}
+        </td>
+        <td className="p-2 tabular-nums">
+          {toCount(row.filesDone)}/{toCount(row.filesTotal)}
+        </td>
+        <td className="min-w-0 p-2">
+          {path && row.currentFile ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  tabIndex={0}
+                  aria-label={row.currentFile}
+                  className="flex min-w-0 font-[var(--font-code)]"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="min-w-0 truncate"
+                    style={{ direction: "rtl", textAlign: "left" }}
+                  >
+                    {path.directory}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="max-w-full shrink-0 truncate"
+                  >
+                    {path.filename}
+                  </span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xl break-all">
+                {row.currentFile}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            "—"
+          )}
+        </td>
+        <td className="p-2 tabular-nums">
+          {Math.floor(transferTitleProgress(row))}%
+          {row.verifying > 0 && (
+            <p className="text-muted-foreground">
+              {formatByteCount(toCount(row.verificationBytes))}
+            </p>
+          )}
+        </td>
+      </tr>
+      {expanded && row.hasException && (
+        <tr id={`transfer-detail-${row.titleId}`}>
+          <td colSpan={5} className="break-words bg-muted/20 p-3 text-xs">
+            {detail ??
+              t(
+                failed
+                  ? "move.operationLoadFailed"
+                  : "move.transferDetailPending",
+              )}
+          </td>
+        </tr>
+      )}
+    </React.Fragment>
   );
 }

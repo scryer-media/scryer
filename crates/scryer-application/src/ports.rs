@@ -5069,6 +5069,51 @@ pub struct LocationOperationProgress {
 /// of the ownership rows outside the runner.
 #[async_trait]
 pub trait LocationOperationRepository: Send + Sync {
+    async fn allocate_transfer_generation(&self) -> AppResult<i64> {
+        Ok(1)
+    }
+    async fn transfer_high_water(&self, _operation_id: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn transfer_titles_initialized(&self, _operation_id: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn mark_transfer_titles_initialized(&self, _operation_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn save_transfer_high_water(
+        &self,
+        _operation_id: &str,
+        _basis_points: i64,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn upsert_transfer_title(
+        &self,
+        _operation_id: &str,
+        _title: &crate::location::live::TransferTitle,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn transfer_title_page(
+        &self,
+        _operation_id: &str,
+        _offset: i64,
+        _limit: i64,
+    ) -> AppResult<Vec<crate::location::live::TransferTitle>> {
+        Ok(Vec::new())
+    }
+    async fn transfer_title_count(&self, _operation_id: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn transfer_title(
+        &self,
+        _operation_id: &str,
+        _title_id: &str,
+    ) -> AppResult<Option<crate::location::live::TransferTitle>> {
+        Ok(None)
+    }
+
     /// Persists a confirmed operation. `plan_json` is the serialized plan the
     /// user confirmed, kept so a resumed run does not have to rebuild it.
     async fn create_location_operation(
