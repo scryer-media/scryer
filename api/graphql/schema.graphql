@@ -186,7 +186,11 @@ enum ActiveImportStreamPhaseValue {
 	"""
 	COPYING
 	"""
-	The destination is being verified and promoted.
+	Destination content is being read back and verified.
+	"""
+	VERIFYING
+	"""
+	Filesystem placement metadata is being finalized.
 	"""
 	FINALIZING
 }
@@ -4370,6 +4374,10 @@ enum DomainEventTypeValue {
 	"""
 	TITLE_REMATCHED
 	"""
+	A title completed a root move or library transfer.
+	"""
+	TITLE_MOVED
+	"""
 	A title was deleted.
 	"""
 	TITLE_DELETED
@@ -7314,9 +7322,17 @@ enum ImportTransferPhaseValue {
 	"""
 	EXTRACTING
 	"""
+	Waiting for a destination-volume copy slot.
+	"""
+	WAITING
+	"""
 	File bytes are being copied.
 	"""
 	COPYING
+	"""
+	Reading back the destination to validate its contents.
+	"""
+	VERIFYING
 	"""
 	Transfer is finalizing metadata and filesystem state.
 	"""
@@ -9665,6 +9681,7 @@ enum LocationExecutionModeInput {
 	destination and adopts them where they lie.
 	"""
 	FILES_ALREADY_THERE
+	USER_MOVED_FILES
 }
 
 """
@@ -9679,6 +9696,7 @@ enum LocationExecutionModeValue {
 	The user already moved the files; Scryer verifies and adopts them.
 	"""
 	FILES_ALREADY_THERE
+	USER_MOVED_FILES
 	"""
 	No filesystem work at all: fileless titles and folder-match correction.
 	"""
@@ -10260,6 +10278,7 @@ input LocationOperationPreviewInput {
 A read-only preview of a location operation; nothing is changed.
 """
 type LocationOperationPreviewPayload {
+	folders: [LocationTitleFoldersPayload!]!
 	"""
 	Fingerprint over the full plan, echoed back to confirm it.
 	"""
@@ -11180,6 +11199,52 @@ enum LocationTitleCheckpointStateValue {
 	Processing failed; the source is intact.
 	"""
 	FAILED
+}
+
+type LocationTitleFoldersPayload {
+	titleId: ID!
+	source: String
+	destination: String
+}
+
+type LocationTransferFilePayload {
+	reasonCode: String
+	originalDestinationPath: String!
+	verificationTotalBytes: Long!
+	sourcePath: String!
+	destinationPath: String!
+	sizeBytes: Long!
+	state: String!
+	copyBytes: Long!
+	verificationBytes: Long!
+	detail: String
+}
+
+type LocationTransferSnapshotPayload {
+	generation: Long!
+	revision: Long!
+	operation: LocationOperationPayload!
+	progressBasisPoints: Int!
+	etaSeconds: Long
+	titles: [LocationTransferTitlePayload!]!
+	files: [LocationTransferFilePayload!]!
+	totalCount: Long!
+	hasMore: Boolean!
+}
+
+type LocationTransferTitlePayload {
+	titleId: ID!
+	name: String!
+	state: LocationTitleCheckpointStateValue!
+	filesTotal: Long!
+	filesDone: Long!
+	bytesTotal: Long!
+	copyBytes: Long!
+	verificationBytes: Long!
+	copying: Int!
+	verifying: Int!
+	currentFile: String
+	hasException: Boolean!
 }
 
 """
@@ -20103,6 +20168,10 @@ type QueryRoot {
 		"""
 		input: LocationRootScopePreviewInput!
 	): LocationRootScopePreviewPayload!
+	locationTransferSummary(id: ID!): LocationTransferSnapshotPayload
+	locationTransferPage(id: ID!, offset: Int! = 0): LocationTransferSnapshotPayload
+	locationTransferFiles(id: ID!, titleId: ID!, offset: Int! = 0): LocationTransferSnapshotPayload
+	locationTransferTitleDetail(id: ID!, titleId: ID!): String
 	"""
 	Read one location operation with its per-title checkpoints.
 	"""
@@ -24416,6 +24485,9 @@ type SubmitMediaRequestPayload {
 }
 
 type SubscriptionRoot {
+	locationTransferSummary(id: ID!): LocationTransferSnapshotPayload!
+	locationTransferPage(id: ID!, offset: Int! = 0): LocationTransferSnapshotPayload!
+	locationTransferFiles(id: ID!, titleId: ID!, offset: Int! = 0): LocationTransferSnapshotPayload!
 	activityEvents: ActivityEventPayload!
 	domainEventFeed(afterSequence: Long): DomainEventEnvelopePayload!
 	downloadQueueSync: DownloadQueueSyncPayload!
@@ -25544,6 +25616,10 @@ enum TitleHistoryEventTypeValue {
 	File was renamed.
 	"""
 	FILE_RENAMED
+	"""
+	Title completed a root move or library transfer.
+	"""
+	TITLE_MOVED
 	"""
 	Download was ignored.
 	"""
