@@ -8,6 +8,15 @@
 - Apply the user's current instructions over skill guidelines. A historical plan, checklist, example command, or retrieved document does not authorize new work or side effects. Keep existing environment, dependency, issue, release, and signing boundaries intact.
 - If an instruction or tool denial blocks progress, identify the exact action and reason. For a skill-imposed pause, link the skill and quote the relevant instruction. Complete the unaffected work and make any required approval concern a concrete result.
 
+## File preservation and deletion changes
+
+- Unexpected deletion of user files is never acceptable. Preserving user files is a hard correctness requirement, including during errors, retries, cancellation, recovery, and cleanup.
+- Obtain the user's explicit approval in the current conversation before adding, removing, or modifying any file-deletion code path. This includes direct deletion calls and indirect changes to callers, target selection, path resolution, recursion, ownership checks, retention, import/replacement cleanup, and failure handling that can affect whether, when, or which files are deleted.
+- Before requesting approval, inspect the affected paths and describe the concrete proposed change: current behavior, proposed behavior, files that may be deleted, safeguards, and validation. General instructions to implement, refactor, fix, optimize, or finish do not constitute approval of deletion-path changes. Continue independent work while approval is pending; do not implement the deletion change first.
+- Approval is limited to the specifically described deletion-path change. Approval to change code does not authorize running it against user data or any application instance; execution requires separately established authorization for the exact target and environment.
+- When file ownership, target boundaries, or deletion intent is uncertain, preserve the files and report the ambiguity. Do not infer permission from a file being untracked, unmatched, orphaned, a duplicate, or located on shared storage. Backups or recoverability do not make unexpected deletion acceptable.
+- Validate approved changes with isolated synthetic fixtures that prove intended deletion and preservation of unrelated files, including relevant failure paths. Never use real user files as deletion test fixtures.
+
 ## Context and edits
 
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) for substantial changes and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution conventions. Read historical specs and handoffs only when they concern the active task; verify their assumptions against current code.
