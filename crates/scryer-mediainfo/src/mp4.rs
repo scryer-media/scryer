@@ -2519,6 +2519,24 @@ mod tests {
     }
 
     #[test]
+    fn partial_fragment_walk_preserves_headers_without_using_partial_timing() {
+        let mut bytes = include_bytes!("../tests/media/hevc_hdr10plus.mp4").to_vec();
+        let baseline = parse_mp4_source(&mut Cursor::new(bytes.clone()), "mp4", AnalysisProfile::DefaultRich).unwrap();
+        for index in 0..200_u32 {
+            let tfhd = [0x18_u32.to_be_bytes(), 1_u32.to_be_bytes(), 1_000_000_u32.to_be_bytes(), 10_000_u32.to_be_bytes()].concat();
+            let tfdt = [0_u32.to_be_bytes(), (index * 1_000_000).to_be_bytes()].concat();
+            let trun = [0_u32.to_be_bytes(), 1_u32.to_be_bytes()].concat();
+            let traf = [make_box(b"tfhd", &tfhd), make_box(b"tfdt", &tfdt), make_box(b"trun", &trun)].concat();
+            bytes.extend_from_slice(&make_box(b"moof", &make_box(b"traf", &traf)));
+        }
+        let raw = parse_mp4_source(&mut Cursor::new(bytes), "mp4", AnalysisProfile::DefaultRich).unwrap();
+        assert!(raw.details.report.budget_exhausted);
+        assert_eq!(raw.duration_seconds, baseline.duration_seconds);
+        assert_eq!(raw.tracks[0].codec_name, baseline.tracks[0].codec_name);
+        assert_eq!(raw.tracks[0].bit_rate_bps, baseline.tracks[0].bit_rate_bps);
+    }
+
+    #[test]
     fn fragment_budget_exhaustion_is_visible_in_outer_report() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/hevc_hdr10plus.mp4");
