@@ -25,7 +25,7 @@ import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
-import { AVAILABLE_LANGUAGES, getLanguageLabel } from "@/lib/i18n";
+import { METADATA_LANGUAGES, getLanguageLabel } from "@/lib/i18n";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type { LibraryRootRecord } from "@/lib/types/titles";
 
@@ -408,7 +408,7 @@ export function TitleOptionsSettingsGrid({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-                {AVAILABLE_LANGUAGES.map((language) => (
+                {METADATA_LANGUAGES.map((language) => (
                   <SelectItem key={language.code} value={language.code}>
                     {language.label}
                   </SelectItem>

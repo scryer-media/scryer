@@ -19,7 +19,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleRecord } from "@/lib/types";
 import type { LibraryRootRecord } from "@/lib/types/titles";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
-import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
+import { METADATA_LANGUAGES } from "@/lib/i18n";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import {
   DISABLED_TITLE_EDIT_VALUE,
@@ -339,7 +339,7 @@ export function BulkTitleEditDialog({
                 <SelectItem value={UNCHANGED_VALUE}>
                   {t("label.unchanged")}
                 </SelectItem>
-                {AVAILABLE_LANGUAGES.map((language) => (
+                {METADATA_LANGUAGES.map((language) => (
                   <SelectItem key={language.code} value={language.code}>
                     {language.label}
                   </SelectItem>

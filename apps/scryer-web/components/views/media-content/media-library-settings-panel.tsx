@@ -37,7 +37,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
-import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
+import { METADATA_LANGUAGES } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DownloadClientRoutingPanel } from "@/components/views/media-content/download-client-routing-panel";
@@ -1380,7 +1380,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                       <SelectItem value={INHERIT_VALUE}>
                         {t("settings.libraryInheritGlobal")}
                       </SelectItem>
-                      {AVAILABLE_LANGUAGES.map((language) => (
+                      {METADATA_LANGUAGES.map((language) => (
                         <SelectItem key={language.code} value={language.code}>
                           {language.label}
                         </SelectItem>
