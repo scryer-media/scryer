@@ -3596,6 +3596,12 @@ pub trait TotpRepository: Send + Sync {
 #[async_trait]
 pub trait DomainEventRepository: Send + Sync {
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent>;
+    /// Append by stable event ID, returning the original event on replay.
+    async fn append_once(&self, _event: NewDomainEvent) -> AppResult<DomainEvent> {
+        Err(AppError::Repository(
+            "idempotent domain event append is not supported".into(),
+        ))
+    }
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>>;
     async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>>;
     async fn count_title_history_page_events(

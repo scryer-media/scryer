@@ -145,6 +145,20 @@ pub(super) async fn append_series_monitor_snapshot_chunk(
 
 #[async_trait]
 impl DomainEventRepository for MockDomainEventRepo {
+    async fn append_once(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        if let Some(existing) = self
+            .events
+            .lock()
+            .await
+            .iter()
+            .find(|row| row.event_id == event.event_id)
+            .cloned()
+        {
+            return Ok(existing);
+        }
+        self.append(event).await
+    }
+
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
         let mut events = self.events.lock().await;
         let sequence = events

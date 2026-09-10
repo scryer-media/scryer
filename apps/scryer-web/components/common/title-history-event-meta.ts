@@ -28,6 +28,7 @@ export const TITLE_HISTORY_FILTERS = [
   "file_recycled",
   "file_deleted",
   "file_renamed",
+  "title_moved",
   "rematched",
   "seeding_started",
   "seeding_completed",
@@ -114,6 +115,12 @@ const eventMeta: Record<string, EventMeta> = {
     icon: FileEdit,
     iconClassName: "text-[var(--scry-info-text-soft)]",
     labelKey: "history.fileRenamed",
+    badgeClassName: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  },
+  title_moved: {
+    icon: HardDrive,
+    iconClassName: "text-[var(--scry-info-text-soft)]",
+    labelKey: "history.titleMoved",
     badgeClassName: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
   },
   seeding_started: {

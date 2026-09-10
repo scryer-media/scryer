@@ -1007,6 +1007,29 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
         Some(destination.id.as_str()),
         "D8: the checkpoint records the title this one merged into"
     );
+    let history = fixture
+        .app
+        .list_title_history_for_title(
+            &fixture.user,
+            &destination.id,
+            Some(&[TitleHistoryEventType::TitleMoved]),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(history.total_count, 1);
+    let entry = &history.records[0];
+    assert_eq!(entry.title_id, destination.id);
+    assert_eq!(entry.source_path, title.folder_path);
+    assert_eq!(entry.dest_path, survivor.folder_path);
+    let data: serde_json::Value = serde_json::from_str(entry.data_json.as_ref().unwrap()).unwrap();
+    assert_eq!(data["source_title_id"], title.id);
+    assert_eq!(data["source_library_id"], fixture.source_library_id);
+    assert_eq!(
+        data["destination_library_id"],
+        fixture.destination_library_id
+    );
 
     // The engine ran once, with the plan the preview described, and Group 0 was
     // told to exclude the operation performing the merge (OQ7).

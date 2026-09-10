@@ -436,6 +436,14 @@ async fn the_preview_states_current_and_destination_folders_with_file_count_and_
 #[tokio::test]
 async fn confirming_a_move_relocates_the_files_and_then_the_catalog() {
     let fixture = RootMoveFixture::new().await;
+    fixture
+        .app
+        .services
+        .identity
+        .users
+        .create(fixture.user.clone())
+        .await
+        .unwrap();
     let title = fixture
         .seed_title(
             "Confirmed Move",
@@ -481,6 +489,33 @@ async fn confirming_a_move_relocates_the_files_and_then_the_catalog() {
     let records = fixture.verifications();
     assert_eq!(records.len(), 1);
     assert!(records[0].outcome.permits_source_removal());
+    let history = fixture
+        .app
+        .list_title_history_for_title(
+            &fixture.user,
+            &title.id,
+            Some(&[TitleHistoryEventType::TitleMoved]),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(history.total_count, 1);
+    let entry = &history.records[0];
+    assert_eq!(entry.source_path, title.folder_path);
+    assert_eq!(entry.dest_path, moved.folder_path);
+    assert_eq!(
+        entry.actor_user_id.as_deref(),
+        Some(fixture.user.id.as_str())
+    );
+    assert_eq!(
+        entry.actor_display_name.as_deref(),
+        Some(fixture.user.username.as_str())
+    );
+    let data: serde_json::Value = serde_json::from_str(entry.data_json.as_ref().unwrap()).unwrap();
+    assert_eq!(data["operation_id"], operation.id);
+    assert_eq!(data["source_root_id"], fixture.root_a_id);
+    assert_eq!(data["destination_root_id"], fixture.root_b_id);
 }
 
 /// US2.1's ordering rule from the failing side: when a title's content cannot
@@ -552,6 +587,21 @@ async fn a_failed_placement_leaves_the_catalog_pointing_at_the_source() {
         "the source content is untouched"
     );
     assert!(fixture.verifications().is_empty());
+    let history = fixture
+        .app
+        .list_title_history_for_title(
+            &fixture.user,
+            &title.id,
+            Some(&[TitleHistoryEventType::TitleMoved]),
+            50,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        history.total_count, 0,
+        "failed moves are not recorded as completed"
+    );
 }
 
 // ── US2.2 ────────────────────────────────────────────────────────────────────
@@ -901,6 +951,23 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
         2,
         "one record per file, not one per attempt"
     );
+    for title in [&first, &second] {
+        let history = fixture
+            .app
+            .list_title_history_for_title(
+                &fixture.user,
+                &title.id,
+                Some(&[TitleHistoryEventType::TitleMoved]),
+                50,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            history.total_count, 1,
+            "resume records each completed title exactly once"
+        );
+    }
     assert_eq!(outcome.counters.titles_total, 2);
     assert_eq!(outcome.counters.titles_processed, 2);
     assert_eq!(outcome.counters.files_processed, 2);

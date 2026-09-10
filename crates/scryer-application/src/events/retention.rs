@@ -17,6 +17,7 @@ pub(crate) const fn retention_class_for_domain_event_type(
         DomainEventType::TitleAdded
         | DomainEventType::TitleUpdated
         | DomainEventType::TitleRematched
+        | DomainEventType::TitleMoved
         | DomainEventType::TitleDeleted
         | DomainEventType::MediaRequestSubmitted
         | DomainEventType::MediaRequestUpdated

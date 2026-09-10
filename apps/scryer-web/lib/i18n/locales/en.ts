@@ -3442,6 +3442,7 @@ const en: LocaleDictionary = {
   "history.fileRecycled": "Recycled",
   "history.fileDeleted": "Deleted",
   "history.fileRenamed": "Renamed",
+  "history.titleMoved": "Moved",
   "history.rematched": "Rematched",
   "history.seedingStarted": "Seeding",
   "history.seedingCompleted": "Seeding done",

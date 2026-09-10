@@ -869,6 +869,7 @@ impl AppUseCase {
             crate::location::root_scope_execution::RootScopeEpilogue { app: self, tail }
         });
 
+        let history = super::history::LocationTitleHistory::new(self, plan).await?;
         let mut runner = LocationOperationRunner::new(
             self.services.library.location_operations.as_ref(),
             mover,
@@ -876,7 +877,8 @@ impl AppUseCase {
             &reconciler,
         )
         .with_ownership_registry(&self.runtime.library.location_ownership)
-        .with_transfers(&self.runtime.library.location_runners.transfers);
+        .with_transfers(&self.runtime.library.location_runners.transfers)
+        .with_completion_recorder(&history);
         if let Some(observer) = observer.as_ref() {
             runner = runner.with_progress_observer(observer);
         }

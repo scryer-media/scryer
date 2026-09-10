@@ -82,7 +82,7 @@ export function TitleHistoryModal({
               limit: PAGE_SIZE,
               offset: pageOffset,
             },
-          })
+          }, { requestPolicy: "network-only" })
           .toPromise();
 
         if (result.error) {

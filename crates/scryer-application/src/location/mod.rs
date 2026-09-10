@@ -41,7 +41,9 @@ pub mod execution;
 pub mod executor;
 pub mod folder_match;
 pub mod hardlinks;
+pub(crate) mod history;
 pub mod identity;
+pub mod live;
 pub mod media_server_refresh;
 pub mod merge;
 pub mod model;
@@ -53,7 +55,6 @@ pub mod root_scope;
 pub mod root_scope_execution;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod transfer;
 pub mod transfer_effects;
 pub mod verify;
-pub mod transfer;
-pub mod live;

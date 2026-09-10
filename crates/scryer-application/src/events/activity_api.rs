@@ -281,6 +281,7 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
     TitleHistoryEventType::FileRecycled,
     TitleHistoryEventType::FileDeleted,
     TitleHistoryEventType::FileRenamed,
+    TitleHistoryEventType::TitleMoved,
     TitleHistoryEventType::DownloadIgnored,
     TitleHistoryEventType::Rematched,
     TitleHistoryEventType::SeedingStarted,
@@ -288,6 +289,7 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
 ];
 
 const TITLE_HISTORY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
+    DomainEventType::TitleMoved,
     DomainEventType::TitleRematched,
     DomainEventType::ReleaseGrabbed,
     DomainEventType::ImportCompleted,

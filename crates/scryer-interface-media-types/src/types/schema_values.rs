@@ -641,6 +641,8 @@ pub enum DomainEventTypeValue {
     TitleUpdated,
     /// A title was rematched.
     TitleRematched,
+    /// A title completed a root move or library transfer.
+    TitleMoved,
     /// A title was deleted.
     TitleDeleted,
     /// Configuration changed.
@@ -730,6 +732,7 @@ impl DomainEventTypeValue {
             DomainEventType::TitleAdded => Self::TitleAdded,
             DomainEventType::TitleUpdated => Self::TitleUpdated,
             DomainEventType::TitleRematched => Self::TitleRematched,
+            DomainEventType::TitleMoved => Self::TitleMoved,
             DomainEventType::TitleDeleted => Self::TitleDeleted,
             DomainEventType::ConfigurationChanged => Self::ConfigurationChanged,
             DomainEventType::DiscoverySearchCompleted => Self::DiscoverySearchCompleted,
@@ -781,6 +784,7 @@ impl DomainEventTypeValue {
             Self::TitleAdded => DomainEventType::TitleAdded,
             Self::TitleUpdated => DomainEventType::TitleUpdated,
             Self::TitleRematched => DomainEventType::TitleRematched,
+            Self::TitleMoved => DomainEventType::TitleMoved,
             Self::TitleDeleted => DomainEventType::TitleDeleted,
             Self::ConfigurationChanged => DomainEventType::ConfigurationChanged,
             Self::DiscoverySearchCompleted => DomainEventType::DiscoverySearchCompleted,

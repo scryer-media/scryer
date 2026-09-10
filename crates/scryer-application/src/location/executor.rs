@@ -546,6 +546,18 @@ pub trait OperationEpilogue: Send + Sync {
     async fn finish_operation(&self, operation: &LocationOperation) -> AppResult<Vec<String>>;
 }
 
+/// Persists one successful title outcome before its completed checkpoint.
+#[async_trait]
+pub trait TitleCompletionRecorder: Send + Sync {
+    async fn record(
+        &self,
+        operation: &LocationOperation,
+        title: &PlannedTitle,
+        state: TitleCheckpointState,
+        detail: Option<&str>,
+    ) -> AppResult<()>;
+}
+
 /// The operation runner (D5).
 pub struct LocationOperationRunner<'a> {
     transfers: Option<&'a super::live::TransferHub>,
@@ -555,12 +567,18 @@ pub struct LocationOperationRunner<'a> {
     reconciler: &'a dyn TitleReconciler,
     registry: Option<&'a crate::location::ownership_guard::LocationOwnershipRegistry>,
     observer: Option<&'a dyn OperationProgressObserver>,
+    completion_recorder: Option<&'a dyn TitleCompletionRecorder>,
     epilogue: Option<&'a dyn OperationEpilogue>,
     pulse_interval: Duration,
     retry: FileMoveRetry,
 }
 
 impl<'a> LocationOperationRunner<'a> {
+    pub fn with_completion_recorder(mut self, recorder: &'a dyn TitleCompletionRecorder) -> Self {
+        self.completion_recorder = Some(recorder);
+        self
+    }
+
     pub fn with_transfers(mut self, transfers: &'a super::live::TransferHub) -> Self {
         self.transfers = Some(transfers);
         self
@@ -580,6 +598,7 @@ impl<'a> LocationOperationRunner<'a> {
             registry: None,
             transfers: None,
             observer: None,
+            completion_recorder: None,
             epilogue: None,
             pulse_interval: PROGRESS_PULSE_INTERVAL,
             retry: FileMoveRetry::default(),
@@ -1295,6 +1314,15 @@ impl<'a> LocationOperationRunner<'a> {
         progress: &mut RunProgress,
         plan: &OperationWorkPlan,
     ) -> AppResult<()> {
+        if matches!(
+            state,
+            TitleCheckpointState::Completed | TitleCheckpointState::CompletedWithWarnings
+        ) && let Some(recorder) = self.completion_recorder
+        {
+            recorder
+                .record(operation, title, state, detail.as_deref())
+                .await?;
+        }
         progress.settle(title, state);
         self.write_title_checkpoint(operation, title, state, detail, progress)
             .await?;

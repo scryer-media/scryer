@@ -2933,6 +2933,7 @@ pub enum TitleHistoryEventType {
     FileRecycled,
     FileDeleted,
     FileRenamed,
+    TitleMoved,
     DownloadIgnored,
     Rematched,
     /// A torrent was imported and its client entry is being retained while it
@@ -2959,6 +2960,7 @@ impl TitleHistoryEventType {
             Self::FileRecycled => "file_recycled",
             Self::FileDeleted => "file_deleted",
             Self::FileRenamed => "file_renamed",
+            Self::TitleMoved => "title_moved",
             Self::DownloadIgnored => "download_ignored",
             Self::Rematched => "rematched",
             Self::SeedingStarted => "seeding_started",
@@ -2981,6 +2983,7 @@ impl TitleHistoryEventType {
             "file_recycled" => Some(Self::FileRecycled),
             "file_deleted" => Some(Self::FileDeleted),
             "file_renamed" => Some(Self::FileRenamed),
+            "title_moved" => Some(Self::TitleMoved),
             "download_ignored" => Some(Self::DownloadIgnored),
             "rematched" => Some(Self::Rematched),
             "seeding_started" => Some(Self::SeedingStarted),
@@ -3003,6 +3006,7 @@ impl TitleHistoryEventType {
         Self::FileRecycled,
         Self::FileDeleted,
         Self::FileRenamed,
+        Self::TitleMoved,
         Self::DownloadIgnored,
         Self::Rematched,
         Self::SeedingStarted,
@@ -3219,6 +3223,7 @@ pub enum DomainEventType {
     TitleAdded,
     TitleUpdated,
     TitleRematched,
+    TitleMoved,
     TitleDeleted,
     ConfigurationChanged,
     DiscoverySearchCompleted,
@@ -3270,6 +3275,7 @@ impl DomainEventType {
             Self::TitleAdded => "title_added",
             Self::TitleUpdated => "title_updated",
             Self::TitleRematched => "title_rematched",
+            Self::TitleMoved => "title_moved",
             Self::TitleDeleted => "title_deleted",
             Self::ConfigurationChanged => "configuration_changed",
             Self::DiscoverySearchCompleted => "discovery_search_completed",
@@ -3321,6 +3327,7 @@ impl DomainEventType {
             "title_added" => Some(Self::TitleAdded),
             "title_updated" => Some(Self::TitleUpdated),
             "title_rematched" => Some(Self::TitleRematched),
+            "title_moved" => Some(Self::TitleMoved),
             "title_deleted" => Some(Self::TitleDeleted),
             "configuration_changed" => Some(Self::ConfigurationChanged),
             "discovery_search_completed" => Some(Self::DiscoverySearchCompleted),
@@ -3461,6 +3468,26 @@ pub struct TitleAddedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleUpdatedEventData {
     pub title: TitleContextSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleMovedEventData {
+    pub title: TitleContextSnapshot,
+    pub operation_id: String,
+    pub operation_type: String,
+    pub mode: String,
+    pub source_title_id: String,
+    pub source_title_name: String,
+    pub source_library_id: String,
+    pub source_library_name: String,
+    pub destination_library_id: String,
+    pub destination_library_name: String,
+    pub source_root_id: String,
+    pub destination_root_id: String,
+    pub source_path: Option<String>,
+    pub destination_path: Option<String>,
+    pub completed_with_warnings: bool,
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4028,6 +4055,7 @@ pub enum DomainEventPayload {
     TitleAdded(TitleAddedEventData),
     TitleUpdated(TitleUpdatedEventData),
     TitleRematched(TitleRematchedEventData),
+    TitleMoved(TitleMovedEventData),
     TitleDeleted(TitleDeletedEventData),
     ConfigurationChanged(ConfigurationChangedEventData),
     DiscoverySearchCompleted(DiscoverySearchCompletedEventData),
@@ -4081,6 +4109,7 @@ impl DomainEventPayload {
             Self::TitleAdded(_) => DomainEventType::TitleAdded,
             Self::TitleUpdated(_) => DomainEventType::TitleUpdated,
             Self::TitleRematched(_) => DomainEventType::TitleRematched,
+            Self::TitleMoved(_) => DomainEventType::TitleMoved,
             Self::TitleDeleted(_) => DomainEventType::TitleDeleted,
             Self::ConfigurationChanged(_) => DomainEventType::ConfigurationChanged,
             Self::DiscoverySearchCompleted(_) => DomainEventType::DiscoverySearchCompleted,

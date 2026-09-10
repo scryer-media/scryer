@@ -838,6 +838,23 @@ async fn an_adoption_cancels_at_a_title_boundary_and_leaves_finished_titles_alon
         fixture.root_a_id,
         "the title the cancel stopped short of is untouched"
     );
+    for (title, count) in [(&first, 1), (&second, 0)] {
+        let history = fixture
+            .app
+            .list_title_history_for_title(
+                &fixture.user,
+                &title.id,
+                Some(&[TitleHistoryEventType::TitleMoved]),
+                50,
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            history.total_count, count,
+            "only the completed title gets move history"
+        );
+    }
 }
 
 /// FR-033/FR-092: an interrupted adoption picks up from its last checkpoint and

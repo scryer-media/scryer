@@ -411,6 +411,7 @@ fn sanitize_history_json_value(value: Value) -> Value {
 fn serialize_title_history_data(payload: &DomainEventPayload) -> Option<String> {
     let value = match payload {
         DomainEventPayload::TitleRematched(data) => serde_json::to_value(data).ok()?,
+        DomainEventPayload::TitleMoved(data) => serde_json::to_value(data).ok()?,
         _ => serde_json::to_value(payload).ok()?,
     };
 
@@ -773,6 +774,42 @@ pub(crate) fn title_history_record_from_domain_event(
             None,
             None,
             None,
+        ),
+        DomainEventPayload::TitleMoved(data) => (
+            Some(data.title.title_name.clone()),
+            Some(data.title.facet.clone()),
+            TitleHistoryEventType::TitleMoved,
+            Some(data.source_title_name.clone()),
+            Some(if data.source_library_id != data.destination_library_id {
+                format!(
+                    "{} → {}",
+                    data.source_library_name, data.destination_library_name
+                )
+            } else {
+                format!(
+                    "{} → {}",
+                    data.source_path
+                        .as_deref()
+                        .unwrap_or(&data.source_library_name),
+                    data.destination_path
+                        .as_deref()
+                        .unwrap_or(&data.destination_library_name)
+                )
+            }),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            data.source_path.clone(),
+            data.destination_path.clone(),
         ),
         DomainEventPayload::TitleUpdated(_) => return None,
         _ => return None,

@@ -2,6 +2,7 @@ import type { TitleHistoryEvent } from "@/lib/types";
 import { LazyCodeEditor } from "@/components/common/lazy-code-editor";
 import { formatSanitizedHistoryValue } from "@/lib/utils/history-redaction";
 import { cn } from "@/lib/utils";
+import { titleMoveHistoryDetails } from "@/lib/utils/history-moves";
 
 const friendlyKeys: Record<string, string> = {
   import_id: "Import ID",
@@ -101,6 +102,10 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
   hasDetail: boolean;
 } {
   const data = parseDataJson(event.dataJson);
+  const moveDetails = titleMoveHistoryDetails(event);
+  if (moveDetails) {
+    return { structuredDetails: moveDetails, rawDetails: [], hasDetail: true };
+  }
   const structuredDetails = [
     event.importId ? { key: "import_id", value: event.importId } : null,
     event.downloadId

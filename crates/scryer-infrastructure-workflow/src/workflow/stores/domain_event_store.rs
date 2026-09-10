@@ -30,6 +30,14 @@ impl DomainEventRepository for DomainEventStore {
             .ok_or_else(|| AppError::Repository("failed to append domain event".into()))
     }
 
+    async fn append_once(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        append_domain_events_once(&self.datastore, vec![event])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::Repository("failed to append domain event".into()))
+    }
+
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
         append_domain_events(&self.datastore, events).await
     }
@@ -296,6 +304,66 @@ mod title_history_filter_tests {
         event.event_id = event_id.to_string();
         event.payload = payload;
         event
+    }
+
+    #[tokio::test]
+    async fn title_move_history_is_idempotent_and_filterable() {
+        let store = store().await;
+        let event = event_with_payload(
+            "location:op:title-1",
+            DomainEventPayload::TitleMoved(scryer_domain::TitleMovedEventData {
+                title: title_snapshot(),
+                operation_id: "op".into(),
+                operation_type: "root_move".into(),
+                mode: "move_with_scryer".into(),
+                source_title_id: "title-1".into(),
+                source_title_name: "Projection Test".into(),
+                source_library_id: "library".into(),
+                source_library_name: "Movies".into(),
+                destination_library_id: "library".into(),
+                destination_library_name: "Movies".into(),
+                source_root_id: "old".into(),
+                destination_root_id: "new".into(),
+                source_path: Some("/old/Film".into()),
+                destination_path: Some("/new/Film".into()),
+                completed_with_warnings: true,
+                detail: Some("Kept both versions of season.nfo".into()),
+            }),
+        );
+        let (first, replay) = tokio::join!(
+            store.append_once(event.clone()),
+            store.append_once(event.clone())
+        );
+        let first = first.unwrap();
+        assert_eq!(first, replay.unwrap());
+        let mut changed_replay = event.clone();
+        changed_replay.occurred_at += chrono::Duration::hours(1);
+        assert_eq!(store.append_once(changed_replay).await.unwrap(), first);
+        assert!(
+            store.append(event).await.is_err(),
+            "ordinary append still rejects duplicate IDs"
+        );
+        for filter in [None, Some(&[TitleHistoryEventType::TitleMoved][..])] {
+            let page = store
+                .list_title_history_page_events(filter, Some(&["title-1".into()]), None, 50, 0)
+                .await
+                .unwrap();
+            assert_eq!(page, vec![first.clone()]);
+            assert_eq!(
+                store
+                    .count_title_history_page_events(filter, None, None)
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert!(
+                store
+                    .list_title_history_page_events(filter, None, None, 50, 1)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     /// Filtering the history page by "download ignored" used to push a literal
