@@ -489,22 +489,6 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
     [updateTrackedRulePackSettings],
   );
 
-  const updateTrackedRulePackMemberPriority = useCallback(
-    async (pack: TrackedRulePackRecord, member: TrackedRulePackMember, priority: number) => {
-      if (member.removed || !member.ruleSetId) return false;
-      return updateTrackedRulePackSettings(
-        pack,
-        {
-          members: pack.members.map((current) => current.templateId === member.templateId
-            ? { ...current, priority }
-            : current),
-        },
-        member.ruleSetId,
-      );
-    },
-    [updateTrackedRulePackSettings],
-  );
-
   const deleteRuleSet = async (record: RuleSetRecord) => {
     setPendingDeleteRuleSet(record);
   };
@@ -772,7 +756,6 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
             onSetAutoUpdate={(pack, enabled) => updateTrackedRulePackSettings(pack, { autoUpdate: enabled })}
             onUninstall={uninstallTrackedRulePack}
             onToggleMember={toggleTrackedRulePackMember}
-            onUpdateMemberPriority={updateTrackedRulePackMemberPriority}
             onCopyMember={(member) => void requestTrackedRuleCopy(member)}
           />
         }

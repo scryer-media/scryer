@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
-import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -63,7 +62,6 @@ type TrackedRulePacksSectionProps = {
   onSetAutoUpdate: (pack: TrackedRulePackRecord, enabled: boolean) => Promise<boolean>;
   onUninstall: (pack: TrackedRulePackRecord) => Promise<void>;
   onToggleMember: (pack: TrackedRulePackRecord, member: TrackedRulePackMember) => Promise<boolean>;
-  onUpdateMemberPriority: (pack: TrackedRulePackRecord, member: TrackedRulePackMember, priority: number) => Promise<boolean>;
   onCopyMember: (member: TrackedRulePackMember) => void;
 };
 
@@ -98,13 +96,6 @@ function ChangeSummary({ preview }: { preview: TrackedRulePackPreview }) {
   );
 }
 
-const MIN_I32 = -(2 ** 31);
-const MAX_I32 = 2 ** 31 - 1;
-
-export function isI32(value: number): boolean {
-  return Number.isInteger(value) && value >= MIN_I32 && value <= MAX_I32;
-}
-
 export function TrackedRulePacksSection({
   packs,
   canManage,
@@ -115,7 +106,6 @@ export function TrackedRulePacksSection({
   onSetAutoUpdate,
   onUninstall,
   onToggleMember,
-  onUpdateMemberPriority,
   onCopyMember,
 }: TrackedRulePacksSectionProps) {
   const dateTimeFormat = useUiDateTimeFormat();
@@ -124,12 +114,7 @@ export function TrackedRulePacksSection({
     changes: TrackedRulePackPreview;
   } | null>(null);
   const [pendingUninstall, setPendingUninstall] = React.useState<TrackedRulePackRecord | null>(null);
-  const [priorityDrafts, setPriorityDrafts] = React.useState<Record<string, string>>({});
   const [expandedPackIds, setExpandedPackIds] = React.useState<Set<string>>(() => new Set());
-
-  React.useEffect(() => {
-    setPriorityDrafts({});
-  }, [packs]);
 
   if (packs.length === 0) return null;
 
@@ -200,7 +185,6 @@ export function TrackedRulePacksSection({
                         <TableHead className="w-[28%]">Rule</TableHead>
                         <TableHead>Description</TableHead>
                         <TableHead className="w-32">Facets</TableHead>
-                        <TableHead className="w-24 text-center">Priority</TableHead>
                         <TableHead className="w-20 text-center">Enabled</TableHead>
                         <TableHead className="w-20 text-right">Actions</TableHead>
                       </TableRow></TableHeader>
@@ -208,24 +192,10 @@ export function TrackedRulePacksSection({
                   {pack.members.map((member) => {
                     const memberBusy = busy || mutatingRuleSetId === member.ruleSetId;
                     const missingRule = member.enabled === null || member.priority === null || member.name === null;
-                    const priorityKey = `${pack.packId}:${member.templateId}`;
-                    const priorityValue = priorityDrafts[priorityKey] ?? String(member.priority ?? 0);
                     return <TableRow key={member.templateId} data-ui="settings-table-row">
                       <TableCell className="font-medium">{member.name ?? member.templateId}{member.removed ? <Badge tone="neutral" className="ml-2">Removed upstream</Badge> : null}</TableCell>
                       <TableCell className="text-muted-foreground">{member.description || "—"}</TableCell>
                       <TableCell><FacetBadges facets={member.appliedFacets} /></TableCell>
-                      <TableCell><Input {...signedIntegerInputProps} aria-label={`Priority: ${member.name ?? member.templateId}`} value={priorityValue} disabled={!canManage || member.removed || missingRule || memberBusy} onChange={(event) => setPriorityDrafts((current) => ({ ...current, [priorityKey]: event.target.value }))} onBlur={(event) => {
-                        const priority = Number(event.currentTarget.value);
-                        if (!isI32(priority)) {
-                          setPriorityDrafts((current) => ({ ...current, [priorityKey]: String(member.priority ?? 0) }));
-                          return;
-                        }
-                        if (priority !== member.priority) {
-                          void onUpdateMemberPriority(pack, member, priority).then((updated) => {
-                            if (!updated) setPriorityDrafts((current) => ({ ...current, [priorityKey]: String(member.priority ?? 0) }));
-                          });
-                        }
-                      }} /></TableCell>
                       <TableCell className="text-center"><Checkbox aria-label={`Enabled: ${member.name ?? member.templateId}`} checked={member.enabled ?? false} disabled={!canManage || member.removed || missingRule || memberBusy} onCheckedChange={() => void onToggleMember(pack, member)} /></TableCell>
                       <TableCell className="text-right">{canManage ? <IconButton id={selectorId("settings-tracked-rule-pack-copy", member.templateId)} label={`Copy ${member.name ?? member.templateId} as custom`} tone="neutral" disabled={missingRule || memberBusy} onClick={() => onCopyMember(member)}><Copy className="h-4 w-4" /></IconButton> : null}</TableCell>
                     </TableRow>;
