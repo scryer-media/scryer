@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
 import {
-  BadgeCheck,
   Database,
   Folder,
   FolderInput,
@@ -9,6 +8,7 @@ import {
   Languages,
   Popcorn,
   RotateCcw,
+  SlidersVertical,
   Tag,
 } from "lucide-react";
 import {
@@ -269,7 +269,7 @@ export function TitleOptionsSettingsGrid({
         </colgroup>
         <tbody>
           <SettingsRow
-            icon={BadgeCheck}
+            icon={SlidersVertical}
             label={t("title.qualityProfile")}
             effective={effectiveQualityProfile}
           >
@@ -282,7 +282,7 @@ export function TitleOptionsSettingsGrid({
               }
               disabled={saving || qualityProfiles.length === 0}
             >
-              <SelectTrigger id={`${idPrefix}-quality-profile`} className="h-9 w-full">
+              <SelectTrigger id={`${idPrefix}-quality-profile`} className="h-9 w-[70%]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -341,7 +341,7 @@ export function TitleOptionsSettingsGrid({
               >
                 <SelectTrigger
                   id={`${idPrefix}-root-folder`}
-                  className="h-9 w-full font-[var(--font-code)] text-sm"
+                  className="h-9 w-[70%] font-[var(--font-code)] text-sm"
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -380,7 +380,7 @@ export function TitleOptionsSettingsGrid({
                 }
                 disabled={saving}
               >
-                <SelectTrigger id={`${idPrefix}-season-folder`} className="h-9 w-full">
+                <SelectTrigger id={`${idPrefix}-season-folder`} className="h-9 w-[70%]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -404,6 +404,7 @@ export function TitleOptionsSettingsGrid({
                   onChange={(codes) => void handleRequiredAudioChange(codes)}
                   compact
                   disabled={audioSaving}
+                  buttonClassName="w-[70%]"
                 />
               </div>
               {hasAudioOverride ? (
@@ -421,7 +422,7 @@ export function TitleOptionsSettingsGrid({
           </SettingsRow>
 
           <SettingsRow
-            icon={Database}
+            icon={Languages}
             label={t("settings.libraryMetadataLanguageLabel")}
             effective={getLanguageLabel(effectiveMetadataLanguage)}
           >
@@ -434,7 +435,7 @@ export function TitleOptionsSettingsGrid({
               }
               disabled={saving}
             >
-              <SelectTrigger id={`${idPrefix}-metadata-language`} className="h-9 w-full">
+              <SelectTrigger id={`${idPrefix}-metadata-language`} className="h-9 w-[70%]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -464,7 +465,7 @@ export function TitleOptionsSettingsGrid({
                   }
                   disabled={saving}
                 >
-                  <SelectTrigger id={`${idPrefix}-filler-policy`} className="h-9 w-full">
+                  <SelectTrigger id={`${idPrefix}-filler-policy`} className="h-9 w-[70%]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -489,7 +490,7 @@ export function TitleOptionsSettingsGrid({
                   }
                   disabled={saving}
                 >
-                  <SelectTrigger id={`${idPrefix}-recap-policy`} className="h-9 w-full">
+                  <SelectTrigger id={`${idPrefix}-recap-policy`} className="h-9 w-[70%]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
