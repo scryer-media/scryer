@@ -617,7 +617,7 @@ export const TitleTable = React.memo(function TitleTable({
             selectionMode && "cursor-pointer",
           )}
         >
-          <TableCell className="px-0 align-middle">
+          <TableCell className="pl-3 pr-0 align-middle">
             {/* Centred by the flex row rather than by mx-auto, which does
                 nothing to the inline-block button Radix renders. */}
             <div className="flex items-center justify-center">
@@ -924,15 +924,16 @@ export const TitleTable = React.memo(function TitleTable({
   const titleTableHeader = (
     <TableHeader>
       <TableRow className={TITLE_TABLE_HEADER_ROW_CLASS}>
-        <TableHead className="w-12 bg-[var(--scry-surfD)] text-center">
-          <Checkbox
-            checked={selectAllState}
-            onCheckedChange={(checked) => onToggleSelectAll(checked === true)}
-            aria-label={t("title.selectAllTitles")}
-            disabled={bulkActionBusy}
-            size="table"
-            className="mx-auto"
-          />
+        <TableHead className="w-12 bg-[var(--scry-surfD)] pl-3 pr-0">
+          <div className="flex items-center justify-center">
+            <Checkbox
+              checked={selectAllState}
+              onCheckedChange={(checked) => onToggleSelectAll(checked === true)}
+              aria-label={t("title.selectAllTitles")}
+              disabled={bulkActionBusy}
+              size="table"
+            />
+          </div>
         </TableHead>
         {renderSortableHeader(
           "name",
