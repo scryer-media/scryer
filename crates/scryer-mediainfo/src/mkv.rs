@@ -3709,4 +3709,266 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(matches!(error, MediaInfoError::Parse(message) if message.contains("ebml header")));
     }
+
+    // A virtual sparse file serves real EBML headers without allocating or
+    // writing gigabytes. Repeated clusters model a large remux on a NAS.
+    struct SparseMkv {
+        head: Vec<u8>,
+        cluster: Vec<u8>,
+        cluster_span: u64,
+        cluster_count: u64,
+        tail: Vec<u8>,
+        position: u64,
+        reads: usize,
+        seeks: usize,
+        bytes: usize,
+    }
+
+    impl crate::source::MediaSource for SparseMkv {
+        fn len(&self) -> u64 {
+            self.head.len() as u64 + self.cluster_span * self.cluster_count + self.tail.len() as u64
+        }
+    }
+
+    impl Read for SparseMkv {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            use crate::source::MediaSource;
+            self.reads += 1;
+            if self.reads > 1024 {
+                return Err(std::io::Error::other("unexpected whole-file traversal"));
+            }
+            let count =
+                (self.len().saturating_sub(self.position)).min(output.len() as u64) as usize;
+            let head_end = self.head.len() as u64;
+            let tail_start = head_end + self.cluster_span * self.cluster_count;
+            let mut written = 0;
+            while written < count {
+                let (data, offset, available) = if self.position < head_end {
+                    (&self.head, self.position, head_end - self.position)
+                } else if self.position < tail_start {
+                    let offset = (self.position - head_end) % self.cluster_span;
+                    (&self.cluster, offset, self.cluster_span - offset)
+                } else {
+                    (
+                        &self.tail,
+                        self.position - tail_start,
+                        self.len() - self.position,
+                    )
+                };
+                let length = available.min((count - written) as u64) as usize;
+                output[written..written + length].fill(0);
+                if offset < data.len() as u64 {
+                    let copied = length.min(data.len() - offset as usize);
+                    output[written..written + copied]
+                        .copy_from_slice(&data[offset as usize..offset as usize + copied]);
+                }
+                self.position += length as u64;
+                written += length;
+            }
+            self.bytes += count;
+            Ok(count)
+        }
+    }
+
+    impl Seek for SparseMkv {
+        fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
+            use crate::source::MediaSource;
+            let position = match from {
+                SeekFrom::Start(position) => i128::from(position),
+                SeekFrom::Current(offset) => i128::from(self.position) + i128::from(offset),
+                SeekFrom::End(offset) => i128::from(self.len()) + i128::from(offset),
+            };
+            self.position = u64::try_from(position).map_err(std::io::Error::other)?;
+            self.seeks += 1;
+            Ok(self.position)
+        }
+    }
+
+    fn sparse_catalog_mkv(cluster_count: u64, indexed: bool, with_duration: bool) -> SparseMkv {
+        let mut info = make_uint_element(&[0x2a, 0xd7, 0xb1], 1_000_000);
+        if with_duration {
+            info.extend(make_ebml_element(&[0x44, 0x89], &600_000_f64.to_be_bytes()));
+        }
+        let mut metadata = make_ebml_element(&[0x15, 0x49, 0xa9, 0x66], &info);
+        let track = [
+            make_uint_element(&[0xd7], 1),
+            make_uint_element(&[0x73, 0xc5], 1),
+            make_uint_element(&[0x83], 1),
+            make_uint_element(&[0x23, 0xe3, 0x83], 40_000_000),
+            make_ebml_element(&[0x86], b"V_MPEG4/ISO/AVC"),
+            make_ebml_element(
+                &[0xe0],
+                &[
+                    make_uint_element(&[0xb0], 1920),
+                    make_uint_element(&[0xba], 1080),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat();
+        metadata.extend(make_ebml_element(
+            &[0x16, 0x54, 0xae, 0x6b],
+            &make_ebml_element(&[0xae], &track),
+        ));
+        let chapters = make_ebml_element(
+            &[0x10, 0x43, 0xa7, 0x70],
+            &make_ebml_element(
+                &[0x45, 0xb9],
+                &make_chapter_atom(
+                    0,
+                    &make_ebml_element(&[0x80], &make_ebml_element(&[0x85], b"Opening")),
+                ),
+            ),
+        );
+        let tags = make_ebml_element(
+            &[0x12, 0x54, 0xc3, 0x67],
+            &make_ebml_element(
+                &[0x73, 0x73],
+                &[
+                    make_ebml_element(&[0x63, 0xc0], &make_uint_element(&[0x63, 0xc5], 1)),
+                    make_ebml_element(
+                        &[0x67, 0xc8],
+                        &[
+                            make_ebml_element(&[0x45, 0xa3], b"BPS"),
+                            make_ebml_element(&[0x44, 0x87], b"8000000"),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            ),
+        );
+        let attachments = make_ebml_element(
+            &[0x19, 0x41, 0xa4, 0x69],
+            &make_ebml_element(
+                &[0x61, 0xa7],
+                &[
+                    make_uint_element(&[0x46, 0xae], 7),
+                    make_ebml_element(&[0x46, 0x6e], b"font.ttf"),
+                    make_ebml_element(&[0x46, 0x60], b"font/ttf"),
+                    make_ebml_element(&[0x46, 0x5c], &[0; 16]),
+                ]
+                .concat(),
+            ),
+        );
+        let cluster_span = 4 * 1024 * 1024;
+        let seek_head = |base: u64| {
+            let entries = [
+                (EBML_ID_CHAPTERS, base),
+                (0x1254_c367, base + chapters.len() as u64),
+                (
+                    0x1941_a469,
+                    base + chapters.len() as u64 + tags.len() as u64,
+                ),
+            ]
+            .into_iter()
+            .flat_map(|(id, position)| {
+                make_ebml_element(
+                    &[0x4d, 0xbb],
+                    &[
+                        make_ebml_element(&[0x53, 0xab], &id.to_be_bytes()),
+                        make_ebml_element(&[0x53, 0xac], &position.to_be_bytes()),
+                    ]
+                    .concat(),
+                )
+            })
+            .collect::<Vec<_>>();
+            make_ebml_element(&[0x11, 0x4d, 0x9b, 0x74], &entries)
+        };
+        if indexed {
+            let base =
+                metadata.len() as u64 + seek_head(0).len() as u64 + cluster_span * cluster_count;
+            metadata.extend(seek_head(base));
+        }
+        let tail = [chapters, tags, attachments].concat();
+        let head = [
+            make_ebml_element(&[0x1a, 0x45, 0xdf, 0xa3], &[]),
+            make_ebml_element_with_declared_size(
+                &[0x18, 0x53, 0x80, 0x67],
+                metadata.len() as u64 + cluster_span * cluster_count + tail.len() as u64,
+                &metadata,
+            ),
+        ]
+        .concat();
+        let mut blocks = make_uint_element(&[0xe7], 0);
+        for index in 0..16 {
+            blocks.extend(make_simple_block(1, index * 40, 0, &[0]));
+        }
+        // Four-byte size fields keep both the Cluster and padding headers eight/five bytes long.
+        let padding_size = cluster_span - 8 - blocks.len() as u64 - 5;
+        blocks.extend(make_ebml_element_with_declared_size(
+            &[0xec],
+            padding_size,
+            &[],
+        ));
+        let cluster = make_ebml_element_with_declared_size(
+            &[0x1f, 0x43, 0xb6, 0x75],
+            cluster_span - 8,
+            &blocks,
+        );
+        SparseMkv {
+            head,
+            cluster,
+            cluster_span,
+            cluster_count,
+            tail,
+            position: 0,
+            reads: 0,
+            seeks: 0,
+            bytes: 0,
+        }
+    }
+
+    #[test]
+    fn catalog_mkv_inventory_io_is_independent_of_remux_size() {
+        let mut baseline = None;
+        for cluster_count in [256, 7680] {
+            // 1 GiB and 30 GiB of clusters.
+            let mut source = sparse_catalog_mkv(cluster_count, true, true);
+            let analysis =
+                crate::analyze_source(&mut source, "mkv", crate::AnalyzeOptions::default())
+                    .unwrap();
+            assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+            assert_eq!(analysis.duration_seconds, Some(600));
+            assert_eq!(analysis.video_bitrate_kbps, Some(8000));
+            assert_eq!(
+                analysis.details.chapters[0].title.as_deref(),
+                Some("Opening")
+            );
+            assert_eq!(
+                analysis.details.attachments[0].name.as_deref(),
+                Some("font.ttf")
+            );
+            assert!(analysis.details.report.budget_exhausted);
+            assert!(
+                analysis
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "mkv_inventory_coverage_limit")
+            );
+            assert!(source.reads < 256, "{} reads", source.reads);
+            assert!(source.seeks < 256, "{} seeks", source.seeks);
+            assert!(source.bytes < 2 * 1024 * 1024, "{} bytes", source.bytes);
+            let costs = (source.reads, source.seeks, source.bytes);
+            eprintln!("{cluster_count} clusters: {costs:?} (reads, seeks, bytes)");
+            if let Some(previous) = baseline {
+                assert_eq!(costs, previous);
+            }
+            baseline = Some(costs);
+        }
+    }
+
+    #[test]
+    fn unindexed_large_mkv_does_not_invent_final_duration_or_chapter_absence() {
+        let mut source = sparse_catalog_mkv(7680, false, false);
+        let analysis =
+            crate::analyze_source(&mut source, "mkv", crate::AnalyzeOptions::default()).unwrap();
+        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert!(analysis.duration_seconds.is_none());
+        assert!(analysis.num_chapters.is_none());
+        assert!(analysis.details.report.budget_exhausted);
+        assert!(source.reads < 256, "{} reads", source.reads);
+    }
 }

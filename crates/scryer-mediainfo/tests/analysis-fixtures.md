@@ -70,6 +70,14 @@ The September 9, 2026 review found that fragment timing's sample limit did not b
 
 The application review also added a source-version check after asynchronous disc episode validation during scan persistence. Release integration retains physical-image size verification separately from title-specific scoring, incorporates final rule scores for each mapped title, and assigns the analysis migration version 229 after the release's migrations 227 and 228.
 
+## Catalog scan I/O
+
+Production probing exists to obtain Scryer's identification and scoring facts quickly and accurately. It is not an exhaustive media parser. Missing optional metadata must remain unknown rather than trigger a whole-file search. Byte limits alone do not bound NAS latency: regression tests must also bound read and seek counts.
+
+MKV supplemental inventory searches at most an 8 MiB prefix and 128 sequential element headers, then follows at most 32 distinct metadata/SeekHead locations. It shares a 256-header I/O budget for indexed metadata, attachments, and duration recovery, in addition to its existing metadata byte and in-memory element limits. It skips cluster and attachment payloads. Incomplete traversal is reported; an unobserved final cluster cannot establish duration.
+
+`catalog_mkv_inventory_io_is_independent_of_remux_size` runs the catalog profile on virtual 1 GiB and 30 GiB MKVs with tail-indexed chapters, attachments, and stream statistics. Both use 47 reads, 67 seeks, and 475,944 bytes at this checkpoint. The test caps operations and requires identical costs across file sizes; these are deterministic parser I/O measurements, not live NAS throughput measurements. Unindexed large-file duration and chapter absence remain unknown.
+
 ## Differential checks
 
 Run the opt-in reference check explicitly:
