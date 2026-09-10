@@ -404,6 +404,7 @@ export function TitleOptionsSettingsGrid({
                   onChange={(codes) => void handleRequiredAudioChange(codes)}
                   compact
                   disabled={audioSaving}
+                  className="!flex w-full justify-end"
                   buttonClassName="w-[70%]"
                 />
               </div>
