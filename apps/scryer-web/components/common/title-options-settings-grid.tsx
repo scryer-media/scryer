@@ -146,7 +146,6 @@ export function TitleOptionsSettingsGrid({
   const [saving, setSaving] = React.useState(false);
   const [audioSaving, setAudioSaving] = React.useState(false);
   const requiredAudioLanguages = title.effectiveRequiredAudioLanguages ?? [];
-  const hasAudioOverride = title.inheritsRequiredAudioLanguages === false;
   const currentProfileId = title.qualityProfileId?.trim() || INHERIT_VALUE;
   const currentRootFolderId = title.rootFolderId?.trim() || "";
   const currentSeasonFolder =
@@ -197,25 +196,6 @@ export function TitleOptionsSettingsGrid({
       const { error } = await client
         .mutation(setTitleRequiredAudioMutation, {
           input: { titleId: title.id, facet: title.facet, languages },
-        })
-        .toPromise();
-      if (error) {
-        throw error;
-      }
-      await onTitleChanged?.();
-    } catch {
-      setGlobalStatus(t("status.failedToUpdate"));
-    } finally {
-      setAudioSaving(false);
-    }
-  };
-
-  const handleResetAudioOverride = async () => {
-    setAudioSaving(true);
-    try {
-      const { error } = await client
-        .mutation(setTitleRequiredAudioMutation, {
-          input: { titleId: title.id, facet: title.facet, languages: null },
         })
         .toPromise();
       if (error) {
@@ -397,28 +377,15 @@ export function TitleOptionsSettingsGrid({
             label={t("title.requiredAudioLanguages")}
             effective={effectiveAudioLanguages}
           >
-            <div className="space-y-1">
-              <div id={`${idPrefix}-required-audio-languages`} className="flex justify-end">
-                <AudioLanguagePicker
-                  value={requiredAudioLanguages}
-                  onChange={(codes) => void handleRequiredAudioChange(codes)}
-                  compact
-                  disabled={audioSaving}
-                  className="!flex w-full justify-end"
-                  buttonClassName="w-[70%]"
-                />
-              </div>
-              {hasAudioOverride ? (
-                <button
-                  id={`${idPrefix}-required-audio-reset`}
-                  type="button"
-                  className="text-xs text-primary hover:underline"
-                  onClick={() => void handleResetAudioOverride()}
-                  disabled={audioSaving}
-                >
-                  {t("title.requiredAudioResetInherit")}
-                </button>
-              ) : null}
+            <div id={`${idPrefix}-required-audio-languages`} className="flex justify-end">
+              <AudioLanguagePicker
+                value={requiredAudioLanguages}
+                onChange={(codes) => void handleRequiredAudioChange(codes)}
+                compact
+                disabled={audioSaving}
+                className="!flex w-full justify-end"
+                buttonClassName="w-[70%]"
+              />
             </div>
           </SettingsRow>
 
