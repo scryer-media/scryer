@@ -624,7 +624,7 @@ export const TitleTable = React.memo(function TitleTable({
               onCheckedChange={() => onToggleSelected(item.id)}
               aria-label={t("title.selectTitle", { name: item.name })}
               disabled={bulkActionBusy}
-              size="table"
+              size="large"
               className="mx-auto"
             />
           </TableCell>
@@ -927,7 +927,7 @@ export const TitleTable = React.memo(function TitleTable({
             onCheckedChange={(checked) => onToggleSelectAll(checked === true)}
             aria-label={t("title.selectAllTitles")}
             disabled={bulkActionBusy}
-            size="table"
+            size="large"
             className="mx-auto"
           />
         </TableHead>
