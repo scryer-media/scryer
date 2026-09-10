@@ -3015,7 +3015,7 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
             )),
         )
             .into_response(),
-        AppError::PluginInstallInProgress(message) => {
+        AppError::PluginInstallInProgress(message) | AppError::LocationOperationBusy(message) => {
             (StatusCode::CONFLICT, Json(ErrorResponse::new(message))).into_response()
         }
         AppError::NotFound(message) => {
@@ -3969,6 +3969,21 @@ mod tests {
         );
         assert!(!body_text.contains("database password"));
         assert!(!body_text.contains("upstream detail"));
+    }
+
+    #[tokio::test]
+    async fn location_operation_busy_response_is_an_actionable_conflict() {
+        let message = "title is locked by a library operation";
+        let response = map_app_error(AppError::LocationOperationBusy(message.into()));
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        let body: Value = serde_json::from_slice(&body).expect("response body is json");
+        assert_eq!(body["error"], message);
+        assert!(body.get("error_id").is_none());
     }
 
     #[tokio::test]
