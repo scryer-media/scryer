@@ -1,15 +1,25 @@
 import * as React from "react";
-import { useClient } from "urql";
+import { useClient, useQuery } from "urql";
 import {
   ChevronDown,
   ChevronRight,
   Loader2,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { TitlePosterSlot } from "@/components/title-poster-slot";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Tooltip,
   TooltipContent,
@@ -34,17 +44,20 @@ import {
 } from "@/lib/location-operations";
 import {
   splitTransferPath,
+  transferArtworkRequest,
+  transferOperationProgress,
   transferTitleProgress,
   type TransferTitle,
 } from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
+import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 
 type Props = { operationId: string; onDismiss?: () => void };
 export function LocationOperationPanel(props: Props) {
   return <OperationPanel key={props.operationId} {...props} />;
 }
 
-function OperationPanel({ operationId }: Props) {
+function OperationPanel({ operationId, onDismiss }: Props) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -56,6 +69,21 @@ function OperationPanel({ operationId }: Props) {
   const summary = useLocationTransfer(operationId, null, true, refresh);
   const titles = useLocationTransfer(operationId, page, open, refresh);
   const operation = summary.snapshot?.operation;
+  const artworkRequest = transferArtworkRequest(
+    titles.snapshot?.titles.map((row) => row.titleId) ?? [],
+  );
+  const [artwork] = useQuery<
+    Record<string, { id: string; posterUrl: string | null } | null>
+  >({
+    ...artworkRequest,
+    pause: !open || !titles.snapshot?.titles.length,
+    requestPolicy: "cache-first",
+  });
+  const posters = new Map(
+    Object.values(artwork.data ?? {})
+      .filter((title) => title?.id)
+      .map((title) => [title!.id, title!.posterUrl]),
+  );
   React.useEffect(() => {
     setNow(Date.now());
   }, [summary.snapshot]);
@@ -115,7 +143,7 @@ function OperationPanel({ operationId }: Props) {
 
   const terminal = isTerminalOperationState(operation.state);
   const counters = operation.counters;
-  const progress = Math.floor(summary.snapshot.progressBasisPoints / 10) / 10;
+  const progress = transferOperationProgress(summary.snapshot);
   const eta =
     summary.connected && operation.state !== "QUEUED" && !terminal
       ? summary.snapshot.etaSeconds
@@ -124,28 +152,15 @@ function OperationPanel({ operationId }: Props) {
     titles.snapshot?.totalCount ?? summary.snapshot.totalCount,
   );
   const rows = titles.snapshot?.titles ?? [];
-  const countKeys = [
-    "merges",
-    "dedups",
-    "renames",
-    "noOps",
-    "unresolved",
-    "titlesBlocked",
-  ] as const;
-  const countLabels = [
-    "Merges",
-    "Dedups",
-    "Renames",
-    "NoOps",
-    "Unresolved",
-    "Blocked",
-  ];
 
   return (
-    <Card id="location-operation-panel">
-      <CardContent className="space-y-4 py-4">
+    <Card
+      id="location-operation-panel"
+      className="overflow-hidden rounded-[14px] border-[var(--scry-border2)] bg-[var(--scry-surfC)] shadow-none"
+    >
+      <CardContent className="space-y-4 p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+          <div className="flex flex-wrap items-center gap-3 text-base font-semibold text-[var(--scry-ink3)]">
             <span
               id="location-operation-type"
               data-operation-type={operation.operationType}
@@ -169,6 +184,18 @@ function OperationPanel({ operationId }: Props) {
             )}
           </div>
           <div className="flex gap-2">
+            {terminal && onDismiss && (
+              <Button
+                id="location-operation-dismiss"
+                variant="default"
+                size="default"
+                className="min-w-28 gap-2 font-semibold"
+                onClick={onDismiss}
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+                {t("move.transferDismiss")}
+              </Button>
+            )}
             {canCancelOperation(operation) && (
               <Button
                 id="location-operation-cancel"
@@ -211,6 +238,7 @@ function OperationPanel({ operationId }: Props) {
           <Progress
             value={progress}
             aria-label={t("move.transferOverallProgress")}
+            aria-valuetext={`${progress.toFixed(1)}%`}
           />
           <p
             id="location-operation-progress"
@@ -246,85 +274,84 @@ function OperationPanel({ operationId }: Props) {
                   {t("move.operationLoadFailed")}
                 </p>
               )}
-              <div className="overflow-x-auto">
-                <table className="w-full table-fixed text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-border">
-                      {[
-                        "Title",
-                        "Status",
-                        "Files",
-                        "CurrentFile",
-                        "Progress",
-                      ].map((column, index) => (
-                        <th
-                          key={column}
-                          className={`p-2 ${index === 3 ? "w-[30%]" : index === 2 || index === 4 ? "w-[12%]" : "w-[23%]"}`}
-                        >
-                          {t(`move.transferColumn${column}`)}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <TitleRow
-                        key={row.titleId}
-                        operationId={operationId}
-                        row={row}
-                      />
+              <Table
+                layout="fixed"
+                density="dense"
+                className="min-w-[800px]"
+                wrapperClassName="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
+              >
+                <TableHeader>
+                  <TableRow>
+                    {[
+                      "Title",
+                      "Status",
+                      "Files",
+                      "CurrentFile",
+                      "Progress",
+                    ].map((column, index) => (
+                      <TableHead
+                        key={column}
+                        className={
+                          index === 3
+                            ? "w-[30%]"
+                            : index === 2 || index === 4
+                              ? "w-[12%]"
+                              : "w-[23%]"
+                        }
+                      >
+                        {t(`move.transferColumn${column}`)}
+                      </TableHead>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((row) => (
+                    <TitleRow
+                      key={row.titleId}
+                      operationId={operationId}
+                      row={row}
+                      posterUrl={posters.get(row.titleId)}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
               {!titles.snapshot && (
                 <p className="text-xs text-muted-foreground">
                   {t("move.operationLoading")}
                 </p>
               )}
-              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>
-                  {t("move.transferRange", {
-                    from: rows.length ? page * 50 + 1 : 0,
-                    to: rows.length ? page * 50 + rows.length : 0,
-                    total,
-                  })}
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page === 0}
-                    onClick={() => setPage(page - 1)}
-                  >
-                    {t("move.transferPrevious")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!titles.snapshot?.hasMore}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    {t("move.transferNext")}
-                  </Button>
+              {total > 50 && (
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>
+                    {t("move.transferRange", {
+                      from: rows.length ? page * 50 + 1 : 0,
+                      to: rows.length ? page * 50 + rows.length : 0,
+                      total,
+                    })}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={page === 0}
+                      onClick={() => setPage(page - 1)}
+                    >
+                      {t("move.transferPrevious")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!titles.snapshot?.hasMore}
+                      onClick={() => setPage(page + 1)}
+                    >
+                      {t("move.transferNext")}
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
-        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          {countKeys.map((key, i) => (
-            <div
-              key={key}
-              className="rounded-lg border border-border px-2 py-1"
-            >
-              <dt className="text-xs text-muted-foreground">
-                {t(`move.counter${countLabels[i]}`)}
-              </dt>
-              <dd className="text-sm">{toCount(counters[key])}</dd>
-            </div>
-          ))}
-        </dl>
         {operation.detail && (
           <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-warning-border)] p-3 text-sm">
             <TriangleAlert className="h-4 w-4 shrink-0" />
@@ -344,9 +371,11 @@ function OperationPanel({ operationId }: Props) {
 function TitleRow({
   operationId,
   row,
+  posterUrl,
 }: {
   operationId: string;
   row: TransferTitle;
+  posterUrl?: string | null;
 }) {
   const client = useClient();
   const t = useTranslate();
@@ -378,11 +407,11 @@ function TitleRow({
   const path = row.currentFile ? splitTransferPath(row.currentFile) : null;
   return (
     <React.Fragment>
-      <tr
+      <TableRow
         id={`location-operation-checkpoint-${row.titleId}`}
-        className="border-b border-border align-top"
+        className="align-top"
       >
-        <td className="p-2">
+        <TableCell>
           <div className="flex items-start gap-1">
             {row.hasException && (
               <button
@@ -398,10 +427,25 @@ function TitleRow({
                 )}
               </button>
             )}
-            <span className="break-words">{row.name}</span>
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="h-[54px] w-9 shrink-0 overflow-hidden rounded-[6px] border border-[var(--scry-border2)] bg-[var(--scry-soft)]">
+                <TitlePosterSlot
+                  src={selectPosterVariantUrl(posterUrl, "w70")}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  emptyLabel={t("label.noArt")}
+                  fallbackTitle={row.name}
+                  fallbackShowText={false}
+                  loading="lazy"
+                />
+              </span>
+              <span className="min-w-0 break-words font-medium text-[var(--scry-ink3)]">
+                {row.name}
+              </span>
+            </span>
           </div>
-        </td>
-        <td className="p-2">
+        </TableCell>
+        <TableCell>
           <Badge tone={row.hasException ? "warning" : "neutral"}>
             {t(
               checkpointStateLabelKey(
@@ -417,11 +461,11 @@ function TitleRow({
               })}
             </p>
           )}
-        </td>
-        <td className="p-2 tabular-nums">
+        </TableCell>
+        <TableCell className="tabular-nums">
           {toCount(row.filesDone)}/{toCount(row.filesTotal)}
-        </td>
-        <td className="min-w-0 p-2">
+        </TableCell>
+        <TableCell className="min-w-0">
           {path && row.currentFile ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -452,27 +496,30 @@ function TitleRow({
           ) : (
             "—"
           )}
-        </td>
-        <td className="p-2 tabular-nums">
-          {Math.floor(transferTitleProgress(row))}%
+        </TableCell>
+        <TableCell className="tabular-nums">
+          {transferTitleProgress(row).toFixed(1)}%
           {row.verifying > 0 && (
             <p className="text-muted-foreground">
               {formatByteCount(toCount(row.verificationBytes))}
             </p>
           )}
-        </td>
-      </tr>
+        </TableCell>
+      </TableRow>
       {expanded && row.hasException && (
-        <tr id={`transfer-detail-${row.titleId}`}>
-          <td colSpan={5} className="break-words bg-muted/20 p-3 text-xs">
+        <TableRow id={`transfer-detail-${row.titleId}`}>
+          <TableCell
+            colSpan={5}
+            className="break-words bg-muted/20 p-3 text-xs"
+          >
             {detail ??
               t(
                 failed
                   ? "move.operationLoadFailed"
                   : "move.transferDetailPending",
               )}
-          </td>
-        </tr>
+          </TableCell>
+        </TableRow>
       )}
     </React.Fragment>
   );

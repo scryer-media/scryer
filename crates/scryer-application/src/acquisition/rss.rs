@@ -998,7 +998,11 @@ impl AppUseCase {
         // scope that is missing or below cutoff — never gated on a pre-existing
         // wanted row. The activity ledger row, when present, still supplies
         // upgrade state and is created on the first anchored write.
+        let locked_titles = self.location_owned_title_ids().await?;
         for (title_id, releases) in &matched_by_title {
+            if locked_titles.contains(title_id) {
+                continue;
+            }
             let title = match self.services.catalog.titles.get_by_id(title_id).await {
                 Ok(Some(t)) => t,
                 _ => continue,

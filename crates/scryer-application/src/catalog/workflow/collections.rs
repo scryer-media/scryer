@@ -1227,6 +1227,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::COLLECTION_CREATE_ENTRY,
+                &title_id,
+            )
+            .await?;
         if collection_type.trim().is_empty() {
             return Err(AppError::Validation("collection type is required".into()));
         }
@@ -1287,6 +1293,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::EPISODE_CREATE_ENTRY,
+                &title_id,
+            )
+            .await?;
         if episode_type.trim().is_empty() {
             return Err(AppError::Validation("episode type is required".into()));
         }

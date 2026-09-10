@@ -748,6 +748,10 @@ pub enum AppError {
     #[error("validation: {0}")]
     Validation(String),
 
+    /// A title mutation is deferred until its location operation releases ownership.
+    #[error("{0}")]
+    LocationOperationBusy(String),
+
     /// A previewed location plan was refused at confirmation time. A validation
     /// error in every other respect, but the refusal carries the reason as a
     /// code so the client can re-preview or unblock without reading prose

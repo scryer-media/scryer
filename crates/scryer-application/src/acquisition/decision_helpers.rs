@@ -23,12 +23,12 @@ pub(crate) fn extract_grabbed_release_title(raw: Option<&str>) -> Option<String>
 /// RSS, both task-runner submissions, catalog queueing) makes about a failed
 /// download submission: retry later without burning the release only for the
 /// typed `DownloadSubmitUnavailable` / `DownloadSubmitFailoverExhausted`
-/// failures. Message text is never inspected — an old
+/// failures, or a title temporarily locked by a location operation. Message text is never inspected — an old
 /// "all prioritized download clients failed" repository string, a rendered
 /// typed error wrapped in another error, or any near-match is a definitive
 /// failure, not failover evidence.
 pub(crate) fn is_download_submit_unavailable_error(err: &AppError) -> bool {
-    err.is_retryable_download_submit_failure()
+    err.is_retryable_download_submit_failure() || matches!(err, AppError::LocationOperationBusy(_))
 }
 
 #[derive(Clone, Debug)]

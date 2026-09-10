@@ -3,11 +3,27 @@ import test from "node:test";
 import {
   acceptTransferSnapshot,
   splitTransferPath,
+  transferArtworkRequest,
+  transferOperationProgress,
   transferTitleProgress,
   type TransferSnapshot,
   type TransferView,
   type TransferTitle,
 } from "./location-transfers.ts";
+
+test("artwork requests are bounded, parameterized, and stable across hot ordering", () => {
+  assert.deepEqual(
+    transferArtworkRequest(["b", "a", "a"]),
+    transferArtworkRequest(["a", "b"]),
+  );
+  const request = transferArtworkRequest(
+    Array.from({ length: 5000 }, (_, i) => `title-${i}`),
+  );
+  assert.equal(Object.keys(request.variables).length, 50);
+  assert.equal(request.query.includes("title-"), false);
+  assert.match(request.query, /title49: title\(id: \$id49\)/);
+  assert.deepEqual(transferArtworkRequest([]).variables, {});
+});
 
 const scope = { operationId: "op", page: null, requestGeneration: 1 };
 function snapshot(
@@ -99,9 +115,47 @@ test("file work gives placement and verification equal shares; no-op rows finish
     state: "VERIFYING",
   } as TransferTitle;
   assert.ok(Math.abs(transferTitleProgress(row) - 55) < 1e-10);
-  assert.equal(transferTitleProgress({ ...row, verificationBytes: 1000 }), 100);
+  assert.equal(
+    transferTitleProgress({ ...row, verificationBytes: 1000 }),
+    99.9,
+  );
   assert.equal(
     transferTitleProgress({ ...row, bytesTotal: 0, state: "SKIPPED" }),
+    100,
+  );
+});
+
+test("operation and title progress stay below 100 until finalization completes", () => {
+  for (const state of [
+    "VERIFYING",
+    "RECONCILING",
+    "CLEANING_UP",
+    "FAILED",
+    "CANCELED",
+  ] as const) {
+    const incoming = snapshot(1, 2, 10000);
+    incoming.operation.state = state;
+    assert.equal(transferOperationProgress(incoming), 99.9);
+    if (state !== "CANCELED") {
+      assert.equal(
+        transferTitleProgress({
+          bytesTotal: 100,
+          copyBytes: 100,
+          verificationBytes: 100,
+          state,
+        } as TransferTitle),
+        99.9,
+      );
+    }
+  }
+  const complete = snapshot(1, 3, 9999);
+  complete.operation.state = "COMPLETED";
+  assert.equal(transferOperationProgress(complete), 100);
+  assert.equal(
+    transferTitleProgress({
+      bytesTotal: 100,
+      state: "COMPLETED",
+    } as TransferTitle),
     100,
   );
 });

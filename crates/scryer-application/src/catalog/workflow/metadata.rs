@@ -296,6 +296,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_LANGUAGE_EDIT_ENTRY,
+                title_id,
+            )
+            .await?;
         let language = language
             .filter(|language| !language.trim().is_empty())
             .map(|language| {
@@ -559,6 +565,12 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_METADATA_EDIT_ENTRY,
+                id,
+            )
+            .await?;
         let _profile_reference_guard = self
             .runtime
             .catalog
@@ -637,11 +649,12 @@ impl AppUseCase {
         .await?;
         // Which file a title serves is part of the state an operation
         // reconciles at its title checkpoint (FR-084).
-        self.ensure_location_ownership_allows_title(
-            &crate::location::ownership_guard::MEDIA_FILE_PRIMARY_ENTRY,
-            &title.id,
-        )
-        .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MEDIA_FILE_PRIMARY_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         let media_files = self
             .services
@@ -767,6 +780,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_REMATCH_ENTRY,
+                title_id,
+            )
+            .await?;
         let (replacement_identity_ids, requested_movie_ref) = match existing_title.facet {
             MediaFacet::Movie => {
                 if target_smg_id.is_some_and(|id| id <= 0) {

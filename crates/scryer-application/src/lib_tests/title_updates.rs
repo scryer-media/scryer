@@ -3,6 +3,172 @@ use super::*;
 #[path = "title_tag_recovery_tests.rs"]
 mod title_tag_recovery_tests;
 
+#[tokio::test]
+async fn location_locked_title_refuses_metadata_monitoring_and_episode_edits() {
+    fn blocked<T>(result: AppResult<T>) {
+        let error = result.err().expect("moving title must be locked");
+        assert!(
+            matches!(error, AppError::LocationOperationBusy(_)),
+            "{error}"
+        );
+    }
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Moving Series".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let episode = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            Some(collection.id.clone()),
+            "standard".into(),
+            Some("1".into()),
+            Some("1".into()),
+            None,
+            Some("Original".into()),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    app.runtime.library.location_ownership.claim_all(
+        "move",
+        &[crate::location::ownership_guard::OwnedEntity::Title(
+            title.id.clone(),
+        )],
+    );
+
+    blocked(
+        app.update_title_metadata(&user, &title.id, Some("Changed".into()), None, None)
+            .await,
+    );
+    blocked(
+        app.set_title_metadata_language_override(&user, &title.id, Some("fra".into()))
+            .await,
+    );
+    blocked(app.set_title_monitored(&user, &title.id, false).await);
+    blocked(
+        app.set_title_monitor_selection(&user, &title.id, Some(None))
+            .await,
+    );
+    blocked(
+        app.set_collection_monitored(&user, &collection.id, false)
+            .await,
+    );
+    blocked(app.set_episode_monitored(&user, &episode.id, false).await);
+    blocked(
+        app.update_collection(
+            &user,
+            collection.id.clone(),
+            None,
+            None,
+            Some("Changed".into()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await,
+    );
+    blocked(
+        app.update_episode(
+            &user,
+            episode.id.clone(),
+            None,
+            None,
+            None,
+            None,
+            Some("Changed".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await,
+    );
+    blocked(
+        app.create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "2".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await,
+    );
+    blocked(
+        app.create_episode(
+            &user,
+            title.id.clone(),
+            Some(collection.id.clone()),
+            "standard".into(),
+            Some("2".into()),
+            Some("1".into()),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .await,
+    );
+
+    let unchanged = app.get_title(&user, &title.id).await.unwrap().unwrap();
+    assert_eq!(unchanged.name, "Moving Series");
+    assert!(unchanged.monitored);
+    let unchanged_episode = app
+        .services
+        .catalog
+        .shows
+        .get_episode_by_id(&episode.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged_episode.title.as_deref(), Some("Original"));
+    assert!(unchanged_episode.monitored);
+    app.runtime
+        .library
+        .location_ownership
+        .release_operation("move");
+    app.update_title_metadata(&user, &title.id, Some("Unlocked".into()), None, None)
+        .await
+        .unwrap();
+    app.set_episode_monitored(&user, &episode.id, false)
+        .await
+        .unwrap();
+}
+
 /// A movie library with two roots plus a title parked on the first one, which
 /// is what every FR-077 direct-root-write case needs before it can ask for a
 /// second root.

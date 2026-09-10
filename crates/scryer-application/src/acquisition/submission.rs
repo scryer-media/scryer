@@ -216,6 +216,13 @@ impl AppUseCase {
             .acquire_title(&title_id)
             .await;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
+                &title_id,
+            )
+            .await?;
+
         if let Some(claim) = self
             .runtime
             .acquisition

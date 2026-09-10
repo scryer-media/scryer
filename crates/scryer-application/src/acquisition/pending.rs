@@ -798,6 +798,18 @@ impl AppUseCase {
         now: &chrono::DateTime<Utc>,
         trigger: PendingGrabTrigger,
     ) -> AppResult<PendingGrabOutcome> {
+        if let Some(denial) = self
+            .location_ownership_denial_for_title(
+                &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
+                &pr.title_id,
+            )
+            .await?
+        {
+            if trigger == PendingGrabTrigger::Operator {
+                return Err(denial.into_app_error());
+            }
+            return Ok(PendingGrabOutcome::Deferred);
+        }
         // Load title
         let Some(title) = self.services.catalog.titles.get_by_id(&pr.title_id).await? else {
             return Ok(PendingGrabOutcome::Rejected);

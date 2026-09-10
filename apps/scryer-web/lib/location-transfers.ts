@@ -4,6 +4,18 @@ import type {
   LongValue,
 } from "./location-operations";
 
+export function transferArtworkRequest(titleIds: string[]) {
+  const ids = [...new Set(titleIds)].slice(0, 50).sort();
+  return {
+    query: ids.length
+      ? `query TransferTitleArtwork(${ids.map((_, i) => `$id${i}: ID!`).join(", ")}) {
+          ${ids.map((_, i) => `title${i}: title(id: $id${i}) { id posterUrl }`).join("\n")}
+        }`
+      : "query TransferTitleArtwork { __typename }",
+    variables: Object.fromEntries(ids.map((id, i) => [`id${i}`, id])),
+  };
+}
+
 export type TransferTitle = {
   titleId: string;
   name: string;
@@ -73,18 +85,32 @@ export function acceptTransferSnapshot(
   };
 }
 
+/** File work can finish before catalog finalization. Never round that tail up. */
+export function transferOperationProgress(
+  snapshot: Pick<TransferSnapshot, "operation" | "progressBasisPoints">,
+): number {
+  if (
+    ["COMPLETED", "COMPLETED_WITH_WARNINGS"].includes(snapshot.operation.state)
+  )
+    return 100;
+  return (
+    Math.floor(Math.max(0, Math.min(9999, snapshot.progressBasisPoints)) / 10) /
+    10
+  );
+}
+
 export function transferTitleProgress(row: TransferTitle): number {
+  if (["COMPLETED", "COMPLETED_WITH_WARNINGS", "SKIPPED"].includes(row.state))
+    return 100;
   const total = Number(row.bytesTotal);
   return total > 0
     ? Math.min(
-        100,
+        99.9,
         ((Number(row.copyBytes) + Number(row.verificationBytes)) /
           (2 * total)) *
           100,
       )
-    : ["COMPLETED", "COMPLETED_WITH_WARNINGS", "SKIPPED"].includes(row.state)
-      ? 100
-      : 0;
+    : 0;
 }
 
 export function splitTransferPath(path: string): {

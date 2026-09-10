@@ -29,6 +29,9 @@ impl TransferTitle {
         if self.verifying > 0 {
             return 0;
         }
+        if self.copying > 0 {
+            return 1;
+        }
         match self.state {
             TitleCheckpointState::Verifying => 0,
             TitleCheckpointState::Moving
@@ -180,8 +183,13 @@ impl TransferHub {
     pub fn begin(&self, operation: &str, resumed_bytes: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let telemetry = state.operations.entry(operation.to_owned()).or_default();
-        telemetry.resumed_bytes = resumed_bytes;
-        telemetry.eta = TransferEta::default();
+        // Rebuild transient work from durable proofs on every attempt. Keeping
+        // old file credits would count settled titles twice on in-process resume.
+        *telemetry = OperationTelemetry {
+            resumed_bytes,
+            high_water: telemetry.high_water,
+            ..OperationTelemetry::default()
+        };
     }
 
     pub fn title_finalized(&self, operation: &str, elapsed: Duration) {
@@ -303,7 +311,6 @@ impl TransferHub {
             row.state,
             TitleCheckpointState::Completed
                 | TitleCheckpointState::CompletedWithWarnings
-                | TitleCheckpointState::Failed
                 | TitleCheckpointState::Blocked
                 | TitleCheckpointState::Skipped
         ) {
@@ -789,6 +796,111 @@ mod tests {
         let file = &operation.files[&("title".into(), "file".into())];
         assert_eq!((file.copied, file.verified), (0, 0));
         assert_eq!(operation.eta.useful, 150);
+    }
+
+    #[test]
+    fn same_process_resume_rebuilds_credits_and_preserves_only_display_high_water() {
+        let mut operation = crate::location::test_support::queued_operation(
+            "op",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        operation.state = LocationOperationState::Moving;
+        operation.started_at = Some(chrono::Utc::now());
+        operation.counters.bytes_total = 200;
+        operation.counters.bytes_processed = 100;
+        let hub = TransferHub::default();
+        hub.file_done("op", "first", "file", 100);
+        assert_eq!(hub.progress(&operation, 0).0, 5000);
+        hub.file_failed("op", "second", "file");
+        hub.title_finalized("op", Duration::from_secs(2));
+        hub.begin("op", 100);
+        assert_eq!(hub.progress(&operation, 5000), (5000, None));
+        {
+            let state = hub.state.lock().unwrap();
+            let telemetry = &state.operations["op"];
+            assert!(telemetry.files.is_empty());
+            assert!(!telemetry.failed);
+            assert_eq!(telemetry.finalized, 0);
+            assert_eq!(telemetry.eta.samples, 0);
+        }
+        hub.file_update(
+            "op",
+            "second",
+            "file",
+            100,
+            ImportTransferPhase::Verifying,
+            50,
+        );
+        assert_eq!(hub.progress(&operation, 5000).0, 8750);
+        hub.begin("op", 100);
+        assert_eq!(hub.progress(&operation, 8750), (8750, None));
+    }
+
+    #[test]
+    fn failed_title_still_exposes_a_waiting_siblings_later_copy_and_verification() {
+        let hub = TransferHub::default();
+        hub.file_update(
+            "op",
+            "title",
+            "failed",
+            100,
+            ImportTransferPhase::Copying,
+            0,
+        );
+        hub.file_failed("op", "title", "failed");
+        hub.file_update(
+            "op",
+            "title",
+            "waiting",
+            100,
+            ImportTransferPhase::Waiting,
+            0,
+        );
+        let mut row = TransferTitle {
+            title_id: "title".into(),
+            name: "Title".into(),
+            sequence: 0,
+            state: TitleCheckpointState::Failed,
+            files_total: 2,
+            files_done: 0,
+            bytes_total: 200,
+            copy_bytes: 0,
+            verification_bytes: 0,
+            current_file: None,
+            copying: 0,
+            verifying: 0,
+            detail: Some("first file failed".into()),
+        };
+        hub.overlay("op", &mut row);
+        assert_eq!(row.rank(), 2);
+        hub.file_update(
+            "op",
+            "title",
+            "waiting",
+            100,
+            ImportTransferPhase::Copying,
+            25,
+        );
+        hub.overlay("op", &mut row);
+        assert_eq!((row.copying, row.verifying, row.rank()), (1, 0, 1));
+        assert_eq!(row.current_file.as_deref(), Some("waiting"));
+        hub.file_update(
+            "op",
+            "title",
+            "waiting",
+            100,
+            ImportTransferPhase::Verifying,
+            50,
+        );
+        hub.overlay("op", &mut row);
+        assert_eq!((row.copying, row.verifying, row.rank()), (0, 1, 0));
+        hub.file_done("op", "title", "waiting", 100);
+        hub.overlay("op", &mut row);
+        assert_eq!((row.copying, row.verifying, row.rank()), (0, 0, 2));
+        assert!(row.current_file.is_none());
+        assert!(row.detail.is_some());
     }
 
     #[test]

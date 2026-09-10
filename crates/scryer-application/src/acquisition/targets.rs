@@ -683,6 +683,8 @@ impl AppUseCase {
     ) -> AppResult<Vec<AcquisitionTarget>> {
         let mut targets = self.derive_missing_targets_for_title(now, title_id).await?;
         targets.extend(self.derive_cutoff_targets_for_title(title_id).await?);
+        let locked_titles = self.location_owned_title_ids().await?;
+        targets.retain(|target| !locked_titles.contains(&target.title_id));
 
         let paused = self
             .services

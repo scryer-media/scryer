@@ -81,6 +81,26 @@ impl LocationOperationRunner<'_> {
                         file_index = 0;
                         continue;
                     }
+                    // Catalog-only and recovered titles can all finish inside
+                    // this admission loop without polling any file futures.
+                    match self
+                        .store
+                        .location_operation_cancel_requested(&operation.id)
+                        .await
+                    {
+                        Ok(true) => {
+                            stop = Some((
+                                StopReason::UserCanceled,
+                                "canceled after draining in-flight transfers".into(),
+                            ));
+                            break;
+                        }
+                        Err(error) => {
+                            fatal = Some(error);
+                            break;
+                        }
+                        Ok(false) => {}
+                    }
                     if !admitted.contains(&title.title_id) {
                         let admission = async {
                             let paths = self
@@ -455,6 +475,13 @@ impl LocationOperationRunner<'_> {
         plan: &OperationWorkPlan,
         failed: &mut BTreeMap<String, String>,
     ) -> AppResult<()> {
+        if self
+            .store
+            .location_operation_cancel_requested(&operation.id)
+            .await?
+        {
+            return Ok(());
+        }
         let started = std::time::Instant::now();
         let transfer_detail = self
             .store

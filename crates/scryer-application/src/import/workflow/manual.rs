@@ -2812,11 +2812,12 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     .await?;
     // Manual imports do not pass through the completed-download dispatcher, so
     // they carry their own check (FR-084).
-    app.ensure_location_ownership_allows_title(
-        &crate::location::ownership_guard::MANUAL_IMPORT_ENTRY,
-        &title.id,
-    )
-    .await?;
+    let _location_guard = app
+        .acquire_location_title_mutation(
+            &crate::location::ownership_guard::MANUAL_IMPORT_ENTRY,
+            &title.id,
+        )
+        .await?;
     for mapping in &files {
         validate_manual_import_target_scope(
             app,

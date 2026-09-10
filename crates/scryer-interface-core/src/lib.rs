@@ -401,6 +401,9 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::Validation(message) => {
             coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR")
         }
+        AppError::LocationOperationBusy(message) => {
+            coded_gql_error(message, "LOCATION_OPERATION_BUSY")
+        }
         // A refused location plan is a validation failure the client acts on:
         // `stale_plan` means re-preview, `blocked_items` means unblock the
         // selection, `insufficient_space` means neither will help and the user
@@ -592,6 +595,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
     match err {
         AppError::Unauthorized(_) => "Unauthorized",
         AppError::Validation(_) => "Validation",
+        AppError::LocationOperationBusy(_) => "LocationOperationBusy",
         AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
         AppError::LocationRootRefused { .. } => "LocationRootRefused",
         AppError::DirectRootWriteRetired { .. } => "DirectRootWriteRetired",
@@ -941,6 +945,13 @@ mod tests {
             graphql_error_extension_string(&error, "refusalCode"),
             Some("root_change_destination_is_configured_root")
         );
+    }
+
+    #[test]
+    fn location_operation_busy_is_an_actionable_error() {
+        let error = to_gql_error(AppError::LocationOperationBusy("title is moving".into()));
+        assert_eq!(graphql_error_code(&error), Some("LOCATION_OPERATION_BUSY"));
+        assert_eq!(error.message, "title is moving");
     }
 
     #[test]

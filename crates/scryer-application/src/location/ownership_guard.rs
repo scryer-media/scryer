@@ -68,6 +68,8 @@ impl OwnedEntity {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardedAction {
+    TitleEdit,
+    Download,
     LibraryScan,
     Import,
     Rename,
@@ -83,6 +85,8 @@ impl GuardedAction {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::LibraryScan => "library_scan",
+            Self::TitleEdit => "title_edit",
+            Self::Download => "download",
             Self::Import => "import",
             Self::Rename => "rename",
             Self::TitleDelete => "title_delete",
@@ -98,6 +102,8 @@ impl GuardedAction {
     pub fn label(&self) -> &'static str {
         match self {
             Self::LibraryScan => "a library scan",
+            Self::TitleEdit => "editing this title or its episodes",
+            Self::Download => "downloading or upgrading this title",
             Self::Import => "an import",
             Self::Rename => "a rename",
             Self::TitleDelete => "deleting this title",
@@ -132,9 +138,59 @@ pub struct OwnershipConflict {
 #[derive(Clone, Default)]
 pub struct LocationOwnershipRegistry {
     claims: Arc<RwLock<HashMap<OwnedEntity, String>>>,
+    admissions: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::RwLock<()>>>>>,
 }
 
 impl LocationOwnershipRegistry {
+    fn admission_lock(&self, title_id: &str) -> Arc<tokio::sync::RwLock<()>> {
+        let mut locks = self
+            .admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(lock) = locks.get(title_id).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        if locks.len() >= 256 && locks.len().is_multiple_of(256) {
+            locks.retain(|_, lock| lock.strong_count() > 0);
+        }
+        let lock = Arc::new(tokio::sync::RwLock::new(()));
+        locks.insert(title_id.to_string(), Arc::downgrade(&lock));
+        lock
+    }
+
+    /// Drain work admitted before ownership is claimed. Sorting prevents two
+    /// overlapping operations from waiting on each other's title locks.
+    pub async fn drain_title_mutations(
+        &self,
+        entities: &[OwnedEntity],
+    ) -> Vec<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        let mut ids = entities
+            .iter()
+            .filter_map(|entity| match entity {
+                OwnedEntity::Title(id) => Some(id.as_str()),
+                OwnedEntity::Root(_) => None,
+            })
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut guards = Vec::with_capacity(ids.len());
+        for id in ids {
+            guards.push(self.admission_lock(id).write_owned().await);
+        }
+        guards
+    }
+
+    fn admit_title_mutation(
+        &self,
+        title_id: &str,
+    ) -> AppResult<tokio::sync::OwnedRwLockReadGuard<()>> {
+        // Never wait behind a move while retaining an outer mutation lease:
+        // nested workflows must refuse instead of deadlocking the drain.
+        self.admission_lock(title_id).try_read_owned().map_err(|_| AppError::LocationOperationBusy(
+            format!("title {title_id} is being locked for a location operation; retry after the operation finishes")
+        ))
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -507,9 +563,137 @@ pub const MAINTENANCE_ACTION_ENTRY: GuardedEntry = GuardedEntry {
     constant: "MAINTENANCE_ACTION_ENTRY",
 };
 
+pub const TITLE_METADATA_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/metadata.rs",
+    function: "update_title_metadata_with_root_folder_id",
+    constant: "TITLE_METADATA_EDIT_ENTRY",
+};
+
+pub const TITLE_LANGUAGE_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/metadata.rs",
+    function: "set_title_metadata_language_override",
+    constant: "TITLE_LANGUAGE_EDIT_ENTRY",
+};
+
+pub const TITLE_REMATCH_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/metadata.rs",
+    function: "fix_title_match",
+    constant: "TITLE_REMATCH_ENTRY",
+};
+
+pub const TITLE_MONITOR_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "set_title_monitored",
+    constant: "TITLE_MONITOR_EDIT_ENTRY",
+};
+
+pub const COLLECTION_MONITOR_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "set_collection_monitored",
+    constant: "COLLECTION_MONITOR_EDIT_ENTRY",
+};
+
+pub const EPISODE_MONITOR_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "set_episode_monitored",
+    constant: "EPISODE_MONITOR_EDIT_ENTRY",
+};
+
+pub const COLLECTION_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "update_collection",
+    constant: "COLLECTION_EDIT_ENTRY",
+};
+
+pub const EPISODE_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "update_episode",
+    constant: "EPISODE_EDIT_ENTRY",
+};
+
+pub const SERIES_MOVIE_MONITOR_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "set_series_movie_monitored",
+    constant: "SERIES_MOVIE_MONITOR_EDIT_ENTRY",
+};
+
+pub const TITLE_MONITOR_SELECTION_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/monitoring.rs",
+    function: "set_title_monitor_selection",
+    constant: "TITLE_MONITOR_SELECTION_ENTRY",
+};
+
+pub const TITLE_TAG_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/title_tags.rs",
+    function: "update_title_tags",
+    constant: "TITLE_TAG_EDIT_ENTRY",
+};
+
+pub const SERIES_MOVIE_TAG_EDIT_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/title_tags.rs",
+    function: "update_series_movie_tags",
+    constant: "SERIES_MOVIE_TAG_EDIT_ENTRY",
+};
+
+pub const TITLE_HYDRATION_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/hydration.rs",
+    function: "apply_hydration_result",
+    constant: "TITLE_HYDRATION_ENTRY",
+};
+
+pub const TITLE_DOWNLOAD_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::Download,
+    module: "acquisition/submission.rs",
+    function: "submit_canonical_download",
+    constant: "TITLE_DOWNLOAD_ENTRY",
+};
+
+pub const COLLECTION_CREATE_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/collections.rs",
+    function: "create_collection",
+    constant: "COLLECTION_CREATE_ENTRY",
+};
+
+pub const EPISODE_CREATE_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::TitleEdit,
+    module: "catalog/workflow/collections.rs",
+    function: "create_episode",
+    constant: "EPISODE_CREATE_ENTRY",
+};
+
 /// Every registered mutating entry point. A new one is added here and nowhere
 /// else; [`guarded_entries_are_wired`] fails when this list and the code drift.
 pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
+    &COLLECTION_CREATE_ENTRY,
+    &EPISODE_CREATE_ENTRY,
+    &TITLE_METADATA_EDIT_ENTRY,
+    &TITLE_LANGUAGE_EDIT_ENTRY,
+    &TITLE_REMATCH_ENTRY,
+    &TITLE_MONITOR_EDIT_ENTRY,
+    &COLLECTION_MONITOR_EDIT_ENTRY,
+    &EPISODE_MONITOR_EDIT_ENTRY,
+    &COLLECTION_EDIT_ENTRY,
+    &EPISODE_EDIT_ENTRY,
+    &SERIES_MOVIE_MONITOR_EDIT_ENTRY,
+    &TITLE_MONITOR_SELECTION_ENTRY,
+    &TITLE_TAG_EDIT_ENTRY,
+    &SERIES_MOVIE_TAG_EDIT_ENTRY,
+    &TITLE_HYDRATION_ENTRY,
+    &TITLE_DOWNLOAD_ENTRY,
     &LIBRARY_SCAN_ENTRY,
     &COMPLETED_IMPORT_ENTRY,
     &MANUAL_IMPORT_ENTRY,
@@ -539,6 +723,8 @@ pub const ACTIONS_GUARDED_BY_CLAIM: &[GuardedAction] = &[GuardedAction::Location
 /// Every action the guard knows about; kept beside the enum so the audit test
 /// notices a variant nobody registered an entry point for.
 pub const ALL_GUARDED_ACTIONS: &[GuardedAction] = &[
+    GuardedAction::TitleEdit,
+    GuardedAction::Download,
     GuardedAction::LibraryScan,
     GuardedAction::Import,
     GuardedAction::Rename,
@@ -647,6 +833,25 @@ impl crate::AppUseCase {
         self.location_ownership_guard().open_claims().await
     }
 
+    pub(crate) async fn location_owned_title_ids(&self) -> AppResult<HashSet<String>> {
+        let mut ids = self
+            .location_ownership_open_claims()
+            .await?
+            .into_iter()
+            .filter_map(|claim| match claim.entity {
+                OwnedEntity::Title(id) => Some(id),
+                OwnedEntity::Root(_) => None,
+            })
+            .collect::<HashSet<_>>();
+        if let Ok(claims) = self.runtime.library.location_ownership.claims.read() {
+            ids.extend(claims.keys().filter_map(|entity| match entity {
+                OwnedEntity::Title(id) => Some(id.clone()),
+                OwnedEntity::Root(_) => None,
+            }));
+        }
+        Ok(ids)
+    }
+
     /// The choke point every mutating entry point calls (FR-084). `entry` names
     /// the [`GuardedEntry`] constant registered for this call site.
     pub(crate) async fn ensure_location_ownership_allows(
@@ -657,6 +862,27 @@ impl crate::AppUseCase {
         self.location_ownership_guard()
             .ensure_not_owned(entry, entities)
             .await
+    }
+
+    /// Hold through the mutation, closing the gap between checking ownership
+    /// and changing a title. A move drains these leases before taking claims.
+    pub(crate) async fn acquire_location_title_mutation(
+        &self,
+        entry: &'static GuardedEntry,
+        title_id: &str,
+    ) -> AppResult<tokio::sync::OwnedRwLockReadGuard<()>> {
+        let guard = self
+            .runtime
+            .library
+            .location_ownership
+            .admit_title_mutation(title_id)?;
+        if let Some(denied) = self
+            .location_ownership_denial_for_title(entry, title_id)
+            .await?
+        {
+            return Err(AppError::LocationOperationBusy(denied.message()));
+        }
+        Ok(guard)
     }
 
     /// Title-scoped shorthand.
@@ -809,6 +1035,26 @@ mod tests {
     /// Source of every module that registers a guarded entry point. The audit
     /// test reads these to prove a declared entry is actually wired.
     const GUARDED_ENTRY_SOURCES: &[(&str, &str)] = &[
+        (
+            "catalog/workflow/collections.rs",
+            include_str!("../catalog/workflow/collections.rs"),
+        ),
+        (
+            "catalog/workflow/monitoring.rs",
+            include_str!("../catalog/workflow/monitoring.rs"),
+        ),
+        (
+            "catalog/workflow/title_tags.rs",
+            include_str!("../catalog/workflow/title_tags.rs"),
+        ),
+        (
+            "catalog/workflow/hydration.rs",
+            include_str!("../catalog/workflow/hydration.rs"),
+        ),
+        (
+            "acquisition/submission.rs",
+            include_str!("../acquisition/submission.rs"),
+        ),
         ("location/folder_match.rs", include_str!("folder_match.rs")),
         ("library/library.rs", include_str!("../library/library.rs")),
         ("library/rename.rs", include_str!("../library/rename.rs")),
@@ -1005,6 +1251,68 @@ mod tests {
         assert_eq!(denied.holding_operation_ids(), vec!["op-1".to_string()]);
         assert!(denied.message().contains("op-1"));
         assert!(denied.message().contains("title-1"));
+    }
+
+    #[tokio::test]
+    async fn title_mutation_drain_waits_for_admitted_work_and_preserves_other_titles() {
+        let registry = LocationOwnershipRegistry::new();
+        let mutation = registry.admit_title_mutation("moving").unwrap();
+        let entities = [title("moving")];
+        let drain = registry.drain_title_mutations(&entities);
+        tokio::pin!(drain);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut drain)
+                .await
+                .is_err()
+        );
+        assert!(registry.admit_title_mutation("moving").is_err());
+        assert!(registry.admit_title_mutation("unrelated").is_ok());
+        drop(mutation);
+        let exclusive = drain.await;
+        registry.claim_all("move", &entities);
+        drop(exclusive);
+        let store = FakeOwnershipStore::default();
+        let guard = LocationOwnershipGuard::new(&store, &registry);
+        for entry in [
+            &TITLE_METADATA_EDIT_ENTRY,
+            &EPISODE_EDIT_ENTRY,
+            &TITLE_DOWNLOAD_ENTRY,
+        ] {
+            assert!(guard.check(entry, &entities).await.unwrap().is_some());
+        }
+        registry.release_operation("move");
+        assert!(
+            guard
+                .check(&TITLE_DOWNLOAD_ENTRY, &entities)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(registry.admit_title_mutation("moving").is_ok());
+    }
+
+    #[tokio::test]
+    async fn persisted_title_locks_block_edits_and_downloads_after_restart() {
+        let (mut app, _) = crate::lib_tests::bootstrap();
+        app.services.library.location_operations =
+            Arc::new(FakeOwnershipStore::owning(&[(title("moving"), "move")]));
+        for entry in [
+            &TITLE_METADATA_EDIT_ENTRY,
+            &EPISODE_EDIT_ENTRY,
+            &TITLE_DOWNLOAD_ENTRY,
+        ] {
+            let error = app
+                .acquire_location_title_mutation(entry, "moving")
+                .await
+                .unwrap_err();
+            assert!(matches!(error, AppError::LocationOperationBusy(_)));
+            assert!(error.to_string().contains("move"));
+        }
+        assert!(
+            app.acquire_location_title_mutation(&TITLE_DOWNLOAD_ENTRY, "unrelated")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

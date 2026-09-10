@@ -902,6 +902,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::SERIES_MOVIE_MONITOR_EDIT_ENTRY,
+                &link.series_title_id,
+            )
+            .await?;
         link.monitored = monitored;
         link.monitoring_override = Some(monitored);
         let link = self
@@ -966,6 +972,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_MONITOR_EDIT_ENTRY,
+                id,
+            )
+            .await?;
         self.apply_title_monitoring_change(actor, id, monitored)
             .await
     }
@@ -998,6 +1010,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::COLLECTION_MONITOR_EDIT_ENTRY,
+                &collection.title_id,
+            )
+            .await?;
         let collection = self
             .apply_collection_monitoring_change(actor, collection_id, monitored, true, true)
             .await?;
@@ -1032,6 +1050,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::EPISODE_MONITOR_EDIT_ENTRY,
+                &episode.title_id,
+            )
+            .await?;
         let episode = self
             .apply_episode_monitoring_change(actor, episode_id, monitored, true)
             .await?;
@@ -1062,6 +1086,19 @@ impl AppUseCase {
         )
         .await?;
 
+        let collection = self
+            .services
+            .catalog
+            .shows
+            .get_collection_by_id(&collection_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("collection {collection_id}")))?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::COLLECTION_EDIT_ENTRY,
+                &collection.title_id,
+            )
+            .await?;
         if let Some(raw) = &collection_type
             && raw.trim().is_empty()
         {
@@ -1167,6 +1204,19 @@ impl AppUseCase {
         )
         .await?;
 
+        let episode = self
+            .services
+            .catalog
+            .shows
+            .get_episode_by_id(&episode_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::EPISODE_EDIT_ENTRY,
+                &episode.title_id,
+            )
+            .await?;
         if let Some(raw) = &episode_type
             && raw.trim().is_empty()
         {
@@ -1354,6 +1404,12 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_MONITOR_SELECTION_ENTRY,
+                title_id,
+            )
+            .await?;
         self.apply_title_monitor_selection_patch(
             &title,
             &TitleOptionsPatch {

@@ -463,6 +463,16 @@ impl AppUseCase {
             .await?;
         }
 
+        let mut _location_guards = Vec::with_capacity(titles.len());
+        for title in &titles {
+            _location_guards.push(
+                self.acquire_location_title_mutation(
+                    &crate::location::ownership_guard::TITLE_TAG_EDIT_ENTRY,
+                    &title.id,
+                )
+                .await?,
+            );
+        }
         for title in &titles {
             preflight_user_tag_patch(&title.tags, &add, &remove)?;
         }
@@ -555,6 +565,16 @@ impl AppUseCase {
             parent_titles.insert(link.series_title_id.clone(), title);
         }
 
+        let mut _location_guards = Vec::with_capacity(parent_titles.len());
+        for title in parent_titles.values() {
+            _location_guards.push(
+                self.acquire_location_title_mutation(
+                    &crate::location::ownership_guard::SERIES_MOVIE_TAG_EDIT_ENTRY,
+                    &title.id,
+                )
+                .await?,
+            );
+        }
         for link in &links {
             preflight_user_tag_patch(&link.tags, &add, &remove)?;
         }

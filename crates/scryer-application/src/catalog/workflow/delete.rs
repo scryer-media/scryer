@@ -182,11 +182,12 @@ impl AppUseCase {
         .await?;
         // Deleting a title an operation is mid-move would strip the catalog
         // record out from under it (FR-084).
-        self.ensure_location_ownership_allows_title(
-            &crate::location::ownership_guard::TITLE_DELETE_ENTRY,
-            &title.id,
-        )
-        .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_DELETE_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         if delete_files_on_disk {
             let delete_confirmation = delete_confirmation.ok_or_else(|| {
@@ -248,11 +249,12 @@ impl AppUseCase {
         // operation is mid-move stays out of reach (FR-084). The executor's
         // safety recheck holds the candidate before it gets here; this is the
         // choke point's own guarantee for any caller that did not.
-        self.ensure_location_ownership_allows_title(
-            &crate::location::ownership_guard::MAINTENANCE_DELETE_ENTRY,
-            &title.id,
-        )
-        .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MAINTENANCE_DELETE_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         self.execute_delete_title_files_by_policy(id, preview_fingerprint, authorization)
             .await?;
@@ -515,11 +517,12 @@ impl AppUseCase {
         // The bulk job does not route through `delete_title`, so it carries its
         // own check (FR-084). One item's refusal leaves the rest of the batch
         // alone.
-        self.ensure_location_ownership_allows_title(
-            &crate::location::ownership_guard::TITLE_DELETE_JOB_ENTRY,
-            &title.id,
-        )
-        .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_DELETE_JOB_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         if delete_files_on_disk {
             let preview_fingerprint = item
@@ -981,11 +984,12 @@ impl AppUseCase {
         // Removing a file (or its disk copy) under an in-flight move would
         // invalidate the plan the operation is executing (FR-084). The bulk
         // deletion job routes through here too.
-        self.ensure_location_ownership_allows_title(
-            &crate::location::ownership_guard::MEDIA_FILE_DELETE_ENTRY,
-            &media_file.title_id,
-        )
-        .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MEDIA_FILE_DELETE_ENTRY,
+                &media_file.title_id,
+            )
+            .await?;
         let matching_movie_collection_ids = if preserve_parent_records {
             Vec::new()
         } else {

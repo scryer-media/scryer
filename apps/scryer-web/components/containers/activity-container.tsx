@@ -737,17 +737,15 @@ export const ActivityContainer = memo(function ActivityContainer({
 
   return (
     <>
-      {/* A location operation is reached by id (`?operation=`): it has no
-          jobRunId yet, so nothing lists it. The confirm flow links here. */}
-      {locationOperationId ? (
-        <div className="mb-4">
-          <LocationOperationPanel
-            operationId={locationOperationId}
-            onDismiss={clearLocationOperation}
-          />
-        </div>
-      ) : null}
       <ActivityView
+        operationPanel={
+          locationOperationId ? (
+            <LocationOperationPanel
+              operationId={locationOperationId}
+              onDismiss={clearLocationOperation}
+            />
+          ) : null
+        }
         state={{
           queueItems: visibleItems,
           queueLoading: visibleLoading,

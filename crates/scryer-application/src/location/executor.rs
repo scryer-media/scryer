@@ -678,6 +678,10 @@ impl<'a> LocationOperationRunner<'a> {
         .await?;
 
         let entities = owned_entities(&operation, plan);
+        let _mutation_drain = match self.registry {
+            Some(registry) => registry.drain_title_mutations(&entities).await,
+            None => Vec::new(),
+        };
         match self
             .store
             .claim_location_operation_ownership(operation_id, &entities)
@@ -702,6 +706,8 @@ impl<'a> LocationOperationRunner<'a> {
                     .await;
             }
         }
+
+        drop(_mutation_drain);
 
         // Failures are contained to the title that hit them: the remaining
         // titles are independent work the user asked for, and abandoning them
@@ -2399,6 +2405,66 @@ mod tests {
         assert_eq!(result.unwrap().state, LocationOperationState::Canceled);
         assert_eq!(mover.verifying.load(Ordering::SeqCst), 0);
         assert!(reconciler.cleaned.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pipeline_cancel_stops_catalog_only_and_recovered_titles_at_the_next_boundary() {
+        struct CancelOnReconcile<'a> {
+            store: &'a FakeStore,
+            inner: RecordingReconciler,
+        }
+        #[async_trait]
+        impl TitleReconciler for CancelOnReconcile<'_> {
+            async fn reconcile_title(
+                &self,
+                operation: &LocationOperation,
+                title: &PlannedTitle,
+            ) -> AppResult<TitleStepOutcome> {
+                let outcome = self.inner.reconcile_title(operation, title).await?;
+                self.store.request_cancel(&operation.id);
+                Ok(outcome)
+            }
+            async fn clean_up_title(
+                &self,
+                operation: &LocationOperation,
+                title: &PlannedTitle,
+            ) -> AppResult<TitleStepOutcome> {
+                self.inner.clean_up_title(operation, title).await
+            }
+        }
+        for files in [0, 1] {
+            let store = FakeStore::with_operation(operation());
+            let plan = OperationWorkPlan::new(vec![
+                planned_title("first", 0, files),
+                planned_title("second", 1, files),
+                planned_title("third", 2, files),
+            ]);
+            for title in &plan.titles {
+                for file in &title.files {
+                    store.seed_verification(verified_record(
+                        &title.title_id,
+                        &file.stored_destination(),
+                    ));
+                }
+            }
+            let mover = FakeMover::default();
+            let admission = ScriptedAdmission::new(&[]);
+            let reconciler = CancelOnReconcile {
+                store: &store,
+                inner: RecordingReconciler::default(),
+            };
+            let hub = crate::location::live::TransferHub::default();
+            let result = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+                .with_transfers(&hub)
+                .run("op-1", &plan)
+                .await
+                .unwrap();
+            assert_eq!(result.state, LocationOperationState::Canceled);
+            assert_eq!(result.counters.titles_processed, 1);
+            assert_eq!(*reconciler.inner.reconciled.lock().unwrap(), vec!["first"]);
+            assert_eq!(*reconciler.inner.cleaned.lock().unwrap(), vec!["first"]);
+            assert!(mover.moved().is_empty());
+        }
     }
 
     #[tokio::test]
