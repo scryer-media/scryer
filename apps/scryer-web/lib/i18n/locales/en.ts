@@ -4670,6 +4670,7 @@ const en: LocaleDictionary = {
   "move.transferVerificationBytes": "Verified {{done}} / {{total}}",
   "move.transferNoFiles": "No file transfers for this title.",
   "move.transferFileState.QUEUED": "Queued",
+  "move.transferFileState.WAITING_FOR_STORAGE": "Waiting for storage · checking every 2 min",
   "move.transferFileState.DUPLICATE": "Duplicate (no copy)",
   "move.transferFileState.MOVING": "Moving",
   "move.transferFileState.VERIFYING": "Verifying",

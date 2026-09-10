@@ -70,6 +70,7 @@
 //! workflow's rules.
 
 mod pipeline;
+mod recovery;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -1858,6 +1859,7 @@ mod tests {
     #[derive(Default)]
     struct FakeStore {
         inner: Mutex<FakeStoreState>,
+        writer_gate: Option<Arc<tokio::sync::Mutex<()>>>,
     }
 
     #[derive(Default)]
@@ -2008,6 +2010,10 @@ mod tests {
             &self,
             progress: &LocationOperationProgress,
         ) -> AppResult<()> {
+            let _writer = match &self.writer_gate {
+                Some(gate) => Some(gate.lock().await),
+                None => None,
+            };
             let mut state = self.inner.lock().expect("lock");
             state.operation_states.push(progress.state);
             if let Some(operation) = state.operations.get_mut(&progress.operation_id) {
@@ -2448,6 +2454,124 @@ mod tests {
                 detail: None,
             })
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pipeline_storage_recovery_retries_after_reconnection_without_failing_title() {
+        struct DisconnectOnce {
+            destination: PathBuf,
+            detached: PathBuf,
+            attempts: AtomicU64,
+        }
+        #[async_trait]
+        impl TitleFileMover for DisconnectOnce {
+            async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::fs::rename(&self.destination, &self.detached).unwrap();
+                    return Err(AppError::Repository("storage disconnected".into()));
+                }
+                assert!(self.destination.is_dir());
+                Ok(VerifiedFile {
+                    source_path: request.file.source_path.clone(),
+                    destination_path: request.file.destination_path.clone(),
+                    hashes: None,
+                    depth: AppliedVerificationDepth::exact(request.depth),
+                    outcome: FileVerificationOutcome::Verified,
+                    detail: None,
+                })
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let mover = DisconnectOnce {
+            detached: temp.path().join("detached"),
+            destination,
+            attempts: AtomicU64::new(0),
+        };
+        let mut title = planned_title("first", 0, 1);
+        title.files[0].source_path = temp.path().join("source.mkv");
+        title.files[0].destination_path = mover.destination.join("file.mkv");
+        let plan = OperationWorkPlan::new(vec![title]);
+        let store = FakeStore::with_operation(operation());
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let reconnect = async {
+            while !hub.has_storage_waiters("op-1") {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::sleep(Duration::from_secs(119)).await;
+            assert_eq!(mover.attempts.load(Ordering::SeqCst), 1);
+            assert!(reconciler.cleaned.lock().unwrap().is_empty());
+            std::fs::rename(&mover.detached, &mover.destination).unwrap();
+        };
+        let (result, ()) = tokio::join!(runner.run("op-1", &plan), reconnect);
+        let result = result.unwrap();
+        assert_eq!(result.state, LocationOperationState::Completed);
+        assert_eq!(result.counters.files_processed, 1);
+        assert_eq!(mover.attempts.load(Ordering::SeqCst), 2);
+        assert!(!hub.has_storage_waiters("op-1"));
+        assert_eq!(reconciler.cleaned.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pipeline_progress_writer_does_not_starve_file_holding_writer_gate() {
+        struct GateHoldingMover {
+            gate: Arc<tokio::sync::Mutex<()>>,
+            entered: AtomicBool,
+        }
+        #[async_trait]
+        impl TitleFileMover for GateHoldingMover {
+            async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+                let _writer = self.gate.lock().await;
+                self.entered.store(true, Ordering::SeqCst);
+                request.progress.phase(
+                    scryer_domain::ImportTransferPhase::Verifying,
+                    request.file.size_bytes,
+                );
+                // Model an outstanding SQL response while this file owns the
+                // writer gate. A heartbeat tries to take it after one second.
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                Ok(VerifiedFile {
+                    source_path: request.file.source_path.clone(),
+                    destination_path: request.file.destination_path.clone(),
+                    hashes: None,
+                    depth: AppliedVerificationDepth::exact(request.depth),
+                    outcome: FileVerificationOutcome::Verified,
+                    detail: None,
+                })
+            }
+        }
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let mut store = FakeStore::with_operation(operation());
+        store.writer_gate = Some(gate.clone());
+        let mover = GateHoldingMover {
+            gate,
+            entered: AtomicBool::new(false),
+        };
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let plan = OperationWorkPlan::new(vec![planned_title("first", 0, 1)]);
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let wait_for_file = async {
+            // Keep virtual time still while the read-only filesystem probe is
+            // dispatched to a blocking worker, then allow timers to advance.
+            while !mover.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(runner.run("op-1", &plan), wait_for_file)
+        })
+        .await
+        .expect("file must release the writer gate while progress is waiting");
+        assert_eq!(result.unwrap().state, LocationOperationState::Completed);
+        assert_eq!(reconciler.cleaned.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

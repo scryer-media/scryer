@@ -9,6 +9,35 @@ pub(super) struct PipelineOutcome {
     pub stop: Option<(StopReason, String)>,
 }
 
+type FileResult<'a> = (&'a PlannedTitle, &'a PlannedFile, AppResult<VerifiedFile>);
+type FileTask<'a> = BoxFuture<'a, FileResult<'a>>;
+
+/// Keep admitted file futures polled even while the scheduler awaits a catalog
+/// write. A file may hold the same writer gate needed by progress persistence.
+async fn drive_files<'a>(
+    mut admissions: tokio::sync::mpsc::UnboundedReceiver<FileTask<'a>>,
+    completed: tokio::sync::mpsc::UnboundedSender<FileResult<'a>>,
+) {
+    let mut files = FuturesUnordered::new();
+    let mut closed = false;
+    loop {
+        if closed && files.is_empty() {
+            break;
+        }
+        tokio::select! {
+            next = admissions.recv(), if !closed => match next {
+                Some(file) => files.push(file),
+                None => closed = true,
+            },
+            Some(result) = files.next(), if !files.is_empty() => {
+                // The scheduler can exit on a store error. Still drain every
+                // admitted file before the operation guard may be released.
+                let _ = completed.send(result);
+            },
+        }
+    }
+}
+
 impl LocationOperationRunner<'_> {
     /// Bounded copy admission feeds verification futures. A file's transition to
     /// read-back admits the next copy; verification has no semaphore. All
@@ -20,9 +49,25 @@ impl LocationOperationRunner<'_> {
         progress: &mut RunProgress,
         hub: &TransferHub,
     ) -> AppResult<PipelineOutcome> {
-        let mut pending: FuturesUnordered<
-            BoxFuture<'_, (&PlannedTitle, &PlannedFile, AppResult<VerifiedFile>)>,
-        > = FuturesUnordered::new();
+        let (admissions, admitted) = tokio::sync::mpsc::unbounded_channel();
+        let (completed, completions) = tokio::sync::mpsc::unbounded_channel();
+        let (result, ()) = tokio::join!(
+            self.schedule_pipeline(operation, plan, progress, hub, admissions, completions),
+            drive_files(admitted, completed),
+        );
+        result
+    }
+
+    async fn schedule_pipeline<'run>(
+        &'run self,
+        operation: &'run LocationOperation,
+        plan: &'run OperationWorkPlan,
+        progress: &mut RunProgress,
+        hub: &'run TransferHub,
+        admissions: tokio::sync::mpsc::UnboundedSender<FileTask<'run>>,
+        mut completions: tokio::sync::mpsc::UnboundedReceiver<FileResult<'run>>,
+    ) -> AppResult<PipelineOutcome> {
+        let mut pending = 0usize;
         let notify = Arc::new(tokio::sync::Notify::new());
         let mut copying = Vec::<Arc<AtomicBool>>::new();
         let mut title_index = 0;
@@ -71,6 +116,7 @@ impl LocationOperationRunner<'_> {
                 }
                 while stop.is_none()
                     && fatal.is_none()
+                    && !hub.has_storage_waiters(&operation.id)
                     && title_index < plan.titles.len()
                     && copying.len()
                         < crate::location::transfer::CopyCoordinator::shared().capacity()
@@ -261,37 +307,41 @@ impl LocationOperationRunner<'_> {
                     copying.push(ready.clone());
                     let signal = ready.clone();
                     let wake = notify.clone();
-                    pending.push(
-                        async move {
-                            let result = std::panic::AssertUnwindSafe(self.pipeline_file(
-                                operation,
-                                title,
-                                file,
-                                hub,
-                                signal.clone(),
-                                wake.clone(),
-                            ))
-                            .catch_unwind()
-                            .await
-                            .unwrap_or_else(|_| {
-                                Err(AppError::Repository("file transfer task panicked".into()))
-                            });
-                            signal.store(true, Ordering::Release);
-                            wake.notify_one();
-                            (title, file, result)
-                        }
-                        .boxed(),
-                    );
+                    admissions
+                        .send(
+                            async move {
+                                let result = std::panic::AssertUnwindSafe(self.pipeline_file(
+                                    operation,
+                                    title,
+                                    file,
+                                    hub,
+                                    signal.clone(),
+                                    wake.clone(),
+                                ))
+                                .catch_unwind()
+                                .await
+                                .unwrap_or_else(|_| {
+                                    Err(AppError::Repository("file transfer task panicked".into()))
+                                });
+                                signal.store(true, Ordering::Release);
+                                wake.notify_one();
+                                (title, file, result)
+                            }
+                            .boxed(),
+                        )
+                        .map_err(|_| AppError::Repository("file transfer driver stopped".into()))?;
+                    pending += 1;
                 }
             }
-            if pending.is_empty() {
+            if pending == 0 {
                 if title_index >= plan.titles.len() || stop.is_some() || fatal.is_some() {
                     break;
                 }
                 continue;
             }
             tokio::select! {
-                Some((title, file, result)) = pending.next() => {
+                Some((title, file, result)) = completions.recv() => {
+                    pending -= 1;
                     let result = match result {
                         Ok(verified) => {
                             if verified.depth.fell_back {
@@ -385,13 +435,16 @@ impl LocationOperationRunner<'_> {
                 }
             }
             if checkpoint_at.elapsed() >= Duration::from_secs(1) {
+                let detail = hub.has_storage_waiters(&operation.id).then(|| {
+                    "Waiting for storage to reconnect. Checking every 2 minutes.".to_owned()
+                });
                 if let Err(error) = self
                     .write_progress(
                         operation,
                         LocationOperationState::Moving,
                         progress,
                         plan,
-                        None,
+                        detail,
                         false,
                     )
                     .await
@@ -432,6 +485,8 @@ impl LocationOperationRunner<'_> {
         ready: Arc<AtomicBool>,
         notify: Arc<tokio::sync::Notify>,
     ) -> AppResult<VerifiedFile> {
+        let storage =
+            super::recovery::StorageWatch::capture(&file.source_path, &file.destination_path).await;
         let mut attempt = 1;
         loop {
             let operation_id = operation.id.clone();
@@ -499,10 +554,60 @@ impl LocationOperationRunner<'_> {
                     progress: &sink,
                 })
                 .await;
+            let result = match result {
+                Ok(verified)
+                    if verified.outcome
+                        == crate::location::model::FileVerificationOutcome::Unavailable
+                        && match &storage {
+                            Some(storage) => !storage.available().await,
+                            None => false,
+                        } =>
+                {
+                    Err(AppError::Repository(verified.detail.unwrap_or_else(|| {
+                        "storage became unavailable during verification".into()
+                    })))
+                }
+                result => result,
+            };
             match result {
-                Err(error) if attempt < self.retry.attempts && move_error_is_transient(&error) => {
-                    tokio::time::sleep(self.retry.delay_before(attempt + 1)).await;
-                    attempt += 1;
+                Err(error) if move_error_is_transient(&error) => {
+                    if let Some(storage) = &storage
+                        && !storage.available().await
+                    {
+                        tracing::warn!(operation_id = %operation.id, source = %file.source_path.display(),
+                            error = %error, "transfer waiting for storage; checking again in two minutes");
+                        hub.file_waiting_for_storage(
+                            &operation.id,
+                            &title.title_id,
+                            &file.stored_destination(),
+                            file.size_bytes,
+                        );
+                        let reconnected = super::recovery::wait_for_reconnection(
+                            || storage.available(),
+                            || {
+                                self.store
+                                    .location_operation_cancel_requested(&operation.id)
+                            },
+                        )
+                        .await?;
+                        if !reconnected {
+                            return Err(error);
+                        }
+                        hub.file_update(
+                            &operation.id,
+                            &title.title_id,
+                            &file.stored_destination(),
+                            file.size_bytes,
+                            scryer_domain::ImportTransferPhase::Waiting,
+                            0,
+                        );
+                        attempt = 1;
+                    } else if attempt < self.retry.attempts {
+                        tokio::time::sleep(self.retry.delay_before(attempt + 1)).await;
+                        attempt += 1;
+                    } else {
+                        return Err(error);
+                    }
                 }
                 result => return result,
             }

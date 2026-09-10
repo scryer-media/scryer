@@ -117,6 +117,7 @@ mod tests {
             })
             .await
             .unwrap();
+        hub.file_waiting_for_storage("op", "title", "/destination/4.mkv", 100);
         let first = app
             .location_transfer_files_snapshot(&user, "op", "title", 0)
             .await
@@ -132,7 +133,13 @@ mod tests {
                 .take(5)
                 .map(|file| file.state.as_str())
                 .collect::<Vec<_>>(),
-            ["MOVING", "VERIFYING", "FAILED", "DONE", "QUEUED"]
+            [
+                "MOVING",
+                "VERIFYING",
+                "FAILED",
+                "DONE",
+                "WAITING_FOR_STORAGE"
+            ]
         );
         assert_eq!(first.files[0].copy_bytes, 75);
         assert_eq!(first.files[1].verification_bytes, 25);
@@ -296,6 +303,9 @@ impl crate::AppUseCase {
                 let verified =
                     proof.is_some_and(|proof| proof.outcome == FileVerificationOutcome::Verified);
                 let status = match active.and_then(|file| file.phase) {
+                    _ if active.is_some_and(|file| file.waiting_for_storage) => {
+                        "WAITING_FOR_STORAGE"
+                    }
                     _ if active.is_some_and(|file| file.comparing) => "COMPARING",
                     _ if file.destination_path.is_empty() => "DUPLICATE",
                     Some(scryer_domain::ImportTransferPhase::Verifying) => "VERIFYING",

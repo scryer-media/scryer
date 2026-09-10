@@ -138,6 +138,7 @@ impl TransferEta {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileTelemetry {
+    pub waiting_for_storage: bool,
     pub comparing: bool,
     pub compared: u64,
     pub comparison_total: u64,
@@ -277,6 +278,37 @@ impl TransferHub {
         }
     }
 
+    pub fn has_storage_waiters(&self, operation: &str) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .operations
+            .get(operation)
+            .is_some_and(|op| {
+                op.files
+                    .values()
+                    .any(|file| file.waiting_for_storage && !file.done)
+            })
+    }
+
+    pub fn file_waiting_for_storage(&self, operation: &str, title: &str, path: &str, size: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let file = state
+            .operations
+            .entry(operation.into())
+            .or_default()
+            .files
+            .entry((title.into(), path.into()))
+            .or_default();
+        file.waiting_for_storage = true;
+        file.comparing = false;
+        file.done = false;
+        file.size = size;
+        file.phase = Some(scryer_domain::ImportTransferPhase::Waiting);
+        drop(state);
+        self.changed();
+    }
+
     pub fn file_update(
         &self,
         operation: &str,
@@ -298,7 +330,8 @@ impl TransferHub {
             .abandoned_work
             .remove(&(title.to_owned(), path.to_owned()));
         file.done = false;
-        let phase_changed = file.phase != Some(phase) || file.comparing;
+        let phase_changed = file.phase != Some(phase) || file.comparing || file.waiting_for_storage;
+        file.waiting_for_storage = false;
         file.comparing = false;
         file.size = size;
         file.phase = Some(phase);
@@ -465,7 +498,13 @@ impl TransferHub {
         } else {
             0
         };
-        let eta = if operation.started_at.is_none() || operation.cancel_requested {
+        let eta = if operation.started_at.is_none()
+            || operation.cancel_requested
+            || telemetry
+                .files
+                .values()
+                .any(|file| file.waiting_for_storage && !file.done)
+        {
             None
         } else if remaining == 0
             && telemetry.finalized >= 3
