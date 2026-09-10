@@ -617,16 +617,19 @@ export const TitleTable = React.memo(function TitleTable({
             selectionMode && "cursor-pointer",
           )}
         >
-          <TableCell className="px-0 text-center align-middle">
-            <Checkbox
-              id={titleOverviewSelectId(item.id)}
-              checked={selectedTitleIds.has(item.id)}
-              onCheckedChange={() => onToggleSelected(item.id)}
-              aria-label={t("title.selectTitle", { name: item.name })}
-              disabled={bulkActionBusy}
-              size="large"
-              className="mx-auto"
-            />
+          <TableCell className="px-0 align-middle">
+            {/* Centred by the flex row rather than by mx-auto, which does
+                nothing to the inline-block button Radix renders. */}
+            <div className="flex items-center justify-center">
+              <Checkbox
+                id={titleOverviewSelectId(item.id)}
+                checked={selectedTitleIds.has(item.id)}
+                onCheckedChange={() => onToggleSelected(item.id)}
+                aria-label={t("title.selectTitle", { name: item.name })}
+                disabled={bulkActionBusy}
+                size="large"
+              />
+            </div>
           </TableCell>
           <TableCell className="align-middle overflow-hidden">
             <div className="flex min-w-0 items-center gap-2">
@@ -927,7 +930,7 @@ export const TitleTable = React.memo(function TitleTable({
             onCheckedChange={(checked) => onToggleSelectAll(checked === true)}
             aria-label={t("title.selectAllTitles")}
             disabled={bulkActionBusy}
-            size="large"
+            size="table"
             className="mx-auto"
           />
         </TableHead>
