@@ -860,7 +860,6 @@ export function SettingsBackupsContainer() {
                       <div className={`flex min-w-0 items-center gap-3 px-4 py-3 sm:max-w-xl ${BACKUPS_INSET_CLASS}`}>
                         <Checkbox
                           id="auto-backups-clear-key"
-                          className="size-5 rounded-md"
                           checked={clearAutoBackupKey}
                           disabled={
                             autoBackupSaving || autoBackupSettings.enabled || autoBackupKey.length > 0

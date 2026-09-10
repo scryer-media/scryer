@@ -984,7 +984,7 @@ export function SettingsMediaServersSection({
                       >
                         <Checkbox
                           id="settings-media-server-login-enabled"
-                          className="size-8 rounded-md"
+                          size="large"
                           checked={effectiveFormLoginEnabled && draft.loginEnabled}
                           disabled={!effectiveFormLoginEnabled}
                           onCheckedChange={(checked) =>
@@ -999,7 +999,7 @@ export function SettingsMediaServersSection({
                       <label className="flex items-center gap-3">
                         <Checkbox
                           id="settings-media-server-linking-enabled"
-                          className="size-8 rounded-md"
+                          size="large"
                           checked={draft.linkingEnabled}
                           onCheckedChange={(checked) =>
                             setDraft((previous) => ({
@@ -1013,7 +1013,7 @@ export function SettingsMediaServersSection({
                       <label className="flex items-center gap-3">
                         <Checkbox
                           id="settings-media-server-auto-add-enabled"
-                          className="size-8 rounded-md"
+                          size="large"
                           checked={draft.autoAddEnabled}
                           onCheckedChange={(checked) =>
                             setDraft((previous) => ({
