@@ -1026,7 +1026,7 @@ function WantedItemsCard({
                     </TableRow>
                     {expandedItemId === item.id && (
                       <TableRow>
-                        <TableCell colSpan={11} className="bg-muted/30 p-4">
+                        <TableCell colSpan={11} className="space-y-3 bg-muted/30 p-4">
                           <StandbyReleasesList items={standbyReleases} loading={standbyLoading} />
                           {decisionsLoading ? (
                             <p className="text-sm text-muted-foreground">
@@ -1041,6 +1041,7 @@ function WantedItemsCard({
                               overflow="clip"
                               layout="fixed"
                               density="dense"
+                              wrapperClassName="overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
                             >
                               <TableHeader>
                                 <TableRow>
