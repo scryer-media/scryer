@@ -101,7 +101,13 @@ pub fn initialize_wasm_runtime_for_tests() {
     TEST_WASMTIME_RUNTIME.call_once(|| {
         // Nextest gives each test a process, so this test-only cache is shared
         // across the suite instead of recompiling the same modules per test.
-        let cache_dir = std::env::temp_dir().join("scryer-wasmtime-integration-cache");
+        // It lives under the build directory, not the system temp dir, which
+        // macOS clears on reboot; CI points the root at a restored cache.
+        let root = match std::env::var_os("SCRYER_WASMTIME_TEST_CACHE_ROOT") {
+            Some(root) if !root.is_empty() => std::path::PathBuf::from(root),
+            _ => std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+        };
+        let cache_dir = root.join("scryer-wasmtime-integration-cache");
         scryer_plugins::initialize_wasm_runtime_at(cache_dir)
             .expect("test Wasmtime cache must initialize");
     });
