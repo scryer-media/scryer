@@ -142,6 +142,41 @@ impl LocationOperationRepository for LocationOperationStore {
         Ok(())
     }
 
+    async fn seed_transfer_titles(
+        &self,
+        operation_id: &str,
+        titles: &[scryer_application::location::live::TransferTitle],
+    ) -> AppResult<()> {
+        // Five binds per row; stay below SQLite's conservative bind limit.
+        for chunk in titles.chunks(100) {
+            let mut args = Vec::with_capacity(chunk.len() * 5);
+            for title in chunk {
+                let json = serde_json::to_string(title)
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                args.extend([
+                    SqlArg::Text(operation_id.to_owned()),
+                    SqlArg::Text(title.title_id.clone()),
+                    SqlArg::I64(title.sequence),
+                    SqlArg::I64(title.rank()),
+                    SqlArg::Text(json),
+                ]);
+            }
+            let values = vec!["({}, {}, {}, {}, {})"; chunk.len()].join(", ");
+            SqlRuntime::execute_write(
+                &self.datastore,
+                "seed_transfer_titles",
+                &format!(
+                    "INSERT INTO location_transfer_titles
+                     (operation_id, title_id, sequence, hot_rank, summary_json)
+                     VALUES {values} ON CONFLICT(operation_id, title_id) DO NOTHING"
+                ),
+                args,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn upsert_transfer_title(
         &self,
         operation_id: &str,
@@ -1129,15 +1164,20 @@ mod tests {
             verifying: 0,
             detail: None,
         };
+        let mut seeds = Vec::new();
         for index in 0..2000 {
             row.title_id = format!("title-{index:04}");
             row.sequence = index;
-            store.upsert_transfer_title("op", &row).await.unwrap();
+            seeds.push(row.clone());
         }
+        store.seed_transfer_titles("op", &seeds).await.unwrap();
         row.state = TitleCheckpointState::Verifying;
         row.verifying = 3;
         row.copying = 1;
         store.upsert_transfer_title("op", &row).await.unwrap();
+        // A resumed or racing seed must preserve phase and completed facts.
+        store.seed_transfer_titles("op", &seeds).await.unwrap();
+        store.seed_transfer_titles("op", &[]).await.unwrap();
         let page = store.transfer_title_page("op", 0, 50).await.unwrap();
         assert_eq!(page.len(), 50);
         assert_eq!(page[0].title_id, "title-1999");

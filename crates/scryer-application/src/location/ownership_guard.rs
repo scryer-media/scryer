@@ -244,6 +244,7 @@ pub struct LocationRunnerRegistry {
     pub transfer_generation: Arc<tokio::sync::OnceCell<i64>>,
     live: Arc<std::sync::Mutex<HashSet<String>>>,
     execution: Arc<tokio::sync::Mutex<()>>,
+    completed: Arc<tokio::sync::Notify>,
 }
 
 impl LocationRunnerRegistry {
@@ -258,6 +259,11 @@ impl LocationRunnerRegistry {
         operation_id: &str,
     ) -> AppResult<tokio::sync::OwnedMutexGuard<()>> {
         loop {
+            // Register before reading FIFO state so completion between the
+            // read and the wait cannot be lost.
+            let completed = self.completed.notified();
+            tokio::pin!(completed);
+            completed.as_mut().enable();
             let slot = self.execution_slot().await;
             let mut pending = store.list_active_location_operations().await?;
             // Include accepted requests whose compact summaries are still
@@ -285,7 +291,12 @@ impl LocationRunnerRegistry {
                 return Ok(slot);
             }
             drop(slot);
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // An accepted row can outlive its runner. Recheck that durable
+            // state periodically without polling the store at file-loop rates.
+            tokio::select! {
+                () = completed => {},
+                () = tokio::time::sleep(std::time::Duration::from_secs(2)) => {},
+            }
         }
     }
 
@@ -319,6 +330,7 @@ impl LocationRunnerRegistry {
         if let Ok(mut live) = self.live.lock() {
             live.remove(operation_id);
         }
+        self.completed.notify_waiters();
     }
 }
 
@@ -985,6 +997,48 @@ impl crate::AppUseCase {
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn orphaned_queued_row_backs_off_and_completion_wakes_waiter() {
+        use crate::location::model::{
+            LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
+        };
+        use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+        let store = InMemoryLocationOperationStore::new();
+        let mut first = queued_operation(
+            "first",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        let mut second = first.clone();
+        second.id = "second".into();
+        second.created_at += chrono::Duration::seconds(1);
+        store.insert_operation(first.clone());
+        store.insert_operation(second);
+        let registry = LocationRunnerRegistry::new();
+        let waiting = registry.wait_for_turn(&store, "second");
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), &mut waiting)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .active_reads
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        first.state = LocationOperationState::Completed;
+        store.insert_operation(first);
+        // Model a runner picked up by recovery and then completing.
+        drop(registry.begin("first").unwrap());
+        let _slot = tokio::time::timeout(std::time::Duration::from_millis(250), waiting)
+            .await
+            .expect("completion wakes without waiting for backoff")
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn transfer_dispatch_is_fifo_and_holds_one_instance_slot() {
         use crate::location::model::{
             LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
@@ -1021,6 +1075,7 @@ mod tests {
                 .is_err()
         );
         drop(first_slot);
+        drop(_first_live);
         let _second_slot = tokio::time::timeout(std::time::Duration::from_secs(1), second_wait)
             .await
             .unwrap()

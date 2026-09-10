@@ -50,6 +50,8 @@ struct State {
 #[derive(Default)]
 pub(crate) struct InMemoryLocationOperationStore {
     state: Mutex<State>,
+    pub(crate) operation_read_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    pub(crate) active_reads: std::sync::atomic::AtomicUsize,
 }
 
 impl InMemoryLocationOperationStore {
@@ -185,6 +187,9 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
         &self,
         operation_id: &str,
     ) -> AppResult<Option<LocationOperation>> {
+        if let Some(hook) = self.operation_read_hook.lock().expect("lock").as_ref() {
+            hook();
+        }
         Ok(self
             .state
             .lock()
@@ -208,6 +213,8 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
     }
 
     async fn list_active_location_operations(&self) -> AppResult<Vec<LocationOperation>> {
+        self.active_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let state = self.state.lock().expect("lock");
         let mut active: Vec<LocationOperation> = state
             .operations

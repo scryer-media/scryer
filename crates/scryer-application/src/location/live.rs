@@ -151,7 +151,7 @@ struct OperationTelemetry {
     finalized: u64,
     finalization_seconds: f64,
     last_finalized: Option<Instant>,
-    failed: bool,
+    abandoned_work: BTreeMap<(String, String), u64>,
     high_water: i64,
     eta: TransferEta,
 }
@@ -200,14 +200,18 @@ impl TransferHub {
         telemetry.last_finalized = Some(Instant::now());
     }
 
-    pub fn file_failed(&self, operation: &str, title: &str, path: &str) {
+    pub fn file_failed(&self, operation: &str, title: &str, path: &str, size: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(op) = state.operations.get_mut(operation) {
-            op.failed = true;
-            if let Some(file) = op.files.get_mut(&(title.to_owned(), path.to_owned())) {
-                file.done = true;
-            }
-        }
+        let op = state.operations.entry(operation.to_owned()).or_default();
+        let key = (title.to_owned(), path.to_owned());
+        let completed = op.files.get_mut(&key).map_or(0, |file| {
+            file.done = true;
+            file.copied.saturating_add(file.verified)
+        });
+        // Failed work is no longer scheduled. Exclude it from ETA without
+        // granting progress credit or suppressing healthy siblings' estimates.
+        op.abandoned_work
+            .insert(key, size.saturating_mul(2).saturating_sub(completed));
         drop(state);
         self.changed();
     }
@@ -216,14 +220,6 @@ impl TransferHub {
     }
     pub fn version(&self) -> TransferVersion {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).version
-    }
-    fn snapshot_version(&self, expected: TransferVersion) -> Option<TransferVersion> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.version != expected {
-            return None;
-        }
-        state.version.revision = state.version.revision.saturating_add(1);
-        Some(state.version)
     }
     pub fn set_generation(&self, generation: i64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -255,6 +251,10 @@ impl TransferHub {
             .files
             .entry((title.to_owned(), path.to_owned()))
             .or_default();
+        telemetry
+            .abandoned_work
+            .remove(&(title.to_owned(), path.to_owned()));
+        file.done = false;
         let phase_changed = file.phase != Some(phase);
         file.size = size;
         file.phase = Some(phase);
@@ -397,7 +397,14 @@ impl TransferHub {
         telemetry.high_water = telemetry.high_water.max(stored_high_water).max(value);
         let now = Instant::now();
         telemetry.eta.add_useful(0, now);
-        let remaining = total.saturating_mul(2).saturating_sub(processed);
+        let abandoned = telemetry
+            .abandoned_work
+            .values()
+            .fold(0u64, |sum, work| sum.saturating_add(*work));
+        let remaining = total
+            .saturating_mul(2)
+            .saturating_sub(processed)
+            .saturating_sub(abandoned);
         let metadata_tail = if telemetry.finalized > 0 {
             ((operation.counters.titles_total - operation.counters.titles_processed).max(0) as f64
                 * telemetry.finalization_seconds
@@ -406,23 +413,22 @@ impl TransferHub {
         } else {
             0
         };
-        let eta =
-            if operation.started_at.is_none() || operation.cancel_requested || telemetry.failed {
-                None
-            } else if remaining == 0
-                && telemetry.finalized >= 3
-                && now.duration_since(telemetry.eta.started) >= Duration::from_secs(15)
-                && telemetry
-                    .last_finalized
-                    .is_some_and(|at| now.duration_since(at) < Duration::from_secs(30))
-            {
-                Some(metadata_tail)
-            } else {
-                telemetry
-                    .eta
-                    .estimate(remaining, now)
-                    .map(|seconds| seconds.max(metadata_tail))
-            };
+        let eta = if operation.started_at.is_none() || operation.cancel_requested {
+            None
+        } else if remaining == 0
+            && telemetry.finalized >= 3
+            && now.duration_since(telemetry.eta.started) >= Duration::from_secs(15)
+            && telemetry
+                .last_finalized
+                .is_some_and(|at| now.duration_since(at) < Duration::from_secs(30))
+        {
+            Some(metadata_tail)
+        } else {
+            telemetry
+                .eta
+                .estimate(remaining, now)
+                .map(|seconds| seconds.max(metadata_tail))
+        };
         (telemetry.high_water, eta)
     }
 
@@ -493,75 +499,66 @@ impl crate::AppUseCase {
             .iter()
             .map(|title| title.title_id.as_str())
             .collect();
+        let mut summaries = Vec::with_capacity(plan.titles.len().max(selection.len()));
         for title in &plan.titles {
-            if store
-                .transfer_title(operation_id, &title.title_id)
-                .await?
-                .is_some()
-            {
-                continue;
-            }
-            store
-                .upsert_transfer_title(
-                    operation_id,
-                    &TransferTitle {
-                        title_id: title.title_id.clone(),
-                        name: title.title_name.clone(),
-                        sequence: sequences
-                            .get(title.title_id.as_str())
-                            .copied()
-                            .unwrap_or(title.sequence),
-                        state: TitleCheckpointState::Pending,
-                        files_total: title.files.len() as i64,
-                        files_done: 0,
-                        bytes_total: title.files.iter().map(|file| file.size_bytes).sum(),
-                        copy_bytes: 0,
-                        verification_bytes: 0,
-                        current_file: None,
-                        copying: 0,
-                        verifying: 0,
-                        detail: None,
-                    },
-                )
-                .await?;
+            summaries.push(TransferTitle {
+                title_id: title.title_id.clone(),
+                name: title.title_name.clone(),
+                sequence: sequences
+                    .get(title.title_id.as_str())
+                    .copied()
+                    .unwrap_or(title.sequence),
+                state: TitleCheckpointState::Pending,
+                files_total: title.files.len() as i64,
+                files_done: 0,
+                bytes_total: title.files.iter().map(|file| file.size_bytes).sum(),
+                copy_bytes: 0,
+                verification_bytes: 0,
+                current_file: None,
+                copying: 0,
+                verifying: 0,
+                detail: None,
+            });
+        }
+        let unplanned: Vec<_> = selection
+            .iter()
+            .filter(|id| !planned.contains(id.as_str()))
+            .cloned()
+            .collect();
+        let mut names = BTreeMap::new();
+        for chunk in unplanned.chunks(500) {
+            names.extend(
+                self.services
+                    .catalog
+                    .titles
+                    .get_by_ids(chunk)
+                    .await?
+                    .into_iter()
+                    .map(|title| (title.id, title.name)),
+            );
         }
         for (sequence, id) in selection.iter().enumerate() {
             if planned.contains(id.as_str()) {
                 continue;
             }
-            if store.transfer_title(operation_id, id).await?.is_some() {
-                continue;
-            }
-            let name = self
-                .services
-                .catalog
-                .titles
-                .get_by_id(id)
-                .await?
-                .map(|title| title.name)
-                .unwrap_or_else(|| id.clone());
-            store
-                .upsert_transfer_title(
-                    operation_id,
-                    &TransferTitle {
-                        title_id: id.clone(),
-                        name,
-                        sequence: sequence as i64,
-                        state: TitleCheckpointState::Skipped,
-                        files_total: 0,
-                        files_done: 0,
-                        bytes_total: 0,
-                        copy_bytes: 0,
-                        verification_bytes: 0,
-                        current_file: None,
-                        copying: 0,
-                        verifying: 0,
-                        detail: None,
-                    },
-                )
-                .await?;
+            let name = names.get(id).cloned().unwrap_or_else(|| id.clone());
+            summaries.push(TransferTitle {
+                title_id: id.clone(),
+                name,
+                sequence: sequence as i64,
+                state: TitleCheckpointState::Skipped,
+                files_total: 0,
+                files_done: 0,
+                bytes_total: 0,
+                copy_bytes: 0,
+                verification_bytes: 0,
+                current_file: None,
+                copying: 0,
+                verifying: 0,
+                detail: None,
+            });
         }
-        Ok(())
+        store.seed_transfer_titles(operation_id, &summaries).await
     }
 
     pub async fn location_transfer_snapshot(
@@ -610,7 +607,10 @@ impl crate::AppUseCase {
             }
             store.mark_transfer_titles_initialized(operation_id).await?;
         }
-        for _ in 0..3 {
+        // Tag the projection with its starting version. Concurrent writes may
+        // make it slightly stale; the next notification supplies a newer view.
+        // Reads must neither invalidate each other nor fail under write churn.
+        {
             let version = registry.transfers.version();
             let Some(operation) = store.get_location_operation(operation_id).await? else {
                 return Ok(None);
@@ -640,12 +640,9 @@ impl crate::AppUseCase {
             } else {
                 high_water.clamp(0, 9_999)
             };
-            let Some(version) = registry.transfers.snapshot_version(version) else {
-                continue;
-            };
             let has_more =
                 offset.is_some_and(|offset| offset.max(0) + (titles.len() as i64) < total_count);
-            return Ok(Some(TransferSnapshot {
+            Ok(Some(TransferSnapshot {
                 version,
                 operation,
                 progress_basis_points,
@@ -653,11 +650,8 @@ impl crate::AppUseCase {
                 titles,
                 total_count,
                 has_more,
-            }));
+            }))
         }
-        Err(crate::AppError::Repository(
-            "transfer snapshot changed while reading; retry".into(),
-        ))
     }
 }
 
@@ -668,6 +662,114 @@ mod tests {
         LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
     };
     use scryer_domain::ImportTransferPhase;
+
+    #[tokio::test]
+    async fn snapshot_reads_survive_churn_and_do_not_advance_revisions() {
+        use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+        let (mut app, user) = crate::lib_tests::bootstrap();
+        let store = Arc::new(InMemoryLocationOperationStore::new());
+        store.insert_operation(queued_operation(
+            "op",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        ));
+        app.services.library.location_operations = store.clone();
+        app.initialize_transfer_generation().await.unwrap();
+        let hub = app.runtime.library.location_runners.transfers.clone();
+        let mut subscriber = hub.subscribe();
+        let initial = hub.version();
+        let (summary, page) = tokio::join!(
+            app.location_transfer_snapshot(&user, "op", None, 50),
+            app.location_transfer_snapshot(&user, "op", Some(0), 50),
+        );
+        assert_eq!(summary.unwrap().unwrap().version, initial);
+        assert_eq!(page.unwrap().unwrap().version, initial);
+        assert_eq!(hub.version(), initial);
+        assert!(!subscriber.has_changed().unwrap());
+        let churn = hub.clone();
+        *store.operation_read_hook.lock().unwrap() = Some(Box::new(move || {
+            for index in 0..100 {
+                churn.file_done("op", "title", &index.to_string(), 1);
+            }
+        }));
+        let snapshot = app
+            .location_transfer_snapshot(&user, "op", Some(0), 50)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.version > initial);
+        assert!(snapshot.version < hub.version());
+        assert!(subscriber.has_changed().unwrap());
+        subscriber.borrow_and_update();
+        *store.operation_read_hook.lock().unwrap() = None;
+        let newest = app
+            .location_transfer_snapshot(&user, "op", None, 50)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(newest.version > snapshot.version);
+        assert_eq!(newest.version, hub.version());
+        assert!(!subscriber.has_changed().unwrap());
+    }
+
+    #[test]
+    fn failed_and_blocked_work_does_not_hide_healthy_work_eta() {
+        let mut operation = crate::location::test_support::queued_operation(
+            "op",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        operation.state = LocationOperationState::Moving;
+        operation.started_at = Some(chrono::Utc::now());
+        operation.counters.bytes_total = 1000;
+        let hub = TransferHub::default();
+        hub.file_update(
+            "op",
+            "failed",
+            "file",
+            100,
+            ImportTransferPhase::Copying,
+            50,
+        );
+        hub.file_failed("op", "failed", "file", 100);
+        hub.file_failed("op", "blocked", "", 200);
+        hub.file_update(
+            "op",
+            "healthy",
+            "file",
+            700,
+            ImportTransferPhase::Copying,
+            200,
+        );
+        let now = Instant::now();
+        let mut eta = TransferEta::new(now - Duration::from_secs(20));
+        for seconds in [5, 10, 15, 20] {
+            eta.add_useful(500, now - Duration::from_secs(20 - seconds));
+        }
+        hub.state
+            .lock()
+            .unwrap()
+            .operations
+            .get_mut("op")
+            .unwrap()
+            .eta = eta;
+        // 250 actual bytes earn progress; 550 abandoned work bytes earn none.
+        // Healthy work has 1,200 bytes left at 100 useful bytes/second.
+        assert_eq!(hub.progress(&operation, 0), (1250, Some(12)));
+        hub.file_failed("op", "failed", "file", 100);
+        assert_eq!(hub.progress(&operation, 0), (1250, Some(12)));
+        hub.state
+            .lock()
+            .unwrap()
+            .operations
+            .get_mut("op")
+            .unwrap()
+            .eta
+            .last_useful = now - Duration::from_secs(31);
+        assert_eq!(hub.progress(&operation, 0), (1250, None));
+    }
 
     #[test]
     fn unequal_files_retries_and_restart_keep_high_water_without_claiming_verification() {
@@ -813,7 +915,7 @@ mod tests {
         let hub = TransferHub::default();
         hub.file_done("op", "first", "file", 100);
         assert_eq!(hub.progress(&operation, 0).0, 5000);
-        hub.file_failed("op", "second", "file");
+        hub.file_failed("op", "second", "file", 100);
         hub.title_finalized("op", Duration::from_secs(2));
         hub.begin("op", 100);
         assert_eq!(hub.progress(&operation, 5000), (5000, None));
@@ -821,7 +923,7 @@ mod tests {
             let state = hub.state.lock().unwrap();
             let telemetry = &state.operations["op"];
             assert!(telemetry.files.is_empty());
-            assert!(!telemetry.failed);
+            assert!(telemetry.abandoned_work.is_empty());
             assert_eq!(telemetry.finalized, 0);
             assert_eq!(telemetry.eta.samples, 0);
         }
@@ -849,7 +951,7 @@ mod tests {
             ImportTransferPhase::Copying,
             0,
         );
-        hub.file_failed("op", "title", "failed");
+        hub.file_failed("op", "title", "failed", 100);
         hub.file_update(
             "op",
             "title",

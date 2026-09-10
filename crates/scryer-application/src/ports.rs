@@ -5088,6 +5088,25 @@ pub trait LocationOperationRepository: Send + Sync {
     ) -> AppResult<()> {
         Ok(())
     }
+    /// Seed missing summaries without overwriting checkpoints on resume.
+    /// Persistent stores override this with bounded bulk inserts.
+    async fn seed_transfer_titles(
+        &self,
+        operation_id: &str,
+        titles: &[crate::location::live::TransferTitle],
+    ) -> AppResult<()> {
+        for title in titles {
+            if self
+                .transfer_title(operation_id, &title.title_id)
+                .await?
+                .is_none()
+            {
+                self.upsert_transfer_title(operation_id, title).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn upsert_transfer_title(
         &self,
         _operation_id: &str,

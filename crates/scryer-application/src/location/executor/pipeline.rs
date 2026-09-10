@@ -140,7 +140,12 @@ impl LocationOperationRunner<'_> {
                                     fatal = Some(error);
                                 }
                                 progress.warnings.push(reason);
-                                hub.file_failed(&operation.id, &title.title_id, "");
+                                hub.file_failed(
+                                    &operation.id,
+                                    &title.title_id,
+                                    "",
+                                    title.files.iter().map(|file| file.size_bytes).sum(),
+                                );
                                 title_index += 1;
                                 file_index = 0;
                                 continue;
@@ -302,7 +307,7 @@ impl LocationOperationRunner<'_> {
                         Err(error) => Err(error),
                     };
                     if let Err(error) = result {
-                        hub.file_failed(&operation.id, &title.title_id, &file.stored_destination());
+                        hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
                         failed.insert(title.title_id.clone(), error.to_string());
                     } else if fatal.is_none() {
                         progress.note_file_done(&title.title_id, file);
