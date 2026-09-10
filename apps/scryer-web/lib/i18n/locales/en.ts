@@ -5014,6 +5014,8 @@ const en: LocaleDictionary = {
   "title.tagsAllApplied": "Every defined tag is already applied",
   "title.tagsRemove": "Remove {{label}}",
   "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.tagsNoneDefined": "No tags are defined yet",
+  "title.tagsCreateMore": "Create more tags…",
   "title.bulkAddTags": "Add tags",
   "title.bulkRemoveTags": "Remove tags",
   "title.catalogFilters.themes": "Themes",

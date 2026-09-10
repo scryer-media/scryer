@@ -425,6 +425,43 @@ function loadAuthBootstrapSnapshot(): Promise<AuthBootstrapSnapshot> {
   return authBootstrapPromise;
 }
 
+/**
+ * The signed-in user, observed rather than owned.
+ *
+ * {@link useAuth} owns the session and the shell threads the permissions it
+ * derives down as props, which is right for anything that gates real work. A
+ * leaf that needs one permission for one link -- an offer to go and create more
+ * tags, say -- would otherwise force that prop through every component between
+ * the shell and itself, none of which has any other use for it. This reads the
+ * snapshot the shell has already resolved, so it costs no request, and follows
+ * the session across a sign-in or sign-out.
+ */
+export function useSessionUser(): AuthUser | null {
+  const [user, setUser] = useState<AuthUser | null>(
+    () => authBootstrapSnapshot?.user ?? null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const readSession = () => {
+      void loadAuthBootstrapSnapshot().then((snapshot) => {
+        if (!cancelled) {
+          setUser(snapshot.user);
+        }
+      });
+    };
+
+    readSession();
+    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, readSession);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, readSession);
+    };
+  }, []);
+
+  return user;
+}
+
 function applyAuthenticatedSession(
   token: string,
   user: AuthUser | null,

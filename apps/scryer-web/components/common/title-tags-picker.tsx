@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useNavigate } from "react-router";
 import { useClient } from "urql";
 import { Tag, X } from "lucide-react";
 
@@ -6,6 +7,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -15,8 +17,10 @@ import {
   updateSeriesMovieTagsMutation,
   updateTitleTagsMutation,
 } from "@/lib/graphql/mutations";
+import { useSessionUser } from "@/lib/hooks/use-auth";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
+import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
   availableTitleTagLabels,
   isEmptyTitleTagsDelta,
@@ -28,6 +32,16 @@ import {
 /// value, and the control is an action ("add this one"), not a field with a
 /// current value.
 const ADD_PLACEHOLDER_VALUE = "__add_title_tag__";
+
+/// Sentinel for the way out of the picker. The registry is administrator-owned
+/// and this control cannot add to it, so the one thing it can offer someone who
+/// runs out of tags is the screen that defines them.
+const MANAGE_REGISTRY_VALUE = "__manage_title_tags__";
+
+/// Where the tag registry is edited. The section is gated on catalog settings,
+/// not system settings, so that is what decides whether the way out is offered
+/// -- pointing anyone else at it would be a link to a page they cannot open.
+const TITLE_TAGS_SETTINGS_PATH = "/settings/tags";
 
 export type TitleTagsPickerProps = {
   /** Labels currently applied. Reserved `scryer:` entries are ignored. */
@@ -52,7 +66,9 @@ export type TitleTagsPickerProps = {
 /**
  * Chips plus a registry-backed select. There is deliberately no free-text
  * entry: an administrator decides which tags exist, and everything else only
- * decides which titles carry them.
+ * decides which titles carry them -- so for a viewer who is that administrator
+ * the list ends in the way to go and define more, which is the only thing this
+ * control cannot do for them.
  */
 export function TitleTagsPicker({
   value,
@@ -66,6 +82,12 @@ export function TitleTagsPicker({
   layout = "stacked",
 }: TitleTagsPickerProps) {
   const t = useTranslate();
+  const navigate = useNavigate();
+  const sessionUser = useSessionUser();
+  const canManageRegistry = hasAppPermission(
+    sessionUser,
+    APP_PERMISSIONS.manageCatalogSettings,
+  );
   const applied = React.useMemo(() => userTitleTags(value), [value]);
   const excluded = React.useMemo(
     () => new Set(userTitleTags(excludedLabels)),
@@ -85,9 +107,13 @@ export function TitleTagsPicker({
       if (label === ADD_PLACEHOLDER_VALUE) {
         return;
       }
+      if (label === MANAGE_REGISTRY_VALUE) {
+        void navigate(TITLE_TAGS_SETTINGS_PATH);
+        return;
+      }
       onChange(userTitleTags([...applied, label]));
     },
-    [applied, onChange],
+    [applied, navigate, onChange],
   );
 
   const removeLabel = React.useCallback(
@@ -126,15 +152,17 @@ export function TitleTagsPicker({
     </p>
   );
 
-  const selector = registryIsEmpty ? (
+  const selector = registryIsEmpty && !canManageRegistry ? (
     // No free text means an empty registry has nothing to offer, so the
     // picker says where tags come from instead of showing a dead control.
+    // Someone who can define them keeps the control, because for them it is
+    // not dead: it still carries the way to the screen that defines them.
     <p className="text-xs text-muted-foreground">{t("title.tagsEmptyRegistry")}</p>
   ) : (
     <Select
       value={ADD_PLACEHOLDER_VALUE}
       onValueChange={addLabel}
-      disabled={disabled || loading || options.length === 0}
+      disabled={disabled || loading || (options.length === 0 && !canManageRegistry)}
     >
       <SelectTrigger
         id={`${idPrefix}-tags-add`}
@@ -144,13 +172,28 @@ export function TitleTagsPicker({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ADD_PLACEHOLDER_VALUE}>
-          {options.length === 0 ? t("title.tagsAllApplied") : t("title.tagsAdd")}
+          {options.length > 0
+            ? t("title.tagsAdd")
+            : registryIsEmpty
+              ? t("title.tagsNoneDefined")
+              : t("title.tagsAllApplied")}
         </SelectItem>
         {options.map((label) => (
           <SelectItem key={label} value={label}>
             {label}
           </SelectItem>
         ))}
+        {canManageRegistry ? (
+          <>
+            <SelectSeparator />
+            <SelectItem
+              id={`${idPrefix}-tags-manage`}
+              value={MANAGE_REGISTRY_VALUE}
+            >
+              {t("title.tagsCreateMore")}
+            </SelectItem>
+          </>
+        ) : null}
       </SelectContent>
     </Select>
   );
