@@ -45,6 +45,8 @@ export type TitleTagsPickerProps = {
   excludedLabels?: readonly string[];
   /** Overrides the "no tags applied" line; the bulk pickers word it their own way. */
   emptyValueText?: string;
+  /** Places applied tags beside the add selector for use in a settings table. */
+  layout?: "stacked" | "horizontal" | "table";
 };
 
 /**
@@ -61,6 +63,7 @@ export function TitleTagsPicker({
   idPrefix,
   excludedLabels,
   emptyValueText,
+  layout = "stacked",
 }: TitleTagsPickerProps) {
   const t = useTranslate();
   const applied = React.useMemo(() => userTitleTags(value), [value]);
@@ -94,61 +97,93 @@ export function TitleTagsPicker({
     [applied, onChange],
   );
 
-  return (
-    <div className="space-y-2" id={`${idPrefix}-tags`}>
-      {applied.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
-          {applied.map((label) => (
-            <span
-              key={label}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] py-1 pl-2.5 pr-1.5 text-xs font-semibold text-[var(--scry-accent-text)]"
-            >
-              <span className="truncate">{label}</span>
-              <button
-                id={`${idPrefix}-tag-remove-${label.replace(/\s+/g, "-")}`}
-                type="button"
-                aria-label={t("title.tagsRemove", { label })}
-                title={t("title.tagsRemove", { label })}
-                onClick={() => removeLabel(label)}
-                disabled={disabled}
-                className="rounded-[5px] p-0.5 transition hover:bg-[rgba(var(--scry-accent-rgb),0.28)] disabled:opacity-50"
-              >
-                <X className="h-3 w-3" aria-hidden="true" />
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          {emptyValueText ?? t("title.tagsNone")}
-        </p>
-      )}
-
-      {registryIsEmpty ? (
-        // No free text means an empty registry has nothing to offer, so the
-        // picker says where tags come from instead of showing a dead control.
-        <p className="text-xs text-muted-foreground">{t("title.tagsEmptyRegistry")}</p>
-      ) : (
-        <Select
-          value={ADD_PLACEHOLDER_VALUE}
-          onValueChange={addLabel}
-          disabled={disabled || loading || options.length === 0}
+  const appliedTags = applied.length > 0 ? (
+    <div className="flex flex-wrap gap-1.5">
+      {applied.map((label) => (
+        <span
+          key={label}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] py-1 pl-2 pr-1.5 text-xs font-semibold text-[var(--scry-accent-text)]"
         >
-          <SelectTrigger id={`${idPrefix}-tags-add`} className="h-9 w-full">
-            <SelectValue placeholder={t("title.tagsAdd")} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ADD_PLACEHOLDER_VALUE}>
-              {options.length === 0 ? t("title.tagsAllApplied") : t("title.tagsAdd")}
-            </SelectItem>
-            {options.map((label) => (
-              <SelectItem key={label} value={label}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+          <Tag className="size-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">{label}</span>
+          <button
+            id={`${idPrefix}-tag-remove-${label.replace(/\s+/g, "-")}`}
+            type="button"
+            aria-label={t("title.tagsRemove", { label })}
+            title={t("title.tagsRemove", { label })}
+            onClick={() => removeLabel(label)}
+            disabled={disabled}
+            className="rounded-[5px] p-0.5 transition hover:bg-[rgba(var(--scry-accent-rgb),0.28)] disabled:opacity-50"
+          >
+            <X className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </span>
+      ))}
+    </div>
+  ) : (
+    <p className="text-sm text-muted-foreground">
+      {emptyValueText ?? t("title.tagsNone")}
+    </p>
+  );
+
+  const selector = registryIsEmpty ? (
+    // No free text means an empty registry has nothing to offer, so the
+    // picker says where tags come from instead of showing a dead control.
+    <p className="text-xs text-muted-foreground">{t("title.tagsEmptyRegistry")}</p>
+  ) : (
+    <Select
+      value={ADD_PLACEHOLDER_VALUE}
+      onValueChange={addLabel}
+      disabled={disabled || loading || options.length === 0}
+    >
+      <SelectTrigger id={`${idPrefix}-tags-add`} className="h-9 w-full">
+        <SelectValue placeholder={t("title.tagsAdd")} />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ADD_PLACEHOLDER_VALUE}>
+          {options.length === 0 ? t("title.tagsAllApplied") : t("title.tagsAdd")}
+        </SelectItem>
+        {options.map((label) => (
+          <SelectItem key={label} value={label}>
+            {label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  if (layout === "table") {
+    return (
+      <>
+        <td className="w-[38%] px-4 py-3 align-middle text-sm text-foreground sm:px-5">
+          <div id={`${idPrefix}-tags`} className="flex min-w-0 items-center">
+            {appliedTags}
+          </div>
+        </td>
+        <td className="w-[38%] px-4 py-3 align-middle sm:px-5">
+          <div className="min-w-40">{selector}</div>
+        </td>
+      </>
+    );
+  }
+
+  return (
+    <div
+      className={
+        layout === "horizontal"
+          ? "grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center"
+          : "space-y-2"
+      }
+      id={`${idPrefix}-tags`}
+    >
+      <div
+        className={
+          layout === "horizontal" ? "flex min-w-0 items-center pr-5" : "min-w-0"
+        }
+      >
+        {appliedTags}
+      </div>
+      <div className="min-w-0">{selector}</div>
     </div>
   );
 }
@@ -164,6 +199,8 @@ export type TitleTagsEditorProps = {
    */
   onTitleChanged?: () => Promise<void> | void;
   disabled?: boolean;
+  layout?: "stacked" | "horizontal" | "table";
+  showLabel?: boolean;
 };
 
 /**
@@ -177,6 +214,8 @@ export function TitleTagsEditor({
   idPrefix,
   onTitleChanged,
   disabled = false,
+  layout = "stacked",
+  showLabel = true,
 }: TitleTagsEditorProps) {
   const t = useTranslate();
   const client = useClient();
@@ -212,20 +251,31 @@ export function TitleTagsEditor({
     [client, onTitleChanged, setGlobalStatus, t, tags, titleId],
   );
 
+  const picker = (
+    <TitleTagsPicker
+      value={tags}
+      onChange={(labels) => void applyTags(labels)}
+      definitions={definitions}
+      loading={loading}
+      disabled={disabled || saving}
+      idPrefix={idPrefix}
+      layout={layout}
+    />
+  );
+
+  if (layout === "table") {
+    return picker;
+  }
+
   return (
     <div className="min-w-0">
-      <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <Tag aria-hidden="true" className="size-3.5" />
-        {t("title.tagsLabel")}
-      </label>
-      <TitleTagsPicker
-        value={tags}
-        onChange={(labels) => void applyTags(labels)}
-        definitions={definitions}
-        loading={loading}
-        disabled={disabled || saving}
-        idPrefix={idPrefix}
-      />
+      {showLabel ? (
+        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <Tag aria-hidden="true" className="size-3.5" />
+          {t("title.tagsLabel")}
+        </label>
+      ) : null}
+      {picker}
     </div>
   );
 }

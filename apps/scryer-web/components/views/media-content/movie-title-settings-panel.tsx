@@ -3,7 +3,6 @@ import { useClient } from "urql";
 
 import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
-import { MoveTitleSettingsCard } from "@/components/common/move-title-settings-card";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
 import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
@@ -127,13 +126,34 @@ export function MovieTitleSettingsPanel({
         idPrefix="title-overview-settings"
         currentLibraryName={libraryName ?? title.libraryName ?? null}
         rootFolderReadOnly
+        onOpenMove={experimentalFeaturesEnabled ? () => setMoveOpen(true) : undefined}
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-2 px-3 py-3">
+            <FixTitleMatchSettingsCard
+              facet={title.facet}
+              idPrefix="title-overview-settings"
+              onOpen={onOpenFixMatch}
+              compact
+            />
+            <ChangeTitleFolderCard
+              title={{
+                id: title.id,
+                name: title.name,
+                libraryId: title.libraryId,
+                libraryName: libraryName ?? title.libraryName ?? null,
+                rootFolderId: title.rootFolderId ?? null,
+                rootFolderPath: title.rootFolderPath ?? null,
+              }}
+              roots={rootFolders}
+              idPrefix="title-overview-settings"
+              onTitleChanged={onTitleChanged}
+              compact
+            />
+          </div>
+        }
       />
       {experimentalFeaturesEnabled ? (
         <>
-          <MoveTitleSettingsCard
-            idPrefix="title-overview-settings"
-            onOpen={() => setMoveOpen(true)}
-          />
           <MoveTitlesDialog
             open={moveOpen}
             onOpenChange={setMoveOpen}
@@ -152,24 +172,6 @@ export function MovieTitleSettingsPanel({
           />
         </>
       ) : null}
-      <FixTitleMatchSettingsCard
-        facet={title.facet}
-        idPrefix="title-overview-settings"
-        onOpen={onOpenFixMatch}
-      />
-      <ChangeTitleFolderCard
-        title={{
-          id: title.id,
-          name: title.name,
-          libraryId: title.libraryId,
-          libraryName: libraryName ?? title.libraryName ?? null,
-          rootFolderId: title.rootFolderId ?? null,
-          rootFolderPath: title.rootFolderPath ?? null,
-        }}
-        roots={rootFolders}
-        idPrefix="title-overview-settings"
-        onTitleChanged={onTitleChanged}
-      />
     </div>
   );
 }

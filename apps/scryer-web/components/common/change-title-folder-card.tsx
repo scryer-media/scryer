@@ -19,6 +19,7 @@ type ChangeTitleFolderCardProps = {
   roots: LibraryRootRecord[];
   idPrefix: string;
   onTitleChanged?: () => Promise<void> | void;
+  compact?: boolean;
 };
 
 /**
@@ -30,6 +31,7 @@ export function ChangeTitleFolderCard({
   roots,
   idPrefix,
   onTitleChanged,
+  compact = false,
 }: ChangeTitleFolderCardProps) {
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -43,29 +45,35 @@ export function ChangeTitleFolderCard({
     [onTitleChanged, setGlobalStatus, t],
   );
 
+  const action = (
+    <Button
+      id={`${idPrefix}-change-folder`}
+      type="button"
+      variant="primary"
+      size="sm"
+      className="shrink-0"
+      onClick={() => setOpen(true)}
+    >
+      <FolderSymlink className="h-4 w-4" />
+      {t("title.changeFolderAction")}
+    </Button>
+  );
+
   return (
     <>
-      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">
-            {t("title.changeFolderHeading")}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {t("title.changeFolderDescription")}
-          </p>
+      {compact ? action : (
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">
+              {t("title.changeFolderHeading")}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t("title.changeFolderDescription")}
+            </p>
+          </div>
+          {action}
         </div>
-        <Button
-          id={`${idPrefix}-change-folder`}
-          type="button"
-          variant="primary"
-          size="sm"
-          className="shrink-0"
-          onClick={() => setOpen(true)}
-        >
-          <FolderSymlink className="mr-2 h-4 w-4" />
-          {t("title.changeFolderAction")}
-        </Button>
-      </div>
+      )}
       <ChangeTitleFolderDialog
         open={open}
         onOpenChange={setOpen}

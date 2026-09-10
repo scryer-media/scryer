@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
-import { MoveTitleSettingsCard } from "@/components/common/move-title-settings-card";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
 import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -181,15 +180,68 @@ export function TitleSettingsPanel({
         idPrefix="series-overview-settings"
         currentLibraryName={currentLibraryName}
         rootFolderReadOnly
+        onOpenMove={experimentalFeaturesEnabled ? () => setMoveOpen(true) : undefined}
+        footer={
+          <>
+            <div className="flex flex-wrap items-center justify-end gap-2 px-3 py-3">
+              {onOpenFixMatch ? (
+                <FixTitleMatchSettingsCard
+                  facet={title.facet}
+                  idPrefix="series-overview-settings"
+                  onOpen={onOpenFixMatch}
+                  compact
+                />
+              ) : null}
+              <ChangeTitleFolderCard
+                title={{
+                  id: title.id,
+                  name: title.name,
+                  libraryId: title.libraryId,
+                  libraryName: title.libraryName ?? null,
+                  rootFolderId: title.rootFolderId ?? null,
+                  rootFolderPath: title.rootFolderPath ?? null,
+                }}
+                roots={rootFolders}
+                idPrefix="series-overview-settings"
+                onTitleChanged={onTitleChanged}
+                compact
+              />
+              {renameEnabled ? (
+                <Button
+                  id="series-overview-rename-preview"
+                  data-ui="series-overview-rename-preview"
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={() => void handlePreviewRename()}
+                  disabled={renamePreviewing || renameApplying}
+                >
+                  {renamePreviewing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                  {renamePreviewing ? t("rename.previewing") : t("rename.previewButton")}
+                </Button>
+              ) : null}
+            </div>
+            {renamePlan ? (
+              <div className="px-3 pb-3">
+                <MediaRenamePlanPanel
+                  plan={renamePlan}
+                  applying={renameApplying}
+                  applyDisabled={renameApplying || renamePreviewing || renamePlan.renamable === 0}
+                  applyButtonId="series-overview-rename-apply"
+                  onApply={() => void handleApplyRename()}
+                />
+              </div>
+            ) : null}
+          </>
+        }
       />
 
       {experimentalFeaturesEnabled ? (
         <>
-          <MoveTitleSettingsCard
-            idPrefix="series-overview-settings"
-            onOpen={() => setMoveOpen(true)}
-          />
-
           <MoveTitlesDialog
             open={moveOpen}
             onOpenChange={setMoveOpen}
@@ -209,61 +261,6 @@ export function TitleSettingsPanel({
         </>
       ) : null}
 
-      {onOpenFixMatch ? (
-        <FixTitleMatchSettingsCard
-          facet={title.facet}
-          idPrefix="series-overview-settings"
-          onOpen={onOpenFixMatch}
-        />
-      ) : null}
-
-      <ChangeTitleFolderCard
-        title={{
-          id: title.id,
-          name: title.name,
-          libraryId: title.libraryId,
-          libraryName: title.libraryName ?? null,
-          rootFolderId: title.rootFolderId ?? null,
-          rootFolderPath: title.rootFolderPath ?? null,
-        }}
-        roots={rootFolders}
-        idPrefix="series-overview-settings"
-        onTitleChanged={onTitleChanged}
-      />
-
-      {renameEnabled ? (
-        <div className={`${onOpenFixMatch ? "mt-3" : "mt-5"} rounded-lg border border-border/70 bg-muted/20 px-3 py-3`}>
-          <div className="flex justify-end">
-            <Button
-              id="series-overview-rename-preview"
-              data-ui="series-overview-rename-preview"
-              type="button"
-              variant="primary"
-              size="sm"
-              className="w-full shrink-0 justify-center gap-2 rounded-md border border-transparent !bg-primary px-3 font-semibold !text-primary-foreground shadow-sm hover:!bg-primary/90 focus-visible:ring-[var(--scry-accent-ring)] sm:w-auto"
-              onClick={() => void handlePreviewRename()}
-              disabled={renamePreviewing || renameApplying}
-            >
-              {renamePreviewing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Eye className="h-4 w-4" />
-              )}
-              {renamePreviewing ? t("rename.previewing") : t("rename.previewButton")}
-            </Button>
-          </div>
-
-          {renamePlan ? (
-            <MediaRenamePlanPanel
-              plan={renamePlan}
-              applying={renameApplying}
-              applyDisabled={renameApplying || renamePreviewing || renamePlan.renamable === 0}
-              applyButtonId="series-overview-rename-apply"
-              onApply={() => void handleApplyRename()}
-            />
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }

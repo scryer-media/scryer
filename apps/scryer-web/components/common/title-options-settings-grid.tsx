@@ -4,10 +4,12 @@ import {
   BadgeCheck,
   Database,
   Folder,
+  FolderInput,
   Folders,
   Languages,
   Popcorn,
   RotateCcw,
+  Tag,
 } from "lucide-react";
 import {
   Select,
@@ -18,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { TitleTagsEditor } from "@/components/common/title-tags-picker";
+import { Button } from "@/components/ui/button";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -74,7 +77,55 @@ type Props = {
    * root instead of offering a dropdown that would rewrite them in place.
    */
   rootFolderReadOnly?: boolean;
+  onOpenMove?: () => void;
+  footer?: React.ReactNode;
 };
+
+type SettingsRowProps = {
+  icon: React.ElementType;
+  label: string;
+  effective: React.ReactNode;
+  children: React.ReactNode;
+};
+
+function SettingsRow({ icon: Icon, label, effective, children }: SettingsRowProps) {
+  return (
+    <tr className="border-b border-border/70 last:border-b-0">
+      <th scope="row" className="w-[24%] px-4 py-3 text-left align-middle sm:px-5">
+        <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Icon aria-hidden="true" className="size-4 shrink-0" />
+          {label}
+        </span>
+      </th>
+      <td className="w-[38%] px-4 py-3 align-middle text-sm text-foreground sm:px-5">
+        <div className="min-w-0 break-words">{effective}</div>
+      </td>
+      <td className="w-[38%] px-4 py-3 align-middle sm:px-5">
+        <div className="min-w-40">{children}</div>
+      </td>
+    </tr>
+  );
+}
+
+function MoveTitleButton({ id, onOpen }: { id: string; onOpen: () => void }) {
+  const t = useTranslate();
+
+  return (
+    <div className="flex justify-end">
+      <Button
+        id={id}
+        type="button"
+        variant="primary"
+        size="sm"
+        title={t("move.actionButton")}
+        onClick={onOpen}
+      >
+        <FolderInput aria-hidden="true" className="size-4" />
+        {t("move.actionButton")}
+      </Button>
+    </div>
+  );
+}
 
 export function TitleOptionsSettingsGrid({
   title,
@@ -86,6 +137,8 @@ export function TitleOptionsSettingsGrid({
   idPrefix,
   currentLibraryName,
   rootFolderReadOnly = false,
+  onOpenMove,
+  footer,
 }: Props) {
   const t = useTranslate();
   const client = useClient();
@@ -188,298 +241,287 @@ export function TitleOptionsSettingsGrid({
   const currentRootFolderLabel = currentRoot?.isDefault
     ? t("title.defaultRootFolder", { path: currentRootPath })
     : currentRootPath;
+  const effectiveQualityProfile =
+    qualityProfiles.find((profile) => profile.id === currentProfileId)?.name ??
+    title.qualityTier ??
+    "—";
+  const effectiveAudioLanguages =
+    formatAudioLanguageLabels(
+      requiredAudioLanguages,
+      t("title.originalAudioLanguagePerTitle"),
+    ) || t("label.none");
+  const effectiveFillerPolicy =
+    title.effectiveFillerPolicy === "SKIP_FILLER"
+      ? t("settings.fillerPolicySkipFiller")
+      : t("settings.fillerPolicyDownloadAll");
+  const effectiveRecapPolicy =
+    title.effectiveRecapPolicy === "SKIP_RECAP"
+      ? t("settings.recapPolicySkipRecap")
+      : t("settings.recapPolicyDownloadAll");
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 [&>div>label]:min-h-8">
-      <div className="min-w-0">
-        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <BadgeCheck aria-hidden="true" className="size-3.5" />
-          {t("title.qualityProfile")}
-        </label>
-        <Select
-          value={currentProfileId}
-          onValueChange={(value) =>
-            void saveTitleOptions({
-              qualityProfileId: value === INHERIT_VALUE ? "" : value,
-            })
-          }
-          disabled={saving || qualityProfiles.length === 0}
-        >
-          <SelectTrigger id={`${idPrefix}-quality-profile`} className="h-9 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-            {qualityProfiles.map((profile) => (
-              <SelectItem key={profile.id} value={profile.id}>
-                {profile.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {currentProfileId === INHERIT_VALUE && title.qualityTier ? (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("settings.libraryEffectiveProfile", { value: title.qualityTier })}
-          </p>
-        ) : null}
-      </div>
-
-      {/* FR-010: where a title lives is stated beside its other settings, but
-          it is not one of them — the library and the root only change through
-          the move workflow, which previews the transfer first (FR-011/FR-017).
-          Everything here is therefore read-only text, not a pinned control
-          pretending to be editable. */}
-      {rootFolderReadOnly ? (
-        <div className="min-w-0">
-          <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Database aria-hidden="true" className="size-3.5" />
-            {t("title.changeFolderLibrary")}
-          </label>
-          <p
-            id={`${idPrefix}-library`}
-            className="flex h-9 items-center truncate text-sm text-foreground"
+    <div className="overflow-x-auto rounded-xl border border-border bg-card">
+      <table className="w-full min-w-[760px] table-fixed border-collapse align-middle">
+        <colgroup>
+          <col className="w-[24%]" />
+          <col className="w-[38%]" />
+          <col className="w-[38%]" />
+        </colgroup>
+        <tbody>
+          <SettingsRow
+            icon={BadgeCheck}
+            label={t("title.qualityProfile")}
+            effective={effectiveQualityProfile}
           >
-            {currentLibraryName?.trim() || "—"}
-          </p>
-        </div>
-      ) : null}
-
-      <div className="min-w-0">
-        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <Folder aria-hidden="true" className="size-3.5" />
-          {t("title.rootFolder")}
-        </label>
-        {rootFolderReadOnly ? (
-          <p
-            id={`${idPrefix}-root-folder`}
-            className="flex h-9 items-center break-all font-[var(--font-code)] text-sm text-foreground"
-          >
-            {currentRootFolderLabel}
-          </p>
-        ) : (
-          <Select
-            value={rootFolderSelectValue}
-            onValueChange={(rootFolderId) =>
-              void saveTitleOptions({ rootFolderId })
-            }
-            disabled={saving || sortedRootFolders.length === 0}
-          >
-            <SelectTrigger
-              id={`${idPrefix}-root-folder`}
-              className="h-9 w-full font-[var(--font-code)] text-sm"
+            <Select
+              value={currentProfileId}
+              onValueChange={(value) =>
+                void saveTitleOptions({
+                  qualityProfileId: value === INHERIT_VALUE ? null : value,
+                })
+              }
+              disabled={saving || qualityProfiles.length === 0}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {sortedRootFolders.map((rootFolder) => (
-                <SelectItem key={rootFolder.id} value={rootFolder.id}>
-                  {rootFolder.isDefault
-                    ? t("title.defaultRootFolder", {
-                        path: folderLabel(rootFolder.path || defaultRootFolder),
-                      })
-                    : folderLabel(rootFolder.path)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
+              <SelectTrigger id={`${idPrefix}-quality-profile`} className="h-9 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                {qualityProfiles.map((profile) => (
+                  <SelectItem key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingsRow>
 
-      {title.facet !== "MOVIE" ? (
-        <div className="min-w-0">
-          <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Folders aria-hidden="true" className="size-3.5" />
-            {t("search.addConfigSeasonFolder")}
-          </label>
-          <Select
-            value={currentSeasonFolder}
-            onValueChange={(value) =>
-              void saveTitleOptions({
-                useSeasonFolders:
-                  value === INHERIT_VALUE ? null : value === "enabled",
-              })
-            }
-            disabled={saving}
-          >
-            <SelectTrigger id={`${idPrefix}-season-folder`} className="h-9 w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-              <SelectItem value="enabled">{t("search.seasonFolder.enabled")}</SelectItem>
-              <SelectItem value="disabled">{t("search.seasonFolder.disabled")}</SelectItem>
-            </SelectContent>
-          </Select>
-          {currentSeasonFolder === INHERIT_VALUE ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("settings.libraryEffectiveSeasonFolders", {
-                value: effectiveUseSeasonFolders
-                  ? t("search.seasonFolder.enabled")
-                  : t("search.seasonFolder.disabled"),
-              })}
-            </p>
+          {rootFolderReadOnly ? (
+            <SettingsRow
+              icon={Database}
+              label={t("title.changeFolderLibrary")}
+              effective={<span id={`${idPrefix}-library`}>{currentLibraryName?.trim() || "—"}</span>}
+            >
+              {onOpenMove ? (
+                <MoveTitleButton
+                  id={`${idPrefix}-library-move-to`}
+                  onOpen={onOpenMove}
+                />
+              ) : (
+                <span className="text-sm text-muted-foreground">—</span>
+              )}
+            </SettingsRow>
           ) : null}
-        </div>
-      ) : null}
 
-      <div className="min-w-0 xl:max-w-72">
-        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <Languages aria-hidden="true" className="size-3.5" />
-          {t("title.requiredAudioLanguages")}
-        </label>
-        <div id={`${idPrefix}-required-audio-languages`}>
-          <AudioLanguagePicker
-            value={requiredAudioLanguages}
-            onChange={(codes) => void handleRequiredAudioChange(codes)}
-            compact
-            disabled={audioSaving}
-          />
-        </div>
-        {!hasAudioOverride ? (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("settings.libraryEffectiveAudio", {
-              value:
-                formatAudioLanguageLabels(
-                  requiredAudioLanguages,
-                  t("title.originalAudioLanguagePerTitle"),
-                ) || t("label.none"),
-            })}
-          </p>
-        ) : null}
-        {hasAudioOverride ? (
-          <button
-            id={`${idPrefix}-required-audio-reset`}
-            type="button"
-            className="mt-1 text-xs text-primary hover:underline"
-            onClick={() => void handleResetAudioOverride()}
-            disabled={audioSaving}
+          <SettingsRow
+            icon={Folder}
+            label={t("title.rootFolder")}
+            effective={
+              <span
+                id={rootFolderReadOnly ? `${idPrefix}-root-folder` : undefined}
+                className="font-[var(--font-code)] text-xs"
+              >
+                {currentRootFolderLabel}
+              </span>
+            }
           >
-            {t("title.requiredAudioResetInherit")}
-          </button>
-        ) : null}
-      </div>
+            {rootFolderReadOnly ? (
+              onOpenMove ? (
+                <MoveTitleButton id={`${idPrefix}-move-to`} onOpen={onOpenMove} />
+              ) : (
+                <span className="text-sm text-muted-foreground">
+                  —
+                </span>
+              )
+            ) : (
+              <Select
+                value={rootFolderSelectValue}
+                onValueChange={(rootFolderId) => void saveTitleOptions({ rootFolderId })}
+                disabled={saving || sortedRootFolders.length === 0}
+              >
+                <SelectTrigger
+                  id={`${idPrefix}-root-folder`}
+                  className="h-9 w-full font-[var(--font-code)] text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {sortedRootFolders.map((rootFolder) => (
+                    <SelectItem key={rootFolder.id} value={rootFolder.id}>
+                      {rootFolder.isDefault
+                        ? t("title.defaultRootFolder", {
+                            path: folderLabel(rootFolder.path || defaultRootFolder),
+                          })
+                        : folderLabel(rootFolder.path)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </SettingsRow>
 
-      <div className="min-w-0">
-        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <Database aria-hidden="true" className="size-3.5" />
-          {t("settings.libraryMetadataLanguageLabel")}
-        </label>
-        <Select
-          value={currentMetadataLanguage}
-          onValueChange={(value) =>
-            void saveTitleOptions({
-              metadataLanguage: value === INHERIT_VALUE ? null : value,
-            })
-          }
-          disabled={saving}
-        >
-          <SelectTrigger id={`${idPrefix}-metadata-language`} className="h-9 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-            {AVAILABLE_LANGUAGES.map((language) => (
-              <SelectItem key={language.code} value={language.code}>
-                {language.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {currentMetadataLanguage === INHERIT_VALUE ? (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("settings.libraryEffectiveMetadataLanguage", {
-              value: getLanguageLabel(effectiveMetadataLanguage),
-            })}
-          </p>
-        ) : null}
-      </div>
+          {title.facet !== "MOVIE" ? (
+            <SettingsRow
+              icon={Folders}
+              label={t("search.addConfigSeasonFolder")}
+              effective={
+                effectiveUseSeasonFolders
+                  ? t("search.seasonFolder.enabled")
+                  : t("search.seasonFolder.disabled")
+              }
+            >
+              <Select
+                value={currentSeasonFolder}
+                onValueChange={(value) =>
+                  void saveTitleOptions({
+                    useSeasonFolders:
+                      value === INHERIT_VALUE ? null : value === "enabled",
+                  })
+                }
+                disabled={saving}
+              >
+                <SelectTrigger id={`${idPrefix}-season-folder`} className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                  <SelectItem value="enabled">{t("search.seasonFolder.enabled")}</SelectItem>
+                  <SelectItem value="disabled">{t("search.seasonFolder.disabled")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsRow>
+          ) : null}
 
-      {title.facet === "ANIME" ? (
-        <>
-          <div className="min-w-0">
-            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <Popcorn aria-hidden="true" className="size-3.5" />
-              {t("settings.fillerPolicyLabel")}
-            </label>
+          <SettingsRow
+            icon={Languages}
+            label={t("title.requiredAudioLanguages")}
+            effective={effectiveAudioLanguages}
+          >
+            <div className="space-y-1">
+              <div id={`${idPrefix}-required-audio-languages`}>
+                <AudioLanguagePicker
+                  value={requiredAudioLanguages}
+                  onChange={(codes) => void handleRequiredAudioChange(codes)}
+                  compact
+                  disabled={audioSaving}
+                />
+              </div>
+              {hasAudioOverride ? (
+                <button
+                  id={`${idPrefix}-required-audio-reset`}
+                  type="button"
+                  className="text-xs text-primary hover:underline"
+                  onClick={() => void handleResetAudioOverride()}
+                  disabled={audioSaving}
+                >
+                  {t("title.requiredAudioResetInherit")}
+                </button>
+              ) : null}
+            </div>
+          </SettingsRow>
+
+          <SettingsRow
+            icon={Database}
+            label={t("settings.libraryMetadataLanguageLabel")}
+            effective={getLanguageLabel(effectiveMetadataLanguage)}
+          >
             <Select
-              value={currentFillerPolicy}
+              value={currentMetadataLanguage}
               onValueChange={(value) =>
                 void saveTitleOptions({
-                  fillerPolicy: value === INHERIT_VALUE ? "" : value,
+                  metadataLanguage: value === INHERIT_VALUE ? null : value,
                 })
               }
               disabled={saving}
             >
-              <SelectTrigger id={`${idPrefix}-filler-policy`} className="h-9 w-full">
+              <SelectTrigger id={`${idPrefix}-metadata-language`} className="h-9 w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-                <SelectItem value="DOWNLOAD_ALL">{t("settings.fillerPolicyDownloadAll")}</SelectItem>
-                <SelectItem value="SKIP_FILLER">{t("settings.fillerPolicySkipFiller")}</SelectItem>
+                {AVAILABLE_LANGUAGES.map((language) => (
+                  <SelectItem key={language.code} value={language.code}>
+                    {language.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
-            {currentFillerPolicy === INHERIT_VALUE && title.effectiveFillerPolicy ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t("settings.libraryEffectiveProfile", {
-                  value:
-                    title.effectiveFillerPolicy === "SKIP_FILLER"
-                      ? t("settings.fillerPolicySkipFiller")
-                      : t("settings.fillerPolicyDownloadAll"),
-                })}
-              </p>
-            ) : null}
-          </div>
+          </SettingsRow>
 
-          <div className="min-w-0">
-            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <RotateCcw aria-hidden="true" className="size-3.5" />
-              {t("settings.recapPolicyLabel")}
-            </label>
-            <Select
-              value={currentRecapPolicy}
-              onValueChange={(value) =>
-                void saveTitleOptions({
-                  recapPolicy: value === INHERIT_VALUE ? "" : value,
-                })
-              }
+          {title.facet === "ANIME" ? (
+            <>
+              <SettingsRow
+                icon={Popcorn}
+                label={t("settings.fillerPolicyLabel")}
+                effective={effectiveFillerPolicy}
+              >
+                <Select
+                  value={currentFillerPolicy}
+                  onValueChange={(value) =>
+                    void saveTitleOptions({
+                      fillerPolicy: value === INHERIT_VALUE ? null : value,
+                    })
+                  }
+                  disabled={saving}
+                >
+                  <SelectTrigger id={`${idPrefix}-filler-policy`} className="h-9 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                    <SelectItem value="DOWNLOAD_ALL">{t("settings.fillerPolicyDownloadAll")}</SelectItem>
+                    <SelectItem value="SKIP_FILLER">{t("settings.fillerPolicySkipFiller")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingsRow>
+
+              <SettingsRow
+                icon={RotateCcw}
+                label={t("settings.recapPolicyLabel")}
+                effective={effectiveRecapPolicy}
+              >
+                <Select
+                  value={currentRecapPolicy}
+                  onValueChange={(value) =>
+                    void saveTitleOptions({
+                      recapPolicy: value === INHERIT_VALUE ? null : value,
+                    })
+                  }
+                  disabled={saving}
+                >
+                  <SelectTrigger id={`${idPrefix}-recap-policy`} className="h-9 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                    <SelectItem value="DOWNLOAD_ALL">{t("settings.recapPolicyDownloadAll")}</SelectItem>
+                    <SelectItem value="SKIP_RECAP">{t("settings.recapPolicySkipRecap")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingsRow>
+            </>
+          ) : null}
+
+          <tr className="border-b border-border/70 last:border-b-0">
+            <th scope="row" className="w-[24%] px-4 py-3 text-left align-middle sm:px-5">
+              <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <Tag aria-hidden="true" className="size-4 shrink-0" />
+                {t("title.tagsLabel")}
+              </span>
+            </th>
+            <TitleTagsEditor
+              titleId={title.id}
+              tags={title.tags}
+              idPrefix={idPrefix}
+              onTitleChanged={onTitleChanged}
               disabled={saving}
-            >
-              <SelectTrigger id={`${idPrefix}-recap-policy`} className="h-9 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-                <SelectItem value="DOWNLOAD_ALL">{t("settings.recapPolicyDownloadAll")}</SelectItem>
-                <SelectItem value="SKIP_RECAP">{t("settings.recapPolicySkipRecap")}</SelectItem>
-              </SelectContent>
-            </Select>
-            {currentRecapPolicy === INHERIT_VALUE && title.effectiveRecapPolicy ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t("settings.libraryEffectiveProfile", {
-                  value:
-                    title.effectiveRecapPolicy === "SKIP_RECAP"
-                      ? t("settings.recapPolicySkipRecap")
-                      : t("settings.recapPolicyDownloadAll"),
-                })}
-              </p>
-            ) : null}
-          </div>
-        </>
-      ) : null}
-
-      {/* Tags sit with the other per-title settings so both the movie panel and
-          the series panel get them from this one grid. They span the row
-          because the chip list grows with the number of tags applied. */}
-      <div className="min-w-0 md:col-span-2 xl:col-span-4">
-        <TitleTagsEditor
-          titleId={title.id}
-          tags={title.tags}
-          idPrefix={idPrefix}
-          onTitleChanged={onTitleChanged}
-          disabled={saving}
-        />
-      </div>
+              layout="table"
+              showLabel={false}
+            />
+          </tr>
+        </tbody>
+      </table>
+      {footer ? <div className="border-t border-border/70">{footer}</div> : null}
     </div>
   );
 }
