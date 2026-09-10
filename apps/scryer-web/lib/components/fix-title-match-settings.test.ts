@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { Provider, type Client } from "urql";
 import { createServer } from "vite";
 
@@ -71,8 +72,13 @@ async function renderWithTranslation(
         rendered,
       );
     }
+    // Views render inside the app router; the tag picker links to settings.
     return renderToStaticMarkup(
-      createElement(TranslateContext.Provider, { value: translate }, rendered),
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(TranslateContext.Provider, { value: translate }, rendered),
+      ),
     );
   } finally {
     await server.close();
@@ -102,8 +108,9 @@ test("movie settings render the movie Fix Match control", async () => {
     true,
   );
 
+  // The settings table footer carries only the compact action, not the card copy.
   assert.match(html, /id="title-overview-settings-fix-match"/);
-  assert.match(html, /title\.fixMatchDescriptionMovie/);
+  assert.match(html, /title\.fixMatchAction/);
   assert.doesNotMatch(html, /title\.fixMatchDescriptionSeries/);
 });
 
