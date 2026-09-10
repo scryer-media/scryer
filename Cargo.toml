@@ -309,3 +309,11 @@ opt-level = 3
 
 [profile.dev.package.fast_image_resize]
 opt-level = 3
+
+# argon2's default parameters (19 MiB, two passes) cost ~200ms per hash when
+# unoptimized, and tests hash on every login, user create, and TOTP check.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
