@@ -68,13 +68,8 @@ async fn discover_episodic_title_files_for_progress(
         &import_paths.folder_template,
         None,
     );
-    if tokio::fs::metadata(&title_dir).await.is_err() {
-        tokio::fs::create_dir_all(&title_dir).await.map_err(|err| {
-            AppError::Repository(format!(
-                "failed to recreate title directory {}: {err}",
-                title_dir.display()
-            ))
-        })?;
+    if !episodic_title_directory_present(&title_dir).await? {
+        return Ok(Vec::new());
     }
     let scan_result = scan_episodic_title_directory_for_progress_metrics(
         app.services.library.library_scanner.clone(),
@@ -82,6 +77,80 @@ async fn discover_episodic_title_files_for_progress(
     )
     .await?;
     Ok(scan_result.files)
+}
+
+/// Whether an episodic title directory exists and can be walked.
+///
+/// An absent directory is never recreated by a scan. Recreating it turned a
+/// vanished library mount into an empty walk that retired every tracked media
+/// file for the title and made every episode wanted again (#208). Whether an
+/// absent directory means "deleted" is decided against the library root by
+/// [`library_root_state`]. Errors other than "not found" (an unreachable
+/// mount, a permission problem) abort the scan so nothing downstream treats
+/// the tree as empty.
+async fn episodic_title_directory_present(title_dir: &Path) -> AppResult<bool> {
+    match tokio::fs::metadata(title_dir).await {
+        Ok(metadata) if metadata.is_dir() => Ok(true),
+        Ok(_) => Err(AppError::Validation(format!(
+            "title directory is not a directory: {}",
+            title_dir.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to inspect title directory {}: {error}",
+            title_dir.display()
+        ))),
+    }
+}
+
+/// What a title's library root looks like when the title directory is absent.
+///
+/// Mirrors Sonarr's series scan: a root that is missing or completely empty is
+/// the signature of a vanished mount, so nothing under it can be called
+/// deleted. Only a populated root makes a missing title directory a real
+/// deletion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LibraryRootState {
+    Missing,
+    Empty,
+    Populated,
+}
+
+async fn library_root_state(root: &Path) -> AppResult<LibraryRootState> {
+    match tokio::fs::metadata(root).await {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Ok(LibraryRootState::Missing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LibraryRootState::Missing);
+        }
+        Err(error) => {
+            return Err(AppError::Repository(format!(
+                "failed to inspect library root {}: {error}",
+                root.display()
+            )));
+        }
+    }
+    let mut entries = tokio::fs::read_dir(root).await.map_err(|error| {
+        AppError::Repository(format!(
+            "failed to read library root {}: {error}",
+            root.display()
+        ))
+    })?;
+    let has_entry = entries
+        .next_entry()
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read library root {}: {error}",
+                root.display()
+            ))
+        })?
+        .is_some();
+    Ok(if has_entry {
+        LibraryRootState::Populated
+    } else {
+        LibraryRootState::Empty
+    })
 }
 
 async fn discover_movie_title_files(
@@ -223,13 +292,21 @@ async fn discover_movie_title_files(
 }
 
 async fn tracked_movie_path_confirmed_missing(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    tracked_media_path_confirmed_missing(path, parent).await
+}
+
+/// A tracked file counts as missing only when it is gone **and** `anchor_dir`
+/// is still a directory. When the anchor is gone too, the whole tree is
+/// unreachable (a vanished mount, a detached volume) rather than deleted, and
+/// the record must survive so a transient outage never retires real files.
+async fn tracked_media_path_confirmed_missing(path: &Path, anchor_dir: &Path) -> bool {
     match tokio::fs::metadata(path).await {
         Ok(_) => false,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let Some(parent) = path.parent() else {
-                return false;
-            };
-            tokio::fs::metadata(parent)
+            tokio::fs::metadata(anchor_dir)
                 .await
                 .map(|metadata| metadata.is_dir())
                 .unwrap_or(false)
@@ -238,7 +315,7 @@ async fn tracked_movie_path_confirmed_missing(path: &Path) -> bool {
             warn!(
                 error = %error,
                 path = %path.display(),
-                "failed to inspect tracked movie path during stale cleanup"
+                "failed to inspect tracked media path during stale cleanup"
             );
             false
         }
@@ -2060,6 +2137,7 @@ impl AppUseCase {
         }
 
         let import_paths = crate::import_workflow::resolve_import_paths(self, &title).await?;
+        let media_root_path = PathBuf::from(&import_paths.media_root);
         let title_dir = crate::effective_title_folder_path(
             &import_paths.media_root,
             &title,
@@ -2081,17 +2159,24 @@ impl AppUseCase {
         let mut analyze_elapsed = Duration::ZERO;
         let mut db_elapsed = Duration::ZERO;
 
-        if !scoped_discovered_files && tokio::fs::metadata(&title_dir).await.is_err() {
-            tokio::fs::create_dir_all(&title_dir).await.map_err(|err| {
-                AppError::Repository(format!(
-                    "failed to recreate title directory {}: {err}",
-                    title_dir.display()
-                ))
-            })?;
+        // A scoped scan only ever touches the files it was handed, so the
+        // directory itself is irrelevant there. A full-folder scan must know
+        // whether the tree is reachable: when it is not, the scan neither
+        // recreates it nor treats it as empty (see #208).
+        let title_dir_present =
+            scoped_discovered_files || episodic_title_directory_present(&title_dir).await?;
+        if !title_dir_present {
+            debug!(
+                title_id = %title.id,
+                title_name = %title.name,
+                title_dir = %title_dir_str,
+                "title scan stage: title directory is missing; nothing to walk"
+            );
         }
 
         let discovered_files = match pre_scanned_files {
             Some(files) => files,
+            None if !title_dir_present => Vec::new(),
             None => {
                 let scan_result = scan_episodic_title_directory_for_progress_metrics(
                     self.services.library.library_scanner.clone(),
@@ -2186,6 +2271,50 @@ impl AppUseCase {
             .keys()
             .cloned()
             .collect::<HashSet<_>>();
+
+        // The directory a tracked file must be confirmed missing against
+        // before its record is retired. `None` means this scan asserts nothing
+        // about files it did not see: a scoped scan, or a title tree that is
+        // unreachable because the library root is missing or empty.
+        let stale_cleanup_anchor: Option<PathBuf> = if scoped_discovered_files {
+            None
+        } else if title_dir_present {
+            Some(title_dir.clone())
+        } else {
+            match library_root_state(&media_root_path).await? {
+                LibraryRootState::Populated => {
+                    debug!(
+                        title_id = %title.id,
+                        title_name = %title.name,
+                        title_dir = %title_dir_str,
+                        tracked_files = remaining_existing_paths.len(),
+                        "title directory is missing under a populated library root; \
+                         retiring tracked files that are confirmed gone"
+                    );
+                    Some(media_root_path.clone())
+                }
+                LibraryRootState::Missing => {
+                    warn!(
+                        title_id = %title.id,
+                        title_name = %title.name,
+                        library_root = %media_root_path.display(),
+                        tracked_files = remaining_existing_paths.len(),
+                        "library root does not exist; keeping tracked media file records untouched"
+                    );
+                    None
+                }
+                LibraryRootState::Empty => {
+                    warn!(
+                        title_id = %title.id,
+                        title_name = %title.name,
+                        library_root = %media_root_path.display(),
+                        tracked_files = remaining_existing_paths.len(),
+                        "library root is empty; keeping tracked media file records untouched"
+                    );
+                    None
+                }
+            }
+        };
 
         let mut summary = LibraryScanSummary::default();
         let mut layout_summary = TitleScanLayoutSummary::default();
@@ -2558,7 +2687,7 @@ impl AppUseCase {
         if !library_scan_cancel_requested(cancel_token.as_ref()) {
             let mut title_updated_after_scan = false;
 
-            if !scoped_discovered_files {
+            if let Some(anchor_dir) = stale_cleanup_anchor.as_deref() {
                 reconcile_library_scan_unmatched_items(
                     self,
                     &title.facet,
@@ -2573,7 +2702,8 @@ impl AppUseCase {
                     if !stale_path.starts_with(title_dir_str.as_str()) {
                         continue;
                     }
-                    if stored_path_to_path_buf(&record.file_path).exists() {
+                    let record_path = stored_path_to_path_buf(&record.file_path);
+                    if !tracked_media_path_confirmed_missing(&record_path, anchor_dir).await {
                         continue;
                     }
                     let db_started = Instant::now();

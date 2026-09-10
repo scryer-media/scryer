@@ -1018,3 +1018,229 @@ async fn resolving_existing_title_pending_import_does_not_clear_existing_title_f
         Some(title_dir.to_string_lossy().as_ref())
     );
 }
+
+/// A series title with one tracked episode file on disk, for the stale-cleanup
+/// tests below. The synthetic tree is `<root>/<name>/Season 01/<file>.mkv`.
+struct TrackedSeriesFixture {
+    title: Title,
+    title_dir: PathBuf,
+    season_dir: PathBuf,
+}
+
+async fn seed_tracked_series_file(
+    ctx: &TestContext,
+    media_root: &Path,
+    id: &str,
+    name: &str,
+) -> TrackedSeriesFixture {
+    let title_dir = media_root.join(name);
+    let season_dir = title_dir.join("Season 01");
+    let file_path = season_dir.join(format!(
+        "{}.S01E01.1080p.WEB-DL.mkv",
+        name.replace(' ', ".")
+    ));
+    write_fake_media_file(&file_path);
+
+    let title = seed_series_title(
+        ctx,
+        id,
+        name,
+        MediaFacet::Series,
+        media_root,
+        Some(&title_dir),
+        None,
+    )
+    .await;
+    let season = seed_collection(ctx, &title, 1).await;
+    let episode = seed_episode(ctx, &title, &season, 1).await;
+
+    let file_id = ctx
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 16,
+            announced_size_bytes: None,
+            role: MediaFileRole::Primary,
+            source_signature_scheme: None,
+            source_signature_value: None,
+            quality_label: Some("1080p".to_string()),
+            scene_name: None,
+            release_group: None,
+            source_type: None,
+            resolution: None,
+            video_codec_parsed: None,
+            audio_codec_parsed: None,
+            audio_channels_parsed: None,
+            acquisition_score: None,
+            scoring_log: None,
+            indexer_source: None,
+            grabbed_release_title: None,
+            grabbed_at: None,
+            edition: None,
+            original_file_path: None,
+            release_hash: None,
+        })
+        .await
+        .expect("insert media file");
+    ctx.media_files
+        .link_file_to_episode(&file_id, &episode.id)
+        .await
+        .expect("link file to episode");
+
+    TrackedSeriesFixture {
+        title,
+        title_dir,
+        season_dir,
+    }
+}
+
+async fn tracked_file_count(ctx: &TestContext, title_id: &str) -> usize {
+    ctx.media_files
+        .list_media_files_for_title(title_id)
+        .await
+        .expect("list media files for title")
+        .len()
+}
+
+async fn bootstrap_tracked_series(
+    ctx: &TestContext,
+    media_root: &Path,
+    id: &str,
+    name: &str,
+) -> TrackedSeriesFixture {
+    seed_media_path_settings(ctx).await;
+    set_media_path(ctx, "series.path", media_root.to_string_lossy().as_ref()).await;
+    set_default_library_root(ctx, MediaFacet::Series, media_root).await;
+
+    let fixture = seed_tracked_series_file(ctx, media_root, id, name).await;
+
+    let baseline = ctx
+        .app
+        .scan_title_library(&admin(), &fixture.title.id)
+        .await
+        .expect("baseline title scan");
+    assert_eq!(baseline.scanned, 1);
+    assert_eq!(tracked_file_count(ctx, &fixture.title.id).await, 1);
+
+    fixture
+}
+
+/// The library mount is gone: the media root itself no longer exists. The scan
+/// must neither recreate the tree nor retire the tracked file (#208).
+#[tokio::test]
+async fn title_scan_keeps_tracked_files_when_library_root_vanishes() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("series root");
+    let fixture =
+        bootstrap_tracked_series(&ctx, media_root.path(), "title-root-gone", "Root Gone Show")
+            .await;
+
+    std::fs::remove_dir_all(media_root.path()).expect("simulate vanished library mount");
+
+    let summary = ctx
+        .app
+        .scan_title_library(&admin(), &fixture.title.id)
+        .await
+        .expect("title scan with vanished root");
+
+    assert_eq!(summary.scanned, 0);
+    assert_eq!(tracked_file_count(&ctx, &fixture.title.id).await, 1);
+    assert!(
+        !fixture.title_dir.exists(),
+        "scan must not recreate the title directory"
+    );
+    assert!(
+        !media_root.path().exists(),
+        "scan must not recreate the library root"
+    );
+}
+
+/// The root directory is still there but has nothing in it, which is what a
+/// dead mount point looks like. Like Sonarr, the scan treats an empty root as
+/// unreachable: records are kept and the directory is not recreated.
+#[tokio::test]
+async fn title_scan_keeps_tracked_files_when_title_directory_vanishes_from_an_empty_root() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("series root");
+    let fixture =
+        bootstrap_tracked_series(&ctx, media_root.path(), "title-dir-gone", "Dir Gone Show").await;
+
+    std::fs::remove_dir_all(&fixture.title_dir).expect("remove title directory");
+    assert!(
+        std::fs::read_dir(media_root.path())
+            .expect("read root")
+            .next()
+            .is_none(),
+        "fixture root must be empty"
+    );
+
+    let summary = ctx
+        .app
+        .scan_title_library(&admin(), &fixture.title.id)
+        .await
+        .expect("title scan with missing title directory");
+
+    assert_eq!(summary.scanned, 0);
+    assert_eq!(tracked_file_count(&ctx, &fixture.title.id).await, 1);
+    assert!(
+        !fixture.title_dir.exists(),
+        "scan must not recreate the title directory"
+    );
+}
+
+/// The root is populated with other content and only this title's directory is
+/// gone: that is a deliberate deletion, so the records are retired and the
+/// episode becomes wanted again. The directory is still not recreated.
+#[tokio::test]
+async fn title_scan_retires_tracked_files_when_title_directory_is_deleted_under_a_populated_root() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("series root");
+    let fixture =
+        bootstrap_tracked_series(&ctx, media_root.path(), "title-deleted", "Deleted Show").await;
+    std::fs::create_dir_all(media_root.path().join("Neighbour Show"))
+        .expect("create sibling title directory");
+
+    std::fs::remove_dir_all(&fixture.title_dir).expect("remove title directory");
+
+    let summary = ctx
+        .app
+        .scan_title_library(&admin(), &fixture.title.id)
+        .await
+        .expect("title scan after title directory deletion");
+
+    assert_eq!(summary.scanned, 0);
+    assert_eq!(tracked_file_count(&ctx, &fixture.title.id).await, 0);
+    assert!(
+        !fixture.title_dir.exists(),
+        "scan must not recreate the title directory"
+    );
+}
+
+/// A season folder deleted underneath an intact title directory is a real
+/// deletion: the title tree was walked and the file is confirmed gone, so the
+/// record is retired and the episode becomes wanted again.
+#[tokio::test]
+async fn title_scan_retires_tracked_files_when_season_directory_is_deleted() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("series root");
+    let fixture = bootstrap_tracked_series(
+        &ctx,
+        media_root.path(),
+        "title-season-gone",
+        "Season Gone Show",
+    )
+    .await;
+
+    std::fs::remove_dir_all(&fixture.season_dir).expect("remove season directory");
+
+    let summary = ctx
+        .app
+        .scan_title_library(&admin(), &fixture.title.id)
+        .await
+        .expect("title scan after season deletion");
+
+    assert_eq!(summary.scanned, 0);
+    assert_eq!(tracked_file_count(&ctx, &fixture.title.id).await, 0);
+    assert!(fixture.title_dir.is_dir());
+}

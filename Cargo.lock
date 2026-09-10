@@ -635,7 +635,7 @@ version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
  "itertools 0.13.0",
@@ -657,9 +657,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.13.1"
+version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 dependencies = [
  "serde_core",
 ]
@@ -1843,7 +1843,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "objc2",
 ]
 
@@ -4063,7 +4063,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "objc2",
  "objc2-foundation",
 ]
@@ -4074,7 +4074,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "dispatch2",
  "objc2",
 ]
@@ -4091,7 +4091,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "objc2",
  "objc2-core-foundation",
 ]
@@ -4192,9 +4192,9 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "open"
-version = "5.4.3"
+version = "5.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c603ab8300cf18bc3b14146b19fe3dfcc4843ae5a400cd0e7a30b95aa366634"
+checksum = "aa576c76302b7b808eecc68061e67336c47833ef9d22caa74dda10fa9675eebc"
 dependencies = [
  "is-wsl",
  "libc",
@@ -4330,7 +4330,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a1fae06bd6bc619675d30b50cb38ca649837cc9e6a92a00b14743cfbdb1390"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "ciborium",
  "coset",
  "data-encoding",
@@ -4548,7 +4548,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "crc32fast",
  "fdeflate",
  "flate2",
@@ -5082,7 +5082,7 @@ version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
 ]
 
 [[package]]
@@ -5111,7 +5111,7 @@ version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
 ]
 
 [[package]]
@@ -5377,7 +5377,7 @@ version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -5576,7 +5576,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
@@ -5637,7 +5637,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "argon2",
  "async-trait",
@@ -5696,7 +5696,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "blake3",
  "chrono",
@@ -5712,7 +5712,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-acquisition"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -5751,7 +5751,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-configuration"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5769,7 +5769,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-crypto"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -5779,7 +5779,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-datastore"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5816,7 +5816,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-identity"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5840,7 +5840,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5873,7 +5873,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library-search"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "scryer-application",
  "scryer-domain",
@@ -5884,7 +5884,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-metadata"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5911,7 +5911,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-notifications"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5928,7 +5928,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-runtime"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5964,7 +5964,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-sql"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "blake3",
  "chrono",
@@ -5979,7 +5979,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-workflow"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6001,7 +6001,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6026,7 +6026,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-acquisition"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6038,7 +6038,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-core"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -6049,7 +6049,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-import"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6067,7 +6067,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6083,7 +6083,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media-types"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6093,7 +6093,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-metadata"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -6104,7 +6104,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-query"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "base64 0.22.1",
@@ -6121,7 +6121,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-security"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6133,7 +6133,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-settings"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6146,7 +6146,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-subscription"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6160,7 +6160,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-system"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6173,14 +6173,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-launcher"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scryer-logging"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "chrono",
  "serde",
@@ -6191,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "bytes",
  "isolang",
@@ -6209,7 +6209,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "axum",
  "serde",
@@ -6221,7 +6221,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-outbound-http"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "chrono",
  "governor",
@@ -6247,7 +6247,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -6286,7 +6286,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "aho-corasick",
  "chrono",
@@ -6300,7 +6300,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-rules"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "regorus",
  "serde",
@@ -6311,11 +6311,11 @@ dependencies = [
 
 [[package]]
 name = "scryer-runtime-info"
-version = "0.19.15"
+version = "0.19.16"
 
 [[package]]
 name = "scryer-webauthn"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -6395,7 +6395,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b04b276c2f79846b7968abe6f87cedf951e06fd2a2b72d99c457e85d7e40f3fb"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "byteorder",
  "bytes",
  "nutype-enum",
@@ -6430,7 +6430,7 @@ version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -7023,7 +7023,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "byteorder",
  "bytes",
  "chrono",
@@ -7052,7 +7052,7 @@ checksum = "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e"
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "byteorder",
  "chrono",
  "crc",
@@ -7608,7 +7608,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "async-compression",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "bytes",
  "futures-core",
  "futures-util",
@@ -7631,7 +7631,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
 dependencies = [
  "async-compression",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "bytes",
  "futures-core",
  "http",
@@ -7873,9 +7873,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.26.0"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -8033,12 +8033,12 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.258.0"
+version = "0.259.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e974fe6821a8cf64575d51ea2194e2c8f77e7b66e9afe7419ce8a97f9ee0d251"
+checksum = "b1d0246511d901aacf25d2dc9111f0054947de5e093fe662099e709ff7530dc3"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.258.0",
+ "wasmparser 0.259.0",
 ]
 
 [[package]]
@@ -8072,7 +8072,7 @@ version = "0.254.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5769a29f799fbab136aaf65b4fe5384cd7d93fe6fc9ba0dcb6c8382a1f16e27"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "hashbrown 0.17.1",
  "indexmap 2.14.2",
  "semver",
@@ -8081,11 +8081,11 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.258.0"
+version = "0.259.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9a61719f93a87b16d325921e251800c4833f8fab50fa21c7de73aed50086313"
+checksum = "0f7c12eac7bb587801590f6a67ff0bc84d0748513864b71108e4b311cc3df694"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "indexmap 2.14.2",
  "semver",
 ]
@@ -8109,7 +8109,7 @@ checksum = "1bd39f78fe9bc82cee4025ec9d52118269e9a1498016cc60119b14f2e1d86a8d"
 dependencies = [
  "addr2line",
  "async-trait",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "bumpalo",
  "cc",
  "encoding_rs",
@@ -8317,7 +8317,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07429ab53576255be2d298e04b2e1f381e39645465adbaebd69314b5430165c0"
 dependencies = [
  "anyhow",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "heck",
  "indexmap 2.14.2",
  "wit-component",
@@ -8331,7 +8331,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85dd81ee95792682ea5b279c9ed352f6b8a2cba084c2f8abdb225e6933323fed"
 dependencies = [
  "async-trait",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "bytes",
  "cap-fs-ext",
  "cap-primitives",
@@ -8372,24 +8372,24 @@ dependencies = [
 
 [[package]]
 name = "wast"
-version = "258.0.0"
+version = "259.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97f7defc7ecca8b19ac7f824598eadd0c53985ee00c74060d65051e9da5b58a1"
+checksum = "c69beba8d9da07af9a0971b559149a2ac4729895b55144de4fddbf5a02660648"
 dependencies = [
  "bumpalo",
  "leb128fmt",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.258.0",
+ "wasm-encoder 0.259.0",
 ]
 
 [[package]]
 name = "wat"
-version = "1.258.0"
+version = "1.259.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7555c008cca87f2ac58d9f83ccda7e7b44611093ce28eb28f052e7c78024b9bf"
+checksum = "c6eec44b0c80391b20fb7ad9ea440c72c5d382385bdf74444bb18321c425017e"
 dependencies = [
- "wast 258.0.0",
+ "wast 259.0.0",
 ]
 
 [[package]]
@@ -8485,7 +8485,7 @@ version = "48.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b871ea219ad85c1e59ee7d013563814e86d2e6aa094d3bc66b7675ec4ca58bb7"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "thiserror 2.0.20",
  "tracing",
  "wasmtime",
@@ -8818,7 +8818,7 @@ version = "0.36.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "windows-sys 0.59.0",
 ]
 
@@ -8858,7 +8858,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0e65bb94c369b3c4741ce3d1d2704b1fec93db7c540df0e521a097e7ceeb5be"
 dependencies = [
  "anyhow",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "indexmap 2.14.2",
  "log",
  "serde",
@@ -9026,7 +9026,7 @@ dependencies = [
 
 [[package]]
 name = "xtask-trash-guides"
-version = "0.19.15"
+version = "0.19.16"
 dependencies = [
  "anyhow",
  "chrono",
