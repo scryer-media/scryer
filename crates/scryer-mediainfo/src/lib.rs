@@ -230,7 +230,7 @@ pub fn analyze_source(
 ) -> Result<MediaAnalysis, MediaInfoError> {
     let started = std::time::Instant::now();
     let ext = extension.to_ascii_lowercase();
-    let mut source = source::BoundedSource::new(input, 768 * 1024 * 1024);
+    let mut source = source::BoundedSource::new(input, 64 * 1024 * 1024).with_io_limit(1024);
     source.seek(std::io::SeekFrom::Start(0))?;
     let mut header = [0_u8; 564];
     let size = source.read(&mut header)?;
@@ -273,7 +273,7 @@ pub fn analyze_source(
     if source.exhausted {
         report.warnings.push(scryer_media_types::ProbeWarning {
             code: "read_budget_exhausted".into(),
-            message: "The aggregate media read budget was exhausted".into(),
+            message: "The aggregate media byte or I/O-operation budget was exhausted".into(),
             ..Default::default()
         });
     }

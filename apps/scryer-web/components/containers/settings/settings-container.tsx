@@ -200,10 +200,10 @@ function IndexerSettingsSubnav({
   t: ReturnType<typeof useTranslate>;
 }) {
   return (
-    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
+    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 2xl:h-full 2xl:w-[218px] 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r 2xl:p-[22px_14px]">
       <nav
         id="settings-indexers-subnav"
-        className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
+        className="flex gap-2 overflow-x-auto pb-1 2xl:flex-col 2xl:overflow-visible 2xl:pb-0"
         aria-label={t("settings.indexers")}
       >
         {tabs.map((tab) => {
@@ -217,7 +217,7 @@ function IndexerSettingsSubnav({
               to={buildIndexerSettingsPath(tab)}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
+                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
                 active &&
                   "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
               )}
@@ -266,10 +266,12 @@ const MAINTENANCE_RULES_SECTIONS: {
 /// entry each. Same shape as the Wanted view's section rail.
 function RulesSubnav({
   activeSection,
+  maintenanceRulesSection,
   sections,
   t,
 }: {
   activeSection: RulesSection;
+  maintenanceRulesSection: MaintenanceRulesSection;
   sections: RulesSection[];
   t: ReturnType<typeof useTranslate>;
 }) {
@@ -279,10 +281,10 @@ function RulesSubnav({
     return null;
   }
   return (
-    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
+    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 2xl:h-full 2xl:w-[218px] 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r 2xl:p-[22px_14px]">
       <nav
         id="settings-rules-subnav"
-        className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
+        className="flex gap-2 overflow-x-auto pb-1 2xl:flex-col 2xl:overflow-visible 2xl:pb-0"
         aria-label={t("nav.rules")}
       >
         {sections.map((section) => {
@@ -290,73 +292,61 @@ function RulesSubnav({
           const Icon = item.icon;
           const active = activeSection === section;
           return (
-            <Link
-              key={section}
-              id={selectorId("settings-rules-subnav", section)}
-              to={buildRulesPath(section)}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
-                active &&
-                  "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-              )}
-            >
-              <Icon
+            <div key={section} className="contents">
+              <Link
+                id={selectorId("settings-rules-subnav", section)}
+                to={buildRulesPath(section)}
+                aria-current={active ? "page" : undefined}
                 className={cn(
-                  "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                  active && "text-[var(--scry-accent-text)]",
+                  "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
+                  active &&
+                    "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
                 )}
-              />
-              <span className="whitespace-nowrap">{t(item.labelKey)}</span>
-            </Link>
-          );
-        })}
-      </nav>
-    </aside>
-  );
-}
-
-/// Pane switcher for Maintenance Rules, a second gutter beside the kind rail.
-/// The rules a maintenance policy is made of, the titles it currently matches,
-/// what it has already done, and what this instance permits are four separate
-/// jobs; they used to be four panels stacked on one scroll.
-function MaintenanceRulesSubnav({
-  activeSection,
-  t,
-}: {
-  activeSection: MaintenanceRulesSection;
-  t: ReturnType<typeof useTranslate>;
-}) {
-  return (
-    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[196px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
-      <nav
-        id="settings-maintenance-rules-subnav"
-        className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
-        aria-label={t("settings.maintenanceRules")}
-      >
-        {MAINTENANCE_RULES_SECTIONS.map((item) => {
-          const Icon = item.icon;
-          const active = activeSection === item.section;
-          return (
-            <Link
-              key={item.section}
-              id={selectorId("settings-maintenance-rules-subnav", item.section)}
-              to={buildRulesPath("maintenance", item.section)}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
-                active &&
-                  "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-              )}
-            >
-              <Icon
-                className={cn(
-                  "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                  active && "text-[var(--scry-accent-text)]",
-                )}
-              />
-              <span className="whitespace-nowrap">{t(item.labelKey)}</span>
-            </Link>
+              >
+                <Icon
+                  className={cn(
+                    "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                    active && "text-[var(--scry-accent-text)]",
+                  )}
+                />
+                <span className="whitespace-nowrap">{t(item.labelKey)}</span>
+              </Link>
+              {section === "maintenance" && active ? (
+                <div className="flex shrink-0 gap-2 2xl:ml-3 2xl:flex-col 2xl:border-l 2xl:border-[var(--scry-border3)] 2xl:pl-3">
+                  {MAINTENANCE_RULES_SECTIONS.map((maintenanceItem) => {
+                    const MaintenanceIcon = maintenanceItem.icon;
+                    const maintenanceActive =
+                      maintenanceRulesSection === maintenanceItem.section;
+                    return (
+                      <Link
+                        key={maintenanceItem.section}
+                        id={selectorId(
+                          "settings-maintenance-rules-subnav",
+                          maintenanceItem.section,
+                        )}
+                        to={buildRulesPath("maintenance", maintenanceItem.section)}
+                        aria-current={maintenanceActive ? "page" : undefined}
+                        className={cn(
+                          "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
+                          maintenanceActive &&
+                            "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
+                        )}
+                      >
+                        <MaintenanceIcon
+                          className={cn(
+                            "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                            maintenanceActive && "text-[var(--scry-accent-text)]",
+                          )}
+                        />
+                        <span className="whitespace-nowrap">
+                          {t(maintenanceItem.labelKey)}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
           );
         })}
       </nav>
@@ -809,12 +799,10 @@ export const SettingsContainer = memo(function SettingsContainer({
       {isRulesSection ? (
         <RulesSubnav
           activeSection={effectiveRulesSection}
+          maintenanceRulesSection={maintenanceRulesSection}
           sections={rulesSections}
           t={t}
         />
-      ) : null}
-      {settingsSection === "maintenanceRules" && !maintenanceRulesHidden ? (
-        <MaintenanceRulesSubnav activeSection={maintenanceRulesSection} t={t} />
       ) : null}
       <main
         ref={settingsContentRef}

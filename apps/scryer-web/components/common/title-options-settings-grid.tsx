@@ -190,7 +190,7 @@ export function TitleOptionsSettingsGrid({
     : currentRootPath;
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 [&>div>label]:min-h-8">
       <div className="min-w-0">
         <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <BadgeCheck aria-hidden="true" className="size-3.5" />

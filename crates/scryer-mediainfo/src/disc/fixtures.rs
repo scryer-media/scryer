@@ -357,7 +357,19 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
     assert_eq!(disc.titles.len(), 2);
     assert_eq!(disc.titles[0].aliases, ["00003"]);
     assert!(disc.automatic_selection);
+    assert_eq!(disc.titles[1].report.status, ProbeStatus::Incomplete);
+    assert!(disc.titles[1].report.warnings.iter().any(|warning| warning.code == "disc_title_not_sampled"));
     assert!(source.bytes_read < 8 * 1024 * 1024);
+    let mut mapped_source = BoundedSource::new(Cursor::new(bytes.clone()), 8 * 1024 * 1024);
+    let mapped = inspect(&mut mapped_source, DiscSelection {
+        episode_mappings: vec![scryer_media_types::DiscEpisodeMapping {
+            disc_title_id: "00002".into(),
+            episode_ids: vec!["episode-2".into()],
+        }],
+        ..Default::default()
+    }, AnalysisProfile::DefaultRich).unwrap();
+    assert_eq!(mapped.details.disc.unwrap().titles[1].report.status, ProbeStatus::Complete);
+    assert!(mapped_source.bytes_read > source.bytes_read, "unmapped titles must avoid payload I/O");
     let selected = inspect(
         &mut Cursor::new(bytes.clone()),
         DiscSelection {

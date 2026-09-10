@@ -45,6 +45,7 @@ type SettingsOverviewSectionProps = {
   generalSaving: boolean;
   imageCacheClearing: boolean;
   onClearImageCache: () => void;
+  onExperimentalFeaturesChange: (enabled: boolean) => void;
   onGeneralSettingsCommit: (update: GeneralSettingsUpdate) => void;
   verificationDepth: VerificationDepth;
   verificationLoading: boolean;
@@ -66,6 +67,7 @@ export function SettingsOverviewSection({
   generalSaving,
   imageCacheClearing,
   onClearImageCache,
+  onExperimentalFeaturesChange,
   onGeneralSettingsCommit,
   verificationDepth,
   verificationLoading,
@@ -216,10 +218,7 @@ export function SettingsOverviewSection({
                 checked={generalSettings.experimentalFeaturesEnabled}
                 ariaLabel={t("settings.experimentalFeaturesLabel")}
                 disabled={generalSaving}
-                onChange={(nextValue) => {
-                  updateGeneralSettings({ experimentalFeaturesEnabled: nextValue });
-                  onGeneralSettingsCommit({ experimentalFeaturesEnabled: nextValue });
-                }}
+                onChange={onExperimentalFeaturesChange}
               />
             </div>
 

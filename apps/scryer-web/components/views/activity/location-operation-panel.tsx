@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { Loader2, ShieldCheck, TriangleAlert, X } from "lucide-react";
+import { Loader2, TriangleAlert, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,6 @@ import {
   orderedCheckpoints,
   showsAssetPlannedState,
   toCount,
-  verificationStampText,
   type LocationOperation,
   type LocationOperationAssetListing,
   type LocationTitleAssets,
@@ -49,17 +48,18 @@ type Props = {
   onDismiss?: () => void;
 };
 
+const CHECKPOINT_DISCLOSURE_LIMIT = 5;
+
 /**
  * Activity view for one location operation (FR-091): lifecycle state, volume
- * and outcome counters, the verification depth stamp with its fallback count
- * (FR-043), and every per-title checkpoint with its blocked/failed/warning
- * detail.
+ * and outcome counters with each per-title checkpoint and its
+ * blocked/failed/warning detail.
  *
  * It polls `locationOperation(id)` because checkpoints do not exist at accept
  * time — they are written as each title enters the run — and because the
  * operation is not yet linked to a job run, so nothing else pushes it.
  */
-export function LocationOperationPanel({ operationId, onDismiss }: Props) {
+export function LocationOperationPanel({ operationId }: Props) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -72,6 +72,7 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
   const [missing, setMissing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const [allTitlesDisclosed, setAllTitlesDisclosed] = React.useState(false);
   const [assets, setAssets] =
     React.useState<LocationOperationAssetListing | null>(null);
   const [refreshNonce, setRefreshNonce] = React.useState(0);
@@ -86,6 +87,7 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
     setError(null);
     setLoading(true);
     setExpanded(new Set());
+    setAllTitlesDisclosed(false);
     setAssets(null);
   }, [operationId]);
 
@@ -280,13 +282,8 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
   if (missing || !operation) {
     return (
       <Card id="location-operation-panel">
-        <CardContent className="flex items-center justify-between gap-3 py-6 text-sm text-muted-foreground">
+        <CardContent className="py-6 text-sm text-muted-foreground">
           <span>{error ?? t("move.operationMissing")}</span>
-          {onDismiss ? (
-            <Button type="button" variant="outline" size="sm" onClick={onDismiss}>
-              {t("move.operationDismiss")}
-            </Button>
-          ) : null}
         </CardContent>
       </Card>
     );
@@ -295,11 +292,13 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
   const counters = operation.counters;
   const progress = Math.round(operationByteProgress(counters) * 100);
   const checkpoints = orderedCheckpoints(operation.titleCheckpoints);
+  const visibleCheckpoints = allTitlesDisclosed
+    ? checkpoints
+    : checkpoints.slice(0, CHECKPOINT_DISCLOSURE_LIMIT);
   const titleAssets = assetsByTitle(assets);
   // FR-091: while some of what the plan describes has not happened yet, every
   // asset row says which side of that line it is on.
   const showPlannedState = showsAssetPlannedState(operation, assets);
-  const fallbackCount = toCount(operation.verificationFallbackCount);
   const terminal = isTerminalOperationState(operation.state);
 
   return (
@@ -323,26 +322,12 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
                 </Badge>
               ) : null}
             </p>
-            {operation.operationType === "CROSS_LIBRARY_TRANSFER" ? (
-              // A cross-library transfer rides the root-move machinery, so
-              // every other line on this panel reads like a root move. This is
-              // the one that says the library changed too (US6, FR-056).
-              <p
-                id="location-operation-transfer-note"
-                className="mt-0.5 text-xs text-muted-foreground"
-              >
-                {t("move.operationTransferNote")}
-              </p>
-            ) : null}
-            <p className="mt-0.5 font-[var(--font-code)] text-xs text-muted-foreground">
-              {operation.id}
-            </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {canCancelOperation(operation) ? (
               <Button
                 type="button"
-                variant="outline"
+                variant="destructive"
                 size="sm"
                 id="location-operation-cancel"
                 onClick={() => void handleCancel()}
@@ -362,17 +347,6 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
                 disabled={busy}
               >
                 {t("move.resumeAction")}
-              </Button>
-            ) : null}
-            {onDismiss ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                id="location-operation-dismiss"
-                onClick={onDismiss}
-              >
-                {t("move.operationDismiss")}
               </Button>
             ) : null}
           </div>
@@ -422,20 +396,6 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
           />
         </dl>
 
-        <p
-          id="location-operation-verification"
-          className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm text-foreground"
-        >
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-          <span>
-            {verificationStampText(
-              operation.verificationDepth,
-              fallbackCount,
-              t,
-            )}
-          </span>
-        </p>
-
         {operation.detail ? (
           <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
@@ -459,8 +419,9 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
               {t("move.checkpointsPending")}
             </p>
           ) : (
-            <ul className="space-y-1">
-              {checkpoints.map((checkpoint) => (
+            <>
+            <ul id="location-operation-checkpoints" className="space-y-1">
+              {visibleCheckpoints.map((checkpoint) => (
                 <CheckpointRow
                   key={checkpoint.titleId}
                   checkpoint={checkpoint}
@@ -472,6 +433,24 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
                 />
               ))}
             </ul>
+            {checkpoints.length > CHECKPOINT_DISCLOSURE_LIMIT ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-auto px-0 text-xs"
+                aria-controls="location-operation-checkpoints"
+                aria-expanded={allTitlesDisclosed}
+                onClick={() => setAllTitlesDisclosed((current) => !current)}
+              >
+                {allTitlesDisclosed
+                  ? t("move.checkpointsShowLess")
+                  : t("move.checkpointsShowAll", {
+                      count: checkpoints.length,
+                    })}
+              </Button>
+            ) : null}
+            </>
           )}
         </div>
       </CardContent>

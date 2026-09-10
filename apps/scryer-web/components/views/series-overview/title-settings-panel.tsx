@@ -100,6 +100,10 @@ export function TitleSettingsPanel({
           ],
     [libraries, rootFolders, title.libraryId, title.libraryName],
   );
+  const currentLibraryName =
+    libraries?.find((library) => library.id === title.libraryId)?.name?.trim() ||
+    title.libraryName?.trim() ||
+    null;
 
   React.useEffect(() => {
     if (!renameEnabled) {
@@ -175,7 +179,7 @@ export function TitleSettingsPanel({
         onUpdateTitleOptions={onUpdateTitleOptions}
         onTitleChanged={onTitleChanged}
         idPrefix="series-overview-settings"
-        currentLibraryName={title.libraryName ?? null}
+        currentLibraryName={currentLibraryName}
         rootFolderReadOnly
       />
 

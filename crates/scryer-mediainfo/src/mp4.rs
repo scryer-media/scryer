@@ -31,6 +31,7 @@ const MP4_METADATA_OUTPUT_MAX_BYTES: usize = 512 * 1024 * 1024;
 struct PreparedMp4 {
     metadata: Vec<u8>,
     file_len_hint: u64,
+    budget_exhausted: bool,
     #[allow(dead_code)]
     stats: ProbeStats,
 }
@@ -87,8 +88,21 @@ pub(crate) fn parse_mp4_source(
     let metadata_by_track = parsed_metadata.tracks;
 
     let mut cursor = Cursor::new(prepared.metadata.as_slice());
-    let ctx = mp4parse::read_mp4(&mut cursor)
-        .map_err(|e| MediaInfoError::Parse(format!("mp4 parse: {e:?}")))?;
+    let ctx = match mp4parse::read_mp4(&mut cursor) {
+        Ok(ctx) => ctx,
+        Err(_) if prepared.budget_exhausted => {
+            let mut details = scryer_media_types::AnalysisDetails::default();
+            report_container_budget(&mut details.report);
+            return Ok(RawContainer {
+                format_name: extension.to_owned(),
+                duration_seconds: None,
+                num_chapters: None,
+                tracks: Vec::new(),
+                details,
+            });
+        }
+        Err(error) => return Err(MediaInfoError::Parse(format!("mp4 parse: {error:?}"))),
+    };
     let num_chapters = match count_mp4_chapters(&parsed_metadata.chapters, &ctx) {
         0 => None,
         count => Some(count),
@@ -99,7 +113,12 @@ pub(crate) fn parse_mp4_source(
         sonarr_mp4_duration_seconds(&ctx, &metadata_by_track, format_duration_seconds);
 
     let (mut tracks, seen_track_ids) = build_mp4_tracks(&ctx, &metadata_by_track);
-    let fragment_result = timing::fragments(&prepared.metadata);
+    let mut fragment_result = timing::fragments(&prepared.metadata);
+    if prepared.budget_exhausted {
+        // A prefix of the fragment sequence cannot establish full-file timing
+        // or complete stream byte accounting.
+        fragment_result.timelines.clear();
+    }
     for track in &mut tracks {
         let Some(id) = track.track_id else {
             continue;
@@ -149,6 +168,9 @@ pub(crate) fn parse_mp4_source(
         .map(|duration| (prepared.file_len_hint as f64 * 8.0 / duration) as u64);
     let mut report = scryer_media_types::ProbeReport::default();
     report_fragment_budget(&mut report, fragment_result.budget_exhausted);
+    if prepared.budget_exhausted {
+        report_container_budget(&mut report);
+    }
     for parsed in &tracks {
         if parsed.raw.kind == TrackKind::Video
             && ctx
@@ -382,24 +404,36 @@ fn best_sonarr_runtime(audio: Option<f64>, video: Option<f64>, format: Option<f6
     }
 }
 
+fn report_container_budget(report: &mut scryer_media_types::ProbeReport) {
+    report.status = scryer_media_types::ProbeStatus::Incomplete;
+    report.budget_exhausted = true;
+    report.warnings.push(scryer_media_types::ProbeWarning {
+        code: "mp4_container_scan_budget".into(),
+        message: "MP4 catalog inspection stops after 128 top-level boxes or 16 MiB of metadata; incomplete fragment timing and bitrate remain unknown".into(),
+        ..Default::default()
+    });
+}
+
 fn prepare_mp4_metadata(
     file: &mut dyn crate::source::MediaSource,
 ) -> Result<PreparedMp4, MediaInfoError> {
     let mut reader = TrackedReader::new(file);
-    let (metadata, file_len_hint) = prepare_mp4_metadata_from_reader(&mut reader)?;
+    let (metadata, file_len_hint, budget_exhausted) = prepare_mp4_metadata_from_reader(&mut reader)?;
     Ok(PreparedMp4 {
         metadata,
         file_len_hint,
+        budget_exhausted,
         stats: reader.stats(),
     })
 }
 
 fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
     reader: &mut TrackedReader<R>,
-) -> Result<(Vec<u8>, u64), MediaInfoError> {
+) -> Result<(Vec<u8>, u64, bool), MediaInfoError> {
     let mut output = Vec::new();
     let mut pos = 0_u64;
-    let mut file_len_hint = 0_u64;
+    let mut boxes_left = 128_usize;
+    let mut budget_exhausted = false;
     let input_len = reader
         .seek(SeekFrom::End(0))
         .map_err(|e| MediaInfoError::Io(e.to_string()))?;
@@ -408,6 +442,14 @@ fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
         .map_err(|e| MediaInfoError::Io(e.to_string()))?;
 
     loop {
+        if pos == input_len {
+            break;
+        }
+        if boxes_left == 0 {
+            budget_exhausted = true;
+            break;
+        }
+        boxes_left -= 1;
         let start = pos;
         let Some((header, header_bytes)) = read_top_level_box_header(reader)? else {
             break;
@@ -431,10 +473,14 @@ fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
         }
 
         if keep {
+            let retained_size = if header.size == 0 { input_len - start } else { header.size };
+            if retained_size > (16 * 1024 * 1024_u64).saturating_sub(output.len() as u64) {
+                budget_exhausted = true;
+                break;
+            }
             if header.size == 0 {
                 output.extend_from_slice(&header_bytes);
                 read_zero_sized_top_level_box(reader, &mut output, &mut pos)?;
-                file_len_hint = file_len_hint.max(pos);
                 break;
             }
             if header.size > MP4_KEEP_BOX_MAX_BYTES {
@@ -477,13 +523,12 @@ fn prepare_mp4_metadata_from_reader<R: Read + Seek>(
             pos = box_end;
         }
 
-        file_len_hint = file_len_hint.max(pos);
         if header.size == 0 {
             break;
         }
     }
 
-    Ok((output, file_len_hint))
+    Ok((output, input_len, budget_exhausted))
 }
 
 fn should_copy_top_level_box(name: &[u8; 4]) -> bool {
@@ -2665,6 +2710,22 @@ mod tests {
     }
 
     #[test]
+    fn catalog_box_walk_is_independent_of_fragment_count() {
+        for count in [1_000, 100_000] {
+            let file = make_box(b"free", &[]).repeat(count);
+            let mut reader = TrackedReader::new(Cursor::new(file));
+            let (_, length, exhausted) = prepare_mp4_metadata_from_reader(&mut reader).unwrap();
+            assert!(exhausted);
+            assert_eq!(length, (count * 8) as u64);
+            assert!(reader.stats().bytes_read <= 128 * 8);
+            assert!(reader.stats().seeks <= 260);
+            let raw = parse_mp4_source(&mut Cursor::new(make_box(b"free", &[]).repeat(count)), "mp4", AnalysisProfile::DefaultRich).unwrap();
+            assert!(raw.details.report.budget_exhausted);
+            assert_eq!(raw.duration_seconds, None);
+        }
+    }
+
+    #[test]
     fn metadata_copy_seeks_over_mdat_payload() {
         let ftyp = make_box(b"ftyp", b"isom\0\0\0\0isom");
         let mdat_payload = vec![0_u8; 1024 * 1024];
@@ -2673,7 +2734,8 @@ mod tests {
         let file = [ftyp.clone(), mdat.clone(), moov.clone()].concat();
 
         let mut reader = TrackedReader::new(Cursor::new(file));
-        let (metadata, file_len_hint) = prepare_mp4_metadata_from_reader(&mut reader).unwrap();
+        let (metadata, file_len_hint, exhausted) = prepare_mp4_metadata_from_reader(&mut reader).unwrap();
+        assert!(!exhausted);
         let stats = reader.stats();
 
         assert_eq!(metadata, [ftyp, moov].concat());

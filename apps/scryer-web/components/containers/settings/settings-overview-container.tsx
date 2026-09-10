@@ -68,6 +68,8 @@ export function SettingsOverviewContainer({
   } = useUiSettings();
   const refreshInstanceFeatures = useRefreshInstanceFeatures();
   const [pendingLanguage, setPendingLanguage] = React.useState<string | null>(null);
+  const [experimentalFeaturesConfirmationOpen, setExperimentalFeaturesConfirmationOpen] =
+    React.useState(false);
   const [rehydrating, setRehydrating] = React.useState(false);
   const [uiSettingsSaving, setUiSettingsSaving] = React.useState(false);
   const [generalSettings, setGeneralSettings] = React.useState<GeneralSettings>(
@@ -288,6 +290,30 @@ export function SettingsOverviewContainer({
     }
   }, [client, refreshInstanceFeatures, setGlobalStatus, t]);
 
+  const handleExperimentalFeaturesChange = React.useCallback(
+    (enabled: boolean) => {
+      if (enabled) {
+        setExperimentalFeaturesConfirmationOpen(true);
+        return;
+      }
+      setGeneralSettings((current) => ({
+        ...current,
+        experimentalFeaturesEnabled: false,
+      }));
+      void handleSaveGeneralSettings({ experimentalFeaturesEnabled: false });
+    },
+    [handleSaveGeneralSettings],
+  );
+
+  const handleConfirmExperimentalFeatures = React.useCallback(async () => {
+    setGeneralSettings((current) => ({
+      ...current,
+      experimentalFeaturesEnabled: true,
+    }));
+    await handleSaveGeneralSettings({ experimentalFeaturesEnabled: true });
+    setExperimentalFeaturesConfirmationOpen(false);
+  }, [handleSaveGeneralSettings]);
+
   const handleClearImageCache = React.useCallback(async () => {
     if (imageCacheClearing) return;
     setImageCacheClearing(true);
@@ -320,12 +346,24 @@ export function SettingsOverviewContainer({
         generalLoading={generalLoading}
         generalSaving={generalSaving}
         imageCacheClearing={imageCacheClearing}
+        onExperimentalFeaturesChange={handleExperimentalFeaturesChange}
         onGeneralSettingsCommit={handleSaveGeneralSettings}
         onClearImageCache={handleClearImageCache}
         verificationDepth={verificationDepth}
         verificationLoading={verificationLoading}
         verificationSaving={verificationSaving}
         onVerificationDepthChange={handleVerificationDepthChange}
+      />
+      <ConfirmDialog
+        open={experimentalFeaturesConfirmationOpen}
+        title={t("settings.experimentalFeaturesLabel")}
+        description={t("settings.experimentalFeaturesHelp")}
+        confirmLabel={t("label.enable")}
+        cancelLabel={t("label.cancel")}
+        confirmButtonVariant="default"
+        isBusy={generalSaving}
+        onConfirm={handleConfirmExperimentalFeatures}
+        onCancel={() => setExperimentalFeaturesConfirmationOpen(false)}
       />
       <ConfirmDialog
         open={pendingLanguage !== null}

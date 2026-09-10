@@ -162,6 +162,7 @@ impl MediaSource for ExtentSource<'_> {
 pub struct BoundedSource<R> {
     inner: R,
     remaining: u64,
+    remaining_operations: Option<u64>,
     pub bytes_read: u64,
     pub seeks: u64,
     pub exhausted: bool,
@@ -174,10 +175,28 @@ impl<R> BoundedSource<R> {
         Self {
             inner,
             remaining: budget,
+            remaining_operations: None,
             bytes_read: 0,
             seeks: 0,
             exhausted: false,
         }
+    }
+
+    /// Limit underlying read/seek calls as well as bytes, for latency-sensitive probes.
+    pub fn with_io_limit(mut self, operations: u64) -> Self {
+        self.remaining_operations = Some(operations);
+        self
+    }
+
+    fn spend_operation(&mut self) -> io::Result<()> {
+        if let Some(remaining) = &mut self.remaining_operations {
+            if *remaining == 0 {
+                self.exhausted = true;
+                return Err(io::Error::other("media I/O operation budget exhausted"));
+            }
+            *remaining -= 1;
+        }
+        Ok(())
     }
 }
 impl<R: Read> Read for BoundedSource<R> {
@@ -189,6 +208,7 @@ impl<R: Read> Read for BoundedSource<R> {
             self.exhausted = true;
             return Err(io::Error::other("media read budget exhausted"));
         }
+        self.spend_operation()?;
         let count = self.remaining.min(bytes.len() as u64) as usize;
         let read = self.inner.read(&mut bytes[..count])?;
         self.remaining -= read as u64;
@@ -198,6 +218,7 @@ impl<R: Read> Read for BoundedSource<R> {
 }
 impl<R: Seek> Seek for BoundedSource<R> {
     fn seek(&mut self, offset: SeekFrom) -> io::Result<u64> {
+        self.spend_operation()?;
         self.seeks += 1;
         self.inner.seek(offset)
     }
@@ -237,6 +258,22 @@ mod tests {
         assert_eq!(&tail, b"iab");
         assert!(source.seek(SeekFrom::Current(-100)).is_err());
     }
+    #[test]
+    fn operation_budget_stops_tiny_reads_and_seeks_before_touching_source() {
+        let mut source = BoundedSource::new(io::Cursor::new(vec![0; 100]), 1_000_000)
+            .with_io_limit(3);
+        source.read_exact(&mut [0]).unwrap();
+        source.seek(SeekFrom::Start(10)).unwrap();
+        source.read_exact(&mut [0]).unwrap();
+        assert!(!source.exhausted);
+        assert!(source.seek(SeekFrom::Start(50)).is_err());
+        assert!(source.read(&mut [0]).is_err());
+        assert_eq!(source.get_ref().position(), 11);
+        assert_eq!(source.bytes_read, 2);
+        assert_eq!(source.seeks, 1);
+        assert!(source.exhausted);
+    }
+
     #[test]
     fn validates_extents_and_limits_physical_reads() {
         let mut input = io::Cursor::new(vec![0; 8]);

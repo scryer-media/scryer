@@ -108,9 +108,12 @@ struct TsPacketLayout {
 }
 
 pub(crate) fn parse_ts_source(
-    mut file: &mut dyn crate::source::MediaSource,
+    source: &mut dyn crate::source::MediaSource,
     profile: AnalysisProfile,
 ) -> Result<RawContainer, MediaInfoError> {
+    // PAT/PMT and timestamp scans consume individual 188-byte packets. Coalesce
+    // their reads before reaching a file or disc extent on network storage.
+    let mut file = std::io::BufReader::with_capacity(64 * 1024, source);
     let file_size = file
         .seek(SeekFrom::End(0))
         .map_err(|e| MediaInfoError::Io(e.to_string()))?;
@@ -2369,6 +2372,36 @@ fn read_full<T: Read>(reader: &mut T, buf: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_program_map_uses_buffered_source_reads() {
+        struct Metered {
+            input: std::io::Cursor<Vec<u8>>,
+            reads: usize,
+        }
+        impl Read for Metered {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                self.input.read(bytes)
+            }
+        }
+        impl Seek for Metered {
+            fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+                self.input.seek(position)
+            }
+        }
+        impl crate::source::MediaSource for Metered {
+            fn len(&self) -> u64 { self.input.get_ref().len() as u64 }
+        }
+        let mut null = [0xff; TS_PACKET_SIZE];
+        null[..4].copy_from_slice(&[0x47, 0x1f, 0xff, 0x10]);
+        let mut bytes = null.repeat(10_000);
+        bytes.extend_from_slice(include_bytes!("../tests/media/h264_aac.ts"));
+        let mut source = Metered { input: std::io::Cursor::new(bytes), reads: 0 };
+        let raw = parse_ts_source(&mut source, AnalysisProfile::ContentProbe).unwrap();
+        assert!(raw.tracks.iter().any(|track| track.codec_name.as_deref() == Some("h264")));
+        assert!(source.reads < 200, "{} underlying reads for delayed PSI", source.reads);
+    }
 
     #[test]
     fn parses_dovi_descriptor_payload() {

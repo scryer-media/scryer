@@ -25,6 +25,8 @@ struct AnalysisFlight<T> {
 #[cfg(any(feature = "runtime-media-analysis", test))]
 struct AnalysisFlights<T> {
     active: std::sync::Mutex<Vec<std::sync::Weak<AnalysisFlight<T>>>>,
+    slots: std::sync::Arc<tokio::sync::Semaphore>,
+    catalog_slots: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 #[cfg(any(feature = "runtime-media-analysis", test))]
@@ -32,15 +34,28 @@ impl<T> Default for AnalysisFlights<T> {
     fn default() -> Self {
         Self {
             active: std::sync::Mutex::new(Vec::new()),
+            slots: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+            // Reserve capacity for a foreground import while scans are queued.
+            catalog_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
         }
     }
 }
 
 #[cfg(any(feature = "runtime-media-analysis", test))]
 impl<T: Clone + Send + Sync + 'static> AnalysisFlights<T> {
+    #[cfg(test)]
     fn start(
         &self,
         key: AnalysisKey,
+        operation: impl FnOnce() -> AppResult<T> + Send + 'static,
+    ) -> std::sync::Arc<AnalysisFlight<T>> {
+        self.start_with_priority(key, false, operation)
+    }
+
+    fn start_with_priority(
+        &self,
+        key: AnalysisKey,
+        catalog: bool,
         operation: impl FnOnce() -> AppResult<T> + Send + 'static,
     ) -> std::sync::Arc<AnalysisFlight<T>> {
         let mut active = self
@@ -61,10 +76,21 @@ impl<T: Clone + Send + Sync + 'static> AnalysisFlights<T> {
         });
         active.push(std::sync::Arc::downgrade(&flight));
         let running = flight.clone();
+        let slots = self.slots.clone();
+        let catalog_slots = self.catalog_slots.clone();
         // The job owns the flight until the blocking read ends. Dropping the
         // initiating request must not allow a second reader to start its work.
         tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(operation)
+            let catalog_permit = if catalog {
+                Some(catalog_slots.acquire_owned().await.expect("probe semaphore stays open"))
+            } else {
+                None
+            };
+            let permit = slots.acquire_owned().await.expect("probe semaphore stays open");
+            let result = tokio::task::spawn_blocking(move || {
+                let _permits = (permit, catalog_permit);
+                operation()
+            })
                 .await
                 .map_err(|error| error.to_string())
                 .and_then(|result| result.map_err(|error| error.to_string()));
@@ -108,7 +134,7 @@ pub(crate) async fn probe_native_catalog(
         source: super::discs::MediaSourceVersion::read(&path).await.ok(),
         selection: selection.clone(),
     };
-    let flight = NATIVE_PROBE_FLIGHTS.start(key.clone(), move || {
+    let flight = NATIVE_PROBE_FLIGHTS.start_with_priority(key.clone(), matches!(operation, super::metrics::ProbeOperation::Catalog), move || {
         nice_thread();
         let started = std::time::Instant::now();
         let result = if scryer_domain::is_disc_image(&path) {
@@ -265,6 +291,45 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn catalog_readers_are_globally_limited_with_foreground_capacity() {
+        let flights = AnalysisFlights::default();
+        let (entered, mut entries) = tokio::sync::mpsc::unbounded_channel();
+        let (release, _) = tokio::sync::watch::channel(false);
+        let mut jobs = Vec::new();
+        for id in 0..24 {
+            let entered = entered.clone();
+            let mut released = release.subscribe();
+            jobs.push(flights.start_with_priority(AnalysisKey {
+                path: PathBuf::from(format!("catalog-{id}.mkv")),
+                source: None,
+                selection: Default::default(),
+            }, true, move || {
+                entered.send(id).unwrap();
+                // Sender drop also releases workers if an assertion fails.
+                let _ = tokio::runtime::Handle::current().block_on(released.wait_for(|released| *released));
+                Ok(id)
+            }));
+        }
+        for _ in 0..3 {
+            tokio::time::timeout(std::time::Duration::from_secs(5), entries.recv()).await.unwrap().unwrap();
+        }
+        assert_eq!(flights.catalog_slots.available_permits(), 0);
+        assert_eq!(flights.slots.available_permits(), 1);
+        assert!(entries.try_recv().is_err());
+        let foreground = flights.start(AnalysisKey {
+            path: PathBuf::from("foreground.mkv"),
+            source: None,
+            selection: Default::default(),
+        }, || Ok(99));
+        assert_eq!(tokio::time::timeout(std::time::Duration::from_secs(5), foreground.outcome()).await.unwrap().unwrap(), 99);
+        release.send(true).unwrap();
+        for job in jobs {
+            job.outcome().await.unwrap();
+        }
+        assert_eq!(flights.slots.available_permits(), 4);
+    }
 
     #[tokio::test]
     async fn matching_analysis_waiters_share_work_after_initiator_cancellation() {

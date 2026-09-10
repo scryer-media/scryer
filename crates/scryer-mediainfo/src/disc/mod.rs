@@ -34,7 +34,7 @@ pub(crate) fn analyze(
     profile: AnalysisProfile,
 ) -> Result<MediaAnalysis, MediaInfoError> {
     let started = Instant::now();
-    let mut source = BoundedSource::new(FileSource::open(path)?, READ_BUDGET);
+    let mut source = BoundedSource::new(FileSource::open(path)?, READ_BUDGET).with_io_limit(4096);
     let result = inspect(&mut source, selection, profile);
     let mut analysis = match result {
         Ok(analysis) => analysis,
@@ -362,6 +362,19 @@ fn inspect(
             continue;
         }
         let mut first: Option<MediaAnalysis> = None;
+        let mapped = disc.selection.episode_mappings.iter().any(|mapping| {
+            mapping.disc_title_id == title.id || title.aliases.contains(&mapping.disc_title_id)
+        });
+        let could_replace_selection = disc.automatic_selection && selected_analysis.as_ref().is_none_or(|selected: &MediaAnalysis| {
+            title.duration_seconds.unwrap_or(0.0) > selected.details.duration_seconds.unwrap_or(0.0)
+                || (title.duration_seconds == selected.details.duration_seconds
+                    && numeric_id(&title.id) < resolved_title_id.as_deref().map(numeric_id).unwrap_or(u32::MAX))
+        });
+        if !mapped && disc.selected_title_id.as_ref() != Some(&title.id) && !could_replace_selection {
+            title.report.status = ProbeStatus::Incomplete;
+            warning(&mut title.report, "disc_title_not_sampled", "Navigation inventoried; media inspection is deferred until this title is selected or mapped");
+            continue;
+        }
         for (key, file) in title_files.get(&title.id).into_iter().flatten() {
             if let Some((status, message)) = failed_clips.get(key) {
                 title.report.status = *status;

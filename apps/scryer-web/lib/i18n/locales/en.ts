@@ -1089,7 +1089,7 @@ const en: LocaleDictionary = {
   "apiExplorer.sessionHelp": "Uses your current session. No credentials or client setup required.",
   "settings.experimentalFeaturesLabel": "Enable experimental features",
   "settings.experimentalFeaturesHelp":
-    "Shows features that are still being finished for everyone on this instance: moving titles between libraries and roots, and maintenance rules.",
+    "Experimental features can change at any time without notice. We make a best effort to preserve compatibility with previous changes, but cannot guarantee it.",
   "settings.personalizedDiscoveryLabel": "Personalized discovery",
   "settings.personalizedDiscoveryHelp":
     "Sends a summary of your library to the metadata gateway so Discovery can recommend titles based on what you own. Turn off to keep Discovery to public feeds only.",
@@ -4644,6 +4644,8 @@ const en: LocaleDictionary = {
   "move.counterBlocked": "Blocked",
   "move.checkpointsHeading": "Titles",
   "move.checkpointsPending": "Titles appear here as they enter the operation.",
+  "move.checkpointsShowAll": "Show all {{count}} titles",
+  "move.checkpointsShowLess": "Show fewer titles",
   "move.checkpointClass": "Classified as",
   "move.checkpointFrom": "From",
   "move.checkpointTo": "To",

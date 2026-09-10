@@ -105,14 +105,26 @@ pub(crate) fn parse_avi_source(
         }
     }
 
+    let mut details = scryer_media_types::AnalysisDetails::default();
     if let Some(offset) = idx1_offset {
         let idx1 = riff::Chunk::read(&mut file, offset)
             .map_err(|e| MediaInfoError::Parse(format!("error reading idx1 chunk: {e}")))?;
-        apply_idx1_stream_sizes(&idx1, &mut file, &mut tracks)?;
+        // Complete accounting is optional. Never read a movie-sized index or
+        // divide a partial byte total by the full duration.
+        if idx1.len() <= 4 * 1024 * 1024 {
+            apply_idx1_stream_sizes(&idx1, &mut file, &mut tracks)?;
+        } else {
+            details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+            details.report.budget_exhausted = true;
+            details.report.warnings.push(scryer_media_types::ProbeWarning {
+                code: "avi_index_budget".into(),
+                message: "AVI index exceeds the 4 MiB catalog budget; index-derived bitrate remains unknown".into(),
+                ..Default::default()
+            });
+        }
     }
 
     backfill_track_bitrates(&mut tracks);
-    let mut details = scryer_media_types::AnalysisDetails::default();
     for track in &mut tracks {
         track.raw.metadata.id = Some(track.stream_number.to_string());
     }
@@ -954,6 +966,25 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
 
         assert_eq!(super::find_mp3_bitrate(&data), Some(128_000));
+    }
+
+    #[test]
+    fn oversized_index_is_skipped_without_losing_video_headers() {
+        use crate::source::BoundedSource;
+        let mut bytes = include_bytes!("../tests/media/matrix_avi_002.avi").to_vec();
+        // Append a large second index; no payload from it is needed for catalog facts.
+        bytes.extend_from_slice(b"idx1");
+        bytes.extend_from_slice(&(8 * 1024 * 1024_u32).to_le_bytes());
+        bytes.resize(bytes.len() + 8 * 1024 * 1024, 0);
+        let riff_length = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&riff_length.to_le_bytes());
+        let mut source = BoundedSource::new(std::io::Cursor::new(bytes), 1024 * 1024).with_io_limit(1024);
+        let raw = super::parse_avi_source(&mut source, AnalysisProfile::DefaultRich).unwrap();
+        assert!(raw.tracks.iter().any(|track| track.metadata.profile.as_deref() == Some("Simple Profile")));
+        assert!(raw.duration_seconds.is_some());
+        assert!(raw.details.report.warnings.iter().any(|warning| warning.code == "avi_index_budget"));
+        assert!(!source.exhausted);
+        assert!(source.bytes_read < 1024 * 1024);
     }
 
     #[test]
