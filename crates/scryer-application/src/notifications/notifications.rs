@@ -394,6 +394,11 @@ impl AppUseCase {
                 AppError::Repository("notification plugin provider is not configured".into())
             })?;
 
+        // Checked before the capability probe: a blocked plugin is absent from
+        // the provider, so the probe would report it as not supporting tests.
+        self.ensure_provider_plugin_not_blocked(channel.channel_type.as_str())
+            .await?;
+
         if !provider.supports_test_for_provider(channel.channel_type.as_str()) {
             return Err(AppError::Validation(format!(
                 "notification provider '{}' does not support test notifications",

@@ -3150,6 +3150,45 @@ async fn plugin_update_count_matches_available_plugins() {
 }
 
 #[tokio::test]
+async fn plugin_blocked_count_is_kept_apart_from_the_update_count() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let json = make_catalog_fixture_json(&[
+        catalog_entry(
+            "alpha",
+            "0.2.0",
+            false,
+            Some("https://example.com/alpha.wasm.zst"),
+        ),
+        catalog_entry(
+            "beta",
+            "1.0.0",
+            false,
+            Some("https://example.com/beta.wasm.zst"),
+        ),
+    ]);
+    h.plugin_repo
+        .store_catalog_fixture_json(&json)
+        .await
+        .unwrap();
+    let beta = make_installation("beta", "1.0.0", false, true);
+    h.plugin_repo
+        .installations
+        .lock()
+        .await
+        .push(make_installation("alpha", "0.1.0", false, true));
+    h.plugin_repo.installations.lock().await.push(beta.clone());
+    h.app
+        .set_plugin_component_blocker(&beta, Some("incompatible contract".into()))
+        .await
+        .unwrap();
+
+    // Beta is blocked but current; alpha has an update but runs. Neither badge
+    // may count the other's plugin, or the operator cannot tell which is which.
+    assert_eq!(h.app.plugin_update_count(&admin()).await.unwrap(), 1);
+    assert_eq!(h.app.plugin_blocked_count(&admin()).await.unwrap(), 1);
+}
+
+#[tokio::test]
 async fn list_default_base_url_from_provider() {
     let provider = MockPluginProvider::new().with_provider(
         "example_indexer",
@@ -4609,8 +4648,31 @@ async fn recover_restored_plugins_skips_local_uploads_and_persists_warning() {
     assert_eq!(
         payload["restoreWarnings"],
         serde_json::json!([
-            "Skipped restoring plugin 'Local Upload' because it was uploaded locally and cannot be re-downloaded from a remote catalog source."
+            "Skipped restoring plugin 'Local Upload' because it was uploaded locally and cannot be re-downloaded from a remote catalog source. Its installation has been removed, but its saved configuration remains and is still enabled, so it will not work until you upload the plugin again."
         ])
+    );
+    // The skip has three consequences and the operator needs all three: the
+    // row is gone, the configuration is not, and it is still switched on.
+    let warning = payload["restoreWarnings"][0].as_str().unwrap();
+    assert!(warning.contains("installation has been removed"), "{warning}");
+    assert!(warning.contains("configuration remains"), "{warning}");
+    assert!(warning.contains("still enabled"), "{warning}");
+}
+
+#[test]
+fn a_restored_plugin_whose_version_moved_is_reported_once() {
+    let mut installation = make_installation("alpha", "0.3.0", false, true);
+    installation.name = "Alpha".to_string();
+
+    let warning = restore_version_change_warning(&installation, "0.1.0")
+        .expect("a version change must be reported");
+    assert!(warning.contains("'Alpha'"), "{warning}");
+    assert!(warning.contains("version 0.3.0"), "{warning}");
+    assert!(warning.contains("version 0.1.0"), "{warning}");
+
+    assert!(
+        restore_version_change_warning(&installation, "0.3.0").is_none(),
+        "a plugin restored at the backup's own version is not a change"
     );
 }
 

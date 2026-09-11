@@ -7,7 +7,7 @@ use async_graphql::{Context, ID, Object, Result as GqlResult, SimpleObject, Uplo
 use chrono::{DateTime, Utc};
 use scryer_application::{
     AppError, AppUseCase, BackupBundleInspectSummary, inspect_backup_bundle,
-    prepare_backup_restore_payload,
+    prepare_backup_restore_payload, validate_inspected_bundle_is_restorable,
 };
 use scryer_domain::AppPermission;
 use scryer_interface_core::{
@@ -203,6 +203,15 @@ impl BackupMutations {
                 ))));
             }
         };
+
+        // Apply runs this same gate against a freshly migrated schema. Running it
+        // here too means a bundle this build cannot restore is refused while the
+        // operator can still act on it, instead of after they have committed to a
+        // fresh instance on the strength of a healthy-looking summary.
+        if let Err(error) = validate_inspected_bundle_is_restorable(&summary) {
+            let _ = tokio::fs::remove_dir_all(&upload_dir).await;
+            return Err(to_gql_error(error));
+        }
 
         Ok(RestoreInspectPayload {
             upload_id: upload_id.into(),

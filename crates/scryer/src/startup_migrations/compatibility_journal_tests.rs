@@ -154,3 +154,78 @@ async fn compatibility_journal_failed_completion_remains_retryable() {
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn blocked_subjects_reports_only_still_blocked_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp
+        .path()
+        .join("blocked.db")
+        .to_string_lossy()
+        .into_owned();
+    let services = SqliteServices::new_with_mode(path, MigrationMode::Apply)
+        .await
+        .unwrap();
+    let datastore = services.datastore();
+    ensure(&datastore).await.unwrap();
+
+    record(
+        &datastore,
+        "repair",
+        "stuck",
+        "digest-a",
+        "original",
+        "blocked",
+        Some("no compatible build".into()),
+    )
+    .await
+    .unwrap();
+    record(
+        &datastore,
+        "repair",
+        "fixed",
+        "digest-b",
+        "original",
+        "validated",
+        None,
+    )
+    .await
+    .unwrap();
+    record(
+        &datastore, "repair", "trying", "digest-c", "original", "pending", None,
+    )
+    .await
+    .unwrap();
+    record(
+        &datastore, "other", "stuck", "digest-d", "original", "blocked", None,
+    )
+    .await
+    .unwrap();
+
+    let blocked = blocked_subjects(&datastore, "repair").await.unwrap();
+    assert_eq!(
+        blocked,
+        std::collections::HashSet::from([("stuck".to_string(), "digest-a".to_string())]),
+        "only this migration's still-blocked evidence counts"
+    );
+
+    // A later boot that clears the blocker must drop it from the set, so the
+    // recovery catalog refresh is armed again for any future evidence.
+    record(
+        &datastore,
+        "repair",
+        "stuck",
+        "digest-a",
+        "original",
+        "validated",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        blocked_subjects(&datastore, "repair")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

@@ -84,7 +84,11 @@ impl NotificationMutations {
             .await
             .map_err(to_gql_error)?;
         let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
-        Ok(from_notification_channel_with_fields(channel, &fields))
+        let mut payload = from_notification_channel_with_fields(channel, &fields);
+        payload.blocked_reason = app
+            .plugin_component_blocker_for_provider(&payload.channel_type)
+            .await;
+        Ok(payload)
     }
 
     /// Patch a notification channel while preserving omitted fields and provider secrets.
@@ -135,7 +139,11 @@ impl NotificationMutations {
             .await
             .map_err(to_gql_error)?;
         let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
-        Ok(from_notification_channel_with_fields(channel, &fields))
+        let mut payload = from_notification_channel_with_fields(channel, &fields);
+        payload.blocked_reason = app
+            .plugin_component_blocker_for_provider(&payload.channel_type)
+            .await;
+        Ok(payload)
     }
 
     /// Delete a notification channel.

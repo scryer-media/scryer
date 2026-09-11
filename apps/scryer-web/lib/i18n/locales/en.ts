@@ -2328,6 +2328,8 @@ const en: LocaleDictionary = {
   "settings.pluginUnverified": "Unverified",
   "settings.pluginBeta": "Beta",
   "settings.pluginDeprecated": "Deprecated",
+  "settings.pluginBlocked": "Blocked",
+  "settings.pluginBlockedNotRunning": "Not running",
   "settings.pluginSource": "Source",
   "settings.pluginDocs": "Docs",
   "settings.pluginInstallManually": "Install Manually",

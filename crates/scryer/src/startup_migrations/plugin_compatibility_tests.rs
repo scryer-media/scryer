@@ -244,3 +244,42 @@ async fn plugin_compatibility_store_failure_keeps_original_bytes_and_retry_conve
     assert!(migrate(&app, &datastore, &store).await.unwrap());
     assert!(migrate(&app, &datastore, &store).await.unwrap());
 }
+
+#[tokio::test]
+async fn plugin_compatibility_reports_counts_for_the_completion_log() {
+    let ctx = common::TestContext::new().await;
+    let datastore = ctx.db.datastore();
+    let store = DatastoreCustomizationStore::new(datastore.clone());
+    let builtin = builtin_load().descriptor;
+    let replaceable = old_installation(&builtin.id, false);
+    let manual = old_installation("legacy-manual", true);
+    for installation in [&replaceable, &manual] {
+        store
+            .create_plugin_installation(installation, Some(LEGACY_MODULE))
+            .await
+            .unwrap();
+    }
+    let app = ctx.app.with_test_overrides(|builder| {
+        builder
+            .with_plugin_installation_store(Arc::new(store.clone()))
+            .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
+    });
+
+    // `migrate` returns false here, which stops the runner from recording the
+    // migration and logging its own completion line. The counts below are what
+    // the pass logs instead, so the operator still sees that it ran.
+    let counts = run_pass(&app, &datastore, &store).await.unwrap();
+    assert_eq!(counts.replaced, 1, "the bundled match is replaced");
+    assert_eq!(counts.blocked, 1, "the manual upload is blocked");
+    assert_eq!(counts.unchanged, 0);
+    assert!(!migrate(&app, &datastore, &store).await.unwrap());
+
+    // A second pass finds the replacement already in place.
+    let repeat = run_pass(&app, &datastore, &store).await.unwrap();
+    assert_eq!(
+        repeat.replaced, 0,
+        "an already-current component is unchanged"
+    );
+    assert_eq!(repeat.blocked, 1);
+    assert_eq!(repeat.unchanged, 1);
+}

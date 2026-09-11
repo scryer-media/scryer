@@ -452,6 +452,7 @@ function MainContent({
   logsSection,
   scryerVersion,
   pluginUpdateCount,
+  pluginBlockedCount,
   activitySection,
   wantedSection,
   handleOpenOverview,
@@ -486,6 +487,7 @@ function MainContent({
   logsSection: LogsSection;
   scryerVersion: string | null;
   pluginUpdateCount: number;
+  pluginBlockedCount: number;
   activitySection: ActivitySection;
   wantedSection: WantedSection;
   handleOpenOverview: (
@@ -640,6 +642,7 @@ function MainContent({
         uiLanguage={uiLanguage}
         onSelectLanguage={setLanguagePreferenceFromShell}
         pluginUpdateCount={pluginUpdateCount}
+        pluginBlockedCount={pluginBlockedCount}
       />
     );
   }
@@ -1387,6 +1390,7 @@ function AuthenticatedHomePage({
     pendingMediaRequestCounts,
     manualImportRequiredCount,
     pluginUpdateCount,
+    pluginBlockedCount,
     scryerVersion,
   } = useNavigationBadges({
     serviceRestarting,
@@ -1937,6 +1941,7 @@ function AuthenticatedHomePage({
                           pendingMediaRequestCounts={pendingMediaRequestCounts}
                           manualImportRequiredCount={manualImportRequiredCount}
                           pluginUpdateCount={pluginUpdateCount}
+                          pluginBlockedCount={pluginBlockedCount}
                           header={
                             <RootHeader
                               onOpenOverview={handleOpenOverview}
@@ -2010,6 +2015,7 @@ function AuthenticatedHomePage({
                                   logsSection={logsSection}
                                   scryerVersion={scryerVersion}
                                   pluginUpdateCount={pluginUpdateCount}
+                                  pluginBlockedCount={pluginBlockedCount}
                                   activitySection={activitySection}
                                   wantedSection={wantedSection}
                                   handleOpenOverview={handleOpenOverview}

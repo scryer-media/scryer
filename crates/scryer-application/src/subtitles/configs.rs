@@ -189,6 +189,9 @@ impl AppUseCase {
             .await?;
 
         let normalized_provider_type = provider_type.trim().to_ascii_lowercase();
+        self.ensure_provider_plugin_not_blocked(&normalized_provider_type)
+            .await?;
+
         let config = if let Some(id) = id {
             let mut config = self
                 .subtitle_provider_configs_repo()?

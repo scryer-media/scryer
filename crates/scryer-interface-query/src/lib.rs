@@ -2382,17 +2382,26 @@ impl ActivityQueries {
                 Ok(0)
             }
         };
+        let plugin_blocked_count = async {
+            if can_manage_system_settings {
+                app.plugin_blocked_count(&actor).await
+            } else {
+                Ok(0)
+            }
+        };
 
         let (
             pending_import_counts,
             pending_media_request_counts,
             activity_import_count,
             plugin_update_count,
+            plugin_blocked_count,
         ) = tokio::try_join!(
             pending_import_counts,
             pending_media_request_counts,
             activity_import_count,
             plugin_update_count,
+            plugin_blocked_count,
         )
         .map_err(to_gql_error)?;
 
@@ -2401,6 +2410,7 @@ impl ActivityQueries {
             pending_media_request_counts: from_media_request_counts(pending_media_request_counts),
             activity_import_count: activity_import_count as i32,
             plugin_update_count: plugin_update_count as i32,
+            plugin_blocked_count: plugin_blocked_count as i32,
         })
     }
 
@@ -4057,13 +4067,19 @@ impl UtilityQueries {
             .list_notification_channels(&actor)
             .await
             .map_err(to_gql_error)?;
-        Ok(channels
-            .into_iter()
-            .map(|channel| {
-                let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
-                crate::mappers::from_notification_channel_with_fields(channel, &fields)
-            })
-            .collect())
+        let mut payloads = Vec::with_capacity(channels.len());
+        for channel in channels {
+            let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
+            let mut payload =
+                crate::mappers::from_notification_channel_with_fields(channel, &fields);
+            // A blocked plugin leaves the stored row enabled and healthy-looking;
+            // the row is where the operator looks first, so say it there.
+            payload.blocked_reason = app
+                .plugin_component_blocker_for_provider(&payload.channel_type)
+                .await;
+            payloads.push(payload);
+        }
+        Ok(payloads)
     }
 
     /// List notification targets visible to the caller.

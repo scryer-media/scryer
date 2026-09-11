@@ -1169,3 +1169,178 @@ mod plugin_http_client_tests {
 #[cfg(all(test, feature = "runtime-plugin-trust"))]
 #[path = "../app_usecase_plugins_tests.rs"]
 mod app_usecase_plugins_tests;
+
+#[cfg(test)]
+mod component_blocker_message_tests {
+    use super::*;
+
+    fn catalog_entry(
+        id: &str,
+        name: &str,
+        provider_type: &str,
+        status: PluginLifecycleStatus,
+    ) -> CatalogV3PluginEntry {
+        CatalogV3PluginEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: format!("{name} notification plugin"),
+            plugin_type: "notification".to_string(),
+            provider_type: provider_type.to_string(),
+            publisher: "scryer".to_string(),
+            support_tier: PluginSupportTier::Official,
+            status,
+            docs_url: "https://example.invalid/docs".to_string(),
+            source_repo: format!("https://github.com/scryer-media/{id}"),
+            required_signer: RequiredSigner {
+                github_repository: format!("scryer-media/{id}"),
+                github_workflow: None,
+                github_ref: None,
+            },
+            releases: Vec::new(),
+        }
+    }
+
+    fn catalog(plugins: Vec<CatalogV3PluginEntry>) -> CatalogV3 {
+        CatalogV3 {
+            schema_version: "3".to_string(),
+            catalog_version: 1,
+            plugins,
+            community_sources: Vec::new(),
+            rule_packs: Vec::new(),
+        }
+    }
+
+    fn manual_installation(provider_type: &str) -> PluginInstallation {
+        let now = Utc::now();
+        PluginInstallation {
+            id: "installation-1".to_string(),
+            plugin_id: provider_type.to_string(),
+            name: "Uploaded Build".to_string(),
+            description: String::new(),
+            version: "0.1.0".to_string(),
+            sdk_version: "3.0.0".to_string(),
+            sdk_constraint: ">=3.0.0".to_string(),
+            scryer_constraint: None,
+            plugin_type: "notification".to_string(),
+            provider_type: provider_type.to_string(),
+            source_kind: PluginSourceKind::Manual,
+            is_enabled: true,
+            is_builtin: false,
+            wasm_encoding: PluginWasmEncoding::Identity,
+            wasm_digest_algo: Some("blake3".to_string()),
+            source_url: None,
+            support_tier: PluginSupportTier::Unverified,
+            publisher: None,
+            docs_url: None,
+            source_repo: None,
+            manifest_url: None,
+            wasm_digest: None,
+            artifact_digest: None,
+            descriptor_json: None,
+            installed_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn a_catalog_build_for_the_same_provider_is_visible_even_without_shared_provenance() {
+        let installation = manual_installation("hubcast");
+        let entry = catalog_entry(
+            "hubcast",
+            "Hubcast",
+            "hubcast",
+            PluginLifecycleStatus::Active,
+        );
+        assert!(
+            catalog_entry_serves_same_provider(&installation, &entry),
+            "a hand-uploaded build must still find the catalog build for its provider"
+        );
+        let other = catalog_entry(
+            "beacon",
+            "Beacon",
+            "beacon",
+            PluginLifecycleStatus::Active,
+        );
+        assert!(!catalog_entry_serves_same_provider(&installation, &other));
+    }
+
+    #[test]
+    fn a_deprecated_entry_is_replaced_by_the_unique_live_plugin_of_the_same_name() {
+        // The shape the shipped catalog uses to retire a plugin: the old and
+        // new entries share only the product name and the plugin type.
+        let deprecated = catalog_entry(
+            "hubcast-legacy",
+            "Hubcast",
+            "hubcast-legacy",
+            PluginLifecycleStatus::Deprecated,
+        );
+        let successor = catalog_entry(
+            "hubcast",
+            "Hubcast",
+            "hubcast",
+            PluginLifecycleStatus::Beta,
+        );
+        let catalog = catalog(vec![deprecated.clone(), successor]);
+        assert_eq!(
+            catalog_successor_for(&catalog, &deprecated)
+                .map(|entry| entry.id.as_str()),
+            Some("hubcast")
+        );
+    }
+
+    #[test]
+    fn a_deprecated_entry_with_no_live_namesake_has_no_successor() {
+        let deprecated = catalog_entry(
+            "hubcast-legacy",
+            "Hubcast",
+            "hubcast-legacy",
+            PluginLifecycleStatus::Deprecated,
+        );
+        let unrelated = catalog_entry(
+            "beacon",
+            "Beacon",
+            "beacon",
+            PluginLifecycleStatus::Active,
+        );
+        let catalog = catalog(vec![deprecated.clone(), unrelated]);
+        assert!(catalog_successor_for(&catalog, &deprecated).is_none());
+    }
+
+    #[test]
+    fn an_ambiguous_successor_is_not_named() {
+        // Two live plugins answer to the same name, so there is no single
+        // honest recommendation; the terminal message is used instead.
+        let deprecated = catalog_entry(
+            "hubcast-legacy",
+            "Hubcast",
+            "hubcast-legacy",
+            PluginLifecycleStatus::Deprecated,
+        );
+        let catalog = catalog(vec![
+            deprecated.clone(),
+            catalog_entry("hubcast-a", "Hubcast", "hubcast-a", PluginLifecycleStatus::Active),
+            catalog_entry("hubcast-b", "Hubcast", "hubcast-b", PluginLifecycleStatus::Beta),
+        ]);
+        assert!(catalog_successor_for(&catalog, &deprecated).is_none());
+    }
+
+    #[test]
+    fn a_deprecated_namesake_is_never_offered_as_the_successor() {
+        let deprecated = catalog_entry(
+            "hubcast-legacy",
+            "Hubcast",
+            "hubcast-legacy",
+            PluginLifecycleStatus::Deprecated,
+        );
+        let catalog = catalog(vec![
+            deprecated.clone(),
+            catalog_entry(
+                "hubcast-older",
+                "Hubcast",
+                "hubcast-older",
+                PluginLifecycleStatus::Deprecated,
+            ),
+        ]);
+        assert!(catalog_successor_for(&catalog, &deprecated).is_none());
+    }
+}

@@ -72,6 +72,8 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
 
+        self.ensure_provider_plugin_not_blocked(client_type).await?;
+
         // A connection test that dialled differently from live traffic would
         // pass for a client that cannot actually be reached, so the assigned
         // proxy is resolved and used here too.
