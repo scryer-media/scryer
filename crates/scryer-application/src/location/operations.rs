@@ -752,7 +752,56 @@ impl AppUseCase {
                 ),
             }
         }
+        // Every runner this boot intends to spawn has been spawned. From here
+        // on, an accepted row nobody is running is stranded, not pending.
+        self.runtime
+            .library
+            .location_runners
+            .mark_boot_resume_settled();
         Ok(resumed)
+    }
+
+    /// Finish off the rows the FIFO failed for having no runner: close their
+    /// Activity runs and release the ownership claims their acceptance took,
+    /// neither of which the registry can reach. Best effort; nothing here may
+    /// stop the operation that is about to run.
+    async fn settle_stranded_location_operations(&self) {
+        for stranded in self.runtime.library.location_runners.take_stranded() {
+            if let Some(job_run_id) = stranded.job_run_id.as_deref() {
+                let outcome = Ok(OperationRunOutcome {
+                    operation_id: stranded.operation_id.clone(),
+                    state: LocationOperationState::Failed,
+                    stop_reason: Some(crate::location::executor::StopReason::Error),
+                    counters: stranded.counters,
+                    cursor: crate::location::executor::ResumeCursor {
+                        operation_id: stranded.operation_id.clone(),
+                        last_settled_sequence: 0,
+                    },
+                    warnings: Vec::new(),
+                    detail: Some(stranded.detail.clone()),
+                });
+                self.close_location_operation_job_run_for(job_run_id, &outcome)
+                    .await;
+            }
+            match self
+                .services
+                .library
+                .location_operations
+                .release_location_operation_ownership(&stranded.operation_id)
+                .await
+            {
+                Ok(_) => self
+                    .runtime
+                    .library
+                    .location_ownership
+                    .release_operation(&stranded.operation_id),
+                Err(error) => tracing::warn!(
+                    operation_id = %stranded.operation_id,
+                    error = %error,
+                    "could not release the ownership claims of a stranded location operation"
+                ),
+            }
+        }
     }
 
     /// Run one root move to a terminal state or a safe stop.
@@ -780,6 +829,7 @@ impl AppUseCase {
                 operation_id,
             )
             .await?;
+        self.settle_stranded_location_operations().await;
         let row = self.location_operation(operation_id).await.ok().flatten();
         let job_run_id = row
             .as_ref()
@@ -1904,7 +1954,7 @@ impl AppUseCase {
                             title.name
                         )));
                     }
-                    let mapped = path_to_stored_string(&destination_folder.join(relative));
+                    let mapped = path_to_stored_string(destination_folder.join(relative));
                     if !mapped_paths
                         .insert(PathCaseRule::platform_default().fold(&mapped).into_owned())
                     {

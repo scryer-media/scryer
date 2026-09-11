@@ -1876,6 +1876,7 @@ mod tests {
         /// pulse is observable rather than only its end state.
         checkpoint_byte_writes: Vec<i64>,
         released_operations: Vec<String>,
+        transfer_titles: BTreeMap<(String, String), crate::location::live::TransferTitle>,
     }
 
     impl FakeStore {
@@ -1895,6 +1896,31 @@ mod tests {
                 (entity.kind_str().to_string(), entity.id().to_string()),
                 operation_id.to_string(),
             );
+        }
+
+        fn seed_transfer_title(
+            &self,
+            operation_id: &str,
+            row: crate::location::live::TransferTitle,
+        ) {
+            self.inner
+                .lock()
+                .expect("lock")
+                .transfer_titles
+                .insert((operation_id.to_string(), row.title_id.clone()), row);
+        }
+
+        fn transfer_title_row(
+            &self,
+            operation_id: &str,
+            title_id: &str,
+        ) -> Option<crate::location::live::TransferTitle> {
+            self.inner
+                .lock()
+                .expect("lock")
+                .transfer_titles
+                .get(&(operation_id.to_string(), title_id.to_string()))
+                .cloned()
         }
 
         fn request_cancel(&self, operation_id: &str) {
@@ -2066,6 +2092,26 @@ mod tests {
                 .expect("lock")
                 .cancel_requested
                 .contains(operation_id))
+        }
+
+        async fn upsert_transfer_title(
+            &self,
+            operation_id: &str,
+            title: &crate::location::live::TransferTitle,
+        ) -> AppResult<()> {
+            self.inner.lock().expect("lock").transfer_titles.insert(
+                (operation_id.to_string(), title.title_id.clone()),
+                title.clone(),
+            );
+            Ok(())
+        }
+
+        async fn transfer_title(
+            &self,
+            operation_id: &str,
+            title_id: &str,
+        ) -> AppResult<Option<crate::location::live::TransferTitle>> {
+            Ok(self.transfer_title_row(operation_id, title_id))
         }
 
         async fn upsert_location_title_checkpoint(
@@ -2518,6 +2564,69 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn pipeline_cancel_while_waiting_for_storage_stops_without_failing_title() {
+        struct DisconnectForever {
+            destination: PathBuf,
+            detached: PathBuf,
+            attempts: AtomicU64,
+        }
+        #[async_trait]
+        impl TitleFileMover for DisconnectForever {
+            async fn move_file(&self, _request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::fs::rename(&self.destination, &self.detached).unwrap();
+                }
+                Err(AppError::Repository("storage disconnected".into()))
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let mover = DisconnectForever {
+            detached: temp.path().join("detached"),
+            destination,
+            attempts: AtomicU64::new(0),
+        };
+        let mut title = planned_title("first", 0, 1);
+        title.files[0].source_path = temp.path().join("source.mkv");
+        title.files[0].destination_path = mover.destination.join("file.mkv");
+        let plan = OperationWorkPlan::new(vec![title]);
+        let store = FakeStore::with_operation(operation());
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let hub = crate::location::live::TransferHub::default();
+        let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_transfers(&hub);
+        let cancel = async {
+            while !hub.has_storage_waiters("op-1") {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(
+                hub.storage_wait_interval("op-1"),
+                Some(Duration::from_secs(5))
+            );
+            store.request_cancel("op-1");
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(runner.run("op-1", &plan), cancel)
+        })
+        .await
+        .expect("a cancel while waiting for storage returns promptly");
+        let result = result.unwrap();
+        // The user canceled; the storage outage is not the title's failure.
+        assert_eq!(result.state, LocationOperationState::Canceled);
+        assert_eq!(result.counters.files_processed, 0);
+        assert_eq!(mover.attempts.load(Ordering::SeqCst), 1);
+        assert!(
+            !store
+                .checkpoint_states("first")
+                .contains(&TitleCheckpointState::Failed)
+        );
+        assert!(!hub.has_storage_waiters("op-1"));
+        assert!(reconciler.cleaned.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn pipeline_progress_writer_does_not_starve_file_holding_writer_gate() {
         struct GateHoldingMover {
             gate: Arc<tokio::sync::Mutex<()>>,
@@ -2601,6 +2710,24 @@ mod tests {
     #[tokio::test]
     async fn pipeline_cancel_drains_verifiers_before_returning_and_keeps_sources() {
         let store = FakeStore::with_operation(operation());
+        store.seed_transfer_title(
+            "op-1",
+            crate::location::live::TransferTitle {
+                title_id: "first".into(),
+                name: "First".into(),
+                sequence: 0,
+                state: TitleCheckpointState::Pending,
+                files_total: 100,
+                files_done: 0,
+                bytes_total: 100 * 100,
+                copy_bytes: 0,
+                verification_bytes: 0,
+                current_file: None,
+                copying: 0,
+                verifying: 0,
+                detail: None,
+            },
+        );
         let mover = PipelinedMover::new(u64::MAX);
         let admission = ScriptedAdmission::new(&[]);
         let reconciler = RecordingReconciler::default();
@@ -2631,6 +2758,12 @@ mod tests {
         assert_eq!(result.unwrap().state, LocationOperationState::Canceled);
         assert_eq!(mover.verifying.load(Ordering::SeqCst), 0);
         assert!(reconciler.cleaned.lock().unwrap().is_empty());
+        // The title was left unfinished, not mid-flight: nothing of it is
+        // copying or verifying any more, so its row must not keep saying so.
+        let row = store.transfer_title_row("op-1", "first").unwrap();
+        assert_eq!(row.state, TitleCheckpointState::Pending);
+        assert_eq!((row.copying, row.verifying), (0, 0));
+        assert!(row.files_done > 0 && row.files_done < 100);
     }
 
     #[tokio::test]

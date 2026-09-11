@@ -245,9 +245,100 @@ pub struct LocationRunnerRegistry {
     live: Arc<std::sync::Mutex<HashSet<String>>>,
     execution: Arc<tokio::sync::Mutex<()>>,
     completed: Arc<tokio::sync::Notify>,
+    /// Set once the boot resume has spawned every runner it intends to. Until
+    /// then a Queued row without a live runner is simply not picked up yet.
+    boot_resume_settled: Arc<std::sync::atomic::AtomicBool>,
+    /// Queued rows this registry failed because their runner was lost. The
+    /// runtime drains these to close their Activity runs and release their
+    /// ownership claims, which the registry cannot reach.
+    stranded: Arc<std::sync::Mutex<Vec<StrandedOperation>>>,
 }
 
+/// A Queued operation whose runner disappeared before it ever started.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrandedOperation {
+    pub operation_id: String,
+    pub job_run_id: Option<String>,
+    pub counters: super::model::LocationOperationCounters,
+    pub detail: String,
+}
+
+/// Longer than this without a live runner and an accepted row is not merely
+/// between `create` and `spawn`; whatever should have run it is gone.
+const STRANDED_GRACE: chrono::Duration = chrono::Duration::seconds(30);
+
+pub(crate) const STRANDED_DETAIL: &str = "The operation's runner was lost before any file moved, \
+so it was marked failed to unblock the queue. Nothing was changed on disk; plan it again.";
+
 impl LocationRunnerRegistry {
+    /// The boot resume has spawned every runner it intends to; from now on a
+    /// Queued row with no live runner is stranded, not pending pickup.
+    pub fn mark_boot_resume_settled(&self) {
+        self.boot_resume_settled
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Hand back the stranded rows failed since the last call.
+    pub fn take_stranded(&self) -> Vec<StrandedOperation> {
+        self.stranded
+            .lock()
+            .map(|mut stranded| std::mem::take(&mut *stranded))
+            .unwrap_or_default()
+    }
+
+    /// Fail a Queued row at the head of the FIFO whose runner is gone.
+    ///
+    /// Returns whether the head was failed, so the caller re-reads the FIFO.
+    async fn fail_if_stranded(
+        &self,
+        store: &dyn crate::LocationOperationRepository,
+        head: &super::model::LocationOperation,
+    ) -> AppResult<bool> {
+        if head.state != super::model::LocationOperationState::Queued
+            || self.is_live(&head.id)
+            || !self
+                .boot_resume_settled
+                .load(std::sync::atomic::Ordering::Acquire)
+            || chrono::Utc::now() - head.created_at < STRANDED_GRACE
+        {
+            return Ok(false);
+        }
+        // Re-read under the slot: a runner may have registered since the list.
+        let Some(current) = store.get_location_operation(&head.id).await? else {
+            return Ok(false);
+        };
+        if current.state != super::model::LocationOperationState::Queued || self.is_live(&head.id) {
+            return Ok(false);
+        }
+        tracing::warn!(
+            operation_id = %current.id,
+            operation_type = current.operation_type.as_str(),
+            "an accepted location operation has no runner; failing it so the queue moves"
+        );
+        let now = chrono::Utc::now();
+        store
+            .update_location_operation_progress(&crate::LocationOperationProgress {
+                operation_id: current.id.clone(),
+                state: super::model::LocationOperationState::Failed,
+                counters: current.counters,
+                verification_fallback_count: current.verification_fallback_count,
+                detail: Some(STRANDED_DETAIL.to_owned()),
+                clear_detail: false,
+                started_at: current.started_at,
+                completed_at: Some(now),
+            })
+            .await?;
+        if let Ok(mut stranded) = self.stranded.lock() {
+            stranded.push(StrandedOperation {
+                operation_id: current.id.clone(),
+                job_run_id: current.job_run_id.clone(),
+                counters: current.counters,
+                detail: STRANDED_DETAIL.to_owned(),
+            });
+        }
+        Ok(true)
+    }
+
     /// Held through draining and cleanup, not merely while copies run.
     pub async fn execution_slot(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.execution.clone().lock_owned().await
@@ -289,6 +380,12 @@ impl LocationRunnerRegistry {
                     .is_some_and(|operation| operation.state.is_terminal())
             {
                 return Ok(slot);
+            }
+            if let Some(head) = pending.first()
+                && self.fail_if_stranded(store, head).await?
+            {
+                drop(slot);
+                continue;
             }
             drop(slot);
             // An accepted row can outlive its runner. Recheck that durable
@@ -1036,6 +1133,115 @@ mod tests {
             .await
             .expect("completion wakes without waiting for backoff")
             .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stranded_queued_head_is_failed_with_a_reason_once_boot_resume_settled() {
+        use crate::location::model::{
+            LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
+        };
+        use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+        let store = InMemoryLocationOperationStore::new();
+        let mut first = queued_operation(
+            "first",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        first.created_at -= chrono::Duration::minutes(2);
+        first.job_run_id = Some("run-first".into());
+        let mut second = first.clone();
+        second.id = "second".into();
+        second.created_at = chrono::Utc::now();
+        second.job_run_id = None;
+        store.insert_operation(first);
+        store.insert_operation(second);
+        let registry = LocationRunnerRegistry::new();
+        let waiting = registry.wait_for_turn(&store, "second");
+        tokio::pin!(waiting);
+        // Until the boot resume has spawned its runners, a Queued row nobody
+        // is running is simply not picked up yet.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), &mut waiting)
+                .await
+                .is_err()
+        );
+        assert!(registry.take_stranded().is_empty());
+        assert_eq!(
+            store
+                .get_location_operation("first")
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LocationOperationState::Queued
+        );
+        registry.mark_boot_resume_settled();
+        let _slot = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .expect("the stranded head is failed and the queue moves")
+            .unwrap();
+        let failed = store
+            .get_location_operation("first")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.state, LocationOperationState::Failed);
+        assert_eq!(failed.detail.as_deref(), Some(STRANDED_DETAIL));
+        assert!(failed.completed_at.is_some());
+        let stranded = registry.take_stranded();
+        assert_eq!(stranded.len(), 1);
+        assert_eq!(stranded[0].operation_id, "first");
+        assert_eq!(stranded[0].job_run_id.as_deref(), Some("run-first"));
+        assert!(registry.take_stranded().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fresh_or_live_queued_heads_are_not_stranded() {
+        use crate::location::model::{
+            LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
+        };
+        use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+        for live in [false, true] {
+            let store = InMemoryLocationOperationStore::new();
+            let mut first = queued_operation(
+                "first",
+                LocationOperationType::RootMove,
+                LocationExecutionMode::MoveWithScryer,
+                VerificationDepth::Full,
+            );
+            if live {
+                // Old enough to be stranded, but somebody is running it.
+                first.created_at -= chrono::Duration::minutes(2);
+            }
+            let mut second = first.clone();
+            second.id = "second".into();
+            second.created_at = chrono::Utc::now();
+            store.insert_operation(first);
+            store.insert_operation(second);
+            let registry = LocationRunnerRegistry::new();
+            registry.mark_boot_resume_settled();
+            let _first_live = live.then(|| registry.begin("first").unwrap());
+            let waiting = registry.wait_for_turn(&store, "second");
+            tokio::pin!(waiting);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), &mut waiting)
+                    .await
+                    .is_err(),
+                "live = {live}"
+            );
+            assert_eq!(
+                store
+                    .get_location_operation("first")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                LocationOperationState::Queued,
+                "live = {live}"
+            );
+            assert!(registry.take_stranded().is_empty());
+        }
     }
 
     #[tokio::test]

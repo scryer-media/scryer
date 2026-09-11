@@ -139,6 +139,8 @@ impl TransferEta {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileTelemetry {
     pub waiting_for_storage: bool,
+    /// How long the transfer sleeps between storage probes while waiting.
+    pub storage_probe_interval: Option<Duration>,
     pub comparing: bool,
     pub compared: u64,
     pub comparison_total: u64,
@@ -301,12 +303,62 @@ impl TransferHub {
             .entry((title.into(), path.into()))
             .or_default();
         file.waiting_for_storage = true;
+        file.storage_probe_interval = None;
         file.comparing = false;
         file.done = false;
         file.size = size;
         file.phase = Some(scryer_domain::ImportTransferPhase::Waiting);
         drop(state);
         self.changed();
+    }
+
+    /// Record the delay before a waiting file's next storage probe.
+    pub fn file_storage_probe_scheduled(
+        &self,
+        operation: &str,
+        title: &str,
+        path: &str,
+        interval: Duration,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = state
+            .operations
+            .get_mut(operation)
+            .and_then(|op| op.files.get_mut(&(title.into(), path.into())))
+            .filter(|file| file.waiting_for_storage)
+            .is_some_and(|file| file.storage_probe_interval.replace(interval) != Some(interval));
+        drop(state);
+        if changed {
+            self.changed();
+        }
+    }
+
+    /// The shortest probe interval among files still waiting for storage.
+    pub fn storage_wait_interval(&self, operation: &str) -> Option<Duration> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .operations
+            .get(operation)?
+            .files
+            .values()
+            .filter(|file| file.waiting_for_storage && !file.done)
+            .filter_map(|file| file.storage_probe_interval)
+            .min()
+    }
+
+    /// Forget a file the runner gave back untouched, so it reads like every
+    /// other file the operation never reached rather than one still waiting.
+    pub fn file_released(&self, operation: &str, title: &str, path: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let removed = state
+            .operations
+            .get_mut(operation)
+            .is_some_and(|op| op.files.remove(&(title.into(), path.into())).is_some());
+        drop(state);
+        if removed {
+            self.changed();
+        }
     }
 
     pub fn file_update(
