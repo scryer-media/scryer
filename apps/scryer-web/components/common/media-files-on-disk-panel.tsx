@@ -11,6 +11,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { ExternalSubtitleSection } from "@/components/common/external-subtitle-section";
 import { MediaAnalysisDetailsPopover } from "@/components/common/media-analysis-details";
+import { hasDiscReview } from "@/lib/utils/disc-review";
 import {
   MediaInfoBadges,
   SubtitleTracksPopover,
@@ -23,6 +24,7 @@ import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
 import { cn } from "@/lib/utils";
 
 export type MediaFileOnDisk = MediaInfoFile & {
@@ -150,6 +152,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
             const fileDate = formatMediaFileDate(file.createdAt, dateTimeFormat);
             const PathIcon = selectedTitlePresentation ? FileIcon : HardDrive;
             const unknownLabel = t("label.unknown");
+            const selectedTitleAudio = selectedTitleAudioLabel(file);
+            const formatPill = (label: string) => ({
+              className: "bg-[var(--scry-chip)] text-[var(--scry-muted2)]",
+              label,
+            });
             const selectedTitleBadges = [
               {
                 className:
@@ -161,11 +168,16 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                   "bg-[var(--scry-facet-movie-bg)] text-[var(--scry-facet-movie-text)]",
                 label: selectedTitleCodecLabel(file) ?? unknownLabel,
               },
+              ...hdrFormatPills(file).map(formatPill),
               {
                 className:
                   "bg-[var(--scry-facet-anime-bg)] text-[var(--scry-facet-anime-text)]",
-                label: selectedTitleAudioLabel(file) ?? unknownLabel,
+                label: selectedTitleAudio ?? unknownLabel,
               },
+              // The parsed release label can already say "TrueHD Atmos".
+              ...audioFormatPills(file)
+                .filter((pill) => !selectedTitleAudio?.toLowerCase().includes(pill.toLowerCase()))
+                .map(formatPill),
             ];
             const selectedTitleSubtitleStreams =
               file.subtitleStreams.length > 0
@@ -285,7 +297,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             {badge.label}
                           </span>
                         ))}
-                        {file.analysis ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
+                        {file.analysis && hasDiscReview(file.analysis.disc, file.analysisAttempt) ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
                         {selectedTitleSubtitleStreams.length > 0 ? (
                           <SubtitleTracksPopover
                             streams={selectedTitleSubtitleStreams}
