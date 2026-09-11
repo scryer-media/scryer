@@ -43,7 +43,6 @@ async fn resolve(
 
 fn fixture(
     temp: &tempfile::TempDir,
-    recycle: bool,
 ) -> (
     Arc<InMemoryLocationOperationStore>,
     ConflictResolver,
@@ -57,15 +56,34 @@ fn fixture(
     let store = Arc::new(InMemoryLocationOperationStore::new());
     let resolver = ConflictResolver::new(
         store.clone(),
-        BTreeMap::from([("title".into(), ("AnimeTesting".into(), recycle))]),
+        BTreeMap::from([("title".into(), "AnimeTesting".into())]),
     );
     (store, resolver, title)
+}
+
+/// A comparison sink that records the highest byte count it was told about
+/// and whether it was told anything at all: a pair the quick check settles
+/// never reaches the full comparison, so the sink stays silent.
+fn counting_progress() -> (
+    CopyProgress,
+    Arc<std::sync::atomic::AtomicU64>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    let reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let count = reads.clone();
+    let flag = called.clone();
+    let progress = CopyProgress::none().with_comparison_sink(move |bytes, _| {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        count.fetch_max(bytes, std::sync::atomic::Ordering::Relaxed);
+    });
+    (progress, reads, called)
 }
 
 #[tokio::test]
 async fn different_existing_files_keep_destination_and_reuse_durable_provenance_on_resume() {
     let temp = tempfile::tempdir().unwrap();
-    let (store, resolver, title) = fixture(&temp, true);
+    let (store, resolver, title) = fixture(&temp);
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
     std::fs::write(&title.files[0].destination_path, b"original").unwrap();
     let first = resolve(&resolver, &title, 0).await.unwrap();
@@ -95,7 +113,7 @@ async fn different_existing_files_keep_destination_and_reuse_durable_provenance_
 #[tokio::test]
 async fn identical_existing_content_is_fully_compared_even_when_quick_copy_policy_was_requested() {
     let temp = tempfile::tempdir().unwrap();
-    let (store, resolver, title) = fixture(&temp, true);
+    let (store, resolver, title) = fixture(&temp);
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
     std::fs::write(&title.files[0].destination_path, b"incoming").unwrap();
     let proof = resolve(&resolver, &title, 0).await.unwrap();
@@ -120,21 +138,22 @@ async fn identical_existing_content_is_fully_compared_even_when_quick_copy_polic
     assert!(!row.proof_is_current().await);
 }
 
+/// Every occupied candidate name is quick-checked in turn (FR-073): the
+/// original holds different bytes of the same length (the samples disagree)
+/// and the first rename candidate holds a different length, so both are
+/// proven different without a full read and the incoming copy lands on the
+/// numbered name after them.
 #[tokio::test]
-async fn unavailable_recycling_preserves_an_extra_copy_and_compares_occupied_candidate_names() {
+async fn occupied_candidate_names_are_quick_checked_without_a_full_read() {
     let temp = tempfile::tempdir().unwrap();
-    let (_, resolver, title) = fixture(&temp, false);
+    let (_, resolver, title) = fixture(&temp);
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
-    std::fs::write(&title.files[0].destination_path, b"incoming").unwrap();
+    std::fs::write(&title.files[0].destination_path, b"original").unwrap();
     let candidate = title.files[0]
         .destination_path
         .with_file_name("season (from AnimeTesting).nfo");
     std::fs::write(&candidate, b"different candidate").unwrap();
-    let reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let count = reads.clone();
-    let progress = CopyProgress::none().with_comparison_sink(move |bytes, _| {
-        count.fetch_max(bytes, std::sync::atomic::Ordering::Relaxed);
-    });
+    let (progress, _, full_comparison) = counting_progress();
     let proof = resolver
         .resolve(
             &RootMoveFileMover::without_permissions(),
@@ -148,25 +167,99 @@ async fn unavailable_recycling_preserves_an_extra_copy_and_compares_occupied_can
         )
         .await
         .unwrap();
-    assert_eq!(
-        reads.load(std::sync::atomic::Ordering::Relaxed),
-        43,
-        "both occupied names contribute their complete comparison reads"
+    assert!(
+        !full_comparison.load(std::sync::atomic::Ordering::Relaxed),
+        "the quick check settles both occupied names; neither earns a full comparison"
     );
     assert_eq!(
         proof.destination_path.file_name().unwrap(),
         "season (from AnimeTesting) (2).nfo"
     );
+    assert!(proof.permits_source_removal());
     assert!(proof.detail.is_some());
+    assert_eq!(std::fs::read(&proof.destination_path).unwrap(), b"incoming");
     assert_eq!(std::fs::read(&candidate).unwrap(), b"different candidate");
+    assert_eq!(
+        std::fs::read(&title.files[0].destination_path).unwrap(),
+        b"original"
+    );
     assert!(
         title.files[0].source_path.exists(),
         "placement never cleans the source"
     );
 }
 
+/// A size difference is proof enough: neither file is read at all.
 #[tokio::test]
-async fn full_identity_detects_differences_outside_preview_samples_and_counts_both_reads() {
+async fn a_size_difference_is_proven_different_without_reading_either_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&destination, b"original bytes").unwrap();
+    let (progress, _, full_comparison) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress)
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
+    assert!(
+        proof.hashes.is_none(),
+        "nothing was verified against anything"
+    );
+    assert!(!full_comparison.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+/// Same length, different bytes inside the sampled head: the sample settles it
+/// and the full comparison never starts.
+#[tokio::test]
+async fn a_differing_sample_is_proven_different_without_the_full_comparison() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&destination, b"original").unwrap();
+    let (progress, _, full_comparison) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress)
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
+    assert!(proof.hashes.is_none());
+    assert!(!full_comparison.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+/// A pair the quick check cannot tell apart is read end to end on both sides
+/// before it is called identical; the proof carries the full BLAKE3.
+#[tokio::test]
+async fn a_quick_identical_pair_earns_the_full_comparison_of_both_sides() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&destination, b"incoming").unwrap();
+    let (progress, reads, full_comparison) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress)
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
+    assert!(full_comparison.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::Relaxed),
+        16,
+        "both sides are read in full"
+    );
+    let hashes = proof.hashes.expect("the full comparison's hashes");
+    assert_eq!(
+        hashes.full_blake3,
+        blake3::hash(b"incoming").to_hex().to_string()
+    );
+    assert!(source.exists() && destination.exists());
+}
+
+/// The quick check samples a bounded head and tail; a difference in the
+/// middle is invisible to it, and only the full comparison finds it — after
+/// reading both files completely.
+#[tokio::test]
+async fn full_identity_detects_differences_outside_the_quick_check_samples_and_counts_both_reads() {
     use std::sync::atomic::{AtomicU64, Ordering};
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("a");
@@ -189,23 +282,12 @@ async fn full_identity_detects_differences_outside_preview_samples_and_counts_bo
     assert!(source.exists() && destination.exists());
 }
 
-#[tokio::test]
-async fn preview_hash_stops_at_the_decimal_ten_megabyte_boundary() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("file");
-    let file = std::fs::File::create(&path).unwrap();
-    file.set_len(10_000_000).unwrap();
-    assert!(preview_hash(&path).await.unwrap().is_some());
-    file.set_len(10_000_001).unwrap();
-    assert!(preview_hash(&path).await.unwrap().is_none());
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn valid_hardlink_resolution_never_reads_content_and_survives_interrupted_cleanup() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
-    let (store, resolver, title) = fixture(&temp, true);
+    let (store, resolver, title) = fixture(&temp);
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
     std::fs::hard_link(
         &title.files[0].source_path,
@@ -214,7 +296,7 @@ async fn valid_hardlink_resolution_never_reads_content_and_survives_interrupted_
     .unwrap();
     std::fs::set_permissions(
         &title.files[0].source_path,
-        std::fs::Permissions::from_mode(0),
+        std::fs::Permissions::from_mode(0o000),
     )
     .unwrap();
     let progress = CopyProgress::none()
@@ -250,7 +332,7 @@ async fn valid_hardlink_resolution_never_reads_content_and_survives_interrupted_
 #[tokio::test]
 async fn companions_and_nested_trickplay_follow_the_resolved_media_stem() {
     let temp = tempfile::tempdir().unwrap();
-    let (_, resolver, mut title) = fixture(&temp, true);
+    let (_, resolver, mut title) = fixture(&temp);
     title.files[0].source_path.set_file_name("episode.mkv");
     title.files[0].destination_path.set_file_name("episode.mkv");
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
@@ -284,7 +366,7 @@ async fn companions_and_nested_trickplay_follow_the_resolved_media_stem() {
 #[tokio::test]
 async fn a_companion_uses_the_longest_matching_media_stem() {
     let temp = tempfile::tempdir().unwrap();
-    let (_, resolver, mut title) = fixture(&temp, true);
+    let (_, resolver, mut title) = fixture(&temp);
     let source = temp.path().join("source");
     let destination = temp.path().join("destination");
     title.files[0].source_path = source.join("episode.mkv");
@@ -321,7 +403,7 @@ async fn a_companion_uses_the_longest_matching_media_stem() {
 #[tokio::test]
 async fn changing_files_never_produce_a_completed_identity_proof() {
     let temp = tempfile::tempdir().unwrap();
-    let (_, resolver, title) = fixture(&temp, true);
+    let (_, resolver, title) = fixture(&temp);
     std::fs::write(&title.files[0].source_path, b"incoming").unwrap();
     std::fs::write(&title.files[0].destination_path, b"incoming").unwrap();
     let path = title.files[0].destination_path.clone();

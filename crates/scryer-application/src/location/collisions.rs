@@ -30,12 +30,12 @@ pub enum CollisionDisposition {
     /// Nothing at the destination claims the pathname: the incoming item lands
     /// under its proposed name unchanged.
     PlaceAsIs,
-    /// Full BLAKE3 match: keep the destination copy, recycle the redundant
-    /// incoming/source copy, merge catalog associations onto the survivor.
-    DedupRecycleSource,
-    /// Proven duplicate, but recycling is unavailable or refused: preserve the
-    /// incoming copy under a disambiguated name and warn (FR-073).
-    DedupPreserveWithWarning,
+    /// The quick check (size plus sampled head/tail proof) could not tell the
+    /// incoming file apart from the destination's copy, so the transfer's full
+    /// comparison decides: proven identical, the source copy is dropped and the
+    /// destination's survives; different, the incoming file is preserved under
+    /// the FR-074 name (FR-073). A preview never claims more than "may merge".
+    MayMerge,
     /// Different content: keep the destination filename, rename the incoming
     /// file with a source-library suffix plus numeric disambiguation (FR-074).
     RenameIncoming,
@@ -51,8 +51,7 @@ impl CollisionDisposition {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::PlaceAsIs => "place_as_is",
-            Self::DedupRecycleSource => "dedup_recycle_source",
-            Self::DedupPreserveWithWarning => "dedup_preserve_with_warning",
+            Self::MayMerge => "may_merge",
             Self::RenameIncoming => "rename_incoming",
             Self::FollowRenamedMedia => "follow_renamed_media",
             Self::CaseOnlyRename => "case_only_rename",
@@ -65,8 +64,11 @@ impl CollisionDisposition {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "place_as_is" => Some(Self::PlaceAsIs),
-            "dedup_recycle_source" => Some(Self::DedupRecycleSource),
-            "dedup_preserve_with_warning" => Some(Self::DedupPreserveWithWarning),
+            "may_merge" => Some(Self::MayMerge),
+            // Plans written before the transfer became the sole judge of
+            // identity recorded a preview-time verdict; at transfer time both
+            // were exactly a may-merge candidate.
+            "dedup_recycle_source" | "dedup_preserve_with_warning" => Some(Self::MayMerge),
             "rename_incoming" => Some(Self::RenameIncoming),
             "follow_renamed_media" => Some(Self::FollowRenamedMedia),
             "case_only_rename" => Some(Self::CaseOnlyRename),
@@ -74,26 +76,15 @@ impl CollisionDisposition {
         }
     }
 
-    /// Dispositions that must surface a warning to the user on completion (C3).
-    pub fn warns(&self) -> bool {
-        matches!(self, Self::DedupPreserveWithWarning)
-    }
-
     /// Whether the incoming item lands under a name other than the one it
     /// proposed. Previews count these as collision renames (FR-080).
     pub fn is_rename(&self) -> bool {
-        matches!(
-            self,
-            Self::RenameIncoming | Self::DedupPreserveWithWarning | Self::FollowRenamedMedia
-        )
+        matches!(self, Self::RenameIncoming | Self::FollowRenamedMedia)
     }
 
-    /// Whether the decision proved a duplicate, either recycled or preserved.
-    pub fn is_dedup(&self) -> bool {
-        matches!(
-            self,
-            Self::DedupRecycleSource | Self::DedupPreserveWithWarning
-        )
+    /// Whether the transfer's full comparison decides this item's fate.
+    pub fn may_merge(&self) -> bool {
+        matches!(self, Self::MayMerge)
     }
 }
 
@@ -253,28 +244,19 @@ impl FullHash {
             Some(hashes) => Self::known(hashes.full_blake3.clone()),
         }
     }
-
-    fn missing_reason(&self) -> Option<&'static str> {
-        match self {
-            Self::Known(_) => None,
-            Self::Stale => Some("stale"),
-            Self::Absent => Some("not computed"),
-        }
-    }
 }
 
-/// The content facts the dedup gate reads. `size_bytes` and `sampled_proof` are
-/// pre-filters only; `full_blake3` is the sole deciding comparison (D4).
+/// The content facts the preview's quick check reads: the size and the sampled
+/// head/tail proof. They can rule a look-alike *out*; they never prove identity.
+/// Full-file BLAKE3 is the transfer's job, while both copies still exist (C4).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ContentFacts {
     pub size_bytes: u64,
-    /// The sampled content proof digest (see [`crate::fs_integrity`]). Used to
-    /// cheaply rule candidates *out*; never to rule one *in*.
+    /// The sampled content proof digest (see [`crate::fs_integrity`]). `None`
+    /// when the preview did not read it — the file was unreadable, or the
+    /// sizes already differed and there was nothing to sample for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampled_proof: Option<String>,
-    /// Full-file BLAKE3 state (D4).
-    #[serde(default)]
-    pub full_blake3: FullHash,
 }
 
 impl ContentFacts {
@@ -282,7 +264,6 @@ impl ContentFacts {
         Self {
             size_bytes,
             sampled_proof: None,
-            full_blake3: FullHash::Absent,
         }
     }
 
@@ -290,109 +271,49 @@ impl ContentFacts {
         self.sampled_proof = Some(proof.into());
         self
     }
-
-    pub fn with_full_blake3(mut self, hex: impl Into<String>) -> Self {
-        self.full_blake3 = FullHash::known(hex);
-        self
-    }
-
-    pub fn with_stale_full_blake3(mut self) -> Self {
-        self.full_blake3 = FullHash::Stale;
-        self
-    }
-
-    /// Attach an already-resolved hash state (the read-model path: a planner
-    /// carries [`FullHash`] straight off the media file row).
-    pub fn with_full_hash(mut self, full_blake3: FullHash) -> Self {
-        self.full_blake3 = full_blake3;
-        self
-    }
 }
 
-/// Outcome of the two-stage dedup gate (D4).
+/// What the quick check concluded about a name collision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DedupVerdict {
-    /// Full BLAKE3 matched on both sides: proven identical.
-    Identical,
-    /// Size or the sampled proof already differ: obviously different content,
-    /// no full hash needed and nothing to warn about.
+    /// Same size and the same sampled proof on both sides: the files may be
+    /// identical, and only the transfer's full comparison can say (FR-073).
+    MayMerge,
+    /// Size or the sampled proof differ: different content, no further read
+    /// needed and nothing to warn about.
     DifferentContent,
-    /// The pre-filters matched but at least one side lacks a current full hash,
-    /// so identity is unproven. Treated as *not identical* (never a guess), and
-    /// surfaced so the user understands why a look-alike was not deduplicated.
-    UnprovenMissingFullHash {
-        incoming_missing: Option<&'static str>,
-        destination_missing: Option<&'static str>,
+    /// Same size, but a sampled proof is missing on at least one side, so the
+    /// quick check could not run. The transfer compares the pair anyway; the
+    /// preview says so rather than guessing either way.
+    Unproven {
+        incoming_missing: bool,
+        destination_missing: bool,
     },
 }
 
 impl DedupVerdict {
-    pub fn is_identical(&self) -> bool {
-        matches!(self, Self::Identical)
+    pub fn is_different(&self) -> bool {
+        matches!(self, Self::DifferentContent)
     }
 }
 
-/// The dedup gate: candidacy pre-filters on size + sampled proof, then the
-/// deciding comparison is strictly full-BLAKE3 vs full-BLAKE3 (FR-073, D4).
+/// The preview's quick check: size first, then the sampled proof. Either can
+/// rule a candidate out; agreement only makes it a may-merge candidate, because
+/// the full-file comparison belongs to the transfer (FR-073, C4).
 pub fn dedup_verdict(incoming: &ContentFacts, destination: &ContentFacts) -> DedupVerdict {
     if incoming.size_bytes != destination.size_bytes {
         return DedupVerdict::DifferentContent;
     }
-    // The sampled proof can only rule a candidate out. Two present-and-unequal
-    // proofs prove different bytes; an absent proof proves nothing either way.
-    if let (Some(left), Some(right)) = (
+    match (
         incoming.sampled_proof.as_deref(),
         destination.sampled_proof.as_deref(),
-    ) && left != right
-    {
-        return DedupVerdict::DifferentContent;
-    }
-
-    match (
-        incoming.full_blake3.as_known(),
-        destination.full_blake3.as_known(),
     ) {
-        (Some(left), Some(right)) if left == right => DedupVerdict::Identical,
+        (Some(left), Some(right)) if left == right => DedupVerdict::MayMerge,
         (Some(_), Some(_)) => DedupVerdict::DifferentContent,
-        _ => DedupVerdict::UnprovenMissingFullHash {
-            incoming_missing: incoming.full_blake3.missing_reason(),
-            destination_missing: destination.full_blake3.missing_reason(),
+        (left, right) => DedupVerdict::Unproven {
+            incoming_missing: left.is_none(),
+            destination_missing: right.is_none(),
         },
-    }
-}
-
-/// Whether the recycle bin can accept the redundant source copy for this
-/// operation. Anything other than [`RecycleAvailability::Available`] forces the
-/// preserve-and-rename path; permanent deletion is never a fallback (FR-073).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RecycleAvailability {
-    /// Enabled, configured, and the source path is inside the allowlisted roots.
-    Available,
-    /// The recycle bin is switched off.
-    Disabled,
-    /// Enabled but not usable: invalid or unreachable base path, unknown source
-    /// roots (the allowlist is empty and must fail closed), no free space.
-    Unavailable(String),
-    /// Usable in general, but it refuses this particular source file — most
-    /// often because the file is outside the allowlisted media roots.
-    RejectsSource(String),
-}
-
-impl RecycleAvailability {
-    pub fn is_available(&self) -> bool {
-        matches!(self, Self::Available)
-    }
-
-    /// Human-readable reason recycling cannot be used, if it cannot.
-    pub fn reason(&self) -> Option<String> {
-        match self {
-            Self::Available => None,
-            Self::Disabled => Some("the recycle bin is disabled".to_string()),
-            Self::Unavailable(detail) => Some(format!("the recycle bin is unavailable: {detail}")),
-            Self::RejectsSource(detail) => {
-                Some(format!("the recycle bin rejected the file: {detail}"))
-            }
-        }
     }
 }
 
@@ -580,50 +501,36 @@ impl DestinationItem {
 /// A user-visible warning produced by a collision decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollisionWarning {
-    /// A proven duplicate could not be recycled, so the incoming copy is
-    /// preserved under a new name. Never a permanent deletion (FR-073, C3).
-    DuplicatePreservedRecycleUnavailable {
-        preserved_as: String,
-        reason: String,
-    },
     /// A canonical sidecar was preserved as a renamed incoming artifact while
     /// the destination's canonical file stays authoritative (FR-075).
     CanonicalSidecarPreserved {
         canonical_name: String,
         preserved_as: String,
     },
-    /// Size and sampled proof matched but no current full BLAKE3 was available,
-    /// so the files were not deduplicated (D4).
-    DedupSkippedMissingFullHash { name: String, detail: String },
+    /// The sizes match but the preview could not read a sampled proof on at
+    /// least one side, so it cannot say whether the pair may merge; the
+    /// transfer compares them in full either way.
+    QuickCheckUnavailable { name: String, detail: String },
 }
 
 impl CollisionWarning {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::DuplicatePreservedRecycleUnavailable { .. } => {
-                "duplicate_preserved_recycle_unavailable"
-            }
             Self::CanonicalSidecarPreserved { .. } => "canonical_sidecar_preserved",
-            Self::DedupSkippedMissingFullHash { .. } => "dedup_skipped_missing_full_hash",
+            Self::QuickCheckUnavailable { .. } => "quick_check_unavailable",
         }
     }
 
     pub fn message(&self) -> String {
         match self {
-            Self::DuplicatePreservedRecycleUnavailable {
-                preserved_as,
-                reason,
-            } => format!(
-                "An identical copy could not be recycled because {reason}. It was preserved as \"{preserved_as}\" instead of being deleted."
-            ),
             Self::CanonicalSidecarPreserved {
                 canonical_name,
                 preserved_as,
             } => format!(
                 "The destination's \"{canonical_name}\" stays authoritative; the incoming one was preserved as \"{preserved_as}\"."
             ),
-            Self::DedupSkippedMissingFullHash { name, .. } => format!(
-                "\"{name}\" has not had a complete content comparison, so both files were preserved."
+            Self::QuickCheckUnavailable { name, detail } => format!(
+                "\"{name}\" could not be quick-checked against the destination copy ({detail}); the transfer's full comparison decides whether it merges or is preserved."
             ),
         }
     }
@@ -638,27 +545,17 @@ pub struct CollisionDecision {
     pub disposition: CollisionDisposition,
     /// The name the incoming item proposed.
     pub proposed_name: String,
-    /// The name the incoming item actually lands under. For
-    /// [`CollisionDisposition::DedupRecycleSource`] this is the surviving
-    /// destination name — no incoming bytes are written.
+    /// The name the incoming item lands under if it is written. For
+    /// [`CollisionDisposition::MayMerge`] this is the collided-with name: the
+    /// transfer either merges into it or preserves the file under the FR-074
+    /// name beside it.
     pub final_name: String,
     /// The destination name that was collided with, when there was one.
     pub collided_with: Option<String>,
-    /// The redundant source copy must be recycled (never deleted).
-    pub recycle_source: bool,
-    /// The incoming record's catalog associations merge onto the surviving
-    /// destination record (FR-073).
-    pub merge_catalog_associations: bool,
     pub warnings: Vec<CollisionWarning>,
 }
 
 impl CollisionDecision {
-    /// Whether the item's bytes are written at the destination at all. A
-    /// deduplicated-and-recycled item is not copied; everything else is.
-    pub fn writes_bytes(&self) -> bool {
-        !matches!(self.disposition, CollisionDisposition::DedupRecycleSource)
-    }
-
     pub fn renamed(&self) -> bool {
         self.final_name != self.proposed_name
     }
@@ -671,7 +568,6 @@ pub struct CollisionPlanRequest {
     /// Case rule of the *destination* filesystem (FR-090).
     pub case_rule: PathCaseRule,
     pub naming: CollisionNaming,
-    pub recycle: RecycleAvailability,
     /// Items already present at the destination.
     pub destination: Vec<DestinationItem>,
     /// Items being placed, in the order the caller wants them considered.
@@ -683,15 +579,9 @@ impl CollisionPlanRequest {
         Self {
             case_rule,
             naming,
-            recycle: RecycleAvailability::Available,
             destination: Vec::new(),
             incoming: Vec::new(),
         }
-    }
-
-    pub fn with_recycle(mut self, recycle: RecycleAvailability) -> Self {
-        self.recycle = recycle;
-        self
     }
 
     pub fn with_destination(mut self, destination: Vec<DestinationItem>) -> Self {
@@ -705,18 +595,16 @@ impl CollisionPlanRequest {
     }
 }
 
-/// Counts for the operation summary. Renamed and deduplicated assets are
+/// Counts for the operation summary. Renamed and may-merge assets are
 /// reported separately from media files (FR-075, FR-080).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollisionSummary {
     pub media_placed: usize,
     pub media_renamed: usize,
-    pub media_deduplicated: usize,
+    pub media_may_merge: usize,
     pub assets_placed: usize,
     pub assets_renamed: usize,
-    pub assets_deduplicated: usize,
-    /// Proven duplicates preserved because recycling was not possible.
-    pub preserved_recycle_unavailable: usize,
+    pub assets_may_merge: usize,
     /// "Collisions" that were the title's own path under a different case.
     pub case_only_renames: usize,
 }
@@ -748,11 +636,6 @@ impl CollisionPlan {
             .collect()
     }
 
-    /// Files whose redundant source copy must go through the recycle bin.
-    pub fn recycled_sources(&self) -> impl Iterator<Item = &CollisionDecision> {
-        self.decisions.iter().filter(|d| d.recycle_source)
-    }
-
     pub fn summary(&self) -> CollisionSummary {
         let mut summary = CollisionSummary::default();
         for decision in &self.decisions {
@@ -772,20 +655,16 @@ impl CollisionPlan {
                         summary.assets_renamed += 1;
                     }
                 }
-                CollisionDisposition::DedupRecycleSource
-                | CollisionDisposition::DedupPreserveWithWarning => {
+                CollisionDisposition::MayMerge => {
                     if media {
-                        summary.media_deduplicated += 1;
+                        summary.media_may_merge += 1;
                     } else {
-                        summary.assets_deduplicated += 1;
+                        summary.assets_may_merge += 1;
                     }
                 }
             }
             if decision.disposition == CollisionDisposition::CaseOnlyRename {
                 summary.case_only_renames += 1;
-            }
-            if decision.disposition == CollisionDisposition::DedupPreserveWithWarning {
-                summary.preserved_recycle_unavailable += 1;
             }
         }
         summary
@@ -959,8 +838,6 @@ fn decide_item(
             proposed_name: item.proposed_name.clone(),
             final_name: target_name,
             collided_with: None,
-            recycle_source: false,
-            merge_catalog_associations: false,
             warnings: Vec::new(),
         };
     }
@@ -980,8 +857,6 @@ fn decide_item(
                 proposed_name: item.proposed_name.clone(),
                 final_name,
                 collided_with: Some(target_name),
-                recycle_source: false,
-                merge_catalog_associations: false,
                 warnings: Vec::new(),
             };
         }
@@ -998,8 +873,6 @@ fn decide_item(
             proposed_name: item.proposed_name.clone(),
             final_name: target_name,
             collided_with: None,
-            recycle_source: false,
-            merge_catalog_associations: false,
             warnings: Vec::new(),
         };
     };
@@ -1007,76 +880,38 @@ fn decide_item(
     let verdict = dedup_verdict(&item.content, &existing.content);
     let mut warnings = Vec::new();
 
-    if verdict.is_identical() {
-        if request.recycle.is_available() {
-            // FR-073: keep the destination copy, recycle the redundant source,
-            // merge catalog associations onto the survivor.
-            return CollisionDecision {
-                item_id: item.id.clone(),
-                kind: item.kind,
-                disposition: CollisionDisposition::DedupRecycleSource,
-                proposed_name: item.proposed_name.clone(),
-                final_name: existing.name.clone(),
-                collided_with: Some(existing.name.clone()),
-                recycle_source: true,
-                merge_catalog_associations: true,
-                warnings,
+    if !verdict.is_different() {
+        // The quick check could not tell the pair apart. The transfer's full
+        // comparison decides (FR-073): identical content merges into the
+        // destination's copy and the source is dropped; different content is
+        // preserved under the FR-074 name. The preview promises only that.
+        if let DedupVerdict::Unproven {
+            incoming_missing,
+            destination_missing,
+        } = verdict
+        {
+            let detail = match (incoming_missing, destination_missing) {
+                (true, true) => "neither file could be sampled",
+                (true, false) => "the incoming file could not be sampled",
+                _ => "the destination file could not be sampled",
             };
-        }
-        // Recycling is off, broken, or refused: preserve + rename + warn. Never
-        // a permanent deletion (FR-073, C3).
-        let base = collision_rename_base(&target_name, &request.naming.source_library_label);
-        let final_name = index.allocate(&base);
-        index.reserve(&final_name);
-        warnings.push(CollisionWarning::DuplicatePreservedRecycleUnavailable {
-            preserved_as: final_name.clone(),
-            reason: request
-                .recycle
-                .reason()
-                .unwrap_or_else(|| "recycling is not available".to_string()),
-        });
-        if item.kind == CollisionItemKind::CanonicalSidecar {
-            warnings.push(CollisionWarning::CanonicalSidecarPreserved {
-                canonical_name: existing.name.clone(),
-                preserved_as: final_name.clone(),
+            warnings.push(CollisionWarning::QuickCheckUnavailable {
+                name: target_name.clone(),
+                detail: detail.to_string(),
             });
         }
+        // The name stays claimed by the destination copy either way; the
+        // suffixed name a different file would take is allocated at transfer
+        // time, against the folder as it is then.
         return CollisionDecision {
             item_id: item.id.clone(),
             kind: item.kind,
-            disposition: CollisionDisposition::DedupPreserveWithWarning,
+            disposition: CollisionDisposition::MayMerge,
             proposed_name: item.proposed_name.clone(),
-            final_name,
+            final_name: existing.name.clone(),
             collided_with: Some(existing.name.clone()),
-            recycle_source: false,
-            // The bytes are preserved as a separate artifact; the destination
-            // record keeps its own associations.
-            merge_catalog_associations: false,
             warnings,
         };
-    }
-
-    if let DedupVerdict::UnprovenMissingFullHash {
-        incoming_missing,
-        destination_missing,
-    } = verdict
-    {
-        let detail = match (incoming_missing, destination_missing) {
-            (Some(left), Some(right)) => format!(
-                "the full-file BLAKE3 is {left} for the incoming file and {right} for the destination file"
-            ),
-            (Some(left), None) => {
-                format!("the incoming file's full-file BLAKE3 is {left}")
-            }
-            (None, Some(right)) => {
-                format!("the destination file's full-file BLAKE3 is {right}")
-            }
-            (None, None) => "the full-file BLAKE3 comparison was inconclusive".to_string(),
-        };
-        warnings.push(CollisionWarning::DedupSkippedMissingFullHash {
-            name: target_name.clone(),
-            detail,
-        });
     }
 
     // FR-074/FR-075: destination keeps its filename; the incoming file is
@@ -1100,8 +935,6 @@ fn decide_item(
         proposed_name: item.proposed_name.clone(),
         final_name,
         collided_with: Some(existing.name.clone()),
-        recycle_source: false,
-        merge_catalog_associations: false,
         warnings,
     }
 }
@@ -1118,72 +951,42 @@ mod tests {
         CollisionPlanRequest::new(case_rule, naming())
     }
 
-    fn facts(size: u64, sampled: &str, full: Option<&str>) -> ContentFacts {
-        let base = ContentFacts::new(size).with_sampled_proof(sampled);
-        match full {
-            Some(hex) => base.with_full_blake3(hex),
-            None => base,
-        }
+    fn facts(size: u64, sampled: &str) -> ContentFacts {
+        ContentFacts::new(size).with_sampled_proof(sampled)
     }
 
-    // --- FR-073 / D4: the dedup gate -------------------------------------
+    // --- FR-073: the quick check ------------------------------------------
 
     #[test]
-    fn matching_full_hashes_prove_a_duplicate() {
-        let verdict = dedup_verdict(
-            &facts(100, "sample", Some("blake3-aaa")),
-            &facts(100, "sample", Some("blake3-aaa")),
-        );
-        assert_eq!(verdict, DedupVerdict::Identical);
+    fn matching_size_and_sample_make_a_may_merge_candidate_not_a_proof() {
+        let verdict = dedup_verdict(&facts(100, "sample"), &facts(100, "sample"));
+        assert_eq!(verdict, DedupVerdict::MayMerge);
+        assert!(!verdict.is_different());
     }
 
     #[test]
-    fn different_sizes_short_circuit_before_hashing() {
-        let verdict = dedup_verdict(
-            &facts(100, "sample", Some("blake3-aaa")),
-            &facts(101, "sample", Some("blake3-aaa")),
-        );
+    fn different_sizes_short_circuit_before_sampling() {
+        let verdict = dedup_verdict(&facts(100, "sample"), &ContentFacts::new(101));
         assert_eq!(verdict, DedupVerdict::DifferentContent);
     }
 
     #[test]
     fn different_sampled_proofs_rule_a_candidate_out() {
-        let verdict = dedup_verdict(
-            &facts(100, "sample-a", Some("blake3-aaa")),
-            &facts(100, "sample-b", Some("blake3-aaa")),
-        );
+        let verdict = dedup_verdict(&facts(100, "sample-a"), &facts(100, "sample-b"));
         assert_eq!(verdict, DedupVerdict::DifferentContent);
     }
 
     #[test]
-    fn a_missing_full_hash_is_never_treated_as_identical() {
-        let verdict = dedup_verdict(
-            &facts(100, "sample", None),
-            &facts(100, "sample", Some("x")),
+    fn a_missing_sample_leaves_the_pair_unproven_rather_than_different() {
+        let verdict = dedup_verdict(&ContentFacts::new(100), &facts(100, "sample"));
+        assert_eq!(
+            verdict,
+            DedupVerdict::Unproven {
+                incoming_missing: true,
+                destination_missing: false,
+            }
         );
-        assert!(!verdict.is_identical());
-        assert!(matches!(
-            verdict,
-            DedupVerdict::UnprovenMissingFullHash {
-                incoming_missing: Some("not computed"),
-                destination_missing: None,
-            }
-        ));
-    }
-
-    #[test]
-    fn a_stale_full_hash_is_never_treated_as_identical() {
-        let incoming = ContentFacts::new(100)
-            .with_sampled_proof("sample")
-            .with_stale_full_blake3();
-        let verdict = dedup_verdict(&incoming, &facts(100, "sample", Some("x")));
-        assert!(matches!(
-            verdict,
-            DedupVerdict::UnprovenMissingFullHash {
-                incoming_missing: Some("stale"),
-                ..
-            }
-        ));
+        assert!(!verdict.is_different());
     }
 
     /// FR-046 clears the whole 0205 column group, so a persisted hash is
@@ -1205,8 +1008,7 @@ mod tests {
     }
 
     /// A hash nothing can date is a hash nothing can vouch for; it reads back
-    /// stale so the backfill job recomputes it and the dedup gate refuses it in
-    /// the meantime.
+    /// stale so the backfill job recomputes it.
     #[test]
     fn a_persisted_hash_without_a_vintage_reads_back_as_stale() {
         let hashes = crate::location::model::PersistedContentHashes {
@@ -1225,144 +1027,72 @@ mod tests {
     }
 
     #[test]
-    fn matching_sampled_proof_with_different_full_hashes_is_not_a_duplicate() {
-        let verdict = dedup_verdict(
-            &facts(100, "sample", Some("blake3-aaa")),
-            &facts(100, "sample", Some("blake3-bbb")),
-        );
-        assert_eq!(verdict, DedupVerdict::DifferentContent);
-    }
-
-    #[test]
-    fn proven_duplicate_keeps_destination_and_recycles_the_source() {
+    fn a_may_merge_candidate_keeps_the_destination_name_for_the_transfer_to_judge() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::media("Film.mkv", 100).with_content(facts(
-                        100,
-                        "sample",
-                        Some("blake3-aaa"),
-                    )),
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(100, "sample")),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(
-                        100,
-                        "sample",
-                        Some("blake3-aaa"),
-                    )),
+                    IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(100, "sample")),
                 ]),
         );
 
         let decision = plan.decision("m1").expect("decision");
-        assert_eq!(
-            decision.disposition,
-            CollisionDisposition::DedupRecycleSource
-        );
+        assert_eq!(decision.disposition, CollisionDisposition::MayMerge);
+        assert!(decision.disposition.may_merge());
+        assert!(!decision.disposition.is_rename());
         assert_eq!(decision.final_name, "Film.mkv");
-        assert!(decision.recycle_source);
-        assert!(decision.merge_catalog_associations);
-        assert!(!decision.writes_bytes());
+        assert_eq!(decision.collided_with.as_deref(), Some("Film.mkv"));
         assert!(decision.warnings.is_empty());
-        assert_eq!(plan.summary().media_deduplicated, 1);
-        assert_eq!(plan.recycled_sources().count(), 1);
+        assert_eq!(plan.summary().media_may_merge, 1);
+        assert_eq!(plan.summary().media_renamed, 0);
     }
 
     #[test]
-    fn a_lookalike_without_a_full_hash_is_renamed_not_deduplicated() {
+    fn a_lookalike_the_preview_could_not_sample_is_still_the_transfers_call() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::media("Film.mkv", 100).with_content(facts(
-                        100,
-                        "sample",
-                        Some("blake3-aaa"),
-                    )),
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(100, "sample")),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 100)
-                        .with_content(facts(100, "sample", None)),
+                    IncomingItem::media("m1", "Film.mkv", 100).with_content(ContentFacts::new(100)),
                 ]),
         );
 
         let decision = plan.decision("m1").expect("decision");
-        assert_eq!(decision.disposition, CollisionDisposition::RenameIncoming);
-        assert_eq!(decision.final_name, "Film (from Movies 4K).mkv");
-        assert!(!decision.recycle_source);
-        assert_eq!(
-            decision.warnings.first().map(CollisionWarning::code),
-            Some("dedup_skipped_missing_full_hash")
-        );
-    }
-
-    #[test]
-    fn a_duplicate_is_preserved_and_renamed_when_recycling_is_disabled() {
-        let plan = plan_collisions(
-            &request(PathCaseRule::CaseSensitive)
-                .with_recycle(RecycleAvailability::Disabled)
-                .with_destination(vec![
-                    DestinationItem::media("Film.mkv", 100).with_content(facts(
-                        100,
-                        "sample",
-                        Some("blake3-aaa"),
-                    )),
-                ])
-                .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(
-                        100,
-                        "sample",
-                        Some("blake3-aaa"),
-                    )),
-                ]),
-        );
-
-        let decision = plan.decision("m1").expect("decision");
-        assert_eq!(
-            decision.disposition,
-            CollisionDisposition::DedupPreserveWithWarning
-        );
-        assert_eq!(decision.final_name, "Film (from Movies 4K).mkv");
-        assert!(!decision.recycle_source, "never a permanent deletion");
-        assert!(decision.writes_bytes());
+        assert_eq!(decision.disposition, CollisionDisposition::MayMerge);
+        assert_eq!(decision.final_name, "Film.mkv");
         let warning = decision.warnings.first().expect("warning");
-        assert_eq!(warning.code(), "duplicate_preserved_recycle_unavailable");
-        assert!(warning.message().contains("recycle bin is disabled"));
-        assert_eq!(plan.summary().preserved_recycle_unavailable, 1);
+        assert_eq!(warning.code(), "quick_check_unavailable");
+        assert!(
+            warning
+                .message()
+                .contains("the incoming file could not be sampled"),
+            "{}",
+            warning.message()
+        );
     }
 
     #[test]
-    fn a_rejected_source_also_preserves_rather_than_deletes() {
-        for availability in [
-            RecycleAvailability::Unavailable("base path is not writable".to_string()),
-            RecycleAvailability::RejectsSource(
-                "source is outside the allowlisted roots".to_string(),
-            ),
-        ] {
-            let plan = plan_collisions(
-                &request(PathCaseRule::CaseSensitive)
-                    .with_recycle(availability)
-                    .with_destination(vec![
-                        DestinationItem::media("Film.mkv", 100).with_content(facts(
-                            100,
-                            "sample",
-                            Some("blake3-aaa"),
-                        )),
-                    ])
-                    .with_incoming(vec![
-                        IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(
-                            100,
-                            "sample",
-                            Some("blake3-aaa"),
-                        )),
-                    ]),
-            );
-            let decision = plan.decision("m1").expect("decision");
-            assert_eq!(
-                decision.disposition,
-                CollisionDisposition::DedupPreserveWithWarning
-            );
-            assert!(!decision.recycle_source);
-            assert!(!decision.warnings.is_empty());
-        }
+    fn a_may_merge_media_file_still_pulls_its_companions_along_unrenamed() {
+        let plan = plan_collisions(
+            &request(PathCaseRule::CaseSensitive)
+                .with_destination(vec![
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(100, "sample")),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(100, "sample")),
+                    IncomingItem::companion("s1", "Film.en.srt", 10).with_companion_of("m1"),
+                ]),
+        );
+        // The media file's name did not change at preview time, so the
+        // companion has nothing to follow; the transfer renames both together
+        // if the media file turns out to be different.
+        let companion = plan.decision("s1").expect("s1");
+        assert_eq!(companion.disposition, CollisionDisposition::PlaceAsIs);
+        assert_eq!(companion.final_name, "Film.en.srt");
     }
 
     // --- FR-072 / FR-074: destination wins, renames disambiguate ----------
@@ -1385,18 +1115,11 @@ mod tests {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::media("Film.mkv", 100).with_content(facts(
-                        100,
-                        "sample-dest",
-                        Some("blake3-dest"),
-                    )),
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(100, "sample-dest")),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 200).with_content(facts(
-                        200,
-                        "sample-src",
-                        Some("blake3-src"),
-                    )),
+                    IncomingItem::media("m1", "Film.mkv", 200)
+                        .with_content(facts(200, "sample-src")),
                 ]),
         );
 
@@ -1456,18 +1179,10 @@ mod tests {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::media("Film.mkv", 100).with_content(facts(
-                        100,
-                        "dest",
-                        Some("blake3-dest"),
-                    )),
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(100, "dest")),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 200).with_content(facts(
-                        200,
-                        "src",
-                        Some("blake3-src"),
-                    )),
+                    IncomingItem::media("m1", "Film.mkv", 200).with_content(facts(200, "src")),
                     IncomingItem::companion("s1", "Film.en.srt", 10).with_companion_of("m1"),
                     IncomingItem::companion("a1", "Film-thumb.jpg", 20).with_companion_of("m1"),
                 ]),
@@ -1509,34 +1224,23 @@ mod tests {
     }
 
     #[test]
-    fn an_identical_asset_deduplicates_through_the_recycle_rule() {
+    fn a_lookalike_asset_is_a_may_merge_candidate_counted_apart_from_media() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::companion("poster.jpg", 10).with_content(facts(
-                        10,
-                        "sample",
-                        Some("blake3-art"),
-                    )),
+                    DestinationItem::companion("poster.jpg", 10).with_content(facts(10, "sample")),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::companion("a1", "poster.jpg", 10).with_content(facts(
-                        10,
-                        "sample",
-                        Some("blake3-art"),
-                    )),
+                    IncomingItem::companion("a1", "poster.jpg", 10)
+                        .with_content(facts(10, "sample")),
                 ]),
         );
 
         let decision = plan.decision("a1").expect("a1");
-        assert_eq!(
-            decision.disposition,
-            CollisionDisposition::DedupRecycleSource
-        );
-        assert!(decision.recycle_source);
+        assert_eq!(decision.disposition, CollisionDisposition::MayMerge);
         let summary = plan.summary();
-        assert_eq!(summary.assets_deduplicated, 1);
-        assert_eq!(summary.media_deduplicated, 0);
+        assert_eq!(summary.assets_may_merge, 1);
+        assert_eq!(summary.media_may_merge, 0);
     }
 
     #[test]
@@ -1544,18 +1248,10 @@ mod tests {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::companion("movie.nfo", 4).with_content(facts(
-                        4,
-                        "dest",
-                        Some("blake3-dest"),
-                    )),
+                    DestinationItem::companion("movie.nfo", 4).with_content(facts(4, "dest")),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::companion("n1", "movie.nfo", 7).with_content(facts(
-                        7,
-                        "src",
-                        Some("blake3-src"),
-                    )),
+                    IncomingItem::companion("n1", "movie.nfo", 7).with_content(facts(7, "src")),
                 ]),
         );
 
@@ -1622,7 +1318,6 @@ mod tests {
         assert_eq!(decision.disposition, CollisionDisposition::CaseOnlyRename);
         assert_eq!(decision.final_name, "Film.mkv");
         assert!(decision.collided_with.is_none());
-        assert!(!decision.recycle_source);
         assert_eq!(plan.summary().case_only_renames, 1);
     }
 
@@ -1635,7 +1330,7 @@ mod tests {
                         .with_path("/media/Movies/Other/FILM.MKV"),
                 ])
                 .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 100)
+                    IncomingItem::media("m1", "Film.mkv", 120)
                         .with_source_path("/media/movies/film.mkv"),
                 ]),
         );
@@ -1695,8 +1390,7 @@ mod tests {
     fn dispositions_round_trip_through_their_persisted_strings() {
         for disposition in [
             CollisionDisposition::PlaceAsIs,
-            CollisionDisposition::DedupRecycleSource,
-            CollisionDisposition::DedupPreserveWithWarning,
+            CollisionDisposition::MayMerge,
             CollisionDisposition::RenameIncoming,
             CollisionDisposition::FollowRenamedMedia,
             CollisionDisposition::CaseOnlyRename,
@@ -1707,5 +1401,15 @@ mod tests {
             );
         }
         assert_eq!(CollisionDisposition::parse("nonsense"), None);
+        // Preview-decided verdicts from older plans read back as the candidate
+        // the transfer treats them as.
+        assert_eq!(
+            CollisionDisposition::parse("dedup_recycle_source"),
+            Some(CollisionDisposition::MayMerge)
+        );
+        assert_eq!(
+            CollisionDisposition::parse("dedup_preserve_with_warning"),
+            Some(CollisionDisposition::MayMerge)
+        );
     }
 }

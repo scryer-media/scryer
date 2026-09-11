@@ -71,7 +71,6 @@ mod tests {
                 same_volume: None,
                 files,
                 deduplicated_sources: vec!["/source/duplicate.srt".into()],
-                deduplicated_media_file_ids: vec![],
                 renamed_destinations: vec![],
                 prune_directories: vec![],
                 warnings: vec![],

@@ -947,11 +947,12 @@ async fn the_layout_is_preserved_and_the_source_root_configuration_is_retired_la
 
 // ── FR-072/073/075: collisions and dedup ─────────────────────────────────────
 
-/// FR-024 (5) + FR-073 + SC-003: a file proven identical by full BLAKE3 is
-/// deduplicated — the destination copy survives, the redundant source copy is
-/// recycled, and nothing is deleted.
+/// FR-024 (5) + FR-073: the preview's quick check only says the file *may*
+/// merge; the transfer's full BLAKE3 comparison proves the pair identical, the
+/// destination copy survives, and the redundant source copy is dropped
+/// outright — no recycle bin is created for it and nothing is warned about.
 #[tokio::test]
-async fn an_identical_file_deduplicates_through_the_recycle_bin() {
+async fn an_identical_file_is_dropped_once_the_transfer_proves_it() {
     let fixture = ConsolidationFixture::new(false).await;
     let destination = fixture
         .seed_destination_title(
@@ -977,24 +978,24 @@ async fn an_identical_file_deduplicates_through_the_recycle_bin() {
     let source_file = fixture.source().join("Twin (2015)").join("Twin.mkv");
 
     let preview = fixture.preview().await;
-    assert_eq!(preview.classification.dedup_eligible_files, 0);
-    assert_eq!(preview.classification.media_collisions, 1);
-    assert_eq!(preview.plan.counts.for_kind(PlanItemKind::Dedup), 0);
+    assert_eq!(preview.classification.dedup_eligible_files, 1);
+    assert_eq!(preview.classification.media_collisions, 0);
+    assert_eq!(preview.plan.counts.for_kind(PlanItemKind::Dedup), 1);
     assert!(
         preview
             .plan
             .sections
             .iter()
             .flat_map(|section| &section.items.items)
-            .any(|item| item.reason_code.as_deref() == Some("compare_during_transfer"))
+            .any(|item| item.reason_code.as_deref()
+                == Some(crate::location::root_move::plan_reasons::MAY_MERGE)),
+        "the preview says the file may merge, and no more"
     );
 
     let operation = fixture.start_and_settle().await;
-    // Recycling during the run creates the bin under the source root, and the
-    // bin never moves — so the source directory is left standing and named.
     assert_eq!(
         operation.state,
-        LocationOperationState::CompletedWithWarnings,
+        LocationOperationState::Completed,
         "detail: {:?}",
         operation.detail
     );
@@ -1009,24 +1010,18 @@ async fn an_identical_file_deduplicates_through_the_recycle_bin() {
             .expect("read the surviving copy"),
         b"identical content".to_vec()
     );
-    // SC-003: recycled, never deleted. The bin stays under the source root,
-    // which the fold retires from the configuration — so housekeeping no longer
-    // enumerates it and the proof is the bin on disk.
-    let bin = fixture.source().join(".scryer-recycle");
-    let entries = std::fs::read_dir(&bin)
-        .expect("the source root's bin")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_dir())
-        .count();
-    assert_eq!(entries, 1, "the duplicate was not recycled");
+    assert!(
+        !fixture.source().join(".scryer-recycle").exists(),
+        "a proven-identical copy is dropped, not recycled"
+    );
     let _ = (source, destination);
 }
 
-/// SC-003 + FR-073's recycle-unavailable path: with the bin switched off the
-/// incoming copy is preserved under a new name, with a visible warning, and
-/// permanent deletion is never the fallback.
+/// FR-073 does not depend on the recycle bin: with the bin switched off a
+/// proven-identical copy is still dropped rather than preserved under a new
+/// name, because the destination already holds the same bytes.
 #[tokio::test]
-async fn an_identical_file_is_preserved_and_renamed_when_the_recycle_bin_is_off() {
+async fn an_identical_file_is_dropped_even_when_the_recycle_bin_is_off() {
     let fixture = ConsolidationFixture::new(false).await;
     fixture
         .app
@@ -1065,38 +1060,22 @@ async fn an_identical_file_is_preserved_and_renamed_when_the_recycle_bin_is_off(
     fixture
         .share_identity(&source.id, vec![external_id("tmdb", "1515")])
         .await;
+    let source_file = fixture.source().join("Twin (2015)").join("Twin.mkv");
 
     let preview = fixture.preview().await;
     assert_eq!(
-        preview.classification.dedup_eligible_files, 0,
-        "a duplicate the bin cannot take is not deduplicated"
-    );
-    assert!(
-        preview
-            .plan
-            .sections
-            .iter()
-            .flat_map(|section| &section.items.items)
-            .any(
-                |item| item.reason_code.as_deref() == Some("compare_during_transfer")
-                    && item
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.contains("preserved"))
-            ),
-        "the user is told before confirming: {:?}",
-        preview.warnings
+        preview.classification.dedup_eligible_files, 1,
+        "the bin setting has no say in what may merge"
     );
 
     let operation = fixture.start_and_settle().await;
-    assert!(
-        matches!(
-            operation.state,
-            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
-        ),
+    assert_eq!(
+        operation.state,
+        LocationOperationState::Completed,
         "detail: {:?}",
         operation.detail
     );
+    assert_eq!(operation.counters.dedups, 1);
 
     let folder = fixture.destination().join("Twin (2015)");
     assert_eq!(
@@ -1104,17 +1083,18 @@ async fn an_identical_file_is_preserved_and_renamed_when_the_recycle_bin_is_off(
         b"identical content".to_vec(),
         "FR-072: destination content always wins the pathname"
     );
-    let preserved: Vec<String> = std::fs::read_dir(&folder)
+    let names: Vec<String> = std::fs::read_dir(&folder)
         .expect("read the merged folder")
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name != "Twin.mkv")
         .collect();
     assert_eq!(
-        preserved.len(),
-        1,
-        "the incoming copy was not preserved beside the destination's: {preserved:?}"
+        names,
+        vec!["Twin.mkv".to_string()],
+        "no extra copy is preserved beside the destination's"
     );
+    assert!(!source_file.exists(), "the redundant source copy is gone");
+    assert!(!fixture.source().join(".scryer-recycle").exists());
 }
 
 // ── FR-027/FR-028 ────────────────────────────────────────────────────────────
