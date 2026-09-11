@@ -17,7 +17,8 @@ const AUTO_DISMISS_DESKTOP_MS = 5_000;
 const AUTO_DISMISS_MOBILE_MS = 3_000;
 const MOBILE_HIDE_RUNNING_MS = 3_000;
 const TOAST_EXIT_GRACE_MS = 200;
-const LIBRARY_SCAN_TOASTER_ID = "library-scans";
+/** The top-right stack the library-scan and location-move toasts share. */
+export const LIBRARY_SCAN_TOASTER_ID = "library-scans";
 const MAX_VISIBLE_LIBRARY_SCAN_TOASTS = 3;
 const MAX_VISIBLE_GENERAL_TOASTS = 3;
 
