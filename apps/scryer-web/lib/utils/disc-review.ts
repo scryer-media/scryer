@@ -4,6 +4,10 @@ export function discReviewInventory(saved: MediaDiscMetadata | null, attempt?: M
   return attempt && !attempt.succeeded ? attempt.disc ?? saved : saved;
 }
 
+export function hasDiscReview(saved: MediaDiscMetadata | null, attempt?: MediaAnalysisAttempt | null) {
+  return discReviewInventory(saved, attempt) != null;
+}
+
 export function discTitleIdentity(id: string, inventory: MediaDiscMetadata | null) {
   return inventory?.titles.find((title) => title.id === id || title.aliases.includes(id))?.id ?? id;
 }

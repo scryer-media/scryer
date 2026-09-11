@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MediaAnalysisAttempt, MediaDiscMetadata, MediaDiscTitle } from "../types/media-analysis.ts";
-import { discEpisodeSelections, discReviewInventory, discTitleIdentity } from "./disc-review.ts";
+import { discEpisodeSelections, discReviewInventory, discTitleIdentity, hasDiscReview } from "./disc-review.ts";
 
 const report: MediaAnalysisAttempt["report"] = {
   status: "INCOMPLETE", bytesRead: 0, seeks: 0, elapsedMs: 1, budgetExhausted: false, warnings: [],
@@ -27,6 +27,14 @@ test("failed disc inspection shows new titles while keeping saved selection and 
   assert.deepEqual(discEpisodeSelections(saved, inventory), { "00003": "episode-2" });
   assert.equal(saved.selection.titleId, "00001");
   assert.equal(saved.selection.episodeMappings[0].discTitleId, "00002");
+});
+
+test("disc review is offered only when an inventory exists", () => {
+  assert.equal(hasDiscReview(saved), true, "stored disc metadata is reviewable");
+  assert.equal(hasDiscReview(null, attempt), true, "a failed inspection supplies an inventory of its own");
+  assert.equal(hasDiscReview(null), false, "a plain file has nothing to review");
+  assert.equal(hasDiscReview(null, { ...attempt, disc: undefined }), false);
+  assert.equal(hasDiscReview(null, { ...attempt, succeeded: true, disc: inspected }), false, "a successful attempt defers to the stored inventory");
 });
 
 test("legacy or successful attempts retain the stored inventory", () => {
