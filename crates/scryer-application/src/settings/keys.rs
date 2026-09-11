@@ -48,6 +48,24 @@ pub const API_EXPLORER_ENABLED_KEY: &str = "ui.api_explorer_enabled";
 // gateway. Stored in the positive sense; absent row means enabled, so existing
 // installs keep personalized discovery working with no data change.
 pub const DISCOVERY_PERSONALIZED_ENABLED_KEY: &str = "discovery.personalized_enabled";
+// Rail-quality rollback levers. All four are unseeded and read like
+// `discovery.region`: an absent row means the default below, so an install that
+// never touches them gets the new behaviour, and an operator who hits a bad
+// interaction can turn one rule off without a downgrade.
+//
+// Excludes mediums the library owns none of, and caps a rail's share of a
+// medium at twice the library's. Absent row means enabled.
+pub const DISCOVERY_MEDIUM_AFFINITY_GATE_KEY: &str = "discovery.medium_affinity_gate";
+// Requires a confident, corroborated canonical genre before a genre rail claims
+// an item. Absent row means enabled.
+pub const DISCOVERY_GENRE_RAIL_CORROBORATION_KEY: &str = "discovery.genre_rail_corroboration";
+// Requires edge, rating or popularity evidence before an item may fill a
+// personalized rail. Absent row means enabled.
+pub const DISCOVERY_GENRE_RAIL_CREDIBILITY_GATE_KEY: &str = "discovery.genre_rail_credibility_gate";
+// "relevance" (default) orders personalized rails by SMG's blended relevance;
+// "legacy" restores the pre-154 rank_score ordering.
+pub const DISCOVERY_RAIL_ORDER_KEY: &str = "discovery.rail_order";
+pub const DISCOVERY_RAIL_ORDER_LEGACY: &str = "legacy";
 // Instance-wide opt in for asking srrdb.com to recover obfuscated filenames
 // during automatic SABnzbd/NZBGet imports. Absent row means disabled, so no
 // install talks to the third-party service until an administrator opts in.

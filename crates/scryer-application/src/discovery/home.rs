@@ -496,7 +496,11 @@ pub(super) fn discovery_item_has_credible_rating_evidence(item: &DiscoveryItemRe
         || discovery_item_external_rating_vote_count(item) >= DISCOVERY_CREDIBLE_RATING_MIN_VOTES
 }
 
-pub(super) fn compare_top_rated_discovery_home_items(
+/// The rating-evidence half of every home comparator: credible first, then a
+/// present external score, then the score, then votes, then the item's own
+/// rating. Factored out so the top-rated rail and the personalized relevance
+/// order break ties on rating in exactly the same way.
+pub(super) fn compare_discovery_home_rating_evidence(
     left: &DiscoveryItemRecord,
     right: &DiscoveryItemRecord,
     candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
@@ -522,6 +526,14 @@ pub(super) fn compare_top_rated_discovery_home_items(
             )
         })
         .then_with(|| compare_discovery_item_rating_desc(left, right))
+}
+
+pub(super) fn compare_top_rated_discovery_home_items(
+    left: &DiscoveryItemRecord,
+    right: &DiscoveryItemRecord,
+    candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+) -> Ordering {
+    compare_discovery_home_rating_evidence(left, right, candidates_by_id)
         .then_with(|| compare_optional_f64_desc(left.rank_score, right.rank_score))
         .then_with(|| {
             right
@@ -604,6 +616,8 @@ pub(super) fn compare_optional_f64_desc(left: Option<f64>, right: Option<f64>) -
 pub(super) fn personalized_section_results(
     items: &[DiscoveryItemRecord],
     library_profile: &DiscoveryLibraryAffinityProfile,
+    candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+    settings: DiscoveryRailCompositionSettings,
     include_unresolved: bool,
     limit: usize,
 ) -> Vec<DiscoverySectionResult> {
@@ -612,8 +626,24 @@ pub(super) fn personalized_section_results(
         .filter(|item| home_item_visible(item, include_unresolved))
         .cloned()
         .collect::<Vec<_>>();
+    let context = DiscoveryRailContext {
+        candidates_by_id,
+        settings,
+        medium_mix: library_profile.medium_mix,
+        // The evidence floor's popularity arm is relative to the pool it is
+        // filtering, so the median is taken once over everything visible, not
+        // per rail: a rail must not lower its own bar by being thin.
+        median_base_rank: discovery_pool_median_base_rank(&visible_items),
+        limit,
+    };
     let mut sections = Vec::new();
     let mut emitted_item_keys = HashSet::new();
+
+    // A library too small to have said anything gets the one honest rail.
+    // Composing a "Because You Like Crime" out of four titles is the failure
+    // this budget exists to prevent, so the ladder widens only as the library
+    // earns it.
+    let label_budget = discovery_rail_label_budget(library_profile.owned_title_count);
 
     // Composition order is dedupe priority: `emitted_item_keys` lets an earlier
     // section claim a title outright, so the most specific reason must compose
@@ -626,7 +656,8 @@ pub(super) fn personalized_section_results(
         "theme",
         "BECAUSE_YOU_LIKE_TAG",
         "because_you_like_tag",
-        limit,
+        label_budget,
+        &context,
         &mut emitted_item_keys,
     ));
     sections.extend(label_affinity_sections(
@@ -635,7 +666,8 @@ pub(super) fn personalized_section_results(
         "genre",
         "BECAUSE_YOU_LIKE_GENRE",
         "because_you_like_genre",
-        limit,
+        label_budget,
+        &context,
         &mut emitted_item_keys,
     ));
 
@@ -644,19 +676,332 @@ pub(super) fn personalized_section_results(
     // the dashboard's facet chips, so it must never become a rail identity: the
     // MOVIES_FOR_YOU / SERIES_FOR_YOU / ANIME_FOR_YOU variants are retired. So is
     // BECAUSE_YOU_HAVE, which duplicated the title page's More Like This shelf.
-    let mut for_you_items = visible_items;
-    dedupe_and_sort_discovery_items(&mut for_you_items);
-    sections.extend(section_result_excluding_emitted(
+    sections.extend(compose_personalized_section(
         "for_you".to_string(),
         "FOR_YOU".to_string(),
         "For You".to_string(),
-        "personalized".to_string(),
-        for_you_items,
-        limit,
+        visible_items,
+        None,
+        &context,
         &mut emitted_item_keys,
     ));
 
     sections
+}
+
+/// Everything a rail needs to decide what it may contain, gathered once.
+pub(super) struct DiscoveryRailContext<'a> {
+    pub(super) candidates_by_id: &'a HashMap<String, DiscoveryHomeCandidate>,
+    pub(super) settings: DiscoveryRailCompositionSettings,
+    pub(super) medium_mix: DiscoveryLibraryMediumMix,
+    pub(super) median_base_rank: Option<f64>,
+    pub(super) limit: usize,
+}
+
+/// Rollback levers for the rail-quality rules. Each one is a named setting so a
+/// bad interaction can be switched off in place rather than waiting for a
+/// downgrade; the defaults are the intended behaviour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DiscoveryRailCompositionSettings {
+    pub(super) medium_affinity_gate: bool,
+    pub(super) genre_rail_corroboration: bool,
+    pub(super) evidence_gate: bool,
+    pub(super) rail_order: DiscoveryRailOrder,
+}
+
+impl Default for DiscoveryRailCompositionSettings {
+    fn default() -> Self {
+        Self {
+            medium_affinity_gate: true,
+            genre_rail_corroboration: true,
+            evidence_gate: true,
+            rail_order: DiscoveryRailOrder::Relevance,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(super) enum DiscoveryRailOrder {
+    /// SMG's blended relevance leads, popularity and edge strength only break
+    /// ties. This is the order the rails are designed around.
+    #[default]
+    Relevance,
+    /// Pre-154 ordering: strongest single edge score, then title. Kept only as
+    /// a rollback lever.
+    Legacy,
+}
+
+/// Per-rail composition counters (WP7). These are the numbers that make a bad
+/// rail diagnosable from a log line instead of a database session: how much of
+/// what shipped was backed by a real relation edge, how much was carried by
+/// ratings alone, what the rail's medium mix came out as, and how many
+/// candidates each gate removed on the way.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct DiscoveryRailStats {
+    pub(super) emitted: usize,
+    pub(super) edge_backed: usize,
+    pub(super) evidence_less: usize,
+    pub(super) credible_rated: usize,
+    pub(super) live_action: usize,
+    pub(super) animation: usize,
+    pub(super) anime: usize,
+    pub(super) medium_gate_dropped: usize,
+    pub(super) medium_cap_dropped: usize,
+    pub(super) evidence_floor_dropped: usize,
+}
+
+impl DiscoveryRailStats {
+    fn record_emitted(&mut self, item: &DiscoveryItemRecord, context: &DiscoveryRailContext<'_>) {
+        self.emitted += 1;
+        if discovery_item_has_edge_evidence(item) {
+            self.edge_backed += 1;
+        } else {
+            self.evidence_less += 1;
+        }
+        if discovery_home_item_has_credible_rating_evidence(item, context.candidates_by_id) {
+            self.credible_rated += 1;
+        }
+        match discovery_item_medium(item) {
+            DiscoveryMedium::LiveAction => self.live_action += 1,
+            DiscoveryMedium::Animation => self.animation += 1,
+            DiscoveryMedium::Anime => self.anime += 1,
+        }
+    }
+
+    fn credible_rated_fraction(&self) -> f64 {
+        if self.emitted == 0 {
+            return 0.0;
+        }
+        self.credible_rated as f64 / self.emitted as f64
+    }
+}
+
+/// Composes one personalized rail: medium gate, evidence floor, relevance
+/// order, per-medium cap with refill, and the never-pad / drop-below-minimum
+/// rule.
+///
+/// `uncapped_medium` names the rail's own medium when the rail *is* about that
+/// medium (the Anime and Animation label rails). Those are exempt from the
+/// proportional cap — an anime rail made of 40% live action is nonsense — but
+/// never from the zero rule.
+pub(super) fn compose_personalized_section(
+    section_id: String,
+    section_type: String,
+    title: String,
+    items: Vec<DiscoveryItemRecord>,
+    uncapped_medium: Option<DiscoveryMedium>,
+    context: &DiscoveryRailContext<'_>,
+    emitted_item_keys: &mut HashSet<String>,
+) -> Option<DiscoverySectionResult> {
+    let mut stats = DiscoveryRailStats::default();
+    let mut eligible = Vec::new();
+    let mut seen = HashSet::new();
+    for item in items {
+        let key = discovery_item_identity_key(&item).to_string();
+        if emitted_item_keys.contains(&key) || !seen.insert(key.clone()) {
+            continue;
+        }
+        if context.settings.medium_affinity_gate
+            && !context.medium_mix.admits(discovery_item_medium(&item))
+        {
+            stats.medium_gate_dropped += 1;
+            continue;
+        }
+        if context.settings.evidence_gate
+            && !discovery_home_item_passes_evidence_floor(
+                &item,
+                context.candidates_by_id,
+                context.median_base_rank,
+            )
+        {
+            stats.evidence_floor_dropped += 1;
+            continue;
+        }
+        eligible.push((key, item));
+    }
+
+    sort_personalized_discovery_items(&mut eligible, context);
+
+    let total_count = eligible.len() as i64;
+    let mut taken_per_medium = DiscoveryLibraryMediumMix::default();
+    let mut emitted = Vec::new();
+    for (key, item) in eligible {
+        if emitted.len() >= context.limit {
+            break;
+        }
+        let medium = discovery_item_medium(&item);
+        if context.settings.medium_affinity_gate
+            && uncapped_medium != Some(medium)
+            && taken_per_medium.count(medium) >= context.medium_mix.slot_cap(medium, context.limit)
+        {
+            // Refill rather than truncate: the rail keeps looking down the list
+            // for something it is allowed to show.
+            stats.medium_cap_dropped += 1;
+            continue;
+        }
+        taken_per_medium.add(medium);
+        stats.record_emitted(&item, context);
+        emitted_item_keys.insert(key);
+        emitted.push(item);
+    }
+
+    log_discovery_rail_stats(&section_id, &section_type, &stats, context);
+
+    // Never pad. A rail ships with whatever passed, and if that is too little to
+    // be a rail it does not ship at all — an eight-item floor, or the caller's
+    // own limit when that is smaller.
+    if emitted.len() < DISCOVERY_RAIL_MIN_ITEMS.min(context.limit) {
+        for item in &emitted {
+            emitted_item_keys.remove(discovery_item_identity_key(item));
+        }
+        return None;
+    }
+
+    Some(DiscoverySectionResult {
+        section_id,
+        section_type,
+        title,
+        surface: "personalized".to_string(),
+        total_count,
+        items: emitted,
+    })
+}
+
+fn sort_personalized_discovery_items(
+    items: &mut [(String, DiscoveryItemRecord)],
+    context: &DiscoveryRailContext<'_>,
+) {
+    match context.settings.rail_order {
+        DiscoveryRailOrder::Relevance => items.sort_by(|left, right| {
+            compare_discovery_home_relevance_items(&left.1, &right.1, context.candidates_by_id)
+        }),
+        DiscoveryRailOrder::Legacy => {
+            items.sort_by(|left, right| compare_discovery_items(&left.1, &right.1))
+        }
+    }
+}
+
+/// Relevance order for personalized rails.
+///
+/// `recommendation_score` is the only field that means "SMG thinks this is
+/// relevant to your library", so it leads. `rank_score` is the strength of a
+/// single edge, not relevance and not popularity, which is why it sits near the
+/// bottom — ordering by it is what put four tag-inflated titles above three
+/// well-evidenced ones. Title is the very last tiebreak: a rail that falls into
+/// alphabetical order has told the user it has nothing to say.
+pub(super) fn compare_discovery_home_relevance_items(
+    left: &DiscoveryItemRecord,
+    right: &DiscoveryItemRecord,
+    candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+) -> Ordering {
+    compare_optional_f64_desc(left.recommendation_score, right.recommendation_score)
+        .then_with(|| right.matched_subject_count.cmp(&left.matched_subject_count))
+        .then_with(|| compare_discovery_home_rating_evidence(left, right, candidates_by_id))
+        .then_with(|| compare_optional_f64_desc(left.base_rank, right.base_rank))
+        .then_with(|| compare_optional_f64_desc(left.rank_score, right.rank_score))
+        .then_with(|| left.sort_index.cmp(&right.sort_index))
+        .then_with(|| {
+            left.sort_title
+                .as_deref()
+                .unwrap_or(&left.display_title)
+                .cmp(right.sort_title.as_deref().unwrap_or(&right.display_title))
+        })
+        .then_with(|| left.target_key.cmp(&right.target_key))
+}
+
+/// Ladder width for a library of this size: nothing below
+/// [`DISCOVERY_RAIL_BUDGET_MIN_OWNED_TITLES`] owned titles (FOR_YOU only), one
+/// rail per family until [`DISCOVERY_RAIL_BUDGET_FULL_LADDER_OWNED_TITLES`],
+/// then the full ladder.
+pub(super) fn discovery_rail_label_budget(owned_title_count: usize) -> usize {
+    if owned_title_count < DISCOVERY_RAIL_BUDGET_MIN_OWNED_TITLES {
+        0
+    } else if owned_title_count < DISCOVERY_RAIL_BUDGET_FULL_LADDER_OWNED_TITLES {
+        1
+    } else {
+        DISCOVERY_RAIL_LADDER_LABELS
+    }
+}
+
+/// An item reached by a real relation edge: it matched at least one owned
+/// subject, and the edge that found it scored above the evidence-less band
+/// (SMG's semantic floor near 1.0 and the affiliation-key-only 0).
+pub(super) fn discovery_item_has_edge_evidence(item: &DiscoveryItemRecord) -> bool {
+    item.matched_subject_count > 0
+        && item
+            .rank_score
+            .is_some_and(|score| score > DISCOVERY_EVIDENCE_LESS_RANK_SCORE_CEILING)
+}
+
+/// The item evidence floor. A personalized rail may show an item only when
+/// something vouches for it: a real edge, a credible rating, or popularity at
+/// or above the pool's median. What it may never show is the evidence-less
+/// band — items that arrived with a bare semantic or affiliation-key match, no
+/// ratings and no standing, which is precisely the alphabetical tail.
+pub(super) fn discovery_home_item_passes_evidence_floor(
+    item: &DiscoveryItemRecord,
+    candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+    median_base_rank: Option<f64>,
+) -> bool {
+    if discovery_item_has_edge_evidence(item) {
+        return true;
+    }
+    if discovery_home_item_has_credible_rating_evidence(item, candidates_by_id) {
+        return true;
+    }
+    match (median_base_rank, item.base_rank) {
+        (Some(median), Some(base_rank)) => base_rank.is_finite() && base_rank >= median,
+        _ => false,
+    }
+}
+
+/// Median `base_rank` over the items that report one. Items without a base rank
+/// are not counted as zero: an unknown popularity is not evidence of an
+/// unpopular title, and letting it drag the median down would widen the floor
+/// instead of holding it.
+pub(super) fn discovery_pool_median_base_rank(items: &[DiscoveryItemRecord]) -> Option<f64> {
+    let mut ranks = items
+        .iter()
+        .filter_map(|item| item.base_rank)
+        .filter(|rank| rank.is_finite() && *rank > 0.0)
+        .collect::<Vec<_>>();
+    if ranks.is_empty() {
+        return None;
+    }
+    ranks.sort_by(f64::total_cmp);
+    let middle = ranks.len() / 2;
+    if ranks.len() % 2 == 0 {
+        Some((ranks[middle - 1] + ranks[middle]) / 2.0)
+    } else {
+        Some(ranks[middle])
+    }
+}
+
+fn log_discovery_rail_stats(
+    section_id: &str,
+    section_type: &str,
+    stats: &DiscoveryRailStats,
+    context: &DiscoveryRailContext<'_>,
+) {
+    debug!(
+        section_id,
+        section_type,
+        emitted = stats.emitted,
+        edge_backed = stats.edge_backed,
+        evidence_less = stats.evidence_less,
+        credible_rated = stats.credible_rated,
+        credible_rated_fraction = stats.credible_rated_fraction(),
+        rail_live_action = stats.live_action,
+        rail_animation = stats.animation,
+        rail_anime = stats.anime,
+        library_live_action = context.medium_mix.live_action,
+        library_animation = context.medium_mix.animation,
+        library_anime = context.medium_mix.anime,
+        medium_gate_dropped = stats.medium_gate_dropped,
+        medium_cap_dropped = stats.medium_cap_dropped,
+        evidence_floor_dropped = stats.evidence_floor_dropped,
+        "composed personalized discovery rail"
+    );
 }
 
 pub(super) fn canonical_affinity_labels_for_profile(
@@ -685,28 +1030,37 @@ pub(super) fn canonical_affinity_labels_for_profile(
     labels
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn label_affinity_sections(
     items: &[DiscoveryItemRecord],
     labels: &[String],
     canonical_kind: &str,
     section_type: &str,
     section_id_prefix: &str,
-    limit: usize,
+    label_budget: usize,
+    context: &DiscoveryRailContext<'_>,
     emitted_item_keys: &mut HashSet<String>,
 ) -> Vec<DiscoverySectionResult> {
     let mut sections = Vec::new();
-    for label in canonical_affinity_labels_for_profile(items, labels, canonical_kind) {
-        let mut section_items = items
+    for label in canonical_affinity_labels_for_profile(items, labels, canonical_kind)
+        .into_iter()
+        .take(label_budget)
+    {
+        let section_items = items
             .iter()
             .filter(|item| {
                 item.matched_subject_count > 0
-                    && discovery_item_matches_affinity_label(item, &label, canonical_kind)
+                    && discovery_item_matches_affinity_label(
+                        item,
+                        &label,
+                        canonical_kind,
+                        context.settings.genre_rail_corroboration,
+                    )
                     && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
-        dedupe_and_sort_discovery_items(&mut section_items);
-        if let Some(section) = section_result_excluding_emitted(
+        if let Some(section) = compose_personalized_section(
             format!(
                 "{}_{}",
                 section_id_prefix,
@@ -714,15 +1068,28 @@ pub(super) fn label_affinity_sections(
             ),
             section_type.to_string(),
             format!("Because You Like {}", label),
-            "personalized".to_string(),
             section_items,
-            limit,
+            affinity_label_own_medium(&label),
+            context,
             emitted_item_keys,
         ) {
             sections.push(section);
         }
     }
     sections
+}
+
+/// The medium a rail is *about*, when its label names one. Such a rail is
+/// exempt from the proportional medium cap: "Because You Like Anime" made of
+/// 40% live action would be absurd. It is not exempt from the zero rule — a
+/// library with no anime never gets the rail at all, because the label could
+/// not have entered the profile.
+pub(super) fn affinity_label_own_medium(label: &str) -> Option<DiscoveryMedium> {
+    match normalize_discovery_affinity_key(label).as_str() {
+        "animation" => Some(DiscoveryMedium::Animation),
+        "anime" => Some(DiscoveryMedium::Anime),
+        _ => None,
+    }
 }
 
 /// Animation is a medium; anime is a tradition. Metadata sources tag anime with
@@ -736,14 +1103,18 @@ pub(super) fn label_affinity_sections(
 /// The guard is keyed on the label name and is **kind-agnostic by design**: a
 /// theme/tag rail named "Anime" or "Animation" carries exactly the same meaning
 /// its genre namesake does, so it has to split the same way.
+///
+/// Both arms are decided by the medium classifier, so "Animation" means
+/// animation — not "anything that is not anime". The old negation let live
+/// action into the animation rail whenever a stray `animation` facet term
+/// appeared on a live-action title.
 pub(super) fn affinity_label_keeps_item_across_anime_boundary(
     item: &DiscoveryItemRecord,
     label: &str,
 ) -> bool {
-    match normalize_discovery_affinity_key(label).as_str() {
-        "animation" => !discovery_item_is_anime(item),
-        "anime" => discovery_item_is_anime(item),
-        _ => true,
+    match affinity_label_own_medium(label) {
+        Some(medium) => discovery_item_medium(item) == medium,
+        None => true,
     }
 }
 
@@ -768,7 +1139,15 @@ pub(super) fn discovery_item_is_anime(item: &DiscoveryItemRecord) -> bool {
 /// the metadata gateway. Both rail families are therefore sourced from the
 /// canonical tags SMG itself assigned.
 #[derive(Clone, Debug, Default)]
-pub(super) struct DiscoveryLibraryAffinityProfile {
+pub(crate) struct DiscoveryLibraryAffinityProfile {
     pub(super) genre_labels: Vec<String>,
     pub(super) theme_labels: Vec<String>,
+    /// Owned titles per medium, from the same classifier the rails gate on.
+    /// This is the whole medium law in one field: zero excludes, and the share
+    /// caps.
+    pub(super) medium_mix: DiscoveryLibraryMediumMix,
+    /// Owned titles considered when the profile was built. Sets both the label
+    /// support floor and the rail budget, so a small library cannot talk as if
+    /// it were a large one.
+    pub(super) owned_title_count: usize,
 }

@@ -193,6 +193,21 @@ pub struct DiscoveryCollectionCompletionInput {
     pub include_future: bool,
 }
 
+/// How many owned titles the library holds of each medium.
+///
+/// Medium is an axis, not a genre: live action, (western) animation and anime
+/// are three nearly disjoint universes, and a zero count is the strongest
+/// negative signal a library can send. SMG hard-excludes a medium whose count
+/// is zero from retrieval and rerank, and applies a prior above zero. Scryer
+/// always sends the mix and keeps its own composition gate as the guarantee.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryContextMediumMixInput {
+    pub live_action: i32,
+    pub animation: i32,
+    pub anime: i32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveryContextSnapshotSubmitInput {
@@ -205,6 +220,9 @@ pub struct DiscoveryContextSnapshotSubmitInput {
     pub include_unresolved: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_fingerprint: Option<String>,
+    /// Always sent. The gateway treats an absent mix as "no medium prior",
+    /// which is exactly the behaviour this plan removes.
+    pub medium_mix: DiscoveryContextMediumMixInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -241,6 +259,8 @@ pub struct DiscoveryContextChangesInput {
     pub context_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_context_fingerprint: Option<String>,
+    /// Always sent, same contract as the snapshot submit input.
+    pub medium_mix: DiscoveryContextMediumMixInput,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -446,7 +466,22 @@ pub struct DiscoveryTitle {
     pub edge_count: i32,
     pub relation_count: i32,
     pub source_subject_count: i32,
+    /// Strength of the single strongest relation edge that reached this target
+    /// from any library subject, with the edge's provider tier baked in. It is
+    /// **not** relevance and **not** popularity: a semantic-only candidate sits
+    /// at ~1.0 and an affiliation-key-only candidate at 0. Order by
+    /// [`DiscoveryTitle::recommendation_score`] and reason about
+    /// recognisability with [`DiscoveryTitle::base_rank`].
     pub rank_score: f64,
+    /// SMG's blended relevance score for this target against the submitted
+    /// library context (0 when the target was never reranked). Deliberately
+    /// **not** `#[serde(default)]`: a gateway that does not export it is below
+    /// the minimum SMG version for this build, and the sync must fail loudly
+    /// instead of silently degrading every personalized rail to edge strength.
+    pub recommendation_score: f64,
+    /// The target's own popularity base rank (0 when unknown). Carries the same
+    /// no-`serde(default)` contract as `recommendation_score`.
+    pub base_rank: f64,
     pub best_source: String,
     #[serde(default)]
     pub matched_subject_keys: Vec<String>,

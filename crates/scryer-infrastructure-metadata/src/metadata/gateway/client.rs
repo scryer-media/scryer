@@ -2523,8 +2523,8 @@ mod tests {
     use base64::Engine as _;
     use scryer_application::{
         AppError, DiscoveryContextChangeType, DiscoveryContextChangedSubjectInput,
-        DiscoveryContextChangesInput, DiscoveryPublicFeedInput, DiscoverySubjectInput,
-        MetadataGateway, TitleCredit,
+        DiscoveryContextChangesInput, DiscoveryContextMediumMixInput, DiscoveryPublicFeedInput,
+        DiscoverySubjectInput, MetadataGateway, TitleCredit,
     };
     use serde_json::json;
     use std::sync::atomic::Ordering;
@@ -3765,6 +3765,11 @@ mod tests {
                 include_owned: true,
                 include_unresolved: false,
                 context_fingerprint: Some("current".to_string()),
+                medium_mix: DiscoveryContextMediumMixInput {
+                    live_action: 1,
+                    animation: 0,
+                    anime: 0,
+                },
             })
             .await
             .expect("incremental discovery reload should succeed through APQ POST");
