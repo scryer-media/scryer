@@ -52,7 +52,8 @@ export type JobKey =
   | "RECYCLE_BIN_PURGE"
   | "ACQUISITION_SEARCH"
   | "AUTO_BACKUP"
-  | "APPLICATION_UPGRADE";
+  | "APPLICATION_UPGRADE"
+  | "LOCATION_OPERATION";
 
 export type JobScheduleInfo = {
   kind: JobScheduleKind;

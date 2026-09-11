@@ -6,6 +6,7 @@ import { CircleCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { useOptionalLocationMoveProgress } from "@/lib/context/location-move-progress-context";
 import { startLocationOperationMutation } from "@/lib/graphql/mutations";
 import {
   recognizeStartRefusal,
@@ -63,6 +64,7 @@ export function useLocationOperationStart(options: {
 }): LocationOperationStart {
   const client = useClient();
   const t = useTranslate();
+  const moveProgress = useOptionalLocationMoveProgress();
   const {
     failedMessage,
     recognizeOwnRefusal,
@@ -97,6 +99,7 @@ export function useLocationOperationStart(options: {
         // The dialog stays open on success: nothing lists location operations
         // yet, so this is where the user picks the operation up in Activity.
         setStartedOperationId(started.operation.id);
+        moveProgress?.trackOperation(started.operation.id);
         onStarted?.(started.operation.id);
       } catch (error: unknown) {
         const own = recognizeOwnRefusal?.(error) ?? null;
@@ -127,6 +130,7 @@ export function useLocationOperationStart(options: {
     [
       client,
       failedMessage,
+      moveProgress,
       onNeedsFreshPreview,
       onStarted,
       recognizeOwnRefusal,
