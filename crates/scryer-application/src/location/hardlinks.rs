@@ -238,7 +238,7 @@ pub const HARDLINK_WARNING_SAMPLE_LIMIT: usize = 5;
 ///   same-volume move, `Some(false)` for cross-volume, `None` when the
 ///   relationship is not known yet.
 /// * `recycles_source` is true when the operation will recycle the source copy
-///   (any cross-volume move that removes the source, or a dedup decision).
+///   (any cross-volume move that removes the source).
 ///
 /// This is pure: the same facts always produce the same warnings, so the
 /// preview and the completion summary cannot disagree.

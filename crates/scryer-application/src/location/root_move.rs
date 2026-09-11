@@ -56,7 +56,7 @@ use crate::location::classify::{
 };
 use crate::location::collisions::{
     CollisionDisposition, CollisionNaming, CollisionPlan, CollisionPlanRequest, ContentFacts,
-    DestinationItem, FullHash, IncomingItem, PathCaseRule, RecycleAvailability, plan_collisions,
+    DestinationItem, IncomingItem, PathCaseRule, plan_collisions,
 };
 use crate::location::executor::{
     ClassifiedTitleBaseline, OperationWorkPlan, PlannedFile, PlannedTitle, TitleOutcomeCounts,
@@ -94,6 +94,11 @@ pub mod plan_reasons {
     /// The destination folder already exists and its contents were planned
     /// against (FR-072–075).
     pub const DESTINATION_FOLDER_EXISTS: &str = "destination_folder_exists";
+    /// The preview's quick check could not tell an incoming file apart from
+    /// the destination's copy of the same name; the transfer's full comparison
+    /// decides whether it merges or is preserved under a suffixed name
+    /// (FR-073).
+    pub const MAY_MERGE: &str = "may_merge";
     /// The title changes library: its catalog ownership moves, and settings it
     /// inherited from the source library are replaced by the destination
     /// library's (FR-056).
@@ -181,20 +186,15 @@ pub struct RootMoveTitleExecution {
     /// `Some(true)` for a same-volume move (rename fast path, FR-032).
     pub same_volume: Option<bool>,
     pub files: Vec<RootMoveFileExecution>,
-    /// Source files proven redundant against identical destination content, so
-    /// they are recycled instead of copied (FR-073).
-    pub deduplicated_sources: Vec<String>,
-    /// Media-file ids of those redundant sources, when they were tracked media
-    /// rather than companion assets.
+    /// Source files the transfer proved byte-identical to the destination's
+    /// copy and therefore dropped instead of copied (FR-073).
     ///
-    /// The file is recycled and the destination's copy survives, so the source
-    /// row is a duplicate of the survivor's and is removed with it (FR-073:
-    /// "retain or merge catalog associations onto the survivor"). Kept beside
-    /// the paths rather than folded into them because cleanup acts on paths and
-    /// the catalog acts on ids, and defaulted so a plan serialized before the
-    /// field existed still loads.
+    /// A preview never fills this: identity is the transfer's call, made by a
+    /// full comparison while both copies exist (C4). The Activity listing
+    /// fills it from the transfer's recorded decisions so the operation can
+    /// name the files it merged.
     #[serde(default)]
-    pub deduplicated_media_file_ids: Vec<String>,
+    pub deduplicated_sources: Vec<String>,
     /// Destination paths whose file name the collision planner changed so
     /// destination content keeps its own name (FR-074/075). Kept beside
     /// `deduplicated_sources` because Activity counts both (FR-091), and
@@ -302,12 +302,6 @@ impl RootMoveTitleExecution {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeduplicationSurvivor {
-    pub destination_path: String,
-    pub source_media_file_id: Option<String>,
-}
-
 /// The whole confirmed instruction set, persisted as the operation's plan JSON
 /// so a restart resumes without rebuilding a preview (FR-033).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -316,9 +310,6 @@ pub struct RootMoveExecutionPlan {
     /// Catalog path updates confirmed by a user who moved files externally.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub catalog_paths: BTreeMap<String, Vec<RootMoveFileExecution>>,
-    /// Surviving destination for every source the confirmed plan will recycle.
-    #[serde(default)]
-    pub deduplication_destinations: BTreeMap<String, DeduplicationSurvivor>,
     /// Titles the selection classified as already at their destination. They
     /// carry no instructions, so they are counted here rather than dropped
     /// (FR-091). Defaulted so a plan serialized before the field existed loads.
@@ -354,20 +345,6 @@ pub struct RootMoveExecutionPlan {
 }
 
 impl RootMoveExecutionPlan {
-    pub(super) fn record_deduplication_destinations(&mut self, items: &[PlanItem]) {
-        for item in items.iter().filter(|item| item.kind == PlanItemKind::Dedup) {
-            if let (Some(source), Some(destination)) = (&item.source_path, &item.destination_path) {
-                self.deduplication_destinations.insert(
-                    source.clone(),
-                    DeduplicationSurvivor {
-                        destination_path: destination.clone(),
-                        source_media_file_id: item.media_file_id.clone(),
-                    },
-                );
-            }
-        }
-    }
-
     /// The runner's work plan, in confirmed order.
     pub fn to_work_plan(&self) -> OperationWorkPlan {
         let work_plan = OperationWorkPlan::new(
@@ -437,8 +414,8 @@ impl RootMoveExecutionPlan {
         self.titles.iter().find(|title| title.title_id == title_id)
     }
 
-    /// Bytes this plan will write at the destination, excluding proven
-    /// duplicates that are recycled rather than copied.
+    /// Bytes this plan will write at the destination. A may-merge candidate is
+    /// counted: the transfer decides whether it is written.
     pub fn moved_bytes(&self) -> u64 {
         self.titles.iter().fold(0_u64, |total, title| {
             total.saturating_add(title.bytes_total())
@@ -453,11 +430,12 @@ impl RootMoveExecutionPlan {
 pub struct SourceFile {
     /// Tracked media file id, or `None` for a companion asset.
     pub media_file_id: Option<String>,
-    /// The file's persisted full-BLAKE3 state (D4, FR-047). Carried on the
-    /// draft rather than looked up during planning: planning performs no IO,
-    /// and the dedup gate needs the *persisted* hash, never a fresh read.
-    /// Companion assets are always [`FullHash::Absent`] — nothing hashes them.
-    pub full_blake3: FullHash,
+    /// The preview's sampled head/tail proof of this file, read only when a
+    /// same-sized destination entry shares its name (FR-073). Carried on the
+    /// draft because planning performs no IO. `None` when nothing collided or
+    /// the file could not be sampled; the planner then leaves identity to the
+    /// transfer rather than guessing.
+    pub sampled_proof: Option<String>,
     pub path: PathBuf,
     /// Path relative to the title's folder. `None` when the file lives outside
     /// the folder, in which case it is placed in the destination folder root.
@@ -492,8 +470,6 @@ pub struct RootMoveTitleDraft {
     pub hardlinks: Vec<HardlinkFact>,
     /// Entries already present at the destination folder, when it exists.
     pub destination_entries: Vec<DestinationItem>,
-    /// Whether recycling is usable for this title's source root.
-    pub recycle: RecycleAvailability,
     /// The explanation for a blocked or unresolved title (FR-016/FR-017).
     pub blocked_reason: Option<String>,
     /// What destination-title detection concluded (FR-055), when the caller ran
@@ -657,7 +633,6 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
                 }
             }
         }
-        execution.record_deduplication_destinations(&items);
         builder.extend(items);
         plan_warnings.extend(warnings.iter().cloned());
         // FR-071 + FR-081: the merge summary is both what the preview shows and
@@ -835,7 +810,6 @@ pub(super) fn plan_title(
                 same_volume: draft.same_volume,
                 files: Vec::new(),
                 deduplicated_sources: Vec::new(),
-                deduplicated_media_file_ids: Vec::new(),
                 renamed_destinations: Vec::new(),
                 prune_directories: Vec::new(),
                 warnings: transfer_warnings,
@@ -913,7 +887,6 @@ pub(super) fn plan_title(
     let collisions = plan_collisions_for_files(
         request.case_rule,
         &request.naming,
-        &draft.recycle,
         &draft.destination_entries,
         &draft.files,
         &draft.title_id,
@@ -932,37 +905,12 @@ pub(super) fn plan_title(
     }
 
     let mut files = Vec::new();
-    let mut deduplicated_sources = Vec::new();
-    let mut deduplicated_media_file_ids = Vec::new();
     let mut renamed_destinations = Vec::new();
     for file in &draft.files {
         let item_id = collision_item_id(file);
-        let mut decision = collisions
+        let decision = collisions
             .as_ref()
             .and_then(|plan| plan.decision(&item_id).cloned());
-        if let Some(decision) = decision.as_mut()
-            && decision.collided_with.is_some()
-            && decision.disposition != CollisionDisposition::CaseOnlyRename
-        {
-            let detail = "Files will be compared during transfer. Identical content will be consolidated; different content will be preserved with a source-library suffix.";
-            let mut comparison = PlanItem::new(PlanItemKind::Warning)
-                .with_title(draft.title_id.clone())
-                .with_paths(
-                    Some(path_to_stored_string(&file.path)),
-                    Some(path_to_stored_string(
-                        destination_folder.join(&decision.proposed_name),
-                    )),
-                )
-                .with_reason_code("compare_during_transfer")
-                .with_detail(detail);
-            comparison.media_file_id = file.media_file_id.clone();
-            items.push(comparison);
-            decision.disposition = CollisionDisposition::PlaceAsIs;
-            decision.final_name = decision.proposed_name.clone();
-            decision.recycle_source = false;
-            decision.merge_catalog_associations = false;
-            decision.warnings.clear();
-        }
         let final_name = decision
             .as_ref()
             .map(|decision| decision.final_name.clone())
@@ -1005,24 +953,30 @@ pub(super) fn plan_title(
         let destination_display = path_to_stored_string(&destination_path);
 
         match decision.as_ref().map(|decision| decision.disposition) {
-            Some(CollisionDisposition::DedupRecycleSource) => {
-                // Proven duplicate: no bytes are written, the source copy is
-                // recycled (FR-073). The preview says so before confirmation.
-                deduplicated_sources.push(source_display.clone());
-                if let Some(media_file_id) = file.media_file_id.as_deref() {
-                    deduplicated_media_file_ids.push(media_file_id.to_string());
-                }
-                let mut dedup = PlanItem::new(PlanItemKind::Dedup)
-                        .with_title(draft.title_id.clone())
-                        .with_paths(Some(source_display), Some(destination_display))
-                        .with_size(file.size_bytes)
-                        .with_detail(
-                            "identical content already exists at the destination; the source copy is recycled"
-                                .to_string(),
-                        );
-                dedup.media_file_id = file.media_file_id.clone();
-                items.push(dedup);
-                continue;
+            Some(CollisionDisposition::MayMerge) => {
+                // The quick check could not tell the pair apart (FR-073). The
+                // transfer's full comparison decides while both copies exist
+                // (C4): identical, the source is dropped and the destination's
+                // copy is the survivor; different, the file is preserved under
+                // the FR-074 name. The preview promises exactly that, and the
+                // file stays in the work list because bytes may be written.
+                let preserved_as = super::collisions::collision_rename_base(
+                    &final_name,
+                    &request.naming.source_library_label,
+                );
+                let mut candidate = PlanItem::new(PlanItemKind::Dedup)
+                    .with_title(draft.title_id.clone())
+                    .with_paths(
+                        Some(source_display.clone()),
+                        Some(destination_display.clone()),
+                    )
+                    .with_size(file.size_bytes)
+                    .with_reason_code(plan_reasons::MAY_MERGE)
+                    .with_detail(format!(
+                        "may be identical to the destination's \"{final_name}\"; the transfer's full comparison decides: an identical copy is merged and the source dropped, different content is preserved as \"{preserved_as}\""
+                    ));
+                candidate.media_file_id = file.media_file_id.clone();
+                items.push(candidate);
             }
             Some(disposition) if disposition.is_rename() => {
                 renamed_destinations.push(destination_display.clone());
@@ -1076,7 +1030,7 @@ pub(super) fn plan_title(
 
     // FR-085: hardlink warnings are built from the same facts the completion
     // summary uses, so preview and outcome cannot disagree.
-    let recycles_source = draft.same_volume != Some(true) || !deduplicated_sources.is_empty();
+    let recycles_source = draft.same_volume != Some(true);
     for warning in hardlink_warnings(&draft.hardlinks, draft.same_volume, recycles_source) {
         items.push(
             PlanItem::new(PlanItemKind::Warning)
@@ -1105,8 +1059,7 @@ pub(super) fn plan_title(
         source_root_path: draft.source_root_path.as_deref().map(path_to_stored_string),
         same_volume: draft.same_volume,
         files,
-        deduplicated_sources,
-        deduplicated_media_file_ids,
+        deduplicated_sources: Vec::new(),
         renamed_destinations,
         prune_directories: prune_directories_for(draft),
         warnings: warnings.clone(),
@@ -1315,7 +1268,6 @@ fn plan_adopted_title(
         // FR-053: the redundancy exception is decided at execution time against
         // a persisted verification record, never optimistically here.
         deduplicated_sources: Vec::new(),
-        deduplicated_media_file_ids: Vec::new(),
         renamed_destinations: Vec::new(),
         // Adoption never removes the user's directories. The recycle exception
         // is about redundant *content*; a folder the user still has is theirs.
@@ -1675,7 +1627,6 @@ fn prune_directories_for(draft: &RootMoveTitleDraft) -> Vec<String> {
 pub(super) fn plan_collisions_for_files(
     case_rule: PathCaseRule,
     naming: &CollisionNaming,
-    recycle: &RecycleAvailability,
     destination_entries: &[DestinationItem],
     files: &[SourceFile],
     fallback_name: &str,
@@ -1697,17 +1648,18 @@ pub(super) fn plan_collisions_for_files(
         } else {
             IncomingItem::companion(id, name, file.size_bytes)
         };
+        let mut content = ContentFacts::new(file.size_bytes);
+        if let Some(proof) = file.sampled_proof.as_deref() {
+            content = content.with_sampled_proof(proof);
+        }
         incoming.push(
-            item.with_content(
-                ContentFacts::new(file.size_bytes).with_full_hash(file.full_blake3.clone()),
-            )
-            .with_source_path(path_to_stored_string(&file.path)),
+            item.with_content(content)
+                .with_source_path(path_to_stored_string(&file.path)),
         );
     }
 
     Some(plan_collisions(
         &CollisionPlanRequest::new(case_rule, naming.clone())
-            .with_recycle(recycle.clone())
             .with_destination(destination_entries.to_vec())
             .with_incoming(incoming),
     ))
@@ -1782,7 +1734,7 @@ mod tests {
     fn file(id: Option<&str>, path: &str, relative: Option<&str>, size: u64) -> SourceFile {
         SourceFile {
             media_file_id: id.map(str::to_string),
-            full_blake3: FullHash::Absent,
+            sampled_proof: None,
             path: PathBuf::from(path),
             relative_path: relative.map(PathBuf::from),
             size_bytes: size,
@@ -1812,7 +1764,6 @@ mod tests {
             same_volume: Some(false),
             hardlinks: Vec::new(),
             destination_entries: Vec::new(),
-            recycle: RecycleAvailability::Available,
             blocked_reason: None,
             destination_identity: None,
             facet_conversion: None,
@@ -2034,96 +1985,114 @@ mod tests {
         assert_eq!(planned.plan.verification.bytes, 1_000);
     }
 
-    #[test]
-    fn unproven_collisions_defer_their_name_and_disposition_to_execution() {
-        let mut title = draft(TitleLocationClass::RootMove);
-        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
-        title.files = vec![SourceFile {
+    fn colliding_file(sampled_proof: Option<&str>) -> SourceFile {
+        SourceFile {
             media_file_id: Some("mf-1".to_string()),
-            full_blake3: FullHash::Absent,
+            sampled_proof: sampled_proof.map(str::to_string),
             path: PathBuf::from("/a/Some Movie/movie.mkv"),
             relative_path: Some(PathBuf::from("movie.mkv")),
             size_bytes: 1_000,
-        }];
+        }
+    }
+
+    /// FR-073: a look-alike the quick check could not tell apart is a
+    /// may-merge candidate. The preview says so, keeps the file in the work
+    /// list under its own name, and leaves the verdict to the transfer.
+    #[test]
+    fn a_quick_check_match_is_a_may_merge_candidate_the_transfer_decides() {
+        let mut title = draft(TitleLocationClass::RootMove);
+        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
+        title.files = vec![colliding_file(Some("sample"))];
+        title.destination_entries = vec![
+            DestinationItem::media("movie.mkv", 1_000)
+                .with_content(ContentFacts::new(1_000).with_sampled_proof("sample")),
+        ];
+
+        let planned = build_root_move_plan(&request(vec![title]));
+        let execution = planned.execution.title("title-1").expect("planned");
+
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 1);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
+        let candidate = planned
+            .plan
+            .sections
+            .iter()
+            .flat_map(|section| &section.items.items)
+            .find(|item| item.kind == PlanItemKind::Dedup)
+            .expect("the may-merge item");
+        assert_eq!(
+            candidate.reason_code.as_deref(),
+            Some(plan_reasons::MAY_MERGE)
+        );
+        let detail = candidate.detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("may be identical"), "{detail}");
+        assert!(
+            detail.contains("movie (from Movies).mkv"),
+            "the preview names the fallback: {detail}"
+        );
+        // Nothing is decided at preview time: no source is marked redundant,
+        // and the file keeps its own destination name for the transfer.
+        assert!(execution.deduplicated_sources.is_empty());
+        assert_eq!(execution.files.len(), 1);
+        assert_eq!(
+            execution.files[0].destination_path,
+            "/b/Some Movie/movie.mkv"
+        );
+        assert!(execution.renamed_destinations.is_empty());
+        let work = planned.work_plan();
+        assert_eq!(work.titles[0].outcomes.renames, 0);
+        assert_eq!(work.titles[0].outcomes.dedups, 0);
+    }
+
+    /// FR-074: a quick check that proves different content settles the rename
+    /// at preview time — the destination keeps its name and the preview shows
+    /// the generated one.
+    #[test]
+    fn a_quick_check_mismatch_plans_the_rename() {
+        let mut title = draft(TitleLocationClass::RootMove);
+        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
+        title.files = vec![colliding_file(Some("sample-a"))];
+        title.destination_entries = vec![
+            DestinationItem::media("movie.mkv", 1_000)
+                .with_content(ContentFacts::new(1_000).with_sampled_proof("sample-b")),
+        ];
+
+        let planned = build_root_move_plan(&request(vec![title]));
+        let execution = planned.execution.title("title-1").expect("planned");
+
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
+        assert_eq!(
+            execution.files[0].destination_path,
+            "/b/Some Movie/movie (from Movies).mkv"
+        );
+        assert_eq!(execution.renamed_destinations.len(), 1);
+        let work = planned.work_plan();
+        assert_eq!(work.titles[0].outcomes.renames, 1);
+    }
+
+    /// A file the preview could not sample is still the transfer's call: the
+    /// preview never guesses "different" from a missing read.
+    #[test]
+    fn an_unsampled_lookalike_is_still_a_may_merge_candidate() {
+        let mut title = draft(TitleLocationClass::RootMove);
+        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
+        title.files = vec![colliding_file(None)];
         title.destination_entries = vec![DestinationItem::media("movie.mkv", 1_000)];
 
         let planned = build_root_move_plan(&request(vec![title]));
-        let execution = planned.execution.title("title-1").expect("planned");
 
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
-        assert!(execution.deduplicated_sources.is_empty());
-        assert_eq!(
-            execution.files[0].destination_path,
-            "/b/Some Movie/movie.mkv"
-        );
-        assert!(execution.renamed_destinations.is_empty());
-        let work = planned.work_plan();
-        assert_eq!(work.titles[0].outcomes.renames, 0);
-        assert_eq!(work.titles[0].outcomes.dedups, 0);
-    }
-
-    #[test]
-    fn matching_persisted_hashes_still_require_execution_identity_proof() {
-        const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-        let mut title = draft(TitleLocationClass::RootMove);
-        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
-        title.files = vec![SourceFile {
-            media_file_id: Some("mf-1".to_string()),
-            full_blake3: FullHash::known(HASH),
-            path: PathBuf::from("/a/Some Movie/movie.mkv"),
-            relative_path: Some(PathBuf::from("movie.mkv")),
-            size_bytes: 1_000,
-        }];
-        title.destination_entries = vec![
-            DestinationItem::media("movie.mkv", 1_000)
-                .with_content(ContentFacts::new(1_000).with_full_blake3(HASH)),
-        ];
-
-        let planned = build_root_move_plan(&request(vec![title]));
-        let execution = planned.execution.title("title-1").expect("planned");
-
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
-        assert!(execution.deduplicated_sources.is_empty());
-        assert!(planned.execution.deduplication_destinations.is_empty());
-        assert_eq!(
-            execution.files[0].destination_path,
-            "/b/Some Movie/movie.mkv"
-        );
-        assert!(execution.renamed_destinations.is_empty());
-        let work = planned.work_plan();
-        assert_eq!(work.titles[0].outcomes.dedups, 0);
-        assert_eq!(work.titles[0].outcomes.renames, 0);
-    }
-
-    /// A stale hash proves nothing. The row is queued for backfill, and until it
-    /// is rehashed the planner must treat the look-alike as unproven rather than
-    /// deduplicate on a hash of bytes that are gone (FR-046).
-    #[test]
-    fn a_stale_persisted_hash_does_not_deduplicate() {
-        const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-        let mut title = draft(TitleLocationClass::RootMove);
-        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
-        title.files = vec![SourceFile {
-            media_file_id: Some("mf-1".to_string()),
-            full_blake3: FullHash::Stale,
-            path: PathBuf::from("/a/Some Movie/movie.mkv"),
-            relative_path: Some(PathBuf::from("movie.mkv")),
-            size_bytes: 1_000,
-        }];
-        title.destination_entries = vec![
-            DestinationItem::media("movie.mkv", 1_000)
-                .with_content(ContentFacts::new(1_000).with_full_blake3(HASH)),
-        ];
-
-        let planned = build_root_move_plan(&request(vec![title]));
-
-        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 1);
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
         assert_eq!(planned.execution.titles[0].files.len(), 1);
+        assert!(
+            planned
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("could not be quick-checked")),
+            "{:?}",
+            planned.warnings
+        );
     }
 
     /// FR-085: hardlinked sources warn about the broken link and the recycle

@@ -11,11 +11,12 @@
 //!
 //! Nothing new is persisted for this. The confirmed
 //! [`RootMoveExecutionPlan`] already carries, per title, the destination paths
-//! the collision planner renamed ([`RootMoveTitleExecution::renamed_destinations`])
-//! and the source paths it proved redundant
-//! ([`RootMoveTitleExecution::deduplicated_sources`]); the plan's file list
-//! carries the source path each renamed destination came from. So the listing
-//! is a pure read of the operation's stored plan, joined against its
+//! the collision planner renamed ([`RootMoveTitleExecution::renamed_destinations`]);
+//! the plan's file list carries the source path each renamed destination came
+//! from; and the transfer's recorded file resolutions name the sources it
+//! proved identical and dropped, which the listing folds into
+//! [`RootMoveTitleExecution::deduplicated_sources`] before it is built. So the
+//! listing is a pure read of the operation's stored facts, joined against its
 //! checkpoints.
 //!
 //! # Planned is not done
@@ -64,8 +65,8 @@ pub struct RenamedAsset {
     pub done: bool,
 }
 
-/// One source file proven redundant against identical destination content, so
-/// it is recycled rather than copied (FR-073).
+/// One source file the transfer proved byte-identical to destination content,
+/// so it was dropped rather than copied (FR-073).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeduplicatedAsset {
     /// Stored path of the redundant source copy.
@@ -75,10 +76,10 @@ pub struct DeduplicatedAsset {
     /// Stored path of the destination copy that survives, when the plan carries
     /// enough placement to name it.
     ///
-    /// The plan records the redundant source and drops the file from its work
-    /// list, so the survivor is reconstructed by relocating the source's
-    /// folder-relative path onto the destination folder, which is how the
-    /// planner built it in the first place.
+    /// The transfer's resolution names the survivor exactly; a stored plan that
+    /// lost the file falls back to relocating the source's folder-relative
+    /// path onto the destination folder, which is how the planner built it in
+    /// the first place.
     pub surviving_path: Option<String>,
     /// File name of that survivor.
     pub surviving_name: Option<String>,
@@ -256,13 +257,22 @@ fn dedups_for(title: &RootMoveTitleExecution, done: bool) -> Vec<DeduplicatedAss
 
 /// Where the destination copy that survives a dedup lives.
 ///
-/// The planner placed every incoming file at
-/// `<destination folder>/<path relative to the title's folder>`, and a dedup is
-/// by definition a file whose name already existed there, so relocating the
-/// source's folder-relative path is the same construction the plan used. A file
-/// tracked outside its title's folder lands in the destination folder root,
-/// which is the fallback here too.
+/// The transfer's resolution names it exactly, and the listing folds that
+/// path onto the file's plan entry — so the entry is consulted first. A stored
+/// plan that no longer carries the file falls back to the construction the
+/// planner used: every incoming file was placed at
+/// `<destination folder>/<path relative to the title's folder>`, and a dedup
+/// is by definition a file whose name already existed there. A file tracked
+/// outside its title's folder lands in the destination folder root, which is
+/// the fallback here too.
 fn surviving_destination(title: &RootMoveTitleExecution, source_path: &str) -> Option<String> {
+    if let Some(file) = title
+        .files
+        .iter()
+        .find(|file| file.source_path == source_path)
+    {
+        return Some(file.destination_path.clone());
+    }
     let destination_folder = stored_path_to_path_buf(title.destination_folder_path.as_deref()?);
     let source = stored_path_to_path_buf(source_path);
     let relative: Option<PathBuf> = title
@@ -374,27 +384,30 @@ impl AppUseCase {
                 .file_resolutions(operation_id, &title.title_id)
                 .await?;
             for resolution in resolutions.into_iter().filter(|row| row.completed) {
-                if resolution.original_destination != resolution.destination_path {
-                    if !title
+                // An identical merge is a dedup whichever name the transfer
+                // found the matching copy under, so it is classified before the
+                // rename check; the file's destination becomes the survivor.
+                if resolution.disposition == super::resolution::ResolutionDisposition::Identical {
+                    if !title.deduplicated_sources.contains(&resolution.source_path) {
+                        title
+                            .deduplicated_sources
+                            .push(resolution.source_path.clone());
+                    }
+                } else if resolution.original_destination != resolution.destination_path
+                    && !title
                         .renamed_destinations
                         .contains(&resolution.destination_path)
-                    {
-                        title
-                            .renamed_destinations
-                            .push(resolution.destination_path.clone());
-                    }
-                    if let Some(file) = title
-                        .files
-                        .iter_mut()
-                        .find(|file| file.source_path == resolution.source_path)
-                    {
-                        file.destination_path = resolution.destination_path;
-                    }
-                } else if resolution.disposition
-                    == super::resolution::ResolutionDisposition::Identical
-                    && !title.deduplicated_sources.contains(&resolution.source_path)
                 {
-                    title.deduplicated_sources.push(resolution.source_path);
+                    title
+                        .renamed_destinations
+                        .push(resolution.destination_path.clone());
+                }
+                if let Some(file) = title
+                    .files
+                    .iter_mut()
+                    .find(|file| file.source_path == resolution.source_path)
+                {
+                    file.destination_path = resolution.destination_path;
                 }
             }
         }
@@ -442,7 +455,6 @@ mod tests {
             same_volume: Some(false),
             files: Vec::new(),
             deduplicated_sources: Vec::new(),
-            deduplicated_media_file_ids: Vec::new(),
             renamed_destinations: Vec::new(),
             prune_directories: Vec::new(),
             warnings: Vec::new(),
@@ -561,7 +573,6 @@ mod tests {
     fn a_dedup_names_the_destination_copy_that_survives() {
         let mut title = title("title-1", 1);
         title.deduplicated_sources = vec!["/source/Film (2020)/Extras/Film.mkv".to_string()];
-        title.deduplicated_media_file_ids = vec!["media-1".to_string()];
         let plan = RootMoveExecutionPlan {
             titles: vec![title],
             ..RootMoveExecutionPlan::default()
@@ -586,6 +597,44 @@ mod tests {
         );
         assert_eq!(dedup.surviving_name.as_deref(), Some("Film.mkv"));
         assert!(dedup.done);
+    }
+
+    /// The transfer may find the identical copy under a rename candidate
+    /// rather than the original name (FR-073); the listing names the copy it
+    /// actually merged with, which is the destination the resolution folded
+    /// onto the file's plan entry.
+    #[test]
+    fn a_dedup_that_merged_under_a_renamed_destination_names_that_survivor() {
+        let mut title = title("title-1", 1);
+        title.files = vec![file(
+            Some("mf-1"),
+            "/source/Film (2020)/Film.mkv",
+            "/destination/Film (2020)/Film (from Movies).mkv",
+            10,
+        )];
+        title.deduplicated_sources = vec!["/source/Film (2020)/Film.mkv".to_string()];
+        let plan = RootMoveExecutionPlan {
+            titles: vec![title],
+            ..RootMoveExecutionPlan::default()
+        };
+        let checkpoints = vec![checkpoint("title-1", 1, TitleCheckpointState::Completed)];
+
+        let listing = build_asset_listing("operation-1", &plan, &checkpoints);
+
+        assert_eq!(listing.dedups_done, 1);
+        assert!(
+            listing.titles[0].renames.is_empty(),
+            "a merge is not a rename"
+        );
+        let dedup = &listing.titles[0].dedups[0];
+        assert_eq!(
+            dedup.surviving_path.as_deref(),
+            Some("/destination/Film (2020)/Film (from Movies).mkv")
+        );
+        assert_eq!(
+            dedup.surviving_name.as_deref(),
+            Some("Film (from Movies).mkv")
+        );
     }
 
     /// A file tracked outside its title's folder lands in the destination

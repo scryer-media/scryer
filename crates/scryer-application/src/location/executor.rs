@@ -1496,6 +1496,20 @@ impl<'a> LocationOperationRunner<'a> {
                 .record(operation, title, state, detail.as_deref())
                 .await?;
         }
+        if matches!(
+            state,
+            TitleCheckpointState::Completed | TitleCheckpointState::CompletedWithWarnings
+        ) {
+            // The transfer, not the plan, decides which files merged with an
+            // identical copy or landed under another name (FR-073/FR-074), so
+            // a title's outcome counts come from its recorded resolutions —
+            // the same rows a resumed run reads for titles settled earlier.
+            let resolutions = self
+                .store
+                .file_resolutions(&operation.id, &title.title_id)
+                .await?;
+            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+        }
         progress.settle(title, state);
         self.write_title_checkpoint(operation, title, state, detail, progress, reason_code)
             .await?;

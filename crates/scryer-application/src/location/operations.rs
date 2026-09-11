@@ -68,7 +68,7 @@ use crate::location::classify::{
     TitleLocationClass, classify_selection,
 };
 use crate::location::collisions::{
-    CollisionNaming, ContentFacts, DestinationItem, FullHash, PathCaseRule, RecycleAvailability,
+    CollisionNaming, ContentFacts, DestinationItem, FullHash, PathCaseRule,
 };
 use crate::location::execution::{
     ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer,
@@ -1267,18 +1267,7 @@ impl AppUseCase {
                     .await?
                     .map(|library| library.name)
                     .unwrap_or_else(|| "source".into());
-                let config = self
-                    .recycle_bin_config_for_media_root(title.source_root_path.as_deref())
-                    .await;
-                contexts.insert(
-                    title.title_id.clone(),
-                    (
-                        label,
-                        config.enabled
-                            && config.validation_error.is_none()
-                            && title.source_root_path.is_some(),
-                    ),
-                );
+                contexts.insert(title.title_id.clone(), label);
             }
             copy_mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
                 .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }))
@@ -2386,7 +2375,6 @@ impl AppUseCase {
             same_volume: None,
             hardlinks: Vec::new(),
             destination_entries: Vec::new(),
-            recycle: RecycleAvailability::Available,
             blocked_reason: classified.reason.clone(),
             destination_identity: classified.destination_identity.clone(),
             facet_conversion: classified.facet_conversion.clone(),
@@ -2526,7 +2514,7 @@ impl AppUseCase {
                     relative_path: Some(relative.to_path_buf()),
                     path,
                     size_bytes: media.size_bytes.max(0) as u64,
-                    full_blake3: FullHash::Absent,
+                    sampled_proof: None,
                 });
             }
             return Ok(RootMoveTitleOutcome::settled(draft, downgraded_from));
@@ -2571,7 +2559,6 @@ impl AppUseCase {
                 source_folder_path.as_deref(),
                 &media_files,
                 Some(&destination_folder),
-                merge_destination.map(|title| title.id.as_str()),
             )
             .await
         {
@@ -2596,24 +2583,6 @@ impl AppUseCase {
             Some(folder) => Some(same_filesystem(folder, &destination_folder).await),
             None => None,
         };
-        draft.recycle = match source_root_path.as_deref() {
-            Some(root) => {
-                let config = self
-                    .recycle_bin_config_for_media_root(Some(&root.to_string_lossy()))
-                    .await;
-                if !config.enabled {
-                    RecycleAvailability::Disabled
-                } else if let Some(error) = config.validation_error.clone() {
-                    RecycleAvailability::Unavailable(error)
-                } else {
-                    RecycleAvailability::Available
-                }
-            }
-            None => RecycleAvailability::Unavailable(
-                "the source root has no configured path".to_string(),
-            ),
-        };
-
         let moved_bytes = if draft.same_volume == Some(true) {
             0
         } else {
@@ -2743,8 +2712,8 @@ impl AppUseCase {
     /// Every workflow that moves a title asks the same four questions of the
     /// same two paths — what is under the source folder, which of those files
     /// share an inode (FR-085), what the destination folder already holds
-    /// (FR-072–075), and what the destination's persisted hashes prove (FR-073,
-    /// D4). Only the destination folder differs, and each caller has already
+    /// (FR-072–075), and which same-named pairs the quick check can already
+    /// tell apart (FR-073). Only the destination folder differs, and each caller has already
     /// decided that: the naming policy for a move (FR-013), FR-025/FR-026 for a
     /// root-scoped operation.
     pub(super) async fn title_move_facts(
@@ -2752,71 +2721,24 @@ impl AppUseCase {
         source_folder: Option<&Path>,
         media_files: &[crate::TitleMediaFile],
         destination_folder: Option<&Path>,
-        merge_target_title_id: Option<&str>,
     ) -> AppResult<TitleMoveFacts> {
         let (mut files, source_directories) =
             collect_source_files(source_folder, media_files).await?;
         let hardlinks =
             detect_hardlinks(files.iter().map(|file| file.path.clone()).collect()).await?;
-        // FR-073 needs a *proven* hash on both sides, and the catalog is the
-        // only place a destination file's hash exists without reading it again.
-        // For a merge the destination folder holds the destination title's own
-        // tracked media, so the persisted hashes are right there; without them
-        // every identical episode would be renamed beside its twin rather than
-        // deduplicated (D4).
-        let destination_rows = match merge_target_title_id {
-            Some(title_id) => self.destination_media_for_title(title_id).await?,
-            None => BTreeMap::new(),
-        };
-        let destination_hashes: BTreeMap<String, FullHash> = destination_rows
-            .iter()
-            .map(|(path, row)| {
-                (
-                    path.clone(),
-                    FullHash::from_persisted(row.content_hashes.as_ref()),
-                )
-            })
-            .collect();
         let mut destination_entries = match destination_folder {
-            Some(folder) => read_destination_entries(folder, &destination_hashes).await?,
+            Some(folder) => read_destination_entries(folder).await?,
             None => Vec::new(),
         };
-        let source_rows: BTreeMap<&str, &crate::TitleMediaFile> = media_files
-            .iter()
-            .map(|row| (row.id.as_str(), row))
-            .collect();
-        prove_name_collisions(
-            &mut files,
-            &mut destination_entries,
-            &source_rows,
-            &destination_rows,
-        )
-        .await;
+        // The preview's quick check (FR-073): identity itself is the
+        // transfer's call, made in full while both copies exist.
+        quick_check_name_collisions(&mut files, &mut destination_entries).await;
         Ok(TitleMoveFacts {
             files,
             source_directories,
             hardlinks,
             destination_entries,
         })
-    }
-
-    /// One title's tracked media rows keyed by stored path: the persisted
-    /// full BLAKE3 the collision planner proves a duplicate with, and the size
-    /// and signature that say whether that hash still describes the file
-    /// (D4, FR-046, FR-047). One read, however many files collide.
-    pub(super) async fn destination_media_for_title(
-        &self,
-        title_id: &str,
-    ) -> AppResult<BTreeMap<String, crate::TitleMediaFile>> {
-        Ok(self
-            .services
-            .library
-            .media_files
-            .list_media_files_for_title(title_id)
-            .await?
-            .into_iter()
-            .map(|file| (file.file_path.clone(), file))
-            .collect())
     }
 
     /// Series-movie links, collections, and episodes for the titles that cross
@@ -3078,12 +3000,8 @@ pub(super) async fn collect_source_files(
                 seen.insert(stored.clone());
                 files.push(SourceFile {
                     media_file_id: tracked.map(|file| file.id.clone()),
-                    // The persisted hash, never a fresh read: planning does no
-                    // hashing, and an absent hash means "unproven", which the
-                    // dedup gate treats as *not* a duplicate (D4).
-                    full_blake3: tracked
-                        .map(|file| FullHash::from_persisted(file.content_hashes.as_ref()))
-                        .unwrap_or(FullHash::Absent),
+                    // Sampled later, and only for a name that collides.
+                    sampled_proof: None,
                     path,
                     relative_path: relative,
                     size_bytes,
@@ -3119,7 +3037,7 @@ pub(super) async fn collect_source_files(
         for (media_file, (path, size_bytes)) in unseen.into_iter().zip(sizes) {
             files.push(SourceFile {
                 media_file_id: Some(media_file.id.clone()),
-                full_blake3: FullHash::from_persisted(media_file.content_hashes.as_ref()),
+                sampled_proof: None,
                 path,
                 relative_path: None,
                 size_bytes: size_bytes.unwrap_or_else(|| media_file.size_bytes.max(0) as u64),
@@ -3349,19 +3267,13 @@ async fn sampled_proof_of(path: &Path) -> Option<scryer_domain::ImportContentPro
 }
 
 /// What already sits in the destination folder, for the collision planner
-/// (FR-072–075). An absent folder simply has nothing in it.
-///
-/// `known_hashes` maps a stored destination path to the full BLAKE3 the catalog
-/// has for it. Anything not in the map keeps [`FullHash::Absent`], which the
-/// dedup gate reads as "unproven" and therefore as *not* a duplicate (D4) —
-/// the same conservative answer this function gave before hashes were passed at
-/// all.
+/// (FR-072–075). An absent folder simply has nothing in it. Entries carry
+/// their size only; a sampled proof is read afterwards for the names that
+/// collide ([`quick_check_name_collisions`]).
 pub(super) async fn read_destination_entries(
     destination_folder: &Path,
-    known_hashes: &BTreeMap<String, FullHash>,
 ) -> AppResult<Vec<DestinationItem>> {
     let destination_folder = destination_folder.to_path_buf();
-    let known_hashes = known_hashes.clone();
     // One blocking task for the listing and every `stat` in it; the folder is
     // usually absent (a fresh move) or one title deep (a merge).
     tokio::task::spawn_blocking(move || {
@@ -3386,10 +3298,9 @@ pub(super) async fn read_destination_entries(
                     .to_string_lossy()
                     .to_string();
                 let path = path_to_stored_string(entry.path());
-                let full_hash = known_hashes.get(&path).cloned().unwrap_or(FullHash::Absent);
                 items.push(
                     DestinationItem::companion(name, metadata.len())
-                        .with_content(ContentFacts::new(metadata.len()).with_full_hash(full_hash))
+                        .with_content(ContentFacts::new(metadata.len()))
                         .with_path(path),
                 );
             }
@@ -3403,68 +3314,35 @@ pub(super) async fn read_destination_entries(
     .map_err(|error| AppError::Repository(format!("destination listing task failed: {error}")))
 }
 
-use super::resolution::PREVIEW_FULL_HASH_LIMIT_BYTES;
-
-/// The persisted full hash of a tracked file, trusted only while the size *and*
-/// signature the catalog stored both match a fresh `stat`. This is stricter
-/// than the scan's FR-046 invalidation rule on purpose: that rule answers "may
-/// this hash be thrown away?" and never invalidates on a guess, so a row with
-/// no stored signature passes it on size alone. Proof runs the other way — a
-/// row that cannot attest its bytes proves nothing (D4), and its hash reads
-/// back [`FullHash::Stale`] until the backfill job records a signature.
-fn persisted_hash_if_current(
-    media_file: &crate::TitleMediaFile,
-    metadata: &std::fs::Metadata,
-) -> FullHash {
-    let size_matches = i64::try_from(metadata.len()).ok() == Some(media_file.size_bytes);
-    let signature_matches = match (
-        media_file.source_signature_scheme.as_deref(),
-        media_file.source_signature_value.as_deref(),
-        crate::file_source_signature::file_source_signature_from_metadata(metadata).ok(),
-    ) {
-        (Some(scheme), Some(value), Some(fresh)) => fresh.scheme == scheme && fresh.value == value,
-        _ => false,
-    };
-    match FullHash::from_persisted(media_file.content_hashes.as_ref()) {
-        FullHash::Known(hash) if size_matches && signature_matches => FullHash::Known(hash),
-        FullHash::Known(_) => FullHash::Stale,
-        other => other,
-    }
-}
-
-/// Settles the hash evidence for every source file that collides by name with
-/// a destination entry (FR-072–FR-075), reading as little as possible.
+/// The preview's quick check for every source file that collides by name
+/// with a destination entry (FR-072–FR-075): a `stat` on both sides, then the
+/// sampled head/tail proof of each when the sizes agree. Nothing is read end to
+/// end — a preview is an interactive screen, and identity is the transfer's
+/// call, proven in full while both copies still exist (FR-073, C4).
 ///
-/// `source_rows` is keyed by media-file id, `destination_rows` by stored path.
 /// For each colliding pair:
 ///
-/// - the same regular file on both sides (a case-only rename, a hardlink) keeps
-///   both hashes absent, because a proof that the file is its own duplicate
-///   would recycle the only copy;
-/// - a persisted hash whose stored size and signature match the fresh `stat`
-///   is kept as evidence, on either side, at the cost of nothing;
-/// - a side that has no current hash is read end to end only when both files
-///   are within [`PREVIEW_FULL_HASH_LIMIT_BYTES`]; a larger file stays unproven,
-///   which the dedup gate reads as "not a duplicate" (D4).
-pub(crate) async fn prove_name_collisions(
+/// - the same regular file on both sides (a case-only rename, a hardlink) is
+///   left unsampled, so it can never read as its own duplicate;
+/// - different sizes need no sample: the planner rules the pair out on size;
+/// - equal sizes get a sampled proof on each side; a side that cannot be read
+///   stays `None`, which the planner reports rather than guessing.
+pub(crate) async fn quick_check_name_collisions(
     files: &mut [SourceFile],
     destination_entries: &mut [DestinationItem],
-    source_rows: &BTreeMap<&str, &crate::TitleMediaFile>,
-    destination_rows: &BTreeMap<String, crate::TitleMediaFile>,
 ) {
     let case_rule = PathCaseRule::platform_default();
     // First wins, the way `NameIndex` resolves the same fold, so the entry
-    // proven here is the entry the dedup gate compares against.
+    // sampled here is the entry the planner compares against.
     let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
     for (index, entry) in destination_entries.iter().enumerate() {
         by_name
             .entry(case_rule.fold(&entry.name).into_owned())
             .or_insert(index);
     }
-    // A destination entry is settled on its first collision and kept as is
-    // afterwards: a second source file folding to the same name must not reset
-    // evidence the first one's verdict rests on.
-    let mut settled_destinations = std::collections::BTreeSet::new();
+    // A destination entry is sampled once, on its first collision: a second
+    // source file folding to the same name reuses the proof.
+    let mut sampled_destinations = std::collections::BTreeSet::new();
     for file in files.iter_mut() {
         let name = file
             .relative_path
@@ -3485,48 +3363,29 @@ pub(crate) async fn prove_name_collisions(
             continue;
         };
         let destination = stored_path_to_path_buf(stored_destination);
-        let first_visit = settled_destinations.insert(index);
-        let source_metadata = tokio::fs::symlink_metadata(&file.path).await;
-        let destination_metadata = tokio::fs::symlink_metadata(&destination).await;
-        file.full_blake3 = FullHash::Absent;
-        if first_visit {
-            existing.content.full_blake3 = FullHash::Absent;
-        }
-        if let (Ok(source), Ok(target)) = (&source_metadata, &destination_metadata)
-            && super::execution::same_regular_file(source, target)
-        {
+        file.sampled_proof = None;
+        let (Ok(source_metadata), Ok(destination_metadata)) = (
+            tokio::fs::symlink_metadata(&file.path).await,
+            tokio::fs::symlink_metadata(&destination).await,
+        ) else {
+            continue;
+        };
+        if super::execution::same_regular_file(&source_metadata, &destination_metadata) {
             continue;
         }
-        let source_row = file
-            .media_file_id
-            .as_deref()
-            .and_then(|id| source_rows.get(id).copied());
-        if let (Some(row), Ok(metadata)) = (source_row, &source_metadata) {
-            file.full_blake3 = persisted_hash_if_current(row, metadata);
-        }
-        if first_visit
-            && let (Some(row), Ok(metadata)) = (
-                destination_rows.get(stored_destination),
-                &destination_metadata,
-            )
-        {
-            existing.content.full_blake3 = persisted_hash_if_current(row, metadata);
-        }
-        let within_read_limit = file.size_bytes <= PREVIEW_FULL_HASH_LIMIT_BYTES
-            && existing.content.size_bytes <= PREVIEW_FULL_HASH_LIMIT_BYTES;
-        if !within_read_limit {
+        // The planner compares the sizes it is handed; a fresh `stat` keeps
+        // the destination's honest, and rules the pair out before any read.
+        existing.content.size_bytes = destination_metadata.len();
+        if source_metadata.len() != destination_metadata.len() {
             continue;
         }
-        if file.full_blake3.as_known().is_none()
-            && let Ok(Some(hash)) = super::resolution::preview_hash(&file.path).await
-        {
-            file.full_blake3 = FullHash::known(hash);
-        }
-        if first_visit
-            && existing.content.full_blake3.as_known().is_none()
-            && let Ok(Some(hash)) = super::resolution::preview_hash(&destination).await
-        {
-            existing.content.full_blake3 = FullHash::known(hash);
+        file.sampled_proof = sampled_proof_of(&file.path)
+            .await
+            .map(|proof| proof.sample_blake3);
+        if sampled_destinations.insert(index) {
+            existing.content.sampled_proof = sampled_proof_of(&destination)
+                .await
+                .map(|proof| proof.sample_blake3);
         }
     }
 }

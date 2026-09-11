@@ -124,7 +124,7 @@ gradually fills in full-file hashes for content that was already in your library
   that turns out not to be one, the dialog switches branches for you).
 - The preview classifies every title seven ways before you confirm: moving into
   unused folders, merging with a destination title, folder-name collisions,
-  media-name collisions, proven-identical files eligible for dedup,
+  media-name collisions, files that may be identical and merge,
   companion-name collisions, and untracked source entries — all seven shown,
   zeros included.
 - **Two unrelated titles with the same folder name are never merged.** The
@@ -176,11 +176,15 @@ gradually fills in full-file hashes for content that was already in your library
 
 - **Destination content always keeps its name.** Incoming content is renamed or
   deduplicated — never overwritten, never permanently deleted.
-- A duplicate is only ever a duplicate when full-file hashes match. Proven
-  duplicates keep the destination copy and recycle the redundant incoming one,
-  and the operation summary records the dedup. **If the recycle bin is disabled,
-  unavailable, or refuses the file, Scryer preserves the file and renames it with
-  a visible warning** — it never falls back to deleting.
+- A duplicate is only ever a duplicate when full-file hashes match, and that
+  is decided during the transfer, not in the preview: the preview does a quick
+  check (size plus a sampled head-and-tail read) and says a file *may* be
+  identical and merge. During the transfer, files the quick check can tell
+  apart copy straight away, with their hashes computed as they stream; a pair
+  it cannot tell apart is read in full on both sides before it is called
+  identical. **A proven-identical incoming copy is dropped, not recycled** —
+  the destination already holds the same bytes — and the operation summary and
+  asset listing record the dedup.
 - Non-identical media collisions keep the destination filename and rename the
   incoming file with a readable source-library suffix, adding a number only if
   needed. Both media records are preserved, and the generated name is shown in

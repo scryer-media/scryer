@@ -37,10 +37,13 @@ execution is a lie.
 ## C3 — Nothing silent, nothing destroyed
 
 No operation silently overwrites, deletes, merges, or omits user data. Automatic
-removal is permitted only into a recoverable holding area; when recovery is
-unavailable, the fallback is preservation with a visible warning — never permanent
-deletion. Whatever an operation cannot classify or account for is surfaced to the
-user, not skipped or discarded. Every loss path is explicit and user-chosen.
+removal is permitted only into a recoverable holding area, with one exception: a
+copy the operation has proven byte-identical to a surviving copy (C4) may be
+replaced outright, as canonical file-copy tools do with a "replace" option,
+because no content is lost. For everything else, when recovery is unavailable
+the fallback is preservation with a visible warning — never permanent deletion.
+Whatever an operation cannot classify or account for is surfaced to the user,
+not skipped or discarded. Every loss path is explicit, proven, or user-chosen.
 
 *Rationale*: media libraries are years of accumulated, often irreplaceable state.
 

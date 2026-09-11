@@ -209,8 +209,8 @@ sidecars; verify each classification and outcome.
 1. **Given** consolidation, **When** previewed, **Then** the preview identifies:
    titles moving into unused destination folders; titles merging with an existing
    destination title; folder-name collisions between unrelated titles; media
-   collisions; identical files eligible for dedup; sidecar collisions requiring
-   rename; untracked content blocking retirement.
+   collisions; files the quick check finds may be identical (merge candidates);
+   sidecar collisions requiring rename; untracked content blocking retirement.
 2. **Given** two unrelated titles calculating the same destination folder, **When**
    previewed, **Then** the incoming folder receives a unique previewed destination
    name or the operation stays blocked — unrelated titles never merge over a name.
@@ -352,7 +352,9 @@ convergence, throttling, and skip rules.
 - Multi-episode file spanning covered and uncovered episode slots → primary for
   uncovered slots, additional for covered ones (FR-069).
 - Recycle bin disabled, unavailable, or rejecting a file → preserve + collision
-  rename + visible warning; never permanent deletion (FR-073).
+  rename + visible warning; never permanent deletion. The one exception is a
+  source the transfer proved byte-identical to the destination's copy: it is
+  dropped outright, bin or no bin (FR-073, C4).
 - Crash mid-copy → partial destination state is expected and resumable; not stale.
 - Stale source mount during adoption → proceed when the destination is provable from
   stored catalog data; otherwise a clear unresolved state (US3.3).
@@ -429,7 +431,7 @@ convergence, throttling, and skip rules.
   is retired.
 - **FR-024**: The consolidation preview MUST classify: titles moving into unused
   destination folders; titles merging with existing destination titles; folder-name
-  collisions between unrelated titles; media collisions; dedup-eligible identical
+  collisions between unrelated titles; media collisions; quick-checked may-merge
   files; sidecar/non-media collisions requiring rename; and untracked/unsupported
   content that prevents safe source-root retirement.
 - **FR-025**: Unrelated titles MUST never merge because they calculate the same
@@ -586,12 +588,20 @@ convergence, throttling, and skip rules.
 
 - **FR-072**: Destination content always wins the pathname; incoming content is
   deduplicated or renamed, never overwritten.
-- **FR-073**: Identical files (proven by matching **full-file BLAKE3** — never the
-  sampled proof): keep the destination copy; recycle the redundant source copy;
-  retain or merge catalog associations onto the survivor; record the dedup in the
-  operation summary. If the recycle bin is disabled, unavailable, or rejects the
-  file: preserve the incoming copy, rename it per FR-074, complete with a visible
-  warning, and never fall back to permanent deletion.
+- **FR-073**: Identity is decided at transfer time, never by the preview. The
+  preview quick-checks a name collision (size, then the sampled head+tail proof)
+  and lists a pair it cannot tell apart as *may merge*; a pair the quick check
+  proves different is a rename (FR-074) with no further read, and a pair it could
+  not sample is still *may merge* with a visible warning. During the transfer the
+  same quick check runs first: a pair that differs by size or sample copies
+  immediately, with the CRC and full BLAKE3 computed during the copy; a pair the
+  quick check cannot tell apart is compared by matching **full-file BLAKE3 on
+  both sides — never the sampled proof alone** — while both copies exist.
+  Proven identical: keep the destination copy; drop the redundant source copy
+  outright — not recycled, because the surviving copy was proven byte-identical
+  first (C4) and the library already holds those bytes; retain or merge catalog
+  associations onto the survivor; record the dedup in the operation summary and
+  name the file in the asset listing. Proven different: rename per FR-074.
 - **FR-074**: Non-identical media collisions: keep the destination filename; rename
   the incoming file with a readable source-library suffix plus numeric
   disambiguation if needed; preserve both media records; apply role rules
@@ -601,9 +611,9 @@ convergence, throttling, and skip rules.
   with the same suffix scheme; related asset groups move together; companion names
   follow a renamed media file to preserve the relationship; renamed canonical items
   (`movie.nfo`, `tvshow.nfo`) are preserved incoming artifacts while the
-  destination's canonical file stays authoritative; BLAKE3-identical assets
-  deduplicate via the recycle rule. The final summary lists renamed and deduplicated
-  assets separately from media files.
+  destination's canonical file stays authoritative; assets the transfer proves
+  BLAKE3-identical merge per FR-073. The final summary lists renamed and
+  deduplicated assets separately from media files.
 
 ### API and compatibility
 
@@ -706,10 +716,13 @@ convergence, throttling, and skip rules.
   file verified at the configured depth, survives a process restart mid-copy, and
   repeats no verified work on resume.
 - **SC-003**: No location operation ever overwrites destination content or
-  permanently deletes a collision or duplicate, in any acceptance scenario,
-  including recycle-unavailable paths.
+  permanently deletes a collision, in any acceptance scenario, including
+  recycle-unavailable paths. The one permanent removal is FR-073's: a source copy
+  dropped only after the transfer proved the surviving destination copy
+  byte-identical by full BLAKE3 while both copies existed.
 - **SC-004**: Every acceptance scenario's preview matches the executed outcome
-  exactly (no unpreviewed rename, merge, dedup, or role change) or the operation
+  exactly (no unpreviewed rename, merge, dedup, or role change; a *may merge*
+  item resolves to the merge or the rename the preview named) or the operation
   stops with a stale-plan error.
 - **SC-005**: A bulk move spanning three source libraries classifies 100% of
   selected titles into exactly one class, with zero silent omissions.
@@ -727,6 +740,21 @@ convergence, throttling, and skip rules.
   actionable error.
 
 ## Clarifications
+
+### Session 2026-09-11 (operator decisions)
+
+- Q: When a merge finds a same-named file at the destination, when is identity
+  decided, and what happens to a proven-identical source → A: **At transfer
+  time, and the source is dropped outright.** The preview only quick-checks
+  (size, then the sampled head+tail proof) and says the file *may* be identical
+  and merged; long reads never happen to render a screen. During the transfer
+  the quick check runs first: bytes that differ copy immediately, with the CRC
+  and full BLAKE3 computed during the copy; a pair the quick check cannot tell
+  apart is full-hashed on both sides, and a proven-identical source is dropped —
+  no recycle bin, no extra copy — because the destination already holds the
+  byte-identical file. Supersedes FR-073's recycle-or-preserve wording; SC-003
+  now carries this one proven exception, and C3's "never permanent deletion"
+  reads with C4's proof as the gate.
 
 ### Session 2026-09-01 (operator decisions)
 

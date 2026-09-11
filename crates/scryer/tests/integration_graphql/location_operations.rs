@@ -387,7 +387,6 @@ fn planned_collision_title(
             size_bytes: 4_096,
         }],
         deduplicated_sources: vec![format!("/source/{title_name}/{title_name}.nfo")],
-        deduplicated_media_file_ids: Vec::new(),
         renamed_destinations: vec![format!(
             "/destination/{title_name}/{title_name} (from Movies 4K).mkv"
         )],

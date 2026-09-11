@@ -153,7 +153,7 @@ pub trait RootMoveCatalog: Send + Sync {
     /// redundant (FR-073).
     ///
     /// The destination's row is the survivor and keeps every association; this
-    /// removes the duplicate that would otherwise point into the recycle bin.
+    /// removes the duplicate that would otherwise point at a dropped file.
     /// A row that is already gone is success — cleanup runs again on resume.
     async fn delete_media_file(&self, media_file_id: &str) -> AppResult<()>;
 
@@ -598,48 +598,6 @@ impl<'a> RootMoveReconciler<'a> {
         })
     }
 
-    async fn revalidate_duplicate(&self, source: &str) -> AppResult<()> {
-        let destination = self
-            .plan
-            .deduplication_destinations
-            .get(source)
-            .map(|survivor| &survivor.destination_path)
-            .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "stale plan: no surviving destination recorded for {source}; preview again"
-                ))
-            })?;
-        let source_before = tokio::fs::metadata(stored_path_to_path_buf(source))
-            .await
-            .map_err(|error| {
-                AppError::Validation(format!("stale plan: cannot read {source}: {error}"))
-            })?;
-        let source_hash = super::backfill::hash_file_throttled(
-            stored_path_to_path_buf(source),
-            std::time::Duration::ZERO,
-        )
-        .await?;
-        let destination_hash = super::backfill::hash_file_throttled(
-            stored_path_to_path_buf(destination),
-            std::time::Duration::ZERO,
-        )
-        .await?;
-        let source_after = tokio::fs::metadata(stored_path_to_path_buf(source))
-            .await
-            .map_err(|error| {
-                AppError::Validation(format!("stale plan: cannot read {source}: {error}"))
-            })?;
-        if source_hash.size_bytes != destination_hash.size_bytes
-            || source_hash.full_blake3 != destination_hash.full_blake3
-            || !super::backfill::same_file_version(&source_before, &source_after)
-        {
-            return Err(AppError::Validation(format!(
-                "stale plan: {source} no longer matches {destination}; preview again"
-            )));
-        }
-        Ok(())
-    }
-
     /// US7's catalog step: the merge transaction, then the source title's
     /// logical retirement handed to the delete path.
     ///
@@ -808,20 +766,6 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             return Ok(outcome);
         }
 
-        // Re-prove each duplicate immediately before removing its catalog row.
-        // A different file's hash read must not age this destructive decision.
-        for source in &planned.deduplicated_sources {
-            self.revalidate_duplicate(source).await?;
-            if let Some(media_file_id) = self
-                .plan
-                .deduplication_destinations
-                .get(source)
-                .and_then(|survivor| survivor.source_media_file_id.as_deref())
-            {
-                self.catalog.delete_media_file(media_file_id).await?;
-            }
-        }
-
         // Media-file paths first, then the folder, then the root: each step is
         // individually correct, and an interruption between them leaves rows
         // pointing at real files rather than at a folder nothing lives in.
@@ -945,39 +889,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             .map(|record| (record.destination_path.clone(), record))
             .collect();
 
-        // 1. Proven duplicates: the destination copy survives, the redundant
-        //    source is recycled (FR-073).
-        for source in &planned.deduplicated_sources {
-            if tokio::fs::symlink_metadata(stored_path_to_path_buf(source))
-                .await
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-            {
-                continue;
-            }
-            self.revalidate_duplicate(source).await?;
-            let disposal = self
-                .recycler
-                .recycle_source(
-                    &operation.id,
-                    planned,
-                    &stored_path_to_path_buf(source),
-                    None,
-                    0,
-                )
-                .await?;
-            if let SourceDisposal::RemovedRecycleUnavailable(reason) = disposal {
-                outcome.warnings.push(format!(
-                    "the duplicate source {source} was removed rather than recycled: {reason}"
-                ));
-            }
-            if disposal == SourceDisposal::PreservedRecycleUnavailable {
-                outcome.warnings.push(format!(
-                    "An extra copy remains at {source} because it could not be recycled. The destination copy is complete."
-                ));
-            }
-        }
-
-        // 2. Retire sources only after durable verification and catalog writes.
+        // 1. Retire sources only after durable verification and catalog writes.
         // A no-copy placement keeps both hard links until this point.
         let resolutions = self
             .store
@@ -1004,6 +916,34 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             let Some(record) = verified.get(&file.destination_path) else {
                 continue;
             };
+            if resolution.is_some_and(|row| {
+                row.disposition == super::resolution::ResolutionDisposition::Identical
+            }) {
+                // The transfer proved this source byte-identical to the
+                // destination's copy while both existed, and the proof was
+                // re-checked above (C4). The source is a redundant copy of
+                // content the library already holds, not user data that can be
+                // lost, so it is dropped outright rather than recycled
+                // (FR-073) — the destination copy is the survivor.
+                let source = stored_path_to_path_buf(&file.source_path);
+                match tokio::fs::remove_file(&source).await {
+                    Ok(()) => tracing::info!(
+                        operation_id = %operation.id,
+                        title_id = %title.title_id,
+                        source = %file.source_path,
+                        destination = %file.destination_path,
+                        "dropped a source copy proven identical to the destination's"
+                    ),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(AppError::Repository(format!(
+                            "failed to remove the identical source {}: {error}",
+                            file.source_path
+                        )));
+                    }
+                }
+                continue;
+            }
             if record.hashes.is_none() {
                 // Adoption verifies a destination placed by the user. Without
                 // full-hash proof, any remaining source still belongs to them.
@@ -1084,7 +1024,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }
         }
 
-        // 3. Only *empty* source directories, deepest first (FR-031). A
+        // 2. Only *empty* source directories, deepest first (FR-031). A
         //    directory that still holds anything — unmanaged content, a file
         //    this operation never planned — is left exactly as it is.
         for directory in &planned.prune_directories {
@@ -1284,7 +1224,6 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
             .chain(self.plan.catalog_paths.get(title_id).into_iter().flatten())
             .filter(|file| file.media_file_id.is_some())
             .map(|file| file.source_path.clone())
-            .chain(planned.deduplicated_sources.iter().cloned())
             .collect();
         let planned_destinations: BTreeSet<String> = planned
             .files
@@ -1358,9 +1297,9 @@ fn stale(change: PlanInputChange, detail: String) -> TitleAdmission {
 ///
 /// This is only ever reached for a file whose destination copy is *proven*
 /// present and correct, which is the difference between this and a deletion
-/// (C4: destruction requires proof). Collisions and duplicates never take this
-/// path — [`crate::location::collisions`] preserves and renames those instead
-/// (FR-073).
+/// (C4: destruction requires proof). A source proven identical to content the
+/// destination already held never reaches any recycler: cleanup drops it
+/// directly (FR-073).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemoveVerifiedSource;
 
@@ -1390,7 +1329,7 @@ impl SourceRecycler for RemoveVerifiedSource {
 }
 
 /// The production recycler retains an extra copy when the configured bin fails.
-/// A disabled bin permits cleanup of fresh placements, but preserves duplicates.
+/// A disabled bin permits cleanup of fresh placements, with a warning.
 pub struct RecycleBinSourceRecycler {
     configs: BTreeMap<String, crate::recycle_bin::RecycleBinConfig>,
 }
@@ -1425,13 +1364,6 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         }
 
         let Some(config) = self.config_for(title).filter(|config| config.enabled) else {
-            if title
-                .deduplicated_sources
-                .iter()
-                .any(|path| stored_path_to_path_buf(path) == source)
-            {
-                return Ok(SourceDisposal::PreservedRecycleUnavailable);
-            }
             return RemoveVerifiedSource
                 .recycle_source(operation_id, title, source, media_file_id, size_bytes)
                 .await;

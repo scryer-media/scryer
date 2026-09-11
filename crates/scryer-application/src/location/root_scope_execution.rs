@@ -74,7 +74,7 @@ use scryer_domain::{LibraryPermission, Title, User};
 use crate::LibraryRootDraft;
 use crate::library::recycle_bin::RECYCLE_DIR_NAME;
 use crate::location::classify::reason_codes;
-use crate::location::collisions::{CollisionNaming, PathCaseRule, RecycleAvailability};
+use crate::location::collisions::{CollisionNaming, PathCaseRule};
 use crate::location::execution::{DirectoryPrune, remove_directory_if_empty};
 use crate::location::identity::{
     DestinationIdentityOutcome, DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
@@ -389,13 +389,6 @@ impl AppUseCase {
         let recycle_config = self
             .recycle_bin_config_for_media_root(Some(source_root.path.trim()))
             .await;
-        let recycle = if !recycle_config.enabled {
-            RecycleAvailability::Disabled
-        } else if let Some(error) = recycle_config.validation_error.clone() {
-            RecycleAvailability::Unavailable(error)
-        } else {
-            RecycleAvailability::Available
-        };
         let same_volume = Some(same_filesystem(&source_root_path, &destination_root_path).await);
 
         let mut drafts = Vec::with_capacity(titles.len());
@@ -403,8 +396,8 @@ impl AppUseCase {
         // The folder walks and stats behind each title's facts are the
         // preview's cost; a bounded fan-out overlaps them, and `buffered` hands
         // the drafts back in title order.
-        let (merge_summaries, resolved_by_title, identities, recycle) =
-            (&merge_summaries, &resolved_by_title, &identities, &recycle);
+        let (merge_summaries, resolved_by_title, identities) =
+            (&merge_summaries, &resolved_by_title, &identities);
         let pending: Vec<_> = titles
             .iter()
             .map(|title| async move {
@@ -434,9 +427,6 @@ impl AppUseCase {
                         resolved
                             .as_ref()
                             .and_then(|resolved| resolved.destination_folder.as_deref()),
-                        identities
-                            .get(&title.id)
-                            .and_then(DestinationIdentityOutcome::merge_target),
                     )
                     .await?
                 };
@@ -447,7 +437,6 @@ impl AppUseCase {
                     hardlinks: facts.hardlinks,
                     resolved,
                     destination_entries: facts.destination_entries,
-                    recycle: recycle.clone(),
                     destination_identity: identities.get(&title.id).cloned(),
                     merge_summary: merge_summaries.get(&title.id).cloned(),
                     blocked_reason,

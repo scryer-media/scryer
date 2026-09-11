@@ -122,7 +122,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::location::classify::{ClassificationCounts, TitleLocationClass};
 use crate::location::collisions::{
-    CollisionNaming, DestinationItem, PathCaseRule, RecycleAvailability, collision_rename_base,
+    CollisionNaming, DestinationItem, PathCaseRule, collision_rename_base,
     is_canonical_sidecar_name,
 };
 use crate::location::hardlinks::HardlinkFact;
@@ -651,10 +651,12 @@ pub struct RootScopeClassification {
     pub merging_with_destination_titles: i64,
     /// (3) Folder-name collisions between unrelated titles, uniqued (FR-025).
     pub folder_name_collisions: i64,
-    /// (4) Media files whose name collides with destination media.
+    /// (4) Media files whose name collides with destination media and which
+    /// are therefore renamed (FR-074).
     pub media_collisions: i64,
-    /// (5) Files proven identical to destination content and therefore
-    /// dedup-eligible (FR-073).
+    /// (5) Files the preview's quick check could not tell apart from the
+    /// destination's copy: may-merge candidates the transfer's full comparison
+    /// settles (FR-073).
     pub dedup_eligible_files: i64,
     /// (6) Sidecars and companion assets whose name collides and which are
     /// therefore renamed (FR-075).
@@ -1273,8 +1275,6 @@ pub struct RootScopeTitleDraft {
     /// Entries already present at the resolved destination folder (FR-072).
     /// Always empty for a change to an unconfigured path.
     pub destination_entries: Vec<DestinationItem>,
-    /// Whether recycling is usable for this title's source root (FR-073).
-    pub recycle: RecycleAvailability,
     /// What destination-title detection concluded (FR-055), for the same-name
     /// warning that FR-025 exists to make unnecessary.
     pub destination_identity: Option<DestinationIdentityOutcome>,
@@ -1298,7 +1298,6 @@ impl RootScopeTitleDraft {
             blocked_reason_code: None,
             resolved: None,
             destination_entries: Vec::new(),
-            recycle: RecycleAvailability::Available,
             destination_identity: None,
             merge_summary: None,
         }
@@ -1654,7 +1653,6 @@ pub fn build_root_scope_plan(request: &RootScopePlanRequest) -> PlannedRootScope
             index as i64,
         );
         let (items, restated_warnings) = restate_for_root_scope(request, draft, items);
-        execution.record_deduplication_destinations(&items);
         title_items.extend(items);
         warnings.extend(title_warnings);
         warnings.extend(restated_warnings.iter().cloned());
@@ -1881,7 +1879,6 @@ fn root_move_draft(
         same_volume: request.same_volume,
         hardlinks: draft.hardlinks.clone(),
         destination_entries: draft.destination_entries.clone(),
-        recycle: draft.recycle.clone(),
         blocked_reason: draft.blocked_reason.clone(),
         destination_identity: draft.destination_identity.clone(),
         facet_conversion: None,
@@ -2117,15 +2114,6 @@ fn classification_from(
     for item in title_items {
         match item.kind {
             PlanItemKind::Dedup => classification.dedup_eligible_files += 1,
-            PlanItemKind::Warning
-                if item.reason_code.as_deref() == Some("compare_during_transfer") =>
-            {
-                if item.media_file_id.is_some() {
-                    classification.media_collisions += 1;
-                } else {
-                    classification.companion_collisions += 1;
-                }
-            }
             // A folder-scoped rename is FR-025's uniquing, which is already
             // counted as a title; only a file's rename is FR-024 (4) or (6).
             PlanItemKind::Rename if !item.folder_scoped => {
@@ -2151,7 +2139,6 @@ fn classification_from(
 mod plan_test_support {
     use super::*;
 
-    use crate::location::collisions::FullHash;
     use crate::location::identity::{DestinationIdentityOutcome, IdentityCandidate};
     use crate::location::merge::DestinationIdentityMatch;
     use crate::location::preview::{PlanConfirmationError, PlanConfirmationRequest};
@@ -2165,7 +2152,7 @@ mod plan_test_support {
     pub(super) fn tracked(path: &str, size_bytes: u64) -> SourceFile {
         SourceFile {
             media_file_id: Some(format!("file-{path}")),
-            full_blake3: FullHash::Absent,
+            sampled_proof: None,
             path: PathBuf::from(path),
             relative_path: None,
             size_bytes,
@@ -2175,7 +2162,7 @@ mod plan_test_support {
     pub(super) fn companion(path: &str, size_bytes: u64) -> SourceFile {
         SourceFile {
             media_file_id: None,
-            full_blake3: FullHash::Absent,
+            sampled_proof: None,
             path: PathBuf::from(path),
             relative_path: None,
             size_bytes,
@@ -2909,7 +2896,7 @@ mod fold_tests {
     use super::plan_test_support::*;
     use super::*;
 
-    use crate::location::collisions::{ContentFacts, FullHash};
+    use crate::location::collisions::ContentFacts;
     use crate::location::identity::{DestinationIdentityOutcome, IdentityCandidate};
     use crate::location::merge::DestinationIdentityMatch;
 
@@ -3172,9 +3159,10 @@ mod fold_tests {
             DestinationItem::companion("Beta.srt", 3),
         ];
         // FR-024 (5) + FR-073: a file proven identical by full BLAKE3 on both
-        // sides is dedup-eligible — no bytes written, the source copy recycled.
+        // sides is a may-merge candidate: the transfer's full comparison
+        // decides whether it merges or is preserved.
         let mut duplicate = tracked("/media/old/Gamma (2022)/Gamma.mkv", 300);
-        duplicate.full_blake3 = FullHash::known("abc123");
+        duplicate.sampled_proof = Some("abc123".to_string());
         let mut colliding = folded(
             "t3",
             "/media/old/Gamma (2022)",
@@ -3188,7 +3176,7 @@ mod fold_tests {
         );
         colliding.destination_entries = vec![
             DestinationItem::media("Gamma.mkv", 300)
-                .with_content(ContentFacts::new(300).with_full_blake3("abc123")),
+                .with_content(ContentFacts::new(300).with_sampled_proof("abc123")),
         ];
         let fileless = super::plan_test_support::fileless("t4");
         let blocked = RootScopeTitleDraft {
@@ -3228,7 +3216,7 @@ mod fold_tests {
         assert_eq!(planned.classification.untracked_source_entries, 1);
 
         // FR-072/074/075: a renamed media file, a renamed sidecar beside it,
-        // and a proven duplicate are three separate counts.
+        // and a may-merge candidate are three separate counts.
         assert_eq!(planned.classification.media_collisions, 1);
         assert_eq!(planned.classification.companion_collisions, 1);
         assert_eq!(planned.classification.dedup_eligible_files, 1);
@@ -3247,14 +3235,18 @@ mod fold_tests {
             merged.files[0].destination_path
         );
 
-        let deduplicated = planned
+        let candidate = planned
             .execution
             .title("t3")
             .expect("the colliding title has instructions");
-        assert_eq!(deduplicated.deduplicated_sources.len(), 1);
         assert!(
-            deduplicated.files.is_empty(),
-            "a proven duplicate writes no bytes"
+            candidate.deduplicated_sources.is_empty(),
+            "a preview never decides identity"
+        );
+        assert_eq!(
+            candidate.files.len(),
+            1,
+            "a may-merge candidate stays in the work list for the transfer to judge"
         );
     }
 
