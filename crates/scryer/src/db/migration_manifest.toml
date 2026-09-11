@@ -2275,3 +2275,20 @@ kind = "sql"
 file = "postgres/migrations/0237_location_operation_reason_codes.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 238
+description = "discovery item relevance and popularity scores"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0238_discovery_item_relevance_scores.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0238_discovery_item_relevance_scores.sql"
+engine = "postgres"
+scope = "all"

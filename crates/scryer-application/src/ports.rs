@@ -618,7 +618,13 @@ pub struct DiscoveryItemRecord {
     pub edge_count: Option<i32>,
     pub relation_count: Option<i32>,
     pub source_subject_count: Option<i32>,
+    /// Strongest single edge score, not relevance and not popularity. See
+    /// `recommendation_score` / `base_rank` for those.
     pub rank_score: Option<f64>,
+    /// SMG's blended relevance score for this item against the library context.
+    pub recommendation_score: Option<f64>,
+    /// The target's own popularity base rank.
+    pub base_rank: Option<f64>,
     pub matched_subject_keys: Vec<String>,
     pub matched_subject_titles: Vec<String>,
     pub matched_subject_count: i32,
