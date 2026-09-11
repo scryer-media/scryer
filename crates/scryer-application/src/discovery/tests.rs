@@ -2147,6 +2147,52 @@ fn the_medium_mix_is_sent_on_every_submission() {
     assert_eq!(changes.medium_mix, submit.medium_mix);
 }
 
+#[test]
+fn a_gateway_title_without_relevance_fields_still_deserializes() {
+    // `DiscoveryTitle` is shared by every gateway document. Only the context
+    // snapshot and context changes fragments request `recommendation_score`
+    // and `base_rank`; the public feed, More Like This and collection
+    // completion documents do not, and a required field there would take
+    // those surfaces down with a deserialization error the mocked gateways in
+    // this suite never produce.
+    let mut value = serde_json::to_value(DiscoveryTitle {
+        recommendation_score: Some(0.7),
+        base_rank: Some(12.0),
+        ..DiscoveryTitle::default()
+    })
+    .expect("discovery title should serialize");
+    let object = value
+        .as_object_mut()
+        .expect("discovery title should serialize as an object");
+    object.remove("recommendation_score");
+    object.remove("base_rank");
+
+    let title: DiscoveryTitle =
+        serde_json::from_value(value).expect("a title without relevance fields must deserialize");
+    assert_eq!(title.recommendation_score, None);
+    assert_eq!(title.base_rank, None);
+
+    // And the context documents, which do request them, carry them through
+    // to the record the composer orders by.
+    let record = discovery_item_record(
+        "run",
+        "run",
+        "context_snapshot",
+        None,
+        0,
+        &DiscoveryTitle {
+            recommendation_score: Some(0.7),
+            base_rank: Some(12.0),
+            ..DiscoveryTitle::default()
+        },
+        &HashMap::new(),
+        Utc::now(),
+    )
+    .expect("discovery item record should build");
+    assert_eq!(record.recommendation_score, Some(0.7));
+    assert_eq!(record.base_rank, Some(12.0));
+}
+
 fn test_pending_change(
     id: &str,
     change_type: &str,

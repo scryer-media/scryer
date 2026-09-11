@@ -474,14 +474,21 @@ pub struct DiscoveryTitle {
     /// recognisability with [`DiscoveryTitle::base_rank`].
     pub rank_score: f64,
     /// SMG's blended relevance score for this target against the submitted
-    /// library context (0 when the target was never reranked). Deliberately
-    /// **not** `#[serde(default)]`: a gateway that does not export it is below
-    /// the minimum SMG version for this build, and the sync must fail loudly
-    /// instead of silently degrading every personalized rail to edge strength.
-    pub recommendation_score: f64,
-    /// The target's own popularity base rank (0 when unknown). Carries the same
-    /// no-`serde(default)` contract as `recommendation_score`.
-    pub base_rank: f64,
+    /// library context (0 when the target was never reranked).
+    ///
+    /// Only the context snapshot and context changes documents request this
+    /// field; the public feed, More Like This and collection completion
+    /// documents share this struct and do not, so it must tolerate absence.
+    /// That does not weaken the minimum-gateway contract: the snapshot and
+    /// changes fragments request it unconditionally, and a gateway that does
+    /// not export it rejects the whole query at validation, which fails the
+    /// sync loudly before any row could silently degrade to edge strength.
+    #[serde(default)]
+    pub recommendation_score: Option<f64>,
+    /// The target's own popularity base rank (0 when unknown). Same contract
+    /// and same absence rule as `recommendation_score`.
+    #[serde(default)]
+    pub base_rank: Option<f64>,
     pub best_source: String,
     #[serde(default)]
     pub matched_subject_keys: Vec<String>,

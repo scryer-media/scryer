@@ -73,5 +73,12 @@ fails the discovery sync loudly rather than serving degraded rails.
 ## Upgrade notes
 - Migration `0238` adds `recommendation_score` and `base_rank` to
   `discovery_items` plus a relevance-ordered index. It is additive and applies
-  to existing databases in place; no rebuild is required, and the columns fill
-  in on the next discovery sync.
+  to existing databases in place; no rebuild is required. The columns fill in
+  on the next **context snapshot**, not the next incremental reload: the
+  context fingerprint changes on upgrade (it now carries the medium mix), and
+  a changed fingerprint waits for the daily snapshot gate or an eligible
+  library growth (a manual sync does not bypass the gate on an existing
+  install). Until that snapshot lands, existing pool rows carry no relevance
+  score, so personalized rails order on the remaining tie-breaks (matched
+  subjects, rating evidence, edge strength); the medium gate, corroboration
+  gate and evidence floor apply immediately.
