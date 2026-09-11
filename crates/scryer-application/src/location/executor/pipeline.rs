@@ -4,12 +4,24 @@ use crate::location::model::LocationExecutionMode;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use std::sync::atomic::AtomicBool;
 
+/// What one file's transfer future hands back to the driver.
+enum PipelineFileOutcome {
+    Verified(VerifiedFile),
+    /// The user canceled while the file waited for storage. Nothing moved, so
+    /// the file is neither done nor failed; the driver stops at the boundary.
+    Canceled,
+}
+
 pub(super) struct PipelineOutcome {
     pub failures: Vec<String>,
     pub stop: Option<(StopReason, String)>,
 }
 
-type FileResult<'a> = (&'a PlannedTitle, &'a PlannedFile, AppResult<VerifiedFile>);
+type FileResult<'a> = (
+    &'a PlannedTitle,
+    &'a PlannedFile,
+    AppResult<PipelineFileOutcome>,
+);
 type FileTask<'a> = BoxFuture<'a, FileResult<'a>>;
 
 /// Keep admitted file futures polled even while the scheduler awaits a catalog
@@ -343,7 +355,18 @@ impl LocationOperationRunner<'_> {
                 Some((title, file, result)) = completions.recv() => {
                     pending -= 1;
                     let result = match result {
-                        Ok(verified) => {
+                        Ok(PipelineFileOutcome::Canceled) => {
+                            // The file handed itself back untouched. Stop at
+                            // this boundary like any other observed cancel.
+                            if stop.is_none() {
+                                stop = Some((
+                                    StopReason::UserCanceled,
+                                    "canceled after draining in-flight transfers".into(),
+                                ));
+                            }
+                            None
+                        }
+                        Ok(PipelineFileOutcome::Verified(verified)) => Some({
                             if verified.depth.fell_back {
                                 progress.verification_fallbacks += 1;
                                 if let Some(detail) = verified.detail.clone() {
@@ -370,19 +393,28 @@ impl LocationOperationRunner<'_> {
                                 Ok(()) => Err(AppError::Validation(detail.unwrap_or_else(|| "destination verification failed".into()))),
                                 Err(error) => { fatal = Some(error); Ok(()) },
                             }
-                        },
-                        Err(error) => Err(error),
+                        }),
+                        Err(error) => Some(Err(error)),
                     };
-                    if let Err(error) = result {
-                        hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
-                        failed.insert(title.title_id.clone(), error.to_string());
-                    } else if fatal.is_none() {
-                        progress.note_file_done(&title.title_id, file);
+                    match result {
+                        Some(Err(error)) => {
+                            hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
+                            failed.insert(title.title_id.clone(), error.to_string());
+                        }
+                        Some(Ok(())) if fatal.is_none() => progress.note_file_done(&title.title_id, file),
+                        _ => {}
                     }
                     let count = remaining.get_mut(&title.title_id).expect("admitted title");
                     *count = count.saturating_sub(1);
-                    if *count == 0 && stop.is_none() && fatal.is_none() && !failed.contains_key(&title.title_id) {
-                        if let Err(error) = self.finish_pipeline_title(operation, title, progress, plan, &mut failed).await { fatal = Some(error); }
+                    if *count == 0
+                        && stop.is_none()
+                        && fatal.is_none()
+                        && !failed.contains_key(&title.title_id)
+                        && let Err(error) = self
+                            .finish_pipeline_title(operation, title, progress, plan, &mut failed)
+                            .await
+                    {
+                        fatal = Some(error);
                     }
                 },
                 () = notify.notified() => {},
@@ -411,6 +443,16 @@ impl LocationOperationRunner<'_> {
                 } else if let Some(detail) = failed.get(id) {
                     row.state = TitleCheckpointState::Failed;
                     row.detail = Some(detail.clone());
+                } else if stop.is_some()
+                    && matches!(
+                        row.state,
+                        TitleCheckpointState::Moving | TitleCheckpointState::Verifying
+                    )
+                {
+                    // Nothing of this title is in flight any more and the run
+                    // is stopping short. Its verified files are durable; the
+                    // title itself is back to waiting for a resume, not moving.
+                    row.state = TitleCheckpointState::Pending;
                 }
                 if previous
                     != (
@@ -435,9 +477,9 @@ impl LocationOperationRunner<'_> {
                 }
             }
             if checkpoint_at.elapsed() >= Duration::from_secs(1) {
-                let detail = hub.has_storage_waiters(&operation.id).then(|| {
-                    "Waiting for storage to reconnect. Checking every 2 minutes.".to_owned()
-                });
+                let detail = hub
+                    .has_storage_waiters(&operation.id)
+                    .then(|| storage_wait_detail(hub.storage_wait_interval(&operation.id)));
                 if let Err(error) = self
                     .write_progress(
                         operation,
@@ -484,7 +526,7 @@ impl LocationOperationRunner<'_> {
         hub: &TransferHub,
         ready: Arc<AtomicBool>,
         notify: Arc<tokio::sync::Notify>,
-    ) -> AppResult<VerifiedFile> {
+    ) -> AppResult<PipelineFileOutcome> {
         let storage =
             super::recovery::StorageWatch::capture(&file.source_path, &file.destination_path).await;
         let mut attempt = 1;
@@ -575,11 +617,12 @@ impl LocationOperationRunner<'_> {
                         && !storage.available().await
                     {
                         tracing::warn!(operation_id = %operation.id, source = %file.source_path.display(),
-                            error = %error, "transfer waiting for storage; checking again in two minutes");
+                            error = %error, "transfer waiting for storage; probing every few seconds, backing off to once a minute");
+                        let waiting_path = file.stored_destination();
                         hub.file_waiting_for_storage(
                             &operation.id,
                             &title.title_id,
-                            &file.stored_destination(),
+                            &waiting_path,
                             file.size_bytes,
                         );
                         let reconnected = super::recovery::wait_for_reconnection(
@@ -588,10 +631,22 @@ impl LocationOperationRunner<'_> {
                                 self.store
                                     .location_operation_cancel_requested(&operation.id)
                             },
+                            |interval| {
+                                hub.file_storage_probe_scheduled(
+                                    &operation.id,
+                                    &title.title_id,
+                                    &waiting_path,
+                                    interval,
+                                );
+                            },
                         )
                         .await?;
                         if !reconnected {
-                            return Err(error);
+                            // A cancel is not a failure: the file never moved,
+                            // and the title must not settle Failed on a
+                            // Canceled operation.
+                            hub.file_released(&operation.id, &title.title_id, &waiting_path);
+                            return Ok(PipelineFileOutcome::Canceled);
                         }
                         hub.file_update(
                             &operation.id,
@@ -609,7 +664,7 @@ impl LocationOperationRunner<'_> {
                         return Err(error);
                     }
                 }
-                result => return result,
+                result => return result.map(PipelineFileOutcome::Verified),
             }
         }
     }
@@ -678,4 +733,15 @@ impl LocationOperationRunner<'_> {
         }
         Ok(())
     }
+}
+
+/// The operation-level detail shown while every transfer waits for storage.
+fn storage_wait_detail(interval: Option<Duration>) -> String {
+    let cadence = match interval.map(|interval| interval.as_secs()) {
+        None => "Checking again shortly.".to_owned(),
+        Some(60..) => "Checking once a minute.".to_owned(),
+        Some(1) => "Checking every second.".to_owned(),
+        Some(seconds) => format!("Checking every {seconds} seconds."),
+    };
+    format!("Waiting for storage to reconnect. {cadence}")
 }

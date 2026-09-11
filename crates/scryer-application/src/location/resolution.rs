@@ -83,16 +83,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// The first resolver to reach a destination publishes where the media file
+/// landed; later companions of the same file wait on it.
+type MediaResultSender = tokio::sync::watch::Sender<Option<Result<PathBuf, String>>>;
+
 pub struct ConflictResolver {
     pub store: Arc<dyn LocationOperationRepository>,
     pub contexts: BTreeMap<String, (String, bool)>,
     claims: Mutex<BTreeMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
-    media_results: Mutex<
-        BTreeMap<
-            (String, String, PathBuf),
-            tokio::sync::watch::Sender<Option<Result<PathBuf, String>>>,
-        >,
-    >,
+    media_results: Mutex<BTreeMap<(String, String, PathBuf), MediaResultSender>>,
 }
 
 impl ConflictResolver {
