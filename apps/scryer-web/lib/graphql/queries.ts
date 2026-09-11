@@ -4847,6 +4847,7 @@ export const LOCATION_OPERATION_FIELDS = `
       unresolved
     }
     detail
+    reasonCode
     jobRunId
     workflowOperationId
     cancelRequested
@@ -4874,6 +4875,7 @@ export const LOCATION_OPERATION_FIELDS = `
       bytesTotal
       bytesVerified
       detail
+      reasonCode
       startedAt
       updatedAt
       completedAt
@@ -4889,6 +4891,17 @@ const LOCATION_TRANSFER_FIELDS = `
   operation {${LOCATION_OPERATION_FIELDS}}
   titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying currentFile hasException }
 `;
+export const locationOperationRetrySelectionQuery = `query LocationOperationRetrySelection($id: ID!) {
+  locationOperationRetrySelection(id: $id) {
+    operationId
+    mode
+    verificationDepth
+    destinationLibraryId
+    destinationRootId
+    titles { titleId titleName sourceLibraryId sourceRootId sourceFolderPath }
+    catalogBlockedTitleIds
+  }
+}`;
 export const locationTransferSummaryQuery = `query LocationTransferSummary($id: ID!) {
   locationTransferSummary(id: $id) {${LOCATION_TRANSFER_FIELDS}}
 }`;

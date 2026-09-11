@@ -9,19 +9,23 @@ use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::AppError;
 use scryer_application::location::classify::DestinationRequest;
 use scryer_application::location::model::LocationExecutionMode;
-use scryer_application::location::operations::{LocationResumeDecision, StartRootMoveRequest};
+use scryer_application::location::operations::{
+    LocationAbandonDecision, LocationResumeDecision, StartRootMoveRequest,
+};
 use scryer_application::location::preview::{PlanConfirmationRequest, PlanFingerprint};
 use scryer_application::location::root_scope_execution::{RootScopeCall, StartRootScopeRequest};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::{
-    from_canceled_location_operation, from_resumed_location_operation,
-    from_started_location_operation, location_destination_into_application,
-    location_execution_mode_into_application, root_scope_destination,
+    from_abandoned_location_operation, from_canceled_location_operation,
+    from_resumed_location_operation, from_started_location_operation,
+    location_destination_into_application, location_execution_mode_into_application,
+    root_scope_destination,
 };
 use crate::types::{
-    CancelLocationOperationPayload, LocationDestinationInput, LocationRootScopeTargetInput,
-    ResumeLocationOperationPayload, StartLocationOperationInput, StartLocationOperationPayload,
+    AbandonLocationOperationPayload, CancelLocationOperationPayload, LocationDestinationInput,
+    LocationRootScopeTargetInput, ResumeLocationOperationPayload, StartLocationOperationInput,
+    StartLocationOperationPayload,
 };
 
 /// The one destination form a start confirms.
@@ -181,11 +185,44 @@ impl LocationMutations {
         Ok(from_canceled_location_operation(&operation_id, requested))
     }
 
-    /// Pick an interrupted operation back up from its last verified checkpoint.
+    /// Give up on an operation nobody is running: mark it failed, close its
+    /// Activity run, and release the titles and roots it owns.
     ///
-    /// Finished titles are never reprocessed, and an operation that is already
-    /// terminal or was stored without its plan is reported as not resumed rather
-    /// than restarted from the beginning.
+    /// Nothing on disk is touched. Finished titles stay where the operation
+    /// put them, and the operation can be retried from its last verified
+    /// checkpoint once the storage is back. An operation whose runner is still
+    /// alive is refused; cancel it instead.
+    async fn abandon_location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity to mark failed and release.")] id: ID,
+    ) -> GqlResult<AbandonLocationOperationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let payload = match app
+            .abandon_location_operation(&actor, &operation_id)
+            .await
+            .map_err(to_gql_error)?
+        {
+            LocationAbandonDecision::Abandoned => {
+                from_abandoned_location_operation(&operation_id, true, None)
+            }
+            LocationAbandonDecision::NotAbandoned(reason) => {
+                from_abandoned_location_operation(&operation_id, false, Some(reason))
+            }
+        };
+        Ok(payload)
+    }
+
+    /// Pick an interrupted operation back up from its last verified checkpoint,
+    /// or retry a failed or canceled one from the same place.
+    ///
+    /// Finished titles are never reprocessed: a retry repeats only the titles
+    /// that did not settle, after reopening the operation so Activity shows it
+    /// as queued again. An operation that already finished, or was stored
+    /// without its plan, is reported as not resumed rather than restarted from
+    /// the beginning.
     async fn resume_location_operation(
         &self,
         ctx: &Context<'_>,

@@ -13,6 +13,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import {
+  MoveTitlesDialog,
+  type MoveDestinationLibrary,
+  type MoveTitleRef,
+} from "@/components/dialogs/move-titles-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -29,18 +34,29 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import {
+  abandonLocationOperationMutation,
   cancelLocationOperationMutation,
   resumeLocationOperationMutation,
 } from "@/lib/graphql/mutations";
-import { locationTransferTitleDetailQuery } from "@/lib/graphql/queries";
+import {
+  librariesQuery,
+  locationOperationRetrySelectionQuery,
+  locationTransferTitleDetailQuery,
+} from "@/lib/graphql/queries";
 import { useLocationTransfer } from "@/lib/hooks/use-location-transfer";
 import {
+  canAbandonOperation,
   canCancelOperation,
+  canPlanAgainOperation,
   canResumeOperation,
+  canRetryOperation,
   checkpointStateLabelKey,
   isTerminalOperationState,
+  operationGuidanceKey,
   operationStateLabelKey,
+  retrySelectionTitleRefs,
   toCount,
+  type LocationRetrySelection,
 } from "@/lib/location-operations";
 import {
   splitTransferPath,
@@ -88,41 +104,160 @@ function OperationPanel({ operationId, onDismiss }: Props) {
     setNow(Date.now());
   }, [summary.snapshot]);
 
-  async function act(resume: boolean) {
+  // Plan again needs the stored plan joined with the checkpoints, which is a
+  // read of its own rather than part of every progress snapshot. It is only
+  // worth asking for once the operation has stopped.
+  const retryable = canRetryOperation(operation);
+  const [retrySelection, setRetrySelection] =
+    React.useState<LocationRetrySelection | null>(null);
+  React.useEffect(() => {
+    if (!retryable) {
+      setRetrySelection(null);
+      return;
+    }
+    let active = true;
+    client
+      .query<{ locationOperationRetrySelection: LocationRetrySelection | null }>(
+        locationOperationRetrySelectionQuery,
+        { id: operationId },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise()
+      .then((result) => {
+        if (!active) return;
+        setRetrySelection(result.data?.locationOperationRetrySelection ?? null);
+      })
+      .catch(() => {
+        if (active) setRetrySelection(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [client, operationId, retryable, refresh]);
+  const planAgainTitleIds = React.useMemo(
+    () => new Set(retrySelection?.titles.map((title) => title.titleId) ?? []),
+    [retrySelection],
+  );
+  // The operation's own code is the most consequential one across its
+  // titles; a title's own code is what says why *it* stopped.
+  const titleGuidanceKeys = React.useMemo(
+    () =>
+      new Map(
+        (operation?.titleCheckpoints ?? []).flatMap((checkpoint) => {
+          const key = operationGuidanceKey(checkpoint.reasonCode);
+          return key ? [[checkpoint.titleId, key] as const] : [];
+        }),
+      ),
+    [operation?.titleCheckpoints],
+  );
+  const [planAgain, setPlanAgain] = React.useState<{
+    titles: MoveTitleRef[];
+    libraries: MoveDestinationLibrary[];
+  } | null>(null);
+
+  // The ordinary move dialog, opened on this operation's leftovers: the
+  // destination it had, and the titles it did not finish (or the one whose
+  // row the action was taken from). The preview does the rest.
+  async function openPlanAgain(titleId: string | null = null) {
+    const titles = retrySelectionTitleRefs(retrySelection, titleId);
+    if (!titles.length) return;
     setBusy(true);
     try {
       const result = await client
-        .mutation(
-          resume
-            ? resumeLocationOperationMutation
-            : cancelLocationOperationMutation,
-          { id: operationId },
+        .query<{ libraries: MoveDestinationLibrary[] }>(
+          librariesQuery,
+          { facet: null, permission: "MANAGE_TITLES" },
+          { requestPolicy: "network-only" },
         )
         .toPromise();
       if (result.error) throw result.error;
-      const payload = resume
-        ? result.data?.resumeLocationOperation
-        : result.data?.cancelLocationOperation;
-      setGlobalStatus(
-        resume
-          ? payload?.resumed
-            ? t("move.resumeRequested")
-            : (payload?.detail ?? t("move.resumeNotPossible"))
-          : payload?.cancelRequested
-            ? t("move.cancelRequested")
-            : t("move.cancelNotPossible"),
+      const libraries = (result.data?.libraries ?? []).map((library) => ({
+        id: library.id,
+        name: library.name,
+        roots: library.roots,
+      }));
+      const rootPaths = new Map(
+        libraries.flatMap((library) =>
+          library.roots.map((root) => [root.id, root.path] as const),
+        ),
       );
-      setRefresh((value) => value + 1);
+      setPlanAgain({
+        titles: titles.map((title) => ({
+          ...title,
+          rootFolderPath: title.rootFolderId
+            ? (rootPaths.get(title.rootFolderId) ?? null)
+            : null,
+        })),
+        libraries,
+      });
     } catch (error) {
       setGlobalStatus(
-        userFacingGraphQlErrorMessage(
-          error,
-          t(resume ? "move.resumeFailed" : "move.cancelFailed"),
-        ),
+        userFacingGraphQlErrorMessage(error, t("move.planAgainFailed")),
       );
     } finally {
       setBusy(false);
     }
+  }
+
+  // Resume and retry ride one mutation: the server reopens a failed or
+  // canceled operation and walks it from the last verified checkpoint. Only
+  // the words differ, because "resume" implies the run was interrupted and a
+  // terminal run was not. Abandon is the opposite direction: it marks a dead
+  // run failed and releases what it owns, so Retry can pick it up later.
+  type OperationAction = "resume" | "retry" | "cancel" | "abandon";
+  async function act(action: OperationAction) {
+    setBusy(true);
+    try {
+      const outcome = await requestAction(action);
+      setGlobalStatus(
+        outcome.done
+          ? t(`move.${action}Requested`)
+          : (outcome.detail ?? t(`move.${action}NotPossible`)),
+      );
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t(`move.${action}Failed`)),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestAction(
+    action: OperationAction,
+  ): Promise<{ done: boolean; detail: string | null }> {
+    const variables = { id: operationId };
+    if (action === "cancel") {
+      const result = await client
+        .mutation(cancelLocationOperationMutation, variables)
+        .toPromise();
+      if (result.error) throw result.error;
+      return {
+        done: result.data?.cancelLocationOperation?.cancelRequested === true,
+        detail: null,
+      };
+    }
+    if (action === "abandon") {
+      const result = await client
+        .mutation(abandonLocationOperationMutation, variables)
+        .toPromise();
+      if (result.error) throw result.error;
+      const payload = result.data?.abandonLocationOperation;
+      return {
+        done: payload?.abandoned === true,
+        detail: payload?.detail ?? null,
+      };
+    }
+    const result = await client
+      .mutation(resumeLocationOperationMutation, variables)
+      .toPromise();
+    if (result.error) throw result.error;
+    const payload = result.data?.resumeLocationOperation;
+    return {
+      done: payload?.resumed === true,
+      detail: payload?.detail ?? null,
+    };
   }
 
   if (!operation || !summary.snapshot)
@@ -142,6 +277,10 @@ function OperationPanel({ operationId, onDismiss }: Props) {
     );
 
   const terminal = isTerminalOperationState(operation.state);
+  // Non-terminal, and nothing has written to it in a while: whatever was
+  // running it is gone. The state badge alone would still say "Moving".
+  const stalled = canResumeOperation(operation, now);
+  const guidanceKey = operationGuidanceKey(operation.reasonCode);
   const counters = operation.counters;
   const progress = transferOperationProgress(summary.snapshot);
   const eta =
@@ -182,6 +321,11 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             {operation.cancelRequested && !terminal && (
               <Badge tone="warning">{t("move.cancelDraining")}</Badge>
             )}
+            {stalled && (
+              <Badge id="location-operation-stalled" tone="warning">
+                {t("move.stalledNoRunner")}
+              </Badge>
+            )}
           </div>
           <div className="flex gap-2">
             {terminal && onDismiss && (
@@ -202,7 +346,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                 variant="destructive"
                 size="sm"
                 disabled={busy}
-                onClick={() => void act(false)}
+                onClick={() => void act("cancel")}
               >
                 {t("move.cancelAction")}
               </Button>
@@ -213,9 +357,42 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                 variant="outline"
                 size="sm"
                 disabled={busy}
-                onClick={() => void act(true)}
+                onClick={() => void act("resume")}
               >
                 {t("move.resumeAction")}
+              </Button>
+            )}
+            {canAbandonOperation(operation, now) && (
+              <Button
+                id="location-operation-abandon"
+                variant="destructive"
+                size="sm"
+                disabled={busy}
+                onClick={() => void act("abandon")}
+              >
+                {t("move.abandonAction")}
+              </Button>
+            )}
+            {canRetryOperation(operation) && (
+              <Button
+                id="location-operation-retry"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void act("retry")}
+              >
+                {t("move.retryAction")}
+              </Button>
+            )}
+            {canPlanAgainOperation(operation, retrySelection) && (
+              <Button
+                id="location-operation-plan-again"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void openPlanAgain()}
+              >
+                {t("move.planAgainAction")}
               </Button>
             )}
           </div>
@@ -311,6 +488,12 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                       operationId={operationId}
                       row={row}
                       posterUrl={posters.get(row.titleId)}
+                      guidanceKey={titleGuidanceKeys.get(row.titleId) ?? null}
+                      onPlanAgain={
+                        !busy && planAgainTitleIds.has(row.titleId)
+                          ? () => void openPlanAgain(row.titleId)
+                          : null
+                      }
                     />
                   ))}
                 </TableBody>
@@ -352,11 +535,41 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             </div>
           )}
         </div>
-        {operation.detail && (
-          <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-warning-border)] p-3 text-sm">
+        {(operation.detail || guidanceKey || stalled) && (
+          <div
+            id="location-operation-detail"
+            className="flex items-start gap-2 rounded-lg border border-[var(--scry-warning-border)] p-3 text-sm"
+          >
             <TriangleAlert className="h-4 w-4 shrink-0" />
-            <span>{operation.detail}</span>
-          </p>
+            <div className="space-y-1">
+              {stalled && (
+                <p id="location-operation-stalled-guidance">
+                  {t("move.stalledGuidance")}
+                </p>
+              )}
+              {operation.detail && <p>{operation.detail}</p>}
+              {guidanceKey && (
+                <p
+                  id="location-operation-guidance"
+                  className="text-muted-foreground"
+                  data-reason-code={operation.reasonCode ?? undefined}
+                >
+                  {t(guidanceKey)}
+                </p>
+              )}
+              {retrySelection &&
+                retrySelection.catalogBlockedTitleIds.length > 0 && (
+                  <p
+                    id="location-operation-plan-again-blocked"
+                    className="text-muted-foreground"
+                  >
+                    {t("move.planAgainCatalogBlocked", {
+                      count: retrySelection.catalogBlockedTitleIds.length,
+                    })}
+                  </p>
+                )}
+            </div>
+          </div>
         )}
         {summary.error && (
           <p className="text-xs text-[var(--scry-danger-text)]">
@@ -364,6 +577,16 @@ function OperationPanel({ operationId, onDismiss }: Props) {
           </p>
         )}
       </CardContent>
+      <MoveTitlesDialog
+        key={planAgain?.titles.map((title) => title.id).join(",") ?? "closed"}
+        open={planAgain !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPlanAgain(null);
+        }}
+        titles={planAgain?.titles ?? []}
+        libraries={planAgain?.libraries ?? []}
+        initialRootId={retrySelection?.destinationRootId ?? null}
+      />
     </Card>
   );
 }
@@ -585,13 +808,19 @@ function TitleRow({
   operationId,
   row,
   posterUrl,
+  guidanceKey,
+  onPlanAgain,
 }: {
   operationId: string;
   row: TransferTitle;
   posterUrl?: string | null;
+  /** Translation key for why this title stopped; null when it has no code. */
+  guidanceKey?: string | null;
+  /** Plan this one title again; null when the title is not up for it. */
+  onPlanAgain?: (() => void) | null;
 }) {
-  const client = useClient();
   const t = useTranslate();
+  const client = useClient();
   const [expanded, setExpanded] = React.useState(false);
   const [detail, setDetail] = React.useState<string | null>(null);
   const [failed, setFailed] = React.useState(false);
@@ -737,6 +966,25 @@ function TitleRow({
                       : "move.transferDetailPending",
                   )}
               </p>
+            )}
+            {guidanceKey && (
+              <p
+                id={`transfer-guidance-${row.titleId}`}
+                className="mb-3 text-muted-foreground"
+              >
+                {t(guidanceKey)}
+              </p>
+            )}
+            {onPlanAgain && (
+              <Button
+                id={`location-operation-plan-again-${row.titleId}`}
+                variant="outline"
+                size="sm"
+                className="mb-3"
+                onClick={onPlanAgain}
+              >
+                {t("move.planAgainTitleAction")}
+              </Button>
             )}
             <TitleFiles operationId={operationId} titleId={row.titleId} />
           </TableCell>

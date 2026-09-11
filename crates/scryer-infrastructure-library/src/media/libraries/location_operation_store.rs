@@ -28,8 +28,8 @@ use scryer_application::location::classify::TitleLocationClass;
 use scryer_application::location::model::{
     AppliedVerificationDepth, FileVerificationOutcome, FileVerificationRecord,
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
-    LocationOperationType, MoveCrcAlgorithm, StreamedContentHashes, TitleCheckpoint,
-    TitleCheckpointPlacement, TitleCheckpointState, VerificationDepth,
+    LocationOperationType, LocationReasonCode, MoveCrcAlgorithm, StreamedContentHashes,
+    TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState, VerificationDepth,
 };
 use scryer_application::location::ownership_guard::{
     GuardedAction, OwnedEntity, OwnershipConflict,
@@ -49,15 +49,15 @@ const OPERATION_COLUMNS: &str = "id, operation_type, execution_mode, state, init
     file_total, file_completed_count, bytes_total, bytes_completed,
     merge_count, dedup_count, rename_count, no_op_count, unresolved_count,
     job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
-    failure_reason, confirmed_at, started_at, completed_at, created_at, updated_at";
+    failure_reason, reason_code, confirmed_at, started_at, completed_at, created_at, updated_at";
 
 const CHECKPOINT_COLUMNS: &str =
     "c.operation_id, c.title_id, c.sequence, c.state, c.classification,
     c.source_library_id, c.source_root_id, c.source_folder_path,
     c.destination_library_id, c.destination_root_id, c.destination_folder_path,
     c.merged_into_title_id, c.file_total, c.file_completed_count, c.bytes_total,
-    c.bytes_completed, c.blocked_reason, c.failure_reason, c.note, c.checkpointed_at,
-    c.created_at, c.updated_at";
+    c.bytes_completed, c.blocked_reason, c.failure_reason, c.note, c.reason_code,
+    c.checkpointed_at, c.created_at, c.updated_at";
 
 const VERIFICATION_COLUMNS: &str = "id, operation_id, title_id, media_file_id, source_path,
     destination_path, size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
@@ -301,9 +301,10 @@ impl LocationOperationRepository for LocationOperationStore {
               file_total, file_completed_count, bytes_total, bytes_completed,
               merge_count, dedup_count, rename_count, no_op_count, unresolved_count,
               job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
-              failure_reason, confirmed_at, started_at, completed_at, created_at, updated_at)
+              failure_reason, reason_code, confirmed_at, started_at, completed_at, created_at,
+              updated_at)
              VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             vec![
                 SqlArg::Text(operation.id.clone()),
                 SqlArg::Text(operation.operation_type.as_str().to_string()),
@@ -335,6 +336,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::Bool(operation.cancel_requested),
                 SqlArg::OptTimestamp(operation.cancel_requested_at),
                 SqlArg::OptText(operation.detail.clone()),
+                SqlArg::OptText(operation.reason_code.map(|code| code.as_str().to_string())),
                 SqlArg::OptTimestamp(operation.confirmed_at),
                 SqlArg::OptTimestamp(operation.started_at),
                 SqlArg::OptTimestamp(operation.completed_at),
@@ -398,10 +400,14 @@ impl LocationOperationRepository for LocationOperationStore {
         // `started_at` is only ever set once: a resume must not rewrite when the
         // operation first began. `completed_at` is only set when a terminal
         // state supplies one.
-        let detail_clause = if progress.clear_detail {
-            "failure_reason = {}"
+        // The code travels with the detail: a write that supplies or clears
+        // the detail sets the code to whatever it supplies (a new explanation
+        // never keeps an old code), and a write that says nothing about the
+        // detail leaves both alone.
+        let detail_clause = if progress.clear_detail || progress.detail.is_some() {
+            "failure_reason = {}, reason_code = {}"
         } else {
-            "failure_reason = COALESCE({}, failure_reason)"
+            "failure_reason = COALESCE({}, failure_reason), reason_code = COALESCE({}, reason_code)"
         };
         let sql = format!(
             "UPDATE location_operations
@@ -446,6 +452,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::I64(progress.counters.unresolved),
                 SqlArg::I64(progress.verification_fallback_count),
                 SqlArg::OptText(progress.detail.clone()),
+                SqlArg::OptText(progress.reason_code.map(|code| code.as_str().to_string())),
                 SqlArg::OptTimestamp(progress.started_at),
                 SqlArg::OptTimestamp(progress.completed_at),
                 SqlArg::Timestamp(Utc::now()),
@@ -495,6 +502,7 @@ impl LocationOperationRepository for LocationOperationStore {
             "UPDATE location_operations
              SET cancel_requested = {{}}, cancel_requested_at = {{}}, updated_at = {{}},
                  completed_at = CASE WHEN state = 'queued' THEN {{}} ELSE completed_at END,
+                 reason_code = CASE WHEN state = 'queued' THEN 'canceled' ELSE reason_code END,
                  state = CASE WHEN state = 'queued' THEN 'canceled' ELSE state END
              WHERE id = {{}} AND state NOT IN ({TERMINAL_STATES})"
         );
@@ -513,6 +521,61 @@ impl LocationOperationRepository for LocationOperationStore {
         )
         .await?;
         Ok(updated > 0)
+    }
+
+    async fn reopen_location_operation(&self, operation_id: &str) -> AppResult<bool> {
+        let operation_id = operation_id.to_string();
+        // One transaction: a crash between the two writes must not leave a
+        // queued operation explaining itself with a failed title.
+        SqlRuntime::run_in_transaction(&self.datastore, "reopen_location_operation", move |tx| {
+            let operation_id = operation_id.clone();
+            Box::pin(async move {
+                let now = Utc::now();
+                let reopened = SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE location_operations
+                         SET state = 'queued',
+                             failure_reason = NULL,
+                             reason_code = NULL,
+                             completed_at = NULL,
+                             cancel_requested = {},
+                             cancel_requested_at = NULL,
+                             updated_at = {}
+                         WHERE id = {} AND state IN ('failed', 'canceled')",
+                    &[
+                        SqlArg::Bool(false),
+                        SqlArg::Timestamp(now),
+                        SqlArg::Text(operation_id.clone()),
+                    ],
+                )
+                .await?;
+                if reopened == 0 {
+                    return Ok(false);
+                }
+                // Neither a failed title nor one the run left mid-copy is
+                // settled, so the runner re-enters both anyway; the reset
+                // is so Activity shows them as waiting rather than as
+                // failed, or as moving under an operation nothing is
+                // running, until the runner reaches them. A title left
+                // reconciling or cleaning up keeps its state: it says
+                // where the catalog stands, which Plan again reads.
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE location_operation_title_checkpoints
+                         SET state = 'pending',
+                             failure_reason = NULL,
+                             note = NULL,
+                             reason_code = NULL,
+                             checkpointed_at = NULL,
+                             updated_at = {}
+                         WHERE operation_id = {} AND state IN ('failed', 'moving', 'verifying')",
+                    &[SqlArg::Timestamp(now), SqlArg::Text(operation_id)],
+                )
+                .await?;
+                Ok(true)
+            })
+        })
+        .await
     }
 
     async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool> {
@@ -549,8 +612,9 @@ impl LocationOperationRepository for LocationOperationStore {
               source_library_id, source_root_id, source_folder_path,
               destination_library_id, destination_root_id, destination_folder_path,
               merged_into_title_id, file_total, file_completed_count, bytes_total, bytes_completed,
-              blocked_reason, failure_reason, note, checkpointed_at, created_at, updated_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+              blocked_reason, failure_reason, note, reason_code, checkpointed_at, created_at,
+              updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
              ON CONFLICT(operation_id, title_id) DO UPDATE SET
                 sequence = excluded.sequence,
                 state = excluded.state,
@@ -569,6 +633,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 blocked_reason = excluded.blocked_reason,
                 failure_reason = excluded.failure_reason,
                 note = excluded.note,
+                reason_code = excluded.reason_code,
                 checkpointed_at = excluded.checkpointed_at,
                 updated_at = excluded.updated_at",
             vec![
@@ -595,6 +660,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::OptText(blocked_reason),
                 SqlArg::OptText(failure_reason),
                 SqlArg::OptText(note),
+                SqlArg::OptText(checkpoint.reason_code.map(|code| code.as_str().to_string())),
                 SqlArg::OptTimestamp(checkpoint.completed_at),
                 SqlArg::Timestamp(started_at),
                 SqlArg::Timestamp(checkpoint.updated_at),
@@ -963,6 +1029,20 @@ fn parse_owned_entity(entity_type: &str, entity_id: String) -> AppResult<OwnedEn
     }
 }
 
+/// A code this build does not know reads back as `None`: the row still lists,
+/// and its `failure_reason` still explains itself.
+fn parse_reason_code(raw: Option<String>) -> Option<LocationReasonCode> {
+    let raw = raw?;
+    let parsed = LocationReasonCode::parse(&raw);
+    if parsed.is_none() {
+        tracing::warn!(
+            reason_code = %raw,
+            "a location operation row carries a reason code this build does not know"
+        );
+    }
+    parsed
+}
+
 fn row_to_operation(row: &SqlRow) -> AppResult<LocationOperation> {
     let operation_type_raw = row.text("operation_type")?;
     let operation_type = LocationOperationType::parse(&operation_type_raw).ok_or_else(|| {
@@ -1014,6 +1094,7 @@ fn row_to_operation(row: &SqlRow) -> AppResult<LocationOperation> {
             unresolved: row.i64("unresolved_count")?,
         },
         detail: row.opt_text("failure_reason")?,
+        reason_code: parse_reason_code(row.opt_text("reason_code")?),
         job_run_id: row.opt_text("job_run_id")?,
         workflow_operation_id: row.opt_text("workflow_operation_id")?,
         cancel_requested: row.bool("cancel_requested")?,
@@ -1074,6 +1155,7 @@ fn row_to_checkpoint(row: &SqlRow) -> AppResult<TitleCheckpoint> {
         bytes_total: row.i64("bytes_total")?,
         bytes_verified: row.i64("bytes_completed")?,
         detail,
+        reason_code: parse_reason_code(row.opt_text("reason_code")?),
         started_at: Some(row.timestamp("created_at")?),
         updated_at: row.timestamp("updated_at")?,
         completed_at: row.opt_timestamp("checkpointed_at")?,
@@ -1196,6 +1278,7 @@ mod tests {
                 unresolved: 5,
             },
             detail: Some("one title is blocked".to_string()),
+            reason_code: None,
             job_run_id: Some("job-1".to_string()),
             workflow_operation_id: Some("workflow-1".to_string()),
             cancel_requested: false,
@@ -1410,6 +1493,7 @@ mod tests {
                 },
                 verification_fallback_count: 0,
                 detail: None,
+                reason_code: None,
                 clear_detail: true,
                 started_at: Some(first_start),
                 completed_at: None,
@@ -1437,6 +1521,7 @@ mod tests {
                 },
                 verification_fallback_count: 1,
                 detail: Some("one file fell back to the quick floor".to_string()),
+                reason_code: None,
                 clear_detail: false,
                 // A later run must not rewrite when the operation began.
                 started_at: Some(first_start + chrono::Duration::seconds(60)),
@@ -1482,6 +1567,7 @@ mod tests {
                         counters: LocationOperationCounters::default(),
                         verification_fallback_count: 0,
                         detail: None,
+                        reason_code: None,
                         clear_detail: true,
                         started_at: None,
                         completed_at: None,
@@ -1567,6 +1653,144 @@ mod tests {
         );
     }
 
+    /// Retry reopens a failed operation in place: the row goes back to
+    /// `queued` with its explanation cleared, failed titles go back to
+    /// `pending`, and settled titles keep their rows. A finished operation is
+    /// left alone.
+    #[tokio::test]
+    async fn reopening_a_failed_operation_resets_it_and_the_titles_it_left_open() {
+        let store = test_store().await;
+        let mut failed = operation("op-1", LocationOperationState::Failed);
+        failed.detail = Some("1 of 2 title(s) failed: title-1: database is locked".to_string());
+        failed.reason_code = Some(LocationReasonCode::CatalogWriteFailed);
+        failed.completed_at = Some(timestamp());
+        store
+            .create_location_operation(&failed, None)
+            .await
+            .expect("the operation should persist");
+        let checkpoint = |title_id: &str, state, detail: Option<&str>, code| TitleCheckpoint {
+            operation_id: "op-1".to_string(),
+            title_id: title_id.to_string(),
+            sequence: 1,
+            state,
+            classification: None,
+            placement: TitleCheckpointPlacement::default(),
+            files_total: 1,
+            files_verified: 1,
+            bytes_total: 10,
+            bytes_verified: 10,
+            detail: detail.map(str::to_string),
+            reason_code: code,
+            started_at: Some(timestamp()),
+            updated_at: timestamp(),
+            completed_at: Some(timestamp()),
+        };
+        store
+            .upsert_location_title_checkpoint(&checkpoint(
+                "title-1",
+                TitleCheckpointState::Failed,
+                Some("database is locked"),
+                Some(LocationReasonCode::CatalogWriteFailed),
+            ))
+            .await
+            .expect("the failed checkpoint should persist");
+        store
+            .upsert_location_title_checkpoint(&checkpoint(
+                "title-2",
+                TitleCheckpointState::Completed,
+                None,
+                None,
+            ))
+            .await
+            .expect("the completed checkpoint should persist");
+        store
+            .upsert_location_title_checkpoint(&checkpoint(
+                "title-3",
+                TitleCheckpointState::Moving,
+                Some("copying /a/b.mkv"),
+                None,
+            ))
+            .await
+            .expect("the mid-copy checkpoint should persist");
+        store
+            .upsert_location_title_checkpoint(&checkpoint(
+                "title-4",
+                TitleCheckpointState::Reconciling,
+                None,
+                None,
+            ))
+            .await
+            .expect("the mid-reconcile checkpoint should persist");
+
+        assert!(
+            store
+                .reopen_location_operation("op-1")
+                .await
+                .expect("reopen should succeed"),
+            "a failed operation reopens"
+        );
+        let reopened = store
+            .get_location_operation("op-1")
+            .await
+            .expect("read")
+            .expect("the row still exists");
+        assert_eq!(reopened.state, LocationOperationState::Queued);
+        assert_eq!(reopened.detail, None);
+        assert_eq!(reopened.reason_code, None);
+        assert_eq!(reopened.completed_at, None);
+        assert!(!reopened.cancel_requested);
+        assert_eq!(
+            reopened.started_at, failed.started_at,
+            "when the operation first started is history, not state"
+        );
+        let checkpoints = store
+            .list_location_title_checkpoints("op-1")
+            .await
+            .expect("list checkpoints");
+        let by_id = |id: &str| {
+            checkpoints
+                .iter()
+                .find(|row| row.title_id == id)
+                .expect("checkpoint present")
+        };
+        assert_eq!(by_id("title-1").state, TitleCheckpointState::Pending);
+        assert_eq!(by_id("title-1").detail, None);
+        assert_eq!(by_id("title-1").reason_code, None);
+        assert_eq!(by_id("title-1").completed_at, None);
+        assert_eq!(by_id("title-2").state, TitleCheckpointState::Completed);
+        assert!(by_id("title-2").completed_at.is_some());
+        assert_eq!(
+            by_id("title-3").state,
+            TitleCheckpointState::Pending,
+            "a title the run left mid-copy waits again rather than reading as moving"
+        );
+        assert_eq!(by_id("title-3").detail, None);
+        assert_eq!(
+            by_id("title-4").state,
+            TitleCheckpointState::Reconciling,
+            "a title left mid-reconcile keeps the state that says where its catalog stands"
+        );
+
+        assert!(
+            !store
+                .reopen_location_operation("op-1")
+                .await
+                .expect("a second reopen is answered, not refused"),
+            "a queued operation is not reopened again"
+        );
+        store
+            .create_location_operation(&operation("op-2", LocationOperationState::Completed), None)
+            .await
+            .expect("the finished operation should persist");
+        assert!(
+            !store
+                .reopen_location_operation("op-2")
+                .await
+                .expect("reopen should answer"),
+            "a finished operation never reopens"
+        );
+    }
+
     #[tokio::test]
     async fn a_checkpoint_round_trips_and_upserts_in_place() {
         let store = test_store().await;
@@ -1600,6 +1824,7 @@ mod tests {
             bytes_total: 300,
             bytes_verified: 100,
             detail: None,
+            reason_code: None,
             started_at: Some(started),
             updated_at: started,
             completed_at: None,
@@ -1663,6 +1888,7 @@ mod tests {
                 bytes_total: 0,
                 bytes_verified: 0,
                 detail: Some("an import is running".to_string()),
+                reason_code: None,
                 started_at: Some(now),
                 updated_at: now,
                 completed_at: Some(now),
@@ -1751,6 +1977,7 @@ mod tests {
             bytes_total: 10,
             bytes_verified: 10,
             detail: None,
+            reason_code: None,
             started_at: Some(now),
             updated_at: now,
             completed_at: Some(now),
@@ -1830,6 +2057,7 @@ mod tests {
             bytes_total: 0,
             bytes_verified: 0,
             detail: Some(detail.to_string()),
+            reason_code: None,
             started_at: Some(now),
             updated_at: now,
             completed_at: Some(now),
@@ -1911,6 +2139,7 @@ mod tests {
                 bytes_total: 100,
                 bytes_verified: 100,
                 detail: None,
+                reason_code: None,
                 started_at: Some(now),
                 updated_at: now,
                 completed_at: Some(now),

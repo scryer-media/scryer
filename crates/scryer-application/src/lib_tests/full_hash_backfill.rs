@@ -13,7 +13,8 @@ struct SeededFile {
     path: PathBuf,
 }
 
-fn seed_row(id: &str, path: &Path, title_id: &str) -> TitleMediaFile {
+/// A scanned media-file row for `path`, with no signature and no full hash.
+pub(super) fn seed_row(id: &str, path: &Path, title_id: &str) -> TitleMediaFile {
     TitleMediaFile {
         analysis_details: Default::default(),
         analysis_attempt: None,

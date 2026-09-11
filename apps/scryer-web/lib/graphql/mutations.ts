@@ -3087,6 +3087,14 @@ export const cancelLocationOperationMutation = `mutation CancelLocationOperation
   }
 }`;
 
+export const abandonLocationOperationMutation = `mutation AbandonLocationOperation($id: ID!) {
+  abandonLocationOperation(id: $id) {
+    id
+    abandoned
+    detail
+  }
+}`;
+
 export const resumeLocationOperationMutation = `mutation ResumeLocationOperation($id: ID!) {
   resumeLocationOperation(id: $id) {
     id

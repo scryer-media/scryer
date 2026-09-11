@@ -182,6 +182,114 @@ impl LocationOperationState {
     }
 }
 
+/// Machine-readable reason an operation, or one title inside it, stopped
+/// short of its plan.
+///
+/// `detail` keeps the raw cause (a database error verbatim, the path that
+/// failed verification); the code is what the Activity panel keys its guidance
+/// on, so the user is told which way out applies — retry the same operation,
+/// plan again, or fix the storage first — without anyone parsing English.
+///
+/// A code is written wherever a `Failed` or `Canceled` state is, on the
+/// operation row and on the title checkpoint. Persisted as its snake_case
+/// string; a stored value this build does not know reads back as `None`
+/// rather than refusing the row, so a downgrade still lists the operation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum LocationReasonCode {
+    /// Another operation still owns some of the titles or roots (FR-084).
+    /// Retry once it has finished.
+    OwnershipConflict,
+    /// A file could not be read or written; the source is intact. Fix the
+    /// storage, then retry.
+    StorageError,
+    /// A copied file did not match its source; the copy is not trusted and
+    /// the source is untouched. Retry.
+    VerificationMismatch,
+    /// Something changed under the plan after the preview was taken (FR-089).
+    /// Plan again.
+    StalePlan,
+    /// The title can no longer merge into its destination. Fix the destination
+    /// title, then plan again.
+    MergeUnavailable,
+    /// The files were copied and verified, but the catalog update failed. Retry
+    /// the same operation; never plan again for this title.
+    CatalogWriteFailed,
+    /// The move finished but the old copy could not be removed. Retry re-runs
+    /// the cleanup step.
+    SourceCleanupFailed,
+    /// An accepted operation had no runner and was failed so the queue moved.
+    Stranded,
+    /// The user canceled at a safe checkpoint (FR-092). Retry moves the rest.
+    Canceled,
+    /// The user abandoned a stalled operation. Retry once the storage is back.
+    Abandoned,
+    /// A root the plan needs is not mounted; the operation is left interrupted.
+    /// Resume once it is back, or abandon.
+    RootUnavailable,
+}
+
+impl LocationReasonCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OwnershipConflict => "ownership_conflict",
+            Self::StorageError => "storage_error",
+            Self::VerificationMismatch => "verification_mismatch",
+            Self::StalePlan => "stale_plan",
+            Self::MergeUnavailable => "merge_unavailable",
+            Self::CatalogWriteFailed => "catalog_write_failed",
+            Self::SourceCleanupFailed => "source_cleanup_failed",
+            Self::Stranded => "stranded",
+            Self::Canceled => "canceled",
+            Self::Abandoned => "abandoned",
+            Self::RootUnavailable => "root_unavailable",
+        }
+    }
+
+    /// Parse a persisted value; unknown values read back as `None`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "ownership_conflict" => Some(Self::OwnershipConflict),
+            "storage_error" => Some(Self::StorageError),
+            "verification_mismatch" => Some(Self::VerificationMismatch),
+            "stale_plan" => Some(Self::StalePlan),
+            "merge_unavailable" => Some(Self::MergeUnavailable),
+            "catalog_write_failed" => Some(Self::CatalogWriteFailed),
+            "source_cleanup_failed" => Some(Self::SourceCleanupFailed),
+            "stranded" => Some(Self::Stranded),
+            "canceled" => Some(Self::Canceled),
+            "abandoned" => Some(Self::Abandoned),
+            "root_unavailable" => Some(Self::RootUnavailable),
+            _ => None,
+        }
+    }
+
+    /// Which of several failed titles' codes the operation row should carry.
+    ///
+    /// Guidance is per operation, so the code that changes what the user must
+    /// do wins: a catalog failure forbids planning again, a stale plan demands
+    /// it, and everything else says retry.
+    pub fn most_consequential(codes: impl IntoIterator<Item = Self>) -> Option<Self> {
+        codes.into_iter().max_by_key(|code| code.consequence_rank())
+    }
+
+    fn consequence_rank(self) -> u8 {
+        match self {
+            Self::CatalogWriteFailed => 7,
+            Self::MergeUnavailable => 6,
+            Self::StalePlan => 5,
+            Self::SourceCleanupFailed => 4,
+            Self::VerificationMismatch => 3,
+            Self::StorageError => 2,
+            Self::OwnershipConflict
+            | Self::Stranded
+            | Self::Canceled
+            | Self::Abandoned
+            | Self::RootUnavailable => 1,
+        }
+    }
+}
+
 // The verification value types live in [`scryer_domain`]: the import worker
 // serializes them across a process boundary, so they cannot depend on anything
 // here. Re-exported under their established paths — this module is still where
@@ -384,6 +492,8 @@ pub struct TitleCheckpoint {
     pub bytes_verified: i64,
     /// Warning or failure explanation shown in the per-title Activity expansion.
     pub detail: Option<String>,
+    /// Why the title failed, when it did; keys the panel's guidance.
+    pub reason_code: Option<LocationReasonCode>,
     /// When this title entered the operation. Checkpoint rows are written when a
     /// title starts, so this is the row's `created_at` in 0206.
     pub started_at: Option<DateTime<Utc>>,
@@ -460,6 +570,9 @@ pub struct LocationOperation {
     pub counters: LocationOperationCounters,
     /// Concise failure or warning explanation for Activity.
     pub detail: Option<String>,
+    /// Why the operation stopped short, when it did; keys the panel's guidance
+    /// (retry, plan again, or fix the storage first).
+    pub reason_code: Option<LocationReasonCode>,
     /// The Activity job run this operation reports through, when it has one.
     pub job_run_id: Option<String>,
     /// The workflow-operation row this operation reports through, when it has

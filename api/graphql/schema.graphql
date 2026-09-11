@@ -1,4 +1,23 @@
 """
+Result of giving up on an operation nobody is running.
+"""
+type AbandonLocationOperationPayload {
+	"""
+	Operation the abandon was requested for.
+	"""
+	id: ID!
+	"""
+	Whether the operation was marked failed and its titles and roots
+	released. False when it had already stopped on its own.
+	"""
+	abandoned: Boolean!
+	"""
+	Why it was left alone, when it was.
+	"""
+	detail: String
+}
+
+"""
 Progress snapshot for a background acquisition search.
 """
 type AcquisitionSearchJobPayload {
@@ -10215,6 +10234,15 @@ type LocationOperationPayload {
 	"""
 	detail: String
 	"""
+	Machine-readable reason the operation stopped short, for guidance and
+	translation: `ownership_conflict`, `storage_error`,
+	`verification_mismatch`, `stale_plan`, `merge_unavailable`,
+	`catalog_write_failed`, `source_cleanup_failed`, `stranded`, `canceled`,
+	`abandoned`, or `root_unavailable`. Null while it is running or when it
+	finished.
+	"""
+	reasonCode: String
+	"""
 	The Activity job run this operation reports through, when it has one.
 	"""
 	jobRunId: ID
@@ -10673,6 +10701,71 @@ type LocationPlanSectionPayload {
 	The sampled items the client renders.
 	"""
 	items: [LocationPlanItemPayload!]!
+}
+
+"""
+The start-dialog prefill for planning an operation's unfinished work again:
+the same destination, mode and verification depth, and the titles the
+operation did not finish. Finished titles are left out; a fresh preview
+reclassifies the rest.
+"""
+type LocationRetrySelectionPayload {
+	"""
+	Operation the selection was read from.
+	"""
+	operationId: ID!
+	"""
+	Who moved the files last time.
+	"""
+	mode: LocationExecutionModeValue!
+	"""
+	Verification depth the operation ran at.
+	"""
+	verificationDepth: VerificationDepthValue!
+	"""
+	Library the unfinished titles were headed for, when the operation had one.
+	"""
+	destinationLibraryId: ID
+	"""
+	Root the unfinished titles were headed for, when the operation had one.
+	"""
+	destinationRootId: ID
+	"""
+	Titles a fresh plan should select, in plan order.
+	"""
+	titles: [LocationRetryTitlePayload!]!
+	"""
+	Unfinished titles a fresh plan must not select: their files were verified
+	on the destination but the catalog update failed, and only a retry of
+	this operation finishes that.
+	"""
+	catalogBlockedTitleIds: [ID!]!
+}
+
+"""
+One title a fresh plan should select, with where it is now.
+"""
+type LocationRetryTitlePayload {
+	"""
+	Title identity.
+	"""
+	titleId: ID!
+	"""
+	Title name as the plan recorded it.
+	"""
+	titleName: String!
+	"""
+	Library the title is in.
+	"""
+	sourceLibraryId: ID!
+	"""
+	Root the title is in.
+	"""
+	sourceRootId: ID!
+	"""
+	Folder the title owns, when the plan recorded one.
+	"""
+	sourceFolderPath: String
 }
 
 """
@@ -11141,6 +11234,13 @@ type LocationTitleCheckpointPayload {
 	Warning or failure explanation for this title.
 	"""
 	detail: String
+	"""
+	Machine-readable reason the title failed, for guidance and translation:
+	`storage_error`, `verification_mismatch`, `stale_plan`,
+	`merge_unavailable`, `catalog_write_failed`, or `source_cleanup_failed`.
+	Null while the title is still working or when it finished.
+	"""
+	reasonCode: String
 	"""
 	When this title entered the operation.
 	"""
@@ -16809,11 +16909,29 @@ type MutationRoot {
 		id: ID!
 	): CancelLocationOperationPayload!
 	"""
-	Pick an interrupted operation back up from its last verified checkpoint.
+	Give up on an operation nobody is running: mark it failed, close its
+	Activity run, and release the titles and roots it owns.
 	
-	Finished titles are never reprocessed, and an operation that is already
-	terminal or was stored without its plan is reported as not resumed rather
-	than restarted from the beginning.
+	Nothing on disk is touched. Finished titles stay where the operation
+	put them, and the operation can be retried from its last verified
+	checkpoint once the storage is back. An operation whose runner is still
+	alive is refused; cancel it instead.
+	"""
+	abandonLocationOperation(
+		"""
+		Location-operation identity to mark failed and release.
+		"""
+		id: ID!
+	): AbandonLocationOperationPayload!
+	"""
+	Pick an interrupted operation back up from its last verified checkpoint,
+	or retry a failed or canceled one from the same place.
+	
+	Finished titles are never reprocessed: a retry repeats only the titles
+	that did not settle, after reopening the operation so Activity shows it
+	as queued again. An operation that already finished, or was stored
+	without its plan, is reported as not resumed rather than restarted from
+	the beginning.
 	"""
 	resumeLocationOperation(
 		"""
@@ -20190,6 +20308,21 @@ type QueryRoot {
 		id: ID!
 	): LocationOperationPayload
 	"""
+	What planning a location operation's unfinished work again would
+	select: the same destination and mode, and the titles it did not finish.
+	
+	Read on demand for a stopped operation, since it joins the stored plan
+	with the checkpoints. Null for an unknown operation, one stored without
+	a readable plan, and for the root-scoped operation types, which are
+	planned again from the root rather than from titles.
+	"""
+	locationOperationRetrySelection(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!
+	): LocationRetrySelectionPayload
+	"""
 	Which files one location operation renames and deduplicates, per title.
 	
 	Activity's counters say how many; this says which ones, and whether each
@@ -22777,15 +22910,17 @@ Result of asking an interrupted operation to pick up from its checkpoints.
 """
 type ResumeLocationOperationPayload {
 	"""
-	Operation the resume was requested for.
+	Operation the resume or retry was requested for.
 	"""
 	id: ID!
 	"""
-	Whether the operation was restarted.
+	Whether the operation was picked back up. A failed or canceled
+	operation is reopened and retried from its last verified checkpoint; a
+	finished one is never restarted.
 	"""
 	resumed: Boolean!
 	"""
-	Why it was not restarted, when it was not.
+	Why it was not picked back up, when it was not.
 	"""
 	detail: String
 }

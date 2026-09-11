@@ -13,7 +13,7 @@ enum PipelineFileOutcome {
 }
 
 pub(super) struct PipelineOutcome {
-    pub failures: Vec<String>,
+    pub failures: Vec<TitleFailure>,
     pub stop: Option<(StopReason, String)>,
 }
 
@@ -87,7 +87,7 @@ impl LocationOperationRunner<'_> {
         let mut admitted = BTreeSet::new();
         let mut verified_paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut remaining: BTreeMap<String, usize> = BTreeMap::new();
-        let mut failed = BTreeMap::<String, String>::new();
+        let mut failed = BTreeMap::<String, (LocationReasonCode, String)>::new();
         let mut rows = BTreeMap::<String, TransferTitle>::new();
         let mut stop = None;
         let mut fatal = None;
@@ -104,6 +104,7 @@ impl LocationOperationRunner<'_> {
             plan,
             None,
             false,
+            None,
         )
         .await?;
 
@@ -209,6 +210,7 @@ impl LocationOperationRunner<'_> {
                                         Some(reason.clone()),
                                         progress,
                                         plan,
+                                        None,
                                     )
                                     .await
                                 {
@@ -234,6 +236,7 @@ impl LocationOperationRunner<'_> {
                                         Some(reason),
                                         progress,
                                         plan,
+                                        None,
                                     )
                                     .await
                                 {
@@ -390,16 +393,21 @@ impl LocationOperationRunner<'_> {
                                     hub.file_done(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
                                     Ok(())
                                 },
-                                Ok(()) => Err(AppError::Validation(detail.unwrap_or_else(|| "destination verification failed".into()))),
+                                Ok(()) => Err((
+                                    LocationReasonCode::VerificationMismatch,
+                                    AppError::Validation(detail.unwrap_or_else(|| "destination verification failed".into())),
+                                )),
                                 Err(error) => { fatal = Some(error); Ok(()) },
                             }
                         }),
-                        Err(error) => Some(Err(error)),
+                        // A transfer that could not complete is a storage
+                        // problem; the source is intact.
+                        Err(error) => Some(Err((LocationReasonCode::StorageError, error))),
                     };
                     match result {
-                        Some(Err(error)) => {
+                        Some(Err((reason_code, error))) => {
                             hub.file_failed(&operation.id, &title.title_id, &file.stored_destination(), file.size_bytes);
-                            failed.insert(title.title_id.clone(), error.to_string());
+                            failed.insert(title.title_id.clone(), (reason_code, error.to_string()));
                         }
                         Some(Ok(())) if fatal.is_none() => progress.note_file_done(&title.title_id, file),
                         _ => {}
@@ -440,7 +448,7 @@ impl LocationOperationRunner<'_> {
                     row.state = TitleCheckpointState::Verifying;
                 } else if row.copying > 0 {
                     row.state = TitleCheckpointState::Moving;
-                } else if let Some(detail) = failed.get(id) {
+                } else if let Some((_, detail)) = failed.get(id) {
                     row.state = TitleCheckpointState::Failed;
                     row.detail = Some(detail.clone());
                 } else if stop.is_some()
@@ -488,6 +496,7 @@ impl LocationOperationRunner<'_> {
                         plan,
                         detail,
                         false,
+                        None,
                     )
                     .await
                 {
@@ -502,7 +511,7 @@ impl LocationOperationRunner<'_> {
         }
         let mut failures = Vec::new();
         for title in &plan.titles {
-            if let Some(detail) = failed.remove(&title.title_id) {
+            if let Some((reason_code, detail)) = failed.remove(&title.title_id) {
                 self.settle_title(
                     operation,
                     title,
@@ -510,9 +519,14 @@ impl LocationOperationRunner<'_> {
                     Some(detail.clone()),
                     progress,
                     plan,
+                    Some(reason_code),
                 )
                 .await?;
-                failures.push(format!("{}: {detail}", title.title_id));
+                failures.push(TitleFailure {
+                    title_id: title.title_id.clone(),
+                    reason_code,
+                    detail,
+                });
             }
         }
         Ok(PipelineOutcome { failures, stop })
@@ -675,7 +689,7 @@ impl LocationOperationRunner<'_> {
         title: &PlannedTitle,
         progress: &mut RunProgress,
         plan: &OperationWorkPlan,
-        failed: &mut BTreeMap<String, String>,
+        failed: &mut BTreeMap<String, (LocationReasonCode, String)>,
     ) -> AppResult<()> {
         if self
             .store
@@ -707,8 +721,9 @@ impl LocationOperationRunner<'_> {
         // The completeness gate reconstructs these counts from durable proofs.
         progress.files_done.remove(&title.title_id);
         progress.bytes_done.remove(&title.title_id);
+        let mut phase = TitleRunPhase::Moving;
         match self
-            .run_title(operation, title, &paths, progress, plan)
+            .run_title(operation, title, &paths, progress, plan, &mut phase)
             .await
         {
             Ok(TitleRunOutcome::Finished(mut warnings)) => {
@@ -719,7 +734,7 @@ impl LocationOperationRunner<'_> {
                     TitleCheckpointState::CompletedWithWarnings
                 };
                 let detail = (!warnings.is_empty()).then(|| warnings.join("; "));
-                self.settle_title(operation, title, state, detail, progress, plan)
+                self.settle_title(operation, title, state, detail, progress, plan, None)
                     .await?;
                 if let Some(hub) = self.transfers {
                     hub.title_finalized(&operation.id, started.elapsed());
@@ -728,7 +743,10 @@ impl LocationOperationRunner<'_> {
             }
             Ok(TitleRunOutcome::Canceled) => {}
             Err(error) => {
-                failed.insert(title.title_id.clone(), error.to_string());
+                failed.insert(
+                    title.title_id.clone(),
+                    (classify_title_failure(phase, &error), error.to_string()),
+                );
             }
         }
         Ok(())

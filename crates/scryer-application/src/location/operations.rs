@@ -87,12 +87,12 @@ use crate::location::media_server_refresh::{
 use crate::location::merge::engine::{MergePlan, plan_merge};
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
-    VerificationDepth,
+    LocationOperationType, LocationReasonCode, VerificationDepth,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
     FreeSpaceEstimate, FreeSpaceRequest, LocationPlan, PlanConfirmationError,
-    PlanConfirmationRequest, SystemVolumeProbe, estimate_free_space,
+    PlanConfirmationRequest, SystemVolumeProbe, estimate_free_space_off_runtime,
 };
 use crate::location::root_move::{
     PlannedRootMove, RootMoveExecutionPlan, RootMovePlanRequest, RootMoveTitleDraft, SourceFile,
@@ -100,9 +100,11 @@ use crate::location::root_move::{
 };
 use crate::location::transfer_effects::{TitleAssociationFacts, converts_facet};
 use crate::location::verify::{VerifiedCopier, same_filesystem};
+use crate::ports::LocationOperationProgress;
 use crate::services::AppUseCase;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult};
+use futures_util::{StreamExt, stream};
 
 /// Every location operation verifies at full depth, whatever the operator's
 /// verification preference says.
@@ -131,6 +133,58 @@ use crate::{AppError, AppResult};
 /// told about, which is a different thing from a preference that quietly asked
 /// for less.
 pub const LOCATION_OPERATION_VERIFICATION_DEPTH: VerificationDepth = VerificationDepth::Full;
+
+/// How many titles a root-move preview gathers folder facts for at once.
+///
+/// The work is stat and read-dir round trips, so the bound is about not
+/// hammering one mount with a selection's worth of walkers, not about CPU.
+/// Small enough that a single slow mount cannot pin the whole blocking pool.
+pub const LOCATION_PREVIEW_TITLE_CONCURRENCY: usize = 8;
+
+/// What the per-title draft builder borrows from the selection-wide facts
+/// `plan_root_move` gathered once, before fanning the titles out.
+#[derive(Clone, Copy)]
+struct RootMoveDraftContext<'a> {
+    classification: &'a SelectionClassification,
+    libraries: &'a BTreeMap<String, scryer_domain::Library>,
+    destination_library: &'a scryer_domain::Library,
+    merge_plans: &'a BTreeMap<String, MergePlan>,
+    merge_destination_titles: &'a BTreeMap<String, Title>,
+    folder_template: &'a str,
+    media_files_by_title: &'a BTreeMap<String, Vec<crate::TitleMediaFile>>,
+    mode: LocationExecutionMode,
+}
+
+/// One title's draft plus the selection-wide state it contributes, applied in
+/// selection order once the bounded gather hands it back.
+struct RootMoveTitleOutcome {
+    draft: RootMoveTitleDraft,
+    /// The class the draft was downgraded from to needs-resolution, so the
+    /// reported counts follow the drafts.
+    downgraded_from: Option<TitleLocationClass>,
+    /// Bytes this title writes at the destination (zero for a same-volume
+    /// rename and for titles that move nothing).
+    moved_bytes: u64,
+    /// A source and destination path on the volumes the free-space estimate
+    /// probes, from a title that actually moves or adopts files.
+    anchor_source: Option<PathBuf>,
+    anchor_destination: Option<PathBuf>,
+    /// The source root whose recycle-bin configuration the estimate costs.
+    recycle_source_root: Option<String>,
+}
+
+impl RootMoveTitleOutcome {
+    fn settled(draft: RootMoveTitleDraft, downgraded_from: Option<TitleLocationClass>) -> Self {
+        Self {
+            draft,
+            downgraded_from,
+            moved_bytes: 0,
+            anchor_source: None,
+            anchor_destination: None,
+            recycle_source_root: None,
+        }
+    }
+}
 
 /// What the caller asks to preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,6 +434,7 @@ impl AppUseCase {
                 ..LocationOperationCounters::default()
             },
             detail: None,
+            reason_code: None,
             // Activity reads the operation through this run (FR-091). The
             // column stays nullable because an operation created before T036 —
             // or one driven by an administrative path with no run — is still a
@@ -488,6 +543,118 @@ impl AppUseCase {
         Ok(requested)
     }
 
+    /// Give up on an operation nobody is running (recovery plan, P1 Abandon).
+    ///
+    /// The case this exists for: a runner that died mid-move on a root whose
+    /// volume never came back. The row sits non-terminal for as long as the
+    /// root is missing, and while it does it owns its titles and roots, so
+    /// every scan, import, rename, and later move over them is refused. A
+    /// restart does not help — the boot resume declines an unavailable root,
+    /// on purpose — so the user needs a way out that does not wait for
+    /// storage that may be gone for good.
+    ///
+    /// Abandon writes `Failed` with the `abandoned` reason and a detail that
+    /// says who did it, in what state, and what the operation last reported;
+    /// closes the Activity run; and releases the ownership claims. Nothing on
+    /// disk is touched, so the settled titles stay where the operation put
+    /// them and Retry re-enters the rest once the storage is back — an
+    /// abandoned operation is terminal, and terminal is what Retry accepts.
+    ///
+    /// A live runner is refused as an error, the way a second resume is: it
+    /// owns those checkpoints, and pulling the row out from under it would
+    /// leave a running process writing to a row Activity says is over. Cancel
+    /// is the tool for a run that is still alive. A finished or already
+    /// stopped operation is declined with a reason rather than rewritten.
+    pub async fn abandon_location_operation(
+        &self,
+        actor: &User,
+        operation_id: &str,
+    ) -> AppResult<LocationAbandonDecision> {
+        let operation = self
+            .location_operation(operation_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("location operation {operation_id}")))?;
+        self.require_location_operation_permission(actor, &operation)
+            .await?;
+        if operation.state.is_terminal() {
+            return Ok(LocationAbandonDecision::NotAbandoned(format!(
+                "this operation has already stopped ({}), so there is nothing to abandon",
+                operation.state.as_str()
+            )));
+        }
+        // The reservation a runner takes, held across every write below: a
+        // Resume racing this Abandon cannot start a runner on a row that is
+        // being closed, and a runner that already holds it is refused the
+        // way a second resume is.
+        let Some(_reservation) = self.runtime.library.location_runners.begin(operation_id) else {
+            return Err(AppError::Validation(format!(
+                "location operation {operation_id} is still running; cancel it instead of abandoning it"
+            )));
+        };
+
+        let now = chrono::Utc::now();
+        let mut detail = format!(
+            "Abandoned by {} while {}.",
+            actor.username,
+            operation.state.as_str()
+        );
+        if let Some(last) = operation.detail.as_deref().filter(|last| !last.is_empty()) {
+            detail.push_str(" Last reported: ");
+            detail.push_str(last);
+        }
+        detail.push_str(
+            " Abandoning changed nothing on disk: finished titles stay where they are, unfinished ones are left as the run left them, and Retry moves the rest once the storage is back.",
+        );
+        self.services
+            .library
+            .location_operations
+            .update_location_operation_progress(&LocationOperationProgress {
+                operation_id: operation.id.clone(),
+                state: LocationOperationState::Failed,
+                counters: operation.counters,
+                verification_fallback_count: operation.verification_fallback_count,
+                detail: Some(detail.clone()),
+                clear_detail: false,
+                reason_code: Some(LocationReasonCode::Abandoned),
+                started_at: operation.started_at,
+                completed_at: Some(now),
+            })
+            .await?;
+
+        if let Some(job_run_id) = operation.job_run_id.as_deref() {
+            let outcome = Ok(OperationRunOutcome {
+                operation_id: operation.id.clone(),
+                state: LocationOperationState::Failed,
+                stop_reason: Some(crate::location::executor::StopReason::Error),
+                reason_code: Some(LocationReasonCode::Abandoned),
+                counters: operation.counters,
+                cursor: crate::location::executor::ResumeCursor {
+                    operation_id: operation.id.clone(),
+                    last_settled_sequence: 0,
+                },
+                warnings: Vec::new(),
+                detail: Some(detail),
+            });
+            self.close_location_operation_job_run_for(job_run_id, &outcome)
+                .await;
+        }
+        // The claims are the whole point: an abandoned operation must not keep
+        // refusing work over titles it will never touch again. The store is
+        // the source of truth and the in-process cache mirrors it, in that
+        // order, exactly as the runner's own release does.
+        self.services
+            .library
+            .location_operations
+            .release_location_operation_ownership(operation_id)
+            .await?;
+        self.runtime
+            .library
+            .location_ownership
+            .release_operation(operation_id);
+        self.runtime.library.location_runners.transfers.changed();
+        Ok(LocationAbandonDecision::Abandoned)
+    }
+
     /// Read one operation row.
     pub async fn location_operation(
         &self,
@@ -498,6 +665,119 @@ impl AppUseCase {
             .location_operations
             .get_location_operation(operation_id)
             .await
+    }
+
+    /// What a fresh plan for this operation's unfinished work would select
+    /// (recovery plan, P1 "Plan again").
+    ///
+    /// Retry re-enters the *same* plan, which is the right answer for every
+    /// failure the plan itself survived. It is the wrong answer when the plan
+    /// went stale — a title changed under it, a merge target moved — because
+    /// the runner checks the fingerprint again and stops in the same place.
+    /// "Plan again" is the other way out: the ordinary start dialog, prefilled
+    /// with this operation's destination and the titles it did not finish, so
+    /// a new preview reclassifies them (finished titles come out as no-ops and
+    /// verified files dedup) and the user confirms a new operation.
+    ///
+    /// The selection is read from the persisted plan joined with the
+    /// checkpoints. A title is unfinished when it has no checkpoint (the run
+    /// never reached it), a `pending` one, a `failed` one, or one left mid-step
+    /// by a runner that died. Settled titles — completed, skipped, and blocked —
+    /// are left out; a blocked title was refused by the planner for a reason
+    /// the user has to clear first. A title whose failure was a catalog write
+    /// is reported separately and *not* selected: its files are already on the
+    /// destination while its catalog row still points at the source, and a
+    /// fresh plan refuses that shape ("same path"); only Retry converges it.
+    ///
+    /// `None` for an unknown operation and for the root-scoped types (a root
+    /// change or consolidation is re-planned from the root, not from titles).
+    pub async fn location_operation_retry_selection(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Option<LocationRetrySelection>> {
+        let Some(operation) = self.location_operation(operation_id).await? else {
+            return Ok(None);
+        };
+        if !matches!(
+            operation.operation_type,
+            LocationOperationType::RootMove | LocationOperationType::CrossLibraryTransfer
+        ) {
+            return Ok(None);
+        }
+        let store = &self.services.library.location_operations;
+        let Some(plan_json) = store.get_location_operation_plan_json(operation_id).await? else {
+            return Ok(None);
+        };
+        let plan: RootMoveExecutionPlan = match serde_json::from_str(&plan_json) {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    error = %error,
+                    "a location operation's stored plan could not be read, so nothing can be planned again from it"
+                );
+                return Ok(None);
+            }
+        };
+        let checkpoints: BTreeMap<String, crate::location::model::TitleCheckpoint> = store
+            .list_location_title_checkpoints(operation_id)
+            .await?
+            .into_iter()
+            .map(|checkpoint| (checkpoint.title_id.clone(), checkpoint))
+            .collect();
+
+        let mut titles = Vec::new();
+        let mut catalog_blocked_title_ids = Vec::new();
+        for title in &plan.titles {
+            let checkpoint = checkpoints.get(&title.title_id);
+            if checkpoint.is_some_and(|checkpoint| checkpoint.state.is_settled()) {
+                continue;
+            }
+            // A title the run left mid-reconcile or mid-cleanup is in the
+            // same half-flipped shape as one whose catalog write failed, only
+            // without a code to say so: the process died. Retry alone
+            // converges it.
+            if checkpoint.is_some_and(|checkpoint| {
+                checkpoint.reason_code == Some(LocationReasonCode::CatalogWriteFailed)
+                    || matches!(
+                        checkpoint.state,
+                        crate::location::model::TitleCheckpointState::Reconciling
+                            | crate::location::model::TitleCheckpointState::CleaningUp
+                    )
+            }) {
+                catalog_blocked_title_ids.push(title.title_id.clone());
+                continue;
+            }
+            titles.push(LocationRetryTitle {
+                title_id: title.title_id.clone(),
+                title_name: title.title_name.clone(),
+                source_library_id: title.source_library_id.clone(),
+                source_root_id: title.source_root_id.clone(),
+                source_folder_path: title.source_folder_path.clone(),
+            });
+        }
+        // The row's destination is authoritative when it has one; a transfer
+        // whose titles fan out records none, and then the first unfinished
+        // title's own destination is as good a prefill as any.
+        let first = plan
+            .titles
+            .iter()
+            .find(|title| titles.iter().any(|kept| kept.title_id == title.title_id));
+        Ok(Some(LocationRetrySelection {
+            operation_id: operation.id.clone(),
+            mode: operation.mode,
+            verification_depth: operation.verification_depth,
+            destination_library_id: operation
+                .destination_library_id
+                .clone()
+                .or_else(|| first.map(|title| title.destination_library_id.clone())),
+            destination_root_id: operation
+                .destination_root_id
+                .clone()
+                .or_else(|| first.map(|title| title.destination_root_id.clone())),
+            titles,
+            catalog_blocked_title_ids,
+        }))
     }
 
     /// Per-title checkpoints in plan order, for the operation's Activity view
@@ -514,12 +794,20 @@ impl AppUseCase {
     }
 
     /// Resume one persisted operation from its last verified checkpoint
-    /// (FR-033).
+    /// (FR-033), or retry a failed or canceled one from the same place.
+    ///
+    /// The two are one path: the runner always reads the persisted checkpoints
+    /// and skips what settled, so a retry of a `failed` operation repeats only
+    /// the titles that did not finish. The difference is bookkeeping — a
+    /// terminal row is reopened (back to `queued`, its explanation cleared,
+    /// failed titles back to `pending`) so the runner does not refuse it as
+    /// already over. Both routes re-claim ownership in `Preparing`, so a title
+    /// somebody else has claimed since the failure stops the retry there.
     ///
     /// Reports [`LocationResumeDecision::NotResumable`] — never an error, and
-    /// never a silent nothing — when the operation is unknown, terminal, stored
-    /// without a plan this build can read, or sitting on a volume that is not
-    /// mounted right now.
+    /// never a silent nothing — when the operation is unknown, finished (with
+    /// or without warnings), stored without a plan this build can read, or
+    /// sitting on a volume that is not mounted right now.
     /// The one case that *is* an error is a second resume of an operation whose
     /// runner is still alive: that is a caller mistake with a real consequence
     /// (two runners over one set of checkpoints), so it is refused rather than
@@ -543,9 +831,15 @@ impl AppUseCase {
                 "this operation no longer exists",
             ));
         };
-        if operation.state.is_terminal() {
+        // Finished is over: every title settled and ownership was released.
+        // Failed and canceled are terminal too, but they are the states a
+        // retry exists for, so they pass and are reopened below.
+        if matches!(
+            operation.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ) {
             return Ok(LocationResumeDecision::not_resumable(
-                "this operation has already finished, so there is nothing to resume",
+                "this operation has already finished, so there is nothing to retry",
             ));
         }
         // A cross-library transfer is a root move that also flips catalog
@@ -584,7 +878,7 @@ impl AppUseCase {
             .await?
         else {
             return Ok(LocationResumeDecision::not_resumable(
-                "this operation was stored without its plan, so there is nothing to resume",
+                "this operation was stored without its plan, so there is nothing to pick back up",
             ));
         };
         // A stored plan this build cannot read is the same situation for the
@@ -604,7 +898,7 @@ impl AppUseCase {
                     "an interrupted location operation's stored plan could not be read; it stays interrupted"
                 );
                 return Ok(LocationResumeDecision::not_resumable(
-                    "this operation's stored plan cannot be read, so there is nothing to resume",
+                    "this operation's stored plan cannot be read, so there is nothing to pick back up",
                 ));
             }
         };
@@ -614,9 +908,66 @@ impl AppUseCase {
         // boot — would fail every copy and drive the operation to a terminal
         // Failed, turning a boot-order accident into a permanent one.
         if let Some(unavailable) = unavailable_plan_root(&plan, operation.mode).await {
-            return Ok(LocationResumeDecision::not_resumable(format!(
-                "{unavailable} is not available right now, so this operation stays interrupted and can be resumed once it is back"
-            )));
+            let reason = if operation.state.is_terminal() {
+                format!(
+                    "{unavailable} is not available right now, so this operation cannot be retried until it is back"
+                )
+            } else {
+                format!(
+                    "{unavailable} is not available right now, so this operation stays interrupted and can be resumed once it is back"
+                )
+            };
+            // The one refusal that changes the row: the reason goes onto it,
+            // with the `root_unavailable` code, so Activity can say why the
+            // operation is sitting there instead of "Moving" with nothing
+            // moving. The state is untouched — it stays interrupted — and a
+            // write failure is logged rather than raised, because the decline
+            // itself is the answer this caller needs.
+            if !operation.state.is_terminal()
+                && let Err(error) = self
+                    .services
+                    .library
+                    .location_operations
+                    .update_location_operation_progress(&LocationOperationProgress {
+                        operation_id: operation.id.clone(),
+                        state: operation.state,
+                        counters: operation.counters,
+                        verification_fallback_count: operation.verification_fallback_count,
+                        detail: Some(reason.clone()),
+                        clear_detail: false,
+                        reason_code: Some(LocationReasonCode::RootUnavailable),
+                        started_at: operation.started_at,
+                        completed_at: None,
+                    })
+                    .await
+            {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    error = %error,
+                    "could not record why an interrupted location operation was not resumed"
+                );
+            }
+            return Ok(LocationResumeDecision::not_resumable(reason));
+        }
+
+        // A retry reopens the terminal row now that every refusal is behind
+        // it: the runner refuses a terminal operation before it does anything,
+        // and Activity should show the reopened row as queued rather than as
+        // failed with an explanation that is about to be superseded. Reopening
+        // is a conditional write, so a row that stopped being failed or
+        // canceled between the read above and this write is left alone and the
+        // retry is reported as nothing to do rather than started twice.
+        if operation.state.is_terminal()
+            && !self
+                .services
+                .library
+                .location_operations
+                .reopen_location_operation(operation_id)
+                .await?
+        {
+            return Ok(LocationResumeDecision::not_resumable(
+                "this operation changed while the retry was being prepared; look at its current state and try again",
+            ));
         }
 
         // The resumed attempt gets its own run, and the operation points at the
@@ -772,6 +1123,7 @@ impl AppUseCase {
                     operation_id: stranded.operation_id.clone(),
                     state: LocationOperationState::Failed,
                     stop_reason: Some(crate::location::executor::StopReason::Error),
+                    reason_code: Some(crate::location::model::LocationReasonCode::Stranded),
                     counters: stranded.counters,
                     cursor: crate::location::executor::ResumeCursor {
                         operation_id: stranded.operation_id.clone(),
@@ -1382,6 +1734,44 @@ impl crate::location::executor::OperationProgressObserver for LocationJobRunProg
     }
 }
 
+/// The start-dialog prefill for planning an operation's unfinished work again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationRetrySelection {
+    pub operation_id: String,
+    pub mode: LocationExecutionMode,
+    pub verification_depth: VerificationDepth,
+    pub destination_library_id: Option<String>,
+    pub destination_root_id: Option<String>,
+    /// Titles a fresh plan should select, in plan order.
+    pub titles: Vec<LocationRetryTitle>,
+    /// Unfinished titles a fresh plan must *not* select: their catalog update
+    /// failed after the files were verified on the destination, and only Retry
+    /// finishes that.
+    pub catalog_blocked_title_ids: Vec<String>,
+}
+
+/// One title in a [`LocationRetrySelection`], with what the start dialog shows
+/// about where it is now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationRetryTitle {
+    pub title_id: String,
+    pub title_name: String,
+    pub source_library_id: String,
+    pub source_root_id: String,
+    pub source_folder_path: Option<String>,
+}
+
+/// What an abandon decided to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocationAbandonDecision {
+    /// The operation is now `Failed` with the `abandoned` reason, its Activity
+    /// run is closed, and its ownership claims are released.
+    Abandoned,
+    /// Nothing was changed, and why: the operation had already stopped on its
+    /// own.
+    NotAbandoned(String),
+}
+
 /// What a resume decided to do (FR-033).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocationResumeDecision {
@@ -1390,8 +1780,11 @@ pub enum LocationResumeDecision {
     /// Boxed because the execution plan is much larger than the refusal, and an
     /// enum sized by its biggest variant would be paid for on every call.
     Resume(Box<RootMoveExecutionPlan>),
-    /// Nothing was started, and why. The operation is left exactly as it was —
-    /// still interrupted, still resumable later.
+    /// Nothing was started, and why. The operation keeps its state — an
+    /// interrupted one stays interrupted and resumable later, a failed or
+    /// canceled one stays terminal and retryable later. The one refusal that
+    /// touches the row is an unavailable root, which writes this reason onto
+    /// it so Activity can show it.
     NotResumable(String),
 }
 
@@ -1780,304 +2173,49 @@ impl AppUseCase {
         let mut a_destination_path: Option<PathBuf> = None;
         let mut source_root_for_recycle: Option<String> = None;
 
-        for title in &titles {
-            let classified = classification
-                .classification_of(&title.id)
-                .expect("every selected title is classified");
-            let destination_root_path = destination_library
-                .roots
-                .iter()
-                .find(|root| root.id == classified.destination_root_id)
-                .map(|root| PathBuf::from(root.path.clone()));
-            let source_root_path = libraries
-                .get(&title.library_id)
-                .and_then(|library| {
-                    library
-                        .roots
-                        .iter()
-                        .find(|root| root.id == title.root_folder_id)
-                })
-                .map(|root| PathBuf::from(root.path.clone()));
-            let source_folder_path = title
-                .folder_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .map(stored_path_to_path_buf);
-
-            let mut draft = RootMoveTitleDraft {
-                title_id: title.id.clone(),
-                title_name: title.name.clone(),
-                class: classified.class,
-                source_library_id: title.library_id.clone(),
-                source_root_id: title.root_folder_id.clone(),
-                source_root_path: source_root_path.clone(),
-                source_folder_path: source_folder_path.clone(),
-                destination_library_id: classified.destination_library_id.clone(),
-                destination_root_id: classified.destination_root_id.clone(),
-                destination_root_path: destination_root_path.clone(),
-                destination_folder_path: None,
-                files: Vec::new(),
-                source_directories: Vec::new(),
-                same_volume: None,
-                hardlinks: Vec::new(),
-                destination_entries: Vec::new(),
-                recycle: RecycleAvailability::Available,
-                blocked_reason: classified.reason.clone(),
-                destination_identity: classified.destination_identity.clone(),
-                facet_conversion: classified.facet_conversion.clone(),
-                associations: classified.associations,
-                merge_summary: merge_plans.get(&title.id).map(|plan| plan.summary.clone()),
-                adoption: None,
-            };
-
-            let manual_folder_mapping = mode == LocationExecutionMode::UserMovedFiles
-                && classified.class == TitleLocationClass::CatalogOnly
-                && source_folder_path.is_some();
-            if !classified.class.moves_files() && !manual_folder_mapping {
-                drafts.push(draft);
-                continue;
+        let context = RootMoveDraftContext {
+            classification: &classification,
+            libraries: &libraries,
+            destination_library: &destination_library,
+            merge_plans: &merge_plans,
+            merge_destination_titles: &merge_destination_titles,
+            folder_template: &folder_template,
+            media_files_by_title: &media_files_by_title,
+            mode,
+        };
+        // The folder walks, stats, and hashes behind each draft are the
+        // preview's cost, and on a network mount they are latency, not
+        // bandwidth: a bounded fan-out overlaps them. `buffered` hands the
+        // outcomes back in selection order, so the drafts, the counts, and the
+        // "first title that moves bytes" anchors below read exactly as the
+        // sequential loop did.
+        // (The futures are collected first rather than mapped lazily so no
+        // closure returning a borrowing future lives across an await: the
+        // `Send` bound on the GraphQL resolvers cannot express the lifetime
+        // such a closure would need.)
+        let pending: Vec<_> = titles
+            .iter()
+            .map(|title| self.root_move_title_draft(context, title))
+            .collect();
+        let mut outcomes = stream::iter(pending).buffered(LOCATION_PREVIEW_TITLE_CONCURRENCY);
+        while let Some(outcome) = outcomes.next().await {
+            let outcome = outcome?;
+            if let Some(was) = outcome.downgraded_from {
+                downgrade_to_needs_resolution(&mut classification_counts, was);
             }
-
-            let Some(destination_root_path) = destination_root_path else {
-                downgrade_to_needs_resolution(&mut classification_counts, draft.class);
-                draft.class = TitleLocationClass::NeedsResolution;
-                draft.blocked_reason = Some(format!(
-                    "destination root {} has no configured path",
-                    classified.destination_root_id
-                ));
-                drafts.push(draft);
-                continue;
-            };
-
-            // FR-013 for a transfer, FR-063 for a merge.
-            //
-            // A merge has no destination folder of its own to calculate: the
-            // destination title already owns one, and the merged content is
-            // that title's content from the moment Groups 1–5 commit. Sending
-            // the files anywhere else would leave the surviving title owning a
-            // folder that holds half of its media. Routing them into the
-            // destination's folder is also what makes FR-073 work here for
-            // free: the collision engine reads that folder's entries, and two
-            // copies of the same episode dedup against each other instead of
-            // landing side by side.
-            let merge_destination = classified
-                .merge_target_title_id()
-                .and_then(|id| merge_destination_titles.get(id));
-
-            // A merge also lands on the *destination title's* root, not on the
-            // one the request named, when the two differ. FR-063 gives the
-            // destination its placement along with everything else, and a
-            // checkpoint recording a root that does not contain the folder
-            // would be an audit trail nobody can follow.
-            let (destination_root_id, destination_root_path) = match merge_destination {
-                Some(destination_title)
-                    if destination_title.root_folder_id != classified.destination_root_id =>
-                {
-                    match destination_library
-                        .roots
-                        .iter()
-                        .find(|root| root.id == destination_title.root_folder_id)
-                    {
-                        Some(root) => (
-                            destination_title.root_folder_id.clone(),
-                            PathBuf::from(root.path.clone()),
-                        ),
-                        None => (
-                            classified.destination_root_id.clone(),
-                            destination_root_path,
-                        ),
-                    }
-                }
-                _ => (
-                    classified.destination_root_id.clone(),
-                    destination_root_path,
-                ),
-            };
-            draft.destination_root_id = destination_root_id;
-            draft.destination_root_path = Some(destination_root_path.clone());
-
-            let destination_folder = match merge_destination {
-                Some(destination_title) => merge_destination_folder(
-                    destination_title,
-                    &destination_root_path,
-                    &folder_template,
-                ),
-                None => crate::library::rename::configured_title_folder_path(
-                    &destination_root_path.to_string_lossy(),
-                    title,
-                    &folder_template,
-                    title.year,
-                ),
-            };
-            // US3: nothing is planned to move, because it already did. The
-            // destination folder is resolved against what is actually on disk,
-            // the tracked media is accounted for against it (FR-050/051), and
-            // none of the collision, hardlink, or free-space machinery applies —
-            // no bytes are written.
-            if mode == LocationExecutionMode::UserMovedFiles {
-                draft.destination_folder_path = Some(destination_folder.clone());
-                let mut mapped_paths = std::collections::BTreeSet::new();
-                if let Some(destination_title) = merge_destination {
-                    for media in self
-                        .services
-                        .library
-                        .media_files
-                        .list_media_files_for_title(&destination_title.id)
-                        .await?
-                    {
-                        mapped_paths.insert(
-                            PathCaseRule::platform_default()
-                                .fold(&media.file_path)
-                                .into_owned(),
-                        );
-                    }
-                }
-                for media in media_files_by_title.get(&title.id).into_iter().flatten() {
-                    let path = stored_path_to_path_buf(&media.file_path);
-                    let relative = source_folder_path
-                        .as_ref()
-                        .and_then(|folder| path.strip_prefix(folder).ok());
-                    let Some(relative) = relative else {
-                        return Err(AppError::Validation(format!(
-                            "The catalog cannot map a file outside the recorded folder for {}. Correct its folder mapping first.",
-                            title.name
-                        )));
-                    };
-                    if relative.as_os_str().is_empty()
-                        || relative
-                            .components()
-                            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-                    {
-                        return Err(AppError::Validation(format!(
-                            "The catalog path for {} is ambiguous. Correct its folder mapping before moving it.",
-                            title.name
-                        )));
-                    }
-                    let mapped = path_to_stored_string(destination_folder.join(relative));
-                    if !mapped_paths
-                        .insert(PathCaseRule::platform_default().fold(&mapped).into_owned())
-                    {
-                        return Err(AppError::Validation(format!(
-                            "More than one catalog record would point at {mapped}. Resolve that catalog conflict before confirming the manual move."
-                        )));
-                    }
-                    draft.files.push(SourceFile {
-                        media_file_id: Some(media.id.clone()),
-                        relative_path: Some(relative.to_path_buf()),
-                        path,
-                        size_bytes: media.size_bytes.max(0) as u64,
-                        full_blake3: FullHash::Absent,
-                    });
-                }
-                drafts.push(draft);
-                continue;
-            }
-            if mode == LocationExecutionMode::FilesAlreadyThere {
-                let adoption_folder = resolve_adoption_folder(
-                    destination_folder.clone(),
-                    source_folder_path.as_deref(),
-                    &destination_root_path,
-                )
-                .await;
-                draft.destination_folder_path = Some(adoption_folder.clone());
-                draft.adoption = account_for_adoption(
-                    &adoption_folder,
-                    source_folder_path.as_deref(),
-                    media_files_by_title
-                        .get(&title.id)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default(),
-                )
-                .await;
-                if a_source_path.is_none() {
-                    a_source_path = source_folder_path.clone().or(source_root_path.clone());
-                }
-                if a_destination_path.is_none() {
-                    a_destination_path = Some(destination_root_path.clone());
-                }
-                drafts.push(draft);
-                continue;
-            }
-
-            draft.destination_folder_path = Some(destination_folder.clone());
-
-            let media_files = media_files_by_title
-                .get(&title.id)
-                .cloned()
-                .unwrap_or_default();
-            // A source folder that cannot be walked - vanished, unreadable - is
-            // that title's problem, not the preview's: erroring here would hide
-            // the whole plan behind an opaque failure, and the vanished-folder
-            // case is exactly the user who should be offered "Files are already
-            // there" (US3). Degrade to a blocked title the preview can name.
-            let facts = match self
-                .title_move_facts(
-                    source_folder_path.as_deref(),
-                    &media_files,
-                    Some(&destination_folder),
-                    merge_destination.map(|title| title.id.as_str()),
-                )
-                .await
-            {
-                Ok(facts) => facts,
-                Err(error) => {
-                    downgrade_to_needs_resolution(&mut classification_counts, draft.class);
-                    draft.class = TitleLocationClass::NeedsResolution;
-                    draft.blocked_reason = Some(format!(
-                        "the source folder for \"{}\" could not be read ({}); if its files \
-                         were moved by hand, use \"Files are already there\"",
-                        title.name, error
-                    ));
-                    drafts.push(draft);
-                    continue;
-                }
-            };
-            draft.files = facts.files;
-            draft.source_directories = facts.source_directories;
-            draft.hardlinks = facts.hardlinks;
-            draft.destination_entries = facts.destination_entries;
-
-            draft.same_volume = match source_folder_path.as_deref() {
-                Some(folder) => Some(same_filesystem(folder, &destination_folder).await),
-                None => None,
-            };
-            draft.recycle = match source_root_path.as_deref() {
-                Some(root) => {
-                    let config = self
-                        .recycle_bin_config_for_media_root(Some(&root.to_string_lossy()))
-                        .await;
-                    if !config.enabled {
-                        RecycleAvailability::Disabled
-                    } else if let Some(error) = config.validation_error.clone() {
-                        RecycleAvailability::Unavailable(error)
-                    } else {
-                        RecycleAvailability::Available
-                    }
-                }
-                None => RecycleAvailability::Unavailable(
-                    "the source root has no configured path".to_string(),
-                ),
-            };
-
-            if draft.same_volume != Some(true) {
-                moved_bytes = moved_bytes
-                    .saturating_add(draft.files.iter().map(|file| file.size_bytes).sum::<u64>());
-            }
+            moved_bytes = moved_bytes.saturating_add(outcome.moved_bytes);
             if a_source_path.is_none() {
-                a_source_path = source_folder_path.clone().or(source_root_path.clone());
+                a_source_path = outcome.anchor_source;
             }
             if a_destination_path.is_none() {
-                a_destination_path = Some(destination_root_path.clone());
+                a_destination_path = outcome.anchor_destination;
             }
             if source_root_for_recycle.is_none() {
-                source_root_for_recycle = source_root_path
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().to_string());
+                source_root_for_recycle = outcome.recycle_source_root;
             }
-
-            drafts.push(draft);
+            drafts.push(outcome.draft);
         }
+        drop(outcomes);
 
         // FR-080: free space, including the recycle-copy cost when the bin is on
         // another volume.
@@ -2086,8 +2224,8 @@ impl AppUseCase {
                 let recycle_config = self
                     .recycle_bin_config_for_media_root(source_root_for_recycle.as_deref())
                     .await;
-                estimate_free_space(
-                    &FreeSpaceRequest {
+                estimate_free_space_off_runtime(
+                    FreeSpaceRequest {
                         source_path: source,
                         destination_path: destination,
                         moved_bytes,
@@ -2096,8 +2234,9 @@ impl AppUseCase {
                             .enabled
                             .then(|| recycle_config.base_path.clone()),
                     },
-                    &probe,
+                    probe,
                 )
+                .await
             }
             _ => FreeSpaceEstimate::unknown(),
         };
@@ -2182,6 +2321,318 @@ impl AppUseCase {
     /// when a redirect was published and only one side has been hydrated since,
     /// a merge that *could* have been offered is not, and the title transfers
     /// instead. That is a missed merge, never a wrong one.
+    /// One title's draft for [`Self::plan_root_move`]: the paths it moves
+    /// between, the facts read from its folders, and the selection-wide state
+    /// it contributes, which the caller applies in selection order.
+    ///
+    /// Runs under [`LOCATION_PREVIEW_TITLE_CONCURRENCY`] at a time. Everything
+    /// it reads was gathered once before the titles were fanned out; the
+    /// per-title cost is the folder walks, stats, and hashes behind
+    /// [`Self::title_move_facts`], which on a network mount is the preview.
+    async fn root_move_title_draft(
+        &self,
+        context: RootMoveDraftContext<'_>,
+        title: &Title,
+    ) -> AppResult<RootMoveTitleOutcome> {
+        let RootMoveDraftContext {
+            classification,
+            libraries,
+            destination_library,
+            merge_plans,
+            merge_destination_titles,
+            folder_template,
+            media_files_by_title,
+            mode,
+        } = context;
+        let mut downgraded_from = None;
+        let classified = classification
+            .classification_of(&title.id)
+            .expect("every selected title is classified");
+        let destination_root_path = destination_library
+            .roots
+            .iter()
+            .find(|root| root.id == classified.destination_root_id)
+            .map(|root| PathBuf::from(root.path.clone()));
+        let source_root_path = libraries
+            .get(&title.library_id)
+            .and_then(|library| {
+                library
+                    .roots
+                    .iter()
+                    .find(|root| root.id == title.root_folder_id)
+            })
+            .map(|root| PathBuf::from(root.path.clone()));
+        let source_folder_path = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(stored_path_to_path_buf);
+
+        let mut draft = RootMoveTitleDraft {
+            title_id: title.id.clone(),
+            title_name: title.name.clone(),
+            class: classified.class,
+            source_library_id: title.library_id.clone(),
+            source_root_id: title.root_folder_id.clone(),
+            source_root_path: source_root_path.clone(),
+            source_folder_path: source_folder_path.clone(),
+            destination_library_id: classified.destination_library_id.clone(),
+            destination_root_id: classified.destination_root_id.clone(),
+            destination_root_path: destination_root_path.clone(),
+            destination_folder_path: None,
+            files: Vec::new(),
+            source_directories: Vec::new(),
+            same_volume: None,
+            hardlinks: Vec::new(),
+            destination_entries: Vec::new(),
+            recycle: RecycleAvailability::Available,
+            blocked_reason: classified.reason.clone(),
+            destination_identity: classified.destination_identity.clone(),
+            facet_conversion: classified.facet_conversion.clone(),
+            associations: classified.associations,
+            merge_summary: merge_plans.get(&title.id).map(|plan| plan.summary.clone()),
+            adoption: None,
+        };
+
+        let manual_folder_mapping = mode == LocationExecutionMode::UserMovedFiles
+            && classified.class == TitleLocationClass::CatalogOnly
+            && source_folder_path.is_some();
+        if !classified.class.moves_files() && !manual_folder_mapping {
+            return Ok(RootMoveTitleOutcome::settled(draft, downgraded_from));
+        }
+
+        let Some(destination_root_path) = destination_root_path else {
+            downgraded_from = Some(draft.class);
+            draft.class = TitleLocationClass::NeedsResolution;
+            draft.blocked_reason = Some(format!(
+                "destination root {} has no configured path",
+                classified.destination_root_id
+            ));
+            return Ok(RootMoveTitleOutcome::settled(draft, downgraded_from));
+        };
+
+        // FR-013 for a transfer, FR-063 for a merge.
+        //
+        // A merge has no destination folder of its own to calculate: the
+        // destination title already owns one, and the merged content is
+        // that title's content from the moment Groups 1–5 commit. Sending
+        // the files anywhere else would leave the surviving title owning a
+        // folder that holds half of its media. Routing them into the
+        // destination's folder is also what makes FR-073 work here for
+        // free: the collision engine reads that folder's entries, and two
+        // copies of the same episode dedup against each other instead of
+        // landing side by side.
+        let merge_destination = classified
+            .merge_target_title_id()
+            .and_then(|id| merge_destination_titles.get(id));
+
+        // A merge also lands on the *destination title's* root, not on the
+        // one the request named, when the two differ. FR-063 gives the
+        // destination its placement along with everything else, and a
+        // checkpoint recording a root that does not contain the folder
+        // would be an audit trail nobody can follow.
+        let (destination_root_id, destination_root_path) = match merge_destination {
+            Some(destination_title)
+                if destination_title.root_folder_id != classified.destination_root_id =>
+            {
+                match destination_library
+                    .roots
+                    .iter()
+                    .find(|root| root.id == destination_title.root_folder_id)
+                {
+                    Some(root) => (
+                        destination_title.root_folder_id.clone(),
+                        PathBuf::from(root.path.clone()),
+                    ),
+                    None => (
+                        classified.destination_root_id.clone(),
+                        destination_root_path,
+                    ),
+                }
+            }
+            _ => (
+                classified.destination_root_id.clone(),
+                destination_root_path,
+            ),
+        };
+        draft.destination_root_id = destination_root_id;
+        draft.destination_root_path = Some(destination_root_path.clone());
+
+        let destination_folder = match merge_destination {
+            Some(destination_title) => {
+                merge_destination_folder(destination_title, &destination_root_path, folder_template)
+            }
+            None => crate::library::rename::configured_title_folder_path(
+                &destination_root_path.to_string_lossy(),
+                title,
+                folder_template,
+                title.year,
+            ),
+        };
+        // US3: nothing is planned to move, because it already did. The
+        // destination folder is resolved against what is actually on disk,
+        // the tracked media is accounted for against it (FR-050/051), and
+        // none of the collision, hardlink, or free-space machinery applies —
+        // no bytes are written.
+        if mode == LocationExecutionMode::UserMovedFiles {
+            draft.destination_folder_path = Some(destination_folder.clone());
+            let mut mapped_paths = std::collections::BTreeSet::new();
+            if let Some(destination_title) = merge_destination {
+                for media in self
+                    .services
+                    .library
+                    .media_files
+                    .list_media_files_for_title(&destination_title.id)
+                    .await?
+                {
+                    mapped_paths.insert(
+                        PathCaseRule::platform_default()
+                            .fold(&media.file_path)
+                            .into_owned(),
+                    );
+                }
+            }
+            for media in media_files_by_title.get(&title.id).into_iter().flatten() {
+                let path = stored_path_to_path_buf(&media.file_path);
+                let relative = source_folder_path
+                    .as_ref()
+                    .and_then(|folder| path.strip_prefix(folder).ok());
+                let Some(relative) = relative else {
+                    return Err(AppError::Validation(format!(
+                        "The catalog cannot map a file outside the recorded folder for {}. Correct its folder mapping first.",
+                        title.name
+                    )));
+                };
+                if relative.as_os_str().is_empty()
+                    || relative
+                        .components()
+                        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                {
+                    return Err(AppError::Validation(format!(
+                        "The catalog path for {} is ambiguous. Correct its folder mapping before moving it.",
+                        title.name
+                    )));
+                }
+                let mapped = path_to_stored_string(destination_folder.join(relative));
+                if !mapped_paths.insert(PathCaseRule::platform_default().fold(&mapped).into_owned())
+                {
+                    return Err(AppError::Validation(format!(
+                        "More than one catalog record would point at {mapped}. Resolve that catalog conflict before confirming the manual move."
+                    )));
+                }
+                draft.files.push(SourceFile {
+                    media_file_id: Some(media.id.clone()),
+                    relative_path: Some(relative.to_path_buf()),
+                    path,
+                    size_bytes: media.size_bytes.max(0) as u64,
+                    full_blake3: FullHash::Absent,
+                });
+            }
+            return Ok(RootMoveTitleOutcome::settled(draft, downgraded_from));
+        }
+        if mode == LocationExecutionMode::FilesAlreadyThere {
+            let adoption_folder = resolve_adoption_folder(
+                destination_folder.clone(),
+                source_folder_path.as_deref(),
+                &destination_root_path,
+            )
+            .await;
+            draft.destination_folder_path = Some(adoption_folder.clone());
+            draft.adoption = account_for_adoption(
+                &adoption_folder,
+                source_folder_path.as_deref(),
+                media_files_by_title
+                    .get(&title.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            )
+            .await;
+            return Ok(RootMoveTitleOutcome {
+                anchor_source: source_folder_path.clone().or(source_root_path.clone()),
+                anchor_destination: Some(destination_root_path.clone()),
+                ..RootMoveTitleOutcome::settled(draft, downgraded_from)
+            });
+        }
+
+        draft.destination_folder_path = Some(destination_folder.clone());
+
+        let media_files = media_files_by_title
+            .get(&title.id)
+            .cloned()
+            .unwrap_or_default();
+        // A source folder that cannot be walked - vanished, unreadable - is
+        // that title's problem, not the preview's: erroring here would hide
+        // the whole plan behind an opaque failure, and the vanished-folder
+        // case is exactly the user who should be offered "Files are already
+        // there" (US3). Degrade to a blocked title the preview can name.
+        let facts = match self
+            .title_move_facts(
+                source_folder_path.as_deref(),
+                &media_files,
+                Some(&destination_folder),
+                merge_destination.map(|title| title.id.as_str()),
+            )
+            .await
+        {
+            Ok(facts) => facts,
+            Err(error) => {
+                downgraded_from = Some(draft.class);
+                draft.class = TitleLocationClass::NeedsResolution;
+                draft.blocked_reason = Some(format!(
+                    "the source folder for \"{}\" could not be read ({}); if its files \
+                     were moved by hand, use \"Files are already there\"",
+                    title.name, error
+                ));
+                return Ok(RootMoveTitleOutcome::settled(draft, downgraded_from));
+            }
+        };
+        draft.files = facts.files;
+        draft.source_directories = facts.source_directories;
+        draft.hardlinks = facts.hardlinks;
+        draft.destination_entries = facts.destination_entries;
+
+        draft.same_volume = match source_folder_path.as_deref() {
+            Some(folder) => Some(same_filesystem(folder, &destination_folder).await),
+            None => None,
+        };
+        draft.recycle = match source_root_path.as_deref() {
+            Some(root) => {
+                let config = self
+                    .recycle_bin_config_for_media_root(Some(&root.to_string_lossy()))
+                    .await;
+                if !config.enabled {
+                    RecycleAvailability::Disabled
+                } else if let Some(error) = config.validation_error.clone() {
+                    RecycleAvailability::Unavailable(error)
+                } else {
+                    RecycleAvailability::Available
+                }
+            }
+            None => RecycleAvailability::Unavailable(
+                "the source root has no configured path".to_string(),
+            ),
+        };
+
+        let moved_bytes = if draft.same_volume == Some(true) {
+            0
+        } else {
+            draft
+                .files
+                .iter()
+                .fold(0_u64, |total, file| total.saturating_add(file.size_bytes))
+        };
+        Ok(RootMoveTitleOutcome {
+            moved_bytes,
+            anchor_source: source_folder_path.clone().or(source_root_path.clone()),
+            anchor_destination: Some(destination_root_path.clone()),
+            recycle_source_root: source_root_path
+                .as_deref()
+                .map(|path| path.to_string_lossy().to_string()),
+            ..RootMoveTitleOutcome::settled(draft, downgraded_from)
+        })
+    }
+
     async fn detect_destination_titles_for(
         &self,
         titles: &[Title],
@@ -2313,62 +2764,34 @@ impl AppUseCase {
         // tracked media, so the persisted hashes are right there; without them
         // every identical episode would be renamed beside its twin rather than
         // deduplicated (D4).
-        let destination_hashes = match merge_target_title_id {
-            Some(title_id) => self.persisted_hashes_for_title(title_id).await?,
+        let destination_rows = match merge_target_title_id {
+            Some(title_id) => self.destination_media_for_title(title_id).await?,
             None => BTreeMap::new(),
         };
+        let destination_hashes: BTreeMap<String, FullHash> = destination_rows
+            .iter()
+            .map(|(path, row)| {
+                (
+                    path.clone(),
+                    FullHash::from_persisted(row.content_hashes.as_ref()),
+                )
+            })
+            .collect();
         let mut destination_entries = match destination_folder {
-            Some(folder) => read_destination_entries(folder, &destination_hashes).await,
+            Some(folder) => read_destination_entries(folder, &destination_hashes).await?,
             None => Vec::new(),
         };
-        let case_rule = PathCaseRule::platform_default();
-        let by_name: BTreeMap<String, usize> = destination_entries
+        let source_rows: BTreeMap<&str, &crate::TitleMediaFile> = media_files
             .iter()
-            .enumerate()
-            .map(|(index, entry)| (case_rule.fold(&entry.name).into_owned(), index))
+            .map(|row| (row.id.as_str(), row))
             .collect();
-        for file in &mut files {
-            let name = file
-                .relative_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_else(|| {
-                    file.path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string()
-                });
-            let Some(&index) = by_name.get::<str>(case_rule.fold(&name).as_ref()) else {
-                continue;
-            };
-            let existing = &mut destination_entries[index];
-            let Some(path) = existing.path.as_deref() else {
-                continue;
-            };
-            let destination = stored_path_to_path_buf(path);
-            file.full_blake3 = FullHash::Absent;
-            existing.content.full_blake3 = FullHash::Absent;
-            if let (Ok(source), Ok(target)) = (
-                tokio::fs::symlink_metadata(&file.path).await,
-                tokio::fs::symlink_metadata(&destination).await,
-            ) && super::execution::same_regular_file(&source, &target)
-            {
-                continue;
-            }
-            if file.size_bytes <= 10_000_000 && existing.content.size_bytes <= 10_000_000 {
-                if let Ok(Some(hash)) = super::resolution::preview_hash(&file.path).await {
-                    file.full_blake3 = FullHash::known(hash);
-                }
-                if let Ok(Some(hash)) = super::resolution::preview_hash(&destination).await {
-                    existing.content.full_blake3 = FullHash::known(hash);
-                }
-            } else {
-                // Preview samples never authorize consolidation or cleanup.
-                let _source_sample = sampled_proof_of(&file.path).await;
-                let _destination_sample = sampled_proof_of(&destination).await;
-            }
-        }
+        prove_name_collisions(
+            &mut files,
+            &mut destination_entries,
+            &source_rows,
+            &destination_rows,
+        )
+        .await;
         Ok(TitleMoveFacts {
             files,
             source_directories,
@@ -2377,13 +2800,14 @@ impl AppUseCase {
         })
     }
 
-    /// Persisted full-BLAKE3 state for one title's tracked media, keyed by
-    /// stored path, so the collision planner can prove a duplicate without
-    /// reading a byte (D4, FR-047).
-    pub(super) async fn persisted_hashes_for_title(
+    /// One title's tracked media rows keyed by stored path: the persisted
+    /// full BLAKE3 the collision planner proves a duplicate with, and the size
+    /// and signature that say whether that hash still describes the file
+    /// (D4, FR-046, FR-047). One read, however many files collide.
+    pub(super) async fn destination_media_for_title(
         &self,
         title_id: &str,
-    ) -> AppResult<BTreeMap<String, FullHash>> {
+    ) -> AppResult<BTreeMap<String, crate::TitleMediaFile>> {
         Ok(self
             .services
             .library
@@ -2391,10 +2815,7 @@ impl AppUseCase {
             .list_media_files_for_title(title_id)
             .await?
             .into_iter()
-            .map(|file| {
-                let hash = FullHash::from_persisted(file.content_hashes.as_ref());
-                (file.file_path, hash)
-            })
+            .map(|file| (file.file_path.clone(), file))
             .collect())
     }
 
@@ -2588,6 +3009,13 @@ fn source_library_label(libraries: &BTreeMap<String, scryer_domain::Library>) ->
 /// the media-file table only knows about tracked media, and a title folder
 /// holds subtitles, artwork, NFOs, and trickplay directories that belong to it
 /// just as much.
+/// One walked directory with the size of every file in it, produced inside the
+/// walk's blocking task so the stats never hop through the runtime one by one.
+struct StattedListing {
+    path: PathBuf,
+    files: Vec<(PathBuf, u64)>,
+}
+
 pub(super) async fn collect_source_files(
     source_folder: Option<&Path>,
     media_files: &[crate::TitleMediaFile],
@@ -2603,14 +3031,34 @@ pub(super) async fn collect_source_files(
 
     if let Some(folder) = source_folder {
         let folder = folder.to_path_buf();
+        // The walk and the per-file `stat` share one blocking task: a title
+        // folder on a network mount pays one round trip per file either way,
+        // but paying it through a runtime hop per file serializes the title
+        // behind the blocking pool's scheduling as well as the mount's latency.
         let walked = tokio::task::spawn_blocking({
             let folder = folder.clone();
-            move || {
-                crate::library::filesystem_walk::FilesystemWalker::new()
+            move || -> AppResult<Vec<StattedListing>> {
+                let listings = crate::library::filesystem_walk::FilesystemWalker::new()
                     .skip_unreadable_subdirectories()
                     .skip_symlinked_directories()
                     .confine_to_root()
-                    .walk(&folder)
+                    .walk(&folder)?;
+                Ok(listings
+                    .into_iter()
+                    .map(|listing| StattedListing {
+                        files: listing
+                            .files
+                            .into_iter()
+                            .map(|path| {
+                                let size_bytes = std::fs::symlink_metadata(&path)
+                                    .map(|metadata| metadata.len())
+                                    .unwrap_or(0);
+                                (path, size_bytes)
+                            })
+                            .collect(),
+                        path: listing.path,
+                    })
+                    .collect())
             }
         })
         .await
@@ -2620,12 +3068,8 @@ pub(super) async fn collect_source_files(
             if listing.path != folder {
                 directories.push(listing.path.clone());
             }
-            for path in listing.files {
+            for (path, size_bytes) in listing.files {
                 let stored = path_to_stored_string(&path);
-                let size_bytes = tokio::fs::symlink_metadata(&path)
-                    .await
-                    .map(|metadata| metadata.len())
-                    .unwrap_or(0);
                 let relative = path
                     .strip_prefix(&folder)
                     .ok()
@@ -2650,22 +3094,37 @@ pub(super) async fn collect_source_files(
 
     // Tracked media the walk did not see: outside the folder, or the folder is
     // unknown. Leaving it behind would strand a catalog row on the old root.
-    for media_file in media_files {
-        if seen.contains(&media_file.file_path) {
-            continue;
+    let unseen: Vec<&crate::TitleMediaFile> = media_files
+        .iter()
+        .filter(|media_file| !seen.contains(&media_file.file_path))
+        .collect();
+    if !unseen.is_empty() {
+        let paths: Vec<PathBuf> = unseen
+            .iter()
+            .map(|media_file| stored_path_to_path_buf(&media_file.file_path))
+            .collect();
+        let sizes = tokio::task::spawn_blocking(move || {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let size_bytes = std::fs::symlink_metadata(&path)
+                        .map(|metadata| metadata.len())
+                        .ok();
+                    (path, size_bytes)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("source stat task panicked: {error}")))?;
+        for (media_file, (path, size_bytes)) in unseen.into_iter().zip(sizes) {
+            files.push(SourceFile {
+                media_file_id: Some(media_file.id.clone()),
+                full_blake3: FullHash::from_persisted(media_file.content_hashes.as_ref()),
+                path,
+                relative_path: None,
+                size_bytes: size_bytes.unwrap_or_else(|| media_file.size_bytes.max(0) as u64),
+            });
         }
-        let path = stored_path_to_path_buf(&media_file.file_path);
-        let size_bytes = tokio::fs::symlink_metadata(&path)
-            .await
-            .map(|metadata| metadata.len())
-            .unwrap_or_else(|_| media_file.size_bytes.max(0) as u64);
-        files.push(SourceFile {
-            media_file_id: Some(media_file.id.clone()),
-            full_blake3: FullHash::from_persisted(media_file.content_hashes.as_ref()),
-            path,
-            relative_path: None,
-            size_bytes,
-        });
     }
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -2820,46 +3279,44 @@ struct DestinationScanFile {
 /// listing one level deep would report every episode missing.
 async fn walk_destination_files(folder: &Path) -> Option<Vec<DestinationScanFile>> {
     let root = folder.to_path_buf();
-    let walked = tokio::task::spawn_blocking({
-        let root = root.clone();
-        move || {
-            crate::library::filesystem_walk::FilesystemWalker::new()
-                .skip_unreadable_subdirectories()
-                .skip_symlinked_directories()
-                .confine_to_root()
-                .walk(&root)
+    // Walk and stat in one blocking task, as `collect_source_files` does.
+    tokio::task::spawn_blocking(move || {
+        let walked = crate::library::filesystem_walk::FilesystemWalker::new()
+            .skip_unreadable_subdirectories()
+            .skip_symlinked_directories()
+            .confine_to_root()
+            .walk(&root)
+            .ok()?;
+        let mut files = Vec::new();
+        for listing in walked {
+            for path in listing.files {
+                let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if !metadata.is_file() {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(&root)
+                    .ok()
+                    .map(|relative| relative.to_string_lossy().to_string());
+                files.push(DestinationScanFile {
+                    relative_path: relative,
+                    size_bytes: metadata.len(),
+                    signature: crate::file_source_signature::file_source_signature_from_metadata(
+                        &metadata,
+                    )
+                    .ok(),
+                    path,
+                });
+            }
         }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        Some(files)
     })
     .await
-    .ok()?
-    .ok()?;
-
-    let mut files = Vec::new();
-    for listing in walked {
-        for path in listing.files {
-            let Ok(metadata) = tokio::fs::symlink_metadata(&path).await else {
-                continue;
-            };
-            if !metadata.is_file() {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(&root)
-                .ok()
-                .map(|relative| relative.to_string_lossy().to_string());
-            files.push(DestinationScanFile {
-                relative_path: relative,
-                size_bytes: metadata.len(),
-                signature: crate::file_source_signature::file_source_signature_from_metadata(
-                    &metadata,
-                )
-                .ok(),
-                path,
-            });
-        }
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    Some(files)
+    .ok()
+    .flatten()
 }
 
 /// The signature the catalog stored for a media file, when it stored one this
@@ -2902,38 +3359,176 @@ async fn sampled_proof_of(path: &Path) -> Option<scryer_domain::ImportContentPro
 pub(super) async fn read_destination_entries(
     destination_folder: &Path,
     known_hashes: &BTreeMap<String, FullHash>,
-) -> Vec<DestinationItem> {
-    let mut items = Vec::new();
-    let mut pending = vec![destination_folder.to_path_buf()];
-    while let Some(folder) = pending.pop() {
-        let Ok(mut entries) = tokio::fs::read_dir(&folder).await else {
-            continue;
-        };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(metadata) = tokio::fs::symlink_metadata(entry.path()).await else {
+) -> AppResult<Vec<DestinationItem>> {
+    let destination_folder = destination_folder.to_path_buf();
+    let known_hashes = known_hashes.clone();
+    // One blocking task for the listing and every `stat` in it; the folder is
+    // usually absent (a fresh move) or one title deep (a merge).
+    tokio::task::spawn_blocking(move || {
+        let mut items = Vec::new();
+        let mut pending = vec![destination_folder.clone()];
+        while let Some(folder) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&folder) else {
                 continue;
             };
-            if metadata.is_dir() {
-                pending.push(entry.path());
-                continue;
+            for entry in entries.flatten() {
+                let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+                    continue;
+                };
+                if metadata.is_dir() {
+                    pending.push(entry.path());
+                    continue;
+                }
+                let name = entry
+                    .path()
+                    .strip_prefix(&destination_folder)
+                    .expect("walked child")
+                    .to_string_lossy()
+                    .to_string();
+                let path = path_to_stored_string(entry.path());
+                let full_hash = known_hashes.get(&path).cloned().unwrap_or(FullHash::Absent);
+                items.push(
+                    DestinationItem::companion(name, metadata.len())
+                        .with_content(ContentFacts::new(metadata.len()).with_full_hash(full_hash))
+                        .with_path(path),
+                );
             }
-            let name = entry
-                .path()
-                .strip_prefix(destination_folder)
-                .expect("walked child")
-                .to_string_lossy()
-                .to_string();
-            let path = path_to_stored_string(entry.path());
-            let full_hash = known_hashes.get(&path).cloned().unwrap_or(FullHash::Absent);
-            items.push(
-                DestinationItem::companion(name, metadata.len())
-                    .with_content(ContentFacts::new(metadata.len()).with_full_hash(full_hash))
-                    .with_path(path),
-            );
+        }
+        items.sort_by(|left, right| left.name.cmp(&right.name));
+        items
+    })
+    .await
+    // An empty listing is a positive claim that nothing is there, which the
+    // planner takes at face value; a task that died is not that claim.
+    .map_err(|error| AppError::Repository(format!("destination listing task failed: {error}")))
+}
+
+use super::resolution::PREVIEW_FULL_HASH_LIMIT_BYTES;
+
+/// The persisted full hash of a tracked file, trusted only while the size *and*
+/// signature the catalog stored both match a fresh `stat`. This is stricter
+/// than the scan's FR-046 invalidation rule on purpose: that rule answers "may
+/// this hash be thrown away?" and never invalidates on a guess, so a row with
+/// no stored signature passes it on size alone. Proof runs the other way — a
+/// row that cannot attest its bytes proves nothing (D4), and its hash reads
+/// back [`FullHash::Stale`] until the backfill job records a signature.
+fn persisted_hash_if_current(
+    media_file: &crate::TitleMediaFile,
+    metadata: &std::fs::Metadata,
+) -> FullHash {
+    let size_matches = i64::try_from(metadata.len()).ok() == Some(media_file.size_bytes);
+    let signature_matches = match (
+        media_file.source_signature_scheme.as_deref(),
+        media_file.source_signature_value.as_deref(),
+        crate::file_source_signature::file_source_signature_from_metadata(metadata).ok(),
+    ) {
+        (Some(scheme), Some(value), Some(fresh)) => fresh.scheme == scheme && fresh.value == value,
+        _ => false,
+    };
+    match FullHash::from_persisted(media_file.content_hashes.as_ref()) {
+        FullHash::Known(hash) if size_matches && signature_matches => FullHash::Known(hash),
+        FullHash::Known(_) => FullHash::Stale,
+        other => other,
+    }
+}
+
+/// Settles the hash evidence for every source file that collides by name with
+/// a destination entry (FR-072–FR-075), reading as little as possible.
+///
+/// `source_rows` is keyed by media-file id, `destination_rows` by stored path.
+/// For each colliding pair:
+///
+/// - the same regular file on both sides (a case-only rename, a hardlink) keeps
+///   both hashes absent, because a proof that the file is its own duplicate
+///   would recycle the only copy;
+/// - a persisted hash whose stored size and signature match the fresh `stat`
+///   is kept as evidence, on either side, at the cost of nothing;
+/// - a side that has no current hash is read end to end only when both files
+///   are within [`PREVIEW_FULL_HASH_LIMIT_BYTES`]; a larger file stays unproven,
+///   which the dedup gate reads as "not a duplicate" (D4).
+pub(crate) async fn prove_name_collisions(
+    files: &mut [SourceFile],
+    destination_entries: &mut [DestinationItem],
+    source_rows: &BTreeMap<&str, &crate::TitleMediaFile>,
+    destination_rows: &BTreeMap<String, crate::TitleMediaFile>,
+) {
+    let case_rule = PathCaseRule::platform_default();
+    // First wins, the way `NameIndex` resolves the same fold, so the entry
+    // proven here is the entry the dedup gate compares against.
+    let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
+    for (index, entry) in destination_entries.iter().enumerate() {
+        by_name
+            .entry(case_rule.fold(&entry.name).into_owned())
+            .or_insert(index);
+    }
+    // A destination entry is settled on its first collision and kept as is
+    // afterwards: a second source file folding to the same name must not reset
+    // evidence the first one's verdict rests on.
+    let mut settled_destinations = std::collections::BTreeSet::new();
+    for file in files.iter_mut() {
+        let name = file
+            .relative_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                file.path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            });
+        let Some(&index) = by_name.get::<str>(case_rule.fold(&name).as_ref()) else {
+            continue;
+        };
+        let existing = &mut destination_entries[index];
+        let Some(stored_destination) = existing.path.as_deref() else {
+            continue;
+        };
+        let destination = stored_path_to_path_buf(stored_destination);
+        let first_visit = settled_destinations.insert(index);
+        let source_metadata = tokio::fs::symlink_metadata(&file.path).await;
+        let destination_metadata = tokio::fs::symlink_metadata(&destination).await;
+        file.full_blake3 = FullHash::Absent;
+        if first_visit {
+            existing.content.full_blake3 = FullHash::Absent;
+        }
+        if let (Ok(source), Ok(target)) = (&source_metadata, &destination_metadata)
+            && super::execution::same_regular_file(source, target)
+        {
+            continue;
+        }
+        let source_row = file
+            .media_file_id
+            .as_deref()
+            .and_then(|id| source_rows.get(id).copied());
+        if let (Some(row), Ok(metadata)) = (source_row, &source_metadata) {
+            file.full_blake3 = persisted_hash_if_current(row, metadata);
+        }
+        if first_visit
+            && let (Some(row), Ok(metadata)) = (
+                destination_rows.get(stored_destination),
+                &destination_metadata,
+            )
+        {
+            existing.content.full_blake3 = persisted_hash_if_current(row, metadata);
+        }
+        let within_read_limit = file.size_bytes <= PREVIEW_FULL_HASH_LIMIT_BYTES
+            && existing.content.size_bytes <= PREVIEW_FULL_HASH_LIMIT_BYTES;
+        if !within_read_limit {
+            continue;
+        }
+        if file.full_blake3.as_known().is_none()
+            && let Ok(Some(hash)) = super::resolution::preview_hash(&file.path).await
+        {
+            file.full_blake3 = FullHash::known(hash);
+        }
+        if first_visit
+            && existing.content.full_blake3.as_known().is_none()
+            && let Ok(Some(hash)) = super::resolution::preview_hash(&destination).await
+        {
+            existing.content.full_blake3 = FullHash::known(hash);
         }
     }
-    items.sort_by(|left, right| left.name.cmp(&right.name));
-    items
 }
 
 /// The folder a merging title's content moves into (FR-063).

@@ -5,7 +5,7 @@ use crate::contracts::{
 };
 use crate::location::model::{
     FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
-    TitleCheckpoint,
+    LocationReasonCode, TitleCheckpoint,
 };
 use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
@@ -5062,6 +5062,9 @@ pub struct LocationOperationProgress {
     pub detail: Option<String>,
     /// Clear a stored detail that no longer applies.
     pub clear_detail: bool,
+    /// Why the operation stopped short; travels with `detail` and is cleared
+    /// with it, so a code never outlives the explanation it belongs to.
+    pub reason_code: Option<LocationReasonCode>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -5211,6 +5214,15 @@ pub trait LocationOperationRepository: Send + Sync {
     /// Records a cancel request (FR-092). Returns false when the operation is
     /// already terminal, so a late cancel cannot resurrect a finished run.
     async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Reopens a `failed` or `canceled` operation so the runner can walk its
+    /// plan again: the row goes back to `queued` with its failure explanation,
+    /// reason code, completion instant, and cancel request cleared, and every
+    /// `failed` title checkpoint goes back to `pending` (settled titles and
+    /// verified files are untouched, so nothing is repeated). Returns false
+    /// when the operation is not in one of those two states, so a retry cannot
+    /// reopen a finished or a live run.
+    async fn reopen_location_operation(&self, operation_id: &str) -> AppResult<bool>;
 
     /// Whether a cancel has been requested. Read at every title boundary, so a
     /// cancel issued by another process is honored.

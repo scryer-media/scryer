@@ -331,6 +331,11 @@ export type LocationTitleCheckpoint = {
   bytesTotal: LongValue;
   bytesVerified: LongValue;
   detail: string | null;
+  /**
+   * Why the title failed, when it did (see `OPERATION_REASON_CODES`).
+   * Optional on the client type because a cached row may predate the field.
+   */
+  reasonCode?: string | null;
   startedAt: string | null;
   updatedAt: string;
   completedAt: string | null;
@@ -351,6 +356,12 @@ export type LocationOperation = {
   verificationFallbackCount: LongValue;
   counters: LocationOperationCounters;
   detail: string | null;
+  /**
+   * Why the operation stopped short, when it did (see
+   * `OPERATION_REASON_CODES`). Optional on the client type because a cached
+   * row may predate the field.
+   */
+  reasonCode?: string | null;
   jobRunId: string | null;
   workflowOperationId: string | null;
   cancelRequested: boolean;
@@ -1385,6 +1396,96 @@ export function canResumeOperation(
   return nowMs - updatedAtMs >= stallThresholdMs;
 }
 
+/** What a fresh start dialog is prefilled with to plan unfinished work again. */
+export type LocationRetrySelection = {
+  operationId: string;
+  mode: LocationExecutionMode;
+  verificationDepth: VerificationDepth;
+  destinationLibraryId: string | null;
+  destinationRootId: string | null;
+  titles: LocationRetryTitle[];
+  catalogBlockedTitleIds: string[];
+};
+
+export type LocationRetryTitle = {
+  titleId: string;
+  titleName: string;
+  sourceLibraryId: string;
+  sourceRootId: string;
+  sourceFolderPath: string | null;
+};
+
+/** A title as the move dialog wants it, built from a retry selection. */
+export type RetrySelectionTitleRef = {
+  id: string;
+  name: string;
+  libraryId: string;
+  rootFolderId: string | null;
+};
+
+/**
+ * Plan again is Retry's counterpart for a plan that went stale: a stopped
+ * (failed or canceled) operation with titles a fresh preview could still
+ * select. A title whose catalog write failed is never among them — only Retry
+ * converges that one — so an operation left with nothing else offers no
+ * Plan again.
+ */
+export function canPlanAgainOperation(
+  operation: LocationOperation | null | undefined,
+  selection: LocationRetrySelection | null | undefined,
+): boolean {
+  return canRetryOperation(operation) && (selection?.titles.length ?? 0) > 0;
+}
+
+/**
+ * The dialog's title refs for a retry selection: the whole selection, or one
+ * title of it when the action was taken from that title's row. The root's own
+ * path is not part of the selection (it names the title's folder, not the
+ * root), so the caller fills it in from the roots it has.
+ */
+export function retrySelectionTitleRefs(
+  selection: LocationRetrySelection | null | undefined,
+  titleId: string | null = null,
+): RetrySelectionTitleRef[] {
+  return (selection?.titles ?? [])
+    .filter((title) => titleId === null || title.titleId === titleId)
+    .map((title) => ({
+      id: title.titleId,
+      name: title.titleName,
+      libraryId: title.sourceLibraryId,
+      rootFolderId: title.sourceRootId,
+    }));
+}
+
+/**
+ * Abandon is offered exactly where Resume is: a non-terminal run nothing has
+ * written to in a while. Resume is for when the storage is back; Abandon is
+ * for when it is not coming back, so the titles and roots the dead run owns
+ * are released instead of waiting on it.
+ */
+export function canAbandonOperation(
+  operation: LocationOperation | null | undefined,
+  nowMs: number,
+  stallThresholdMs: number = OPERATION_STALL_THRESHOLD_MS,
+): boolean {
+  return canResumeOperation(operation, nowMs, stallThresholdMs);
+}
+
+/**
+ * Retry is for a run that stopped with something left undone: failed or
+ * canceled. It reopens the operation and walks the plan from the last verified
+ * checkpoint, so settled titles are not repeated. A finished operation has
+ * nothing left to do and is never offered one.
+ */
+export function canRetryOperation(
+  operation: LocationOperation | null | undefined,
+): boolean {
+  if (!operation) {
+    return false;
+  }
+  return operation.state === "FAILED" || operation.state === "CANCELED";
+}
+
 /** Fraction of planned bytes the operation has processed, 0–1. */
 export function operationByteProgress(
   counters: LocationOperationCounters | null | undefined,
@@ -1709,6 +1810,45 @@ export function planKindLabelKey(value: LocationPlanItemKind): string {
 /** Translation key for an operation lifecycle state. */
 export function operationStateLabelKey(value: LocationOperationState): string {
   return `move.operationState.${value}`;
+}
+
+/**
+ * Reason codes the server writes on a failed or canceled operation and on a
+ * failed title checkpoint (`LocationReasonCode` in the location model). Each
+ * one has a guidance string keyed `move.reason.<code>` that tells the user the
+ * way out — retry the same operation, plan again, or fix the storage first.
+ */
+export const OPERATION_REASON_CODES = [
+  "ownership_conflict",
+  "storage_error",
+  "verification_mismatch",
+  "stale_plan",
+  "merge_unavailable",
+  "catalog_write_failed",
+  "source_cleanup_failed",
+  "stranded",
+  "canceled",
+  "abandoned",
+  "root_unavailable",
+] as const;
+
+export type OperationReasonCode = (typeof OPERATION_REASON_CODES)[number];
+
+const KNOWN_REASON_CODES: ReadonlySet<string> = new Set(OPERATION_REASON_CODES);
+
+/**
+ * Translation key for the guidance that goes with a reason code, or null when
+ * the code is absent or one this build has no words for — the raw `detail`
+ * still explains itself, so an unknown code degrades to no guidance rather
+ * than to a wrong sentence.
+ */
+export function operationGuidanceKey(
+  reasonCode: string | null | undefined,
+): string | null {
+  if (!reasonCode || !KNOWN_REASON_CODES.has(reasonCode)) {
+    return null;
+  }
+  return `move.reason.${reasonCode}`;
 }
 
 /** Translation key for a per-title checkpoint state. */

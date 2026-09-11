@@ -1306,6 +1306,20 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
         "the operation stays interrupted and resumable, got {:?}",
         untouched.state
     );
+    // The row says why it is sitting there, so Activity does not have to
+    // guess from a stale "Moving" badge.
+    assert_eq!(
+        untouched.reason_code,
+        Some(crate::location::model::LocationReasonCode::RootUnavailable)
+    );
+    assert!(
+        untouched
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains(&*fixture.root_b().to_string_lossy())),
+        "the detail names the missing path: {:?}",
+        untouched.detail
+    );
     assert!(
         fixture.recorded_job_runs().await.is_empty(),
         "nothing was started, so no Activity run was opened"
@@ -1385,6 +1399,409 @@ async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() 
             .expect("boot resume"),
         0
     );
+}
+
+/// Retry: a failed operation with a stored plan is reopened and handed back to
+/// the runner, its explanation cleared so Activity shows it queued again; a
+/// finished one is declined. The boot hook only ever picks up interrupted
+/// operations, so neither is touched at start-up.
+#[tokio::test]
+async fn a_failed_operation_is_reopened_for_a_retry_and_a_finished_one_is_declined() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Retry After Failure",
+            2019,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Retry After Failure (2019)",
+            &[("Retry.After.Failure.2019.mkv", 700)],
+        )
+        .await;
+    let preview = fixture.preview(&[&title.id]).await;
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+
+    let failed_id = "operation-failed";
+    let mut failed = queued_operation(
+        failed_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    failed.state = LocationOperationState::Failed;
+    failed.detail = Some("1 of 1 title(s) failed: database is locked".to_string());
+    failed.reason_code = Some(crate::location::model::LocationReasonCode::CatalogWriteFailed);
+    failed.started_at = Some(chrono::Utc::now());
+    failed.completed_at = Some(chrono::Utc::now());
+    let finished_id = "operation-finished";
+    let mut finished = queued_operation(
+        finished_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    finished.state = LocationOperationState::Completed;
+    finished.completed_at = Some(chrono::Utc::now());
+    for operation in [&failed, &finished] {
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .create_location_operation(operation, Some(&plan_json))
+            .await
+            .expect("persist the operation");
+    }
+
+    // Terminal rows are nobody's business at boot.
+    assert_eq!(
+        fixture
+            .app
+            .resume_interrupted_location_operations()
+            .await
+            .expect("boot resume"),
+        0
+    );
+
+    let plan = fixture
+        .app
+        .resume_location_operation(failed_id)
+        .await
+        .expect("a retry is a decision, not an error")
+        .plan()
+        .expect("a failed operation with a stored plan is retried");
+    assert_eq!(plan, preview.execution);
+    let reopened = fixture
+        .app
+        .location_operation(failed_id)
+        .await
+        .expect("read the operation")
+        .expect("the row still exists");
+    assert_eq!(reopened.state, LocationOperationState::Queued);
+    assert_eq!(reopened.detail, None);
+    assert_eq!(reopened.reason_code, None);
+    assert_eq!(reopened.completed_at, None);
+    assert!(
+        reopened.job_run_id.is_some(),
+        "the retry gets its own Activity run"
+    );
+
+    let decision = fixture
+        .app
+        .resume_location_operation(finished_id)
+        .await
+        .expect("a finished operation is a decline, not an error");
+    let crate::location::operations::LocationResumeDecision::NotResumable(reason) = decision else {
+        panic!("a finished operation must not be retried");
+    };
+    assert!(
+        reason.contains("already finished"),
+        "the reason says it is over: {reason}"
+    );
+    assert_eq!(
+        fixture
+            .app
+            .location_operation(finished_id)
+            .await
+            .expect("read the operation")
+            .expect("the row still exists")
+            .state,
+        LocationOperationState::Completed
+    );
+}
+
+/// Plan again: the selection a fresh start dialog is prefilled with is the
+/// operation's destination plus every title it did not finish — no checkpoint,
+/// pending, failed, or left mid-step — with finished titles left out and a
+/// title whose catalog write failed set aside for Retry.
+#[tokio::test]
+async fn the_retry_selection_names_the_unfinished_titles_and_sets_catalog_failures_aside() {
+    use crate::location::model::{
+        LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState,
+    };
+    let fixture = RootMoveFixture::new().await;
+    let mut ids = Vec::new();
+    for (index, name) in [
+        "Finished",
+        "Failed Copy",
+        "Half Flipped",
+        "Never Reached",
+        "Died Reconciling",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let title = fixture
+            .seed_title(
+                name,
+                2010 + index as i32,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                &format!("{name} ({})", 2010 + index),
+                &[(&format!("{}.mkv", name.replace(' ', ".")), 700)],
+            )
+            .await;
+        ids.push(title.id);
+    }
+    let preview = fixture
+        .preview(&ids.iter().map(String::as_str).collect::<Vec<_>>())
+        .await;
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    let store = &fixture.app.services.library.location_operations;
+    let operation_id = "operation-plan-again";
+    let mut operation = queued_operation(
+        operation_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    operation.state = LocationOperationState::Failed;
+    operation.destination_root_id = Some(fixture.root_b_id.clone());
+    store
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+    let now = chrono::Utc::now();
+    let checkpoint = |title_id: &str, sequence: i64, state, reason_code| TitleCheckpoint {
+        operation_id: operation_id.to_string(),
+        title_id: title_id.to_string(),
+        sequence,
+        state,
+        classification: None,
+        placement: TitleCheckpointPlacement::default(),
+        files_total: 1,
+        files_verified: 0,
+        bytes_total: 700,
+        bytes_verified: 0,
+        detail: None,
+        reason_code,
+        started_at: Some(now),
+        updated_at: now,
+        completed_at: None,
+    };
+    for row in [
+        checkpoint(&ids[0], 1, TitleCheckpointState::Completed, None),
+        checkpoint(
+            &ids[1],
+            2,
+            TitleCheckpointState::Failed,
+            Some(LocationReasonCode::StorageError),
+        ),
+        checkpoint(
+            &ids[2],
+            3,
+            TitleCheckpointState::Failed,
+            Some(LocationReasonCode::CatalogWriteFailed),
+        ),
+        // The process died mid-reconcile: no code was ever written, but the
+        // catalog is in the same half-flipped shape as the coded failure.
+        checkpoint(&ids[4], 5, TitleCheckpointState::Reconciling, None),
+    ] {
+        store
+            .upsert_location_title_checkpoint(&row)
+            .await
+            .expect("persist the checkpoint");
+    }
+
+    let selection = fixture
+        .app
+        .location_operation_retry_selection(operation_id)
+        .await
+        .expect("read the selection")
+        .expect("a root move has a retry selection");
+    assert_eq!(
+        selection
+            .titles
+            .iter()
+            .map(|title| title.title_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![ids[1].as_str(), ids[3].as_str()],
+        "the failed copy and the title the run never reached; not the finished one"
+    );
+    let mut blocked = selection.catalog_blocked_title_ids.clone();
+    blocked.sort();
+    let mut expected_blocked = vec![ids[2].clone(), ids[4].clone()];
+    expected_blocked.sort();
+    assert_eq!(
+        blocked, expected_blocked,
+        "the coded catalog failure and the title left mid-reconcile are both set aside"
+    );
+    assert_eq!(
+        selection.destination_root_id.as_deref(),
+        Some(fixture.root_b_id.as_str())
+    );
+    assert_eq!(selection.mode, LocationExecutionMode::MoveWithScryer);
+    let failed_copy = &selection.titles[0];
+    assert_eq!(failed_copy.title_name, "Failed Copy");
+    assert_eq!(failed_copy.source_root_id, fixture.root_a_id);
+    assert!(
+        failed_copy.source_folder_path.is_some(),
+        "the dialog shows where the title is now"
+    );
+
+    // Root-scoped types are planned again from the root, not from titles.
+    let root_scoped = queued_operation(
+        "operation-root-change",
+        LocationOperationType::RootChange,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    store
+        .create_location_operation(&root_scoped, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+    assert_eq!(
+        fixture
+            .app
+            .location_operation_retry_selection("operation-root-change")
+            .await
+            .expect("read the selection"),
+        None
+    );
+    assert_eq!(
+        fixture
+            .app
+            .location_operation_retry_selection("no-such-operation")
+            .await
+            .expect("read the selection"),
+        None
+    );
+}
+
+/// Abandon: an operation whose runner is gone and whose root will not come
+/// back is marked failed with the `abandoned` reason, its titles and roots are
+/// released, and — because it is terminal now — Retry accepts it once the
+/// storage returns. A finished operation is declined, and a live one is
+/// refused outright.
+#[tokio::test]
+async fn abandoning_a_dead_operation_fails_it_releases_its_claims_and_leaves_retry_open() {
+    use crate::location::ownership_guard::OwnedEntity;
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Abandoned Mid Move",
+            2021,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Abandoned Mid Move (2021)",
+            &[("Abandoned.Mid.Move.2021.mkv", 700)],
+        )
+        .await;
+    let preview = fixture.preview(&[&title.id]).await;
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    let store = &fixture.app.services.library.location_operations;
+
+    let dead_id = "operation-dead";
+    let mut dead = queued_operation(
+        dead_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    dead.state = LocationOperationState::Moving;
+    dead.detail = Some("Waiting for the destination to come back.".to_string());
+    dead.started_at = Some(chrono::Utc::now());
+    store
+        .create_location_operation(&dead, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+    let claimed = store
+        .claim_location_operation_ownership(
+            dead_id,
+            &[
+                OwnedEntity::Title(title.id.clone()),
+                OwnedEntity::Root(fixture.root_a_id.clone()),
+            ],
+        )
+        .await
+        .expect("claim the title and root");
+    assert!(
+        matches!(claimed, crate::ports::LocationOwnershipOutcome::Claimed),
+        "{claimed:?}"
+    );
+
+    // While a runner is alive the row is its, not the user's.
+    {
+        let _live = fixture
+            .app
+            .runtime
+            .library
+            .location_runners
+            .begin(dead_id)
+            .expect("nothing else is running this operation");
+        let refused = fixture
+            .app
+            .abandon_location_operation(&fixture.user, dead_id)
+            .await
+            .expect_err("a live operation must not be abandoned");
+        assert!(
+            matches!(&refused, crate::AppError::Validation(message) if message.contains("cancel it instead")),
+            "{refused:?}"
+        );
+    }
+
+    let decision = fixture
+        .app
+        .abandon_location_operation(&fixture.user, dead_id)
+        .await
+        .expect("abandon is a decision, not an error");
+    assert_eq!(
+        decision,
+        crate::location::operations::LocationAbandonDecision::Abandoned
+    );
+    let abandoned = fixture
+        .app
+        .location_operation(dead_id)
+        .await
+        .expect("read the operation")
+        .expect("the row still exists");
+    assert_eq!(abandoned.state, LocationOperationState::Failed);
+    assert_eq!(
+        abandoned.reason_code,
+        Some(crate::location::model::LocationReasonCode::Abandoned)
+    );
+    let detail = abandoned.detail.clone().unwrap_or_default();
+    assert!(
+        detail.contains(&fixture.user.username)
+            && detail.contains("while moving")
+            && detail.contains("Waiting for the destination to come back."),
+        "the detail says who, when, and what was last reported: {detail}"
+    );
+    assert!(abandoned.completed_at.is_some());
+    assert_eq!(
+        store
+            .location_ownership_holder(&OwnedEntity::Title(title.id.clone()))
+            .await
+            .expect("read the holder"),
+        None,
+        "the title is nobody's once the operation is abandoned"
+    );
+    assert_eq!(
+        store
+            .location_ownership_holder(&OwnedEntity::Root(fixture.root_a_id.clone()))
+            .await
+            .expect("read the holder"),
+        None
+    );
+
+    // Terminal now, so Retry is the way back in; abandoning twice is a no-op
+    // with a reason.
+    let again = fixture
+        .app
+        .abandon_location_operation(&fixture.user, dead_id)
+        .await
+        .expect("a second abandon is answered, not refused");
+    assert!(
+        matches!(&again, crate::location::operations::LocationAbandonDecision::NotAbandoned(reason) if reason.contains("already stopped")),
+        "{again:?}"
+    );
+    fixture
+        .app
+        .resume_location_operation(dead_id)
+        .await
+        .expect("retry")
+        .plan()
+        .expect("an abandoned operation with a stored plan is retried");
 }
 
 /// FR-033, the other unreadable-plan case: the plan is *there* but this build
@@ -2315,4 +2732,258 @@ async fn a_vanished_source_folder_blocks_the_title_instead_of_failing_the_previe
         detail.contains("Files are already there"),
         "the refusal points at the adoption mode: {detail}"
     );
+}
+
+// ── Name collisions in the preview: what gets read, and what is trusted ──────
+
+mod name_collisions {
+    use super::*;
+
+    use crate::file_source_signature::file_source_signature_from_metadata;
+    use crate::lib_tests::full_hash_backfill::seed_row;
+    use crate::location::collisions::{ContentFacts, DestinationItem, FullHash};
+    use crate::location::model::PersistedContentHashes;
+    use crate::location::operations::prove_name_collisions;
+    use crate::location::root_move::SourceFile;
+    use crate::stored_paths::path_to_stored_string;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    /// A scanned row whose stored size and signature describe `path` as it is
+    /// now, carrying `hash` as its attested full BLAKE3.
+    fn current_row(id: &str, path: &Path, hash: &str) -> TitleMediaFile {
+        let mut row = seed_row(id, path, "title-1");
+        let signature = file_source_signature_from_metadata(&std::fs::metadata(path).unwrap())
+            .expect("signature");
+        row.source_signature_scheme = Some(signature.scheme);
+        row.source_signature_value = Some(signature.value);
+        row.content_hashes = Some(PersistedContentHashes {
+            full_blake3: hash.to_string(),
+            move_crc: None,
+            crc_algorithm: None,
+            hash_computed_at: Some(chrono::Utc::now()),
+        });
+        row
+    }
+
+    fn source_file(row: &TitleMediaFile, path: &Path) -> SourceFile {
+        SourceFile {
+            media_file_id: Some(row.id.clone()),
+            full_blake3: FullHash::from_persisted(row.content_hashes.as_ref()),
+            path: path.to_path_buf(),
+            relative_path: Some(path.file_name().unwrap().into()),
+            size_bytes: std::fs::metadata(path).unwrap().len(),
+        }
+    }
+
+    fn destination_entry(row: &TitleMediaFile, path: &Path) -> DestinationItem {
+        let size = std::fs::metadata(path).unwrap().len();
+        DestinationItem::companion(path.file_name().unwrap().to_string_lossy(), size)
+            .with_content(
+                ContentFacts::new(size)
+                    .with_full_hash(FullHash::from_persisted(row.content_hashes.as_ref())),
+            )
+            .with_path(path_to_stored_string(path))
+    }
+
+    async fn prove(
+        files: &mut [SourceFile],
+        entries: &mut [DestinationItem],
+        source_row: &TitleMediaFile,
+        destination_row: &TitleMediaFile,
+    ) {
+        let source_rows: BTreeMap<&str, &TitleMediaFile> =
+            BTreeMap::from([(source_row.id.as_str(), source_row)]);
+        let destination_rows: BTreeMap<String, TitleMediaFile> =
+            BTreeMap::from([(destination_row.file_path.clone(), destination_row.clone())]);
+        prove_name_collisions(files, entries, &source_rows, &destination_rows).await;
+    }
+
+    #[tokio::test]
+    async fn persisted_hashes_are_trusted_while_the_stored_signature_still_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("src").join("episode.mkv");
+        let destination = dir.path().join("dst").join("episode.mkv");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"same bytes").unwrap();
+        std::fs::write(&destination, b"same bytes").unwrap();
+        // Hashes no read could produce: if either side is re-hashed, the test
+        // sees the real digest instead.
+        let source_row = current_row("mf-src", &source, "aaaa");
+        let destination_row = current_row("mf-dst", &destination, "bbbb");
+        let mut files = vec![source_file(&source_row, &source)];
+        let mut entries = vec![destination_entry(&destination_row, &destination)];
+
+        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+
+        assert_eq!(files[0].full_blake3, FullHash::known("aaaa"));
+        assert_eq!(entries[0].content.full_blake3, FullHash::known("bbbb"));
+    }
+
+    #[tokio::test]
+    async fn a_file_whose_signature_moved_on_is_re_read_when_small_and_left_unproven_when_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("src").join("episode.mkv");
+        let destination = dir.path().join("dst").join("episode.mkv");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"fresh bytes").unwrap();
+        std::fs::write(&destination, b"fresh bytes").unwrap();
+        let source_row = current_row("mf-src", &source, "aaaa");
+        // The catalog remembers a different size for the destination: its
+        // hash describes bytes that are gone (FR-046).
+        let mut destination_row = current_row("mf-dst", &destination, "bbbb");
+        destination_row.size_bytes += 1;
+        let mut files = vec![source_file(&source_row, &source)];
+        let mut entries = vec![destination_entry(&destination_row, &destination)];
+
+        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+
+        let real = blake3::hash(b"fresh bytes").to_hex().to_string();
+        assert_eq!(files[0].full_blake3, FullHash::known("aaaa"));
+        assert_eq!(entries[0].content.full_blake3, FullHash::known(real));
+
+        // Past the preview's read limit the stale side stays unproven: the
+        // preview never hashes a large file to render a screen (D4).
+        let large = dir.path().join("dst").join("large.mkv");
+        let large_source = dir.path().join("src").join("large.mkv");
+        for path in [&large, &large_source] {
+            let file = std::fs::File::create(path).unwrap();
+            file.set_len(10_000_001).unwrap();
+        }
+        let large_source_row = current_row("mf-large-src", &large_source, "cccc");
+        let mut large_row = current_row("mf-large", &large, "dddd");
+        large_row.source_signature_value = Some("moved-on".to_string());
+        let mut files = vec![source_file(&large_source_row, &large_source)];
+        let mut entries = vec![destination_entry(&large_row, &large)];
+
+        prove(&mut files, &mut entries, &large_source_row, &large_row).await;
+
+        assert_eq!(files[0].full_blake3, FullHash::known("cccc"));
+        assert_eq!(entries[0].content.full_blake3, FullHash::Stale);
+    }
+
+    #[tokio::test]
+    async fn a_row_without_a_stored_signature_proves_nothing_even_at_the_same_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("src").join("episode.mkv");
+        let destination = dir.path().join("dst").join("episode.mkv");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"same length").unwrap();
+        std::fs::write(&destination, b"SAME LENGTH").unwrap();
+        // A row scanned before signatures shipped: right size, no signature.
+        // The scan's invalidation rule keeps its hash; the preview may not use
+        // it as proof, because the bytes could have been rewritten in place.
+        let mut source_row = current_row("mf-src", &source, "aaaa");
+        source_row.source_signature_scheme = None;
+        source_row.source_signature_value = None;
+        let destination_row = current_row("mf-dst", &destination, "bbbb");
+        let mut files = vec![source_file(&source_row, &source)];
+        let mut entries = vec![destination_entry(&destination_row, &destination)];
+
+        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+
+        let real = blake3::hash(b"same length").to_hex().to_string();
+        assert_eq!(files[0].full_blake3, FullHash::known(real));
+        assert_eq!(entries[0].content.full_blake3, FullHash::known("bbbb"));
+    }
+
+    #[tokio::test]
+    async fn a_large_file_on_either_side_leaves_the_small_side_unread_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("src").join("episode.mkv");
+        let destination = dir.path().join("dst").join("episode.mkv");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"small").unwrap();
+        std::fs::File::create(&destination)
+            .unwrap()
+            .set_len(10_000_001)
+            .unwrap();
+        // Neither side carries a current hash. The small source could be read
+        // for nothing: a size mismatch already rules the pair out, and a proof
+        // of one side alone is no proof.
+        let mut source_row = current_row("mf-src", &source, "aaaa");
+        source_row.source_signature_value = Some("moved-on".to_string());
+        let mut destination_row = current_row("mf-dst", &destination, "bbbb");
+        destination_row.source_signature_value = Some("moved-on".to_string());
+        let mut files = vec![source_file(&source_row, &source)];
+        let mut entries = vec![destination_entry(&destination_row, &destination)];
+
+        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+
+        assert_eq!(files[0].full_blake3, FullHash::Stale);
+        assert_eq!(entries[0].content.full_blake3, FullHash::Stale);
+    }
+
+    #[tokio::test]
+    async fn two_source_files_folding_to_one_destination_name_share_its_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let small = dir.path().join("src").join("a").join("episode.mkv");
+        let large = dir.path().join("src").join("b").join("episode.mkv");
+        let destination = dir.path().join("dst").join("episode.mkv");
+        for path in [&small, &large, &destination] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        std::fs::write(&small, b"bytes").unwrap();
+        std::fs::write(&destination, b"bytes").unwrap();
+        std::fs::File::create(&large)
+            .unwrap()
+            .set_len(10_000_001)
+            .unwrap();
+        let mut small_row = current_row("mf-small", &small, "aaaa");
+        small_row.source_signature_value = Some("moved-on".to_string());
+        let large_row = current_row("mf-large", &large, "cccc");
+        let mut destination_row = current_row("mf-dst", &destination, "bbbb");
+        destination_row.source_signature_value = Some("moved-on".to_string());
+        // Two source files that land on one destination name (the shape a
+        // case-sensitive volume produces under a case-insensitive rule).
+        let mut files = vec![
+            source_file(&small_row, &small),
+            source_file(&large_row, &large),
+        ];
+        let mut entries = vec![destination_entry(&destination_row, &destination)];
+        let source_rows: BTreeMap<&str, &TitleMediaFile> = BTreeMap::from([
+            (small_row.id.as_str(), &small_row),
+            (large_row.id.as_str(), &large_row),
+        ]);
+        let destination_rows: BTreeMap<String, TitleMediaFile> =
+            BTreeMap::from([(destination_row.file_path.clone(), destination_row.clone())]);
+
+        prove_name_collisions(&mut files, &mut entries, &source_rows, &destination_rows).await;
+
+        // The small pair was read and proven; the large second file must not
+        // reset the destination's evidence on its way through.
+        let real = blake3::hash(b"bytes").to_hex().to_string();
+        assert_eq!(files[0].full_blake3, FullHash::known(real.clone()));
+        assert_eq!(entries[0].content.full_blake3, FullHash::known(real));
+        assert_eq!(files[1].full_blake3, FullHash::known("cccc"));
+    }
+
+    // Inode identity is a unix notion; `same_regular_file` has no Windows arm,
+    // so a hardlinked pair there is compared by content like any other.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_same_regular_file_on_both_sides_is_never_its_own_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("src").join("episode.mkv");
+        let destination = dir.path().join("dst").join("episode.mkv");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"one inode").unwrap();
+        std::fs::hard_link(&source, &destination).unwrap();
+        let source_row = current_row("mf-src", &source, "aaaa");
+        let destination_row = current_row("mf-dst", &destination, "aaaa");
+        let mut files = vec![source_file(&source_row, &source)];
+        let mut entries = vec![destination_entry(&destination_row, &destination)];
+
+        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+
+        // Matching persisted hashes would read as a proven duplicate and
+        // recycle the source, which here is the destination's only inode.
+        assert_eq!(files[0].full_blake3, FullHash::Absent);
+        assert_eq!(entries[0].content.full_blake3, FullHash::Absent);
+    }
 }

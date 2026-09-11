@@ -270,6 +270,21 @@ const STRANDED_GRACE: chrono::Duration = chrono::Duration::seconds(30);
 pub(crate) const STRANDED_DETAIL: &str = "The operation's runner was lost before any file moved, \
 so it was marked failed to unblock the queue. Nothing was changed on disk; plan it again.";
 
+/// The same stranding for a retry that never got its runner: files did move
+/// once, so nothing about the disk is claimed and the way out is Retry.
+pub(crate) const STRANDED_RETRY_DETAIL: &str = "The operation's runner was lost before its retry \
+moved any file, so it was marked failed to unblock the queue. Finished titles are unchanged; retry it again.";
+
+/// Which stranding text fits: a row that once started is a retry that never
+/// got going, not a fresh operation nothing touched.
+fn stranded_detail(started_before: bool) -> &'static str {
+    if started_before {
+        STRANDED_RETRY_DETAIL
+    } else {
+        STRANDED_DETAIL
+    }
+}
+
 impl LocationRunnerRegistry {
     /// The boot resume has spawned every runner it intends to; from now on a
     /// Queued row with no live runner is stranded, not pending pickup.
@@ -299,7 +314,10 @@ impl LocationRunnerRegistry {
             || !self
                 .boot_resume_settled
                 .load(std::sync::atomic::Ordering::Acquire)
-            || chrono::Utc::now() - head.created_at < STRANDED_GRACE
+            // A reopened row is as new as its reopen: `updated_at` is when it
+            // went back to queued, and its runner is as far behind as a
+            // fresh row's.
+            || chrono::Utc::now() - head.created_at.max(head.updated_at) < STRANDED_GRACE
         {
             return Ok(false);
         }
@@ -322,8 +340,9 @@ impl LocationRunnerRegistry {
                 state: super::model::LocationOperationState::Failed,
                 counters: current.counters,
                 verification_fallback_count: current.verification_fallback_count,
-                detail: Some(STRANDED_DETAIL.to_owned()),
+                detail: Some(stranded_detail(current.started_at.is_some()).to_owned()),
                 clear_detail: false,
+                reason_code: Some(super::model::LocationReasonCode::Stranded),
                 started_at: current.started_at,
                 completed_at: Some(now),
             })
@@ -333,7 +352,7 @@ impl LocationRunnerRegistry {
                 operation_id: current.id.clone(),
                 job_run_id: current.job_run_id.clone(),
                 counters: current.counters,
-                detail: STRANDED_DETAIL.to_owned(),
+                detail: stranded_detail(current.started_at.is_some()).to_owned(),
             });
         }
         Ok(true)
@@ -1149,6 +1168,8 @@ mod tests {
             VerificationDepth::Full,
         );
         first.created_at -= chrono::Duration::minutes(2);
+        // Nothing has written to a stranded row since it was created.
+        first.updated_at = first.created_at;
         first.job_run_id = Some("run-first".into());
         let mut second = first.clone();
         second.id = "second".into();
@@ -1196,6 +1217,73 @@ mod tests {
         assert!(registry.take_stranded().is_empty());
     }
 
+    /// A retry reopens an old row: its `created_at` is long past, its
+    /// `updated_at` is the reopen. The sweep gives it the same head start a
+    /// fresh row gets, and when a retry does strand, the row says so in
+    /// retry terms rather than claiming nothing ever moved.
+    #[tokio::test(start_paused = true)]
+    async fn a_reopened_head_gets_a_fresh_grace_and_a_stranded_retry_says_so() {
+        use crate::location::model::{
+            LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
+        };
+        use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+        let store = InMemoryLocationOperationStore::new();
+        let mut reopened = queued_operation(
+            "reopened",
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        reopened.created_at -= chrono::Duration::minutes(3);
+        reopened.started_at = Some(reopened.created_at);
+        reopened.updated_at = chrono::Utc::now();
+        let mut second = reopened.clone();
+        second.id = "second".into();
+        second.created_at = chrono::Utc::now();
+        second.started_at = None;
+        store.insert_operation(reopened.clone());
+        store.insert_operation(second);
+        let registry = LocationRunnerRegistry::new();
+        registry.mark_boot_resume_settled();
+        let waiting = registry.wait_for_turn(&store, "second");
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), &mut waiting)
+                .await
+                .is_err(),
+            "a just-reopened head is waiting for its runner, not stranded"
+        );
+        assert!(registry.take_stranded().is_empty());
+        assert_eq!(
+            store
+                .get_location_operation("reopened")
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LocationOperationState::Queued
+        );
+
+        // The reopen is now old too: the retry's runner never came.
+        reopened.updated_at -= chrono::Duration::minutes(2);
+        store.insert_operation(reopened);
+        let _slot = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .expect("the stranded retry is failed and the queue moves")
+            .unwrap();
+        let failed = store
+            .get_location_operation("reopened")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.state, LocationOperationState::Failed);
+        assert_eq!(failed.detail.as_deref(), Some(STRANDED_RETRY_DETAIL));
+        assert_eq!(
+            failed.reason_code,
+            Some(crate::location::model::LocationReasonCode::Stranded)
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn fresh_or_live_queued_heads_are_not_stranded() {
         use crate::location::model::{
@@ -1213,6 +1301,7 @@ mod tests {
             if live {
                 // Old enough to be stranded, but somebody is running it.
                 first.created_at -= chrono::Duration::minutes(2);
+                first.updated_at = first.created_at;
             }
             let mut second = first.clone();
             second.id = "second".into();
@@ -1407,6 +1496,10 @@ mod tests {
         }
 
         async fn request_location_operation_cancel(&self, _operation_id: &str) -> AppResult<bool> {
+            unimplemented!("guard tests only read ownership")
+        }
+
+        async fn reopen_location_operation(&self, _operation_id: &str) -> AppResult<bool> {
             unimplemented!("guard tests only read ownership")
         }
 
