@@ -853,6 +853,10 @@ impl crate::ports::LocationOperationRepository for NullLocationOperationReposito
         Err(location_operation_repository_missing())
     }
 
+    async fn reopen_location_operation(&self, _operation_id: &str) -> AppResult<bool> {
+        Err(location_operation_repository_missing())
+    }
+
     async fn location_operation_cancel_requested(&self, _operation_id: &str) -> AppResult<bool> {
         Ok(false)
     }

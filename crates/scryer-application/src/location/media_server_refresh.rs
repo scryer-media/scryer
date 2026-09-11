@@ -248,6 +248,7 @@ mod tests {
             bytes_total: 20,
             bytes_verified: 20,
             detail: None,
+            reason_code: None,
             started_at: None,
             updated_at: chrono::Utc::now(),
             completed_at: None,

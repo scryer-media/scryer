@@ -37,6 +37,7 @@ async fn durable_resolutions_round_trip_update_and_remain_scoped_to_requested_fi
         verification_fallback_count: 0,
         counters: Default::default(),
         detail: None,
+        reason_code: None,
         job_run_id: None,
         workflow_operation_id: None,
         cancel_requested: false,

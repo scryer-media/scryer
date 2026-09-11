@@ -831,7 +831,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             .await?;
         for resolution in &resolutions {
             if !resolution.proof_is_current().await {
-                return Err(AppError::Validation("A file changed before the catalog update. Its source was preserved; resume to compare it again.".into()));
+                return Err(AppError::Validation("A file changed before the catalog update. Its source was preserved; retry to compare it again.".into()));
             }
             if let Some(warning) = &resolution.warning {
                 outcome.warnings.push(warning.clone());
@@ -996,7 +996,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     continue;
                 }
                 if !row.proof_is_current().await {
-                    return Err(AppError::Validation("A file changed before source cleanup. The source was preserved; resume to compare it again.".into()));
+                    return Err(AppError::Validation("A file changed before source cleanup. The source was preserved; retry to compare it again.".into()));
                 }
                 resolved.destination_path = row.destination_path.clone();
             }

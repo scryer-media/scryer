@@ -746,6 +746,11 @@ pub struct LocationTitleCheckpointPayload {
     pub bytes_verified: Long,
     /// Warning or failure explanation for this title.
     pub detail: Option<String>,
+    /// Machine-readable reason the title failed, for guidance and translation:
+    /// `storage_error`, `verification_mismatch`, `stale_plan`,
+    /// `merge_unavailable`, `catalog_write_failed`, or `source_cleanup_failed`.
+    /// Null while the title is still working or when it finished.
+    pub reason_code: Option<String>,
     /// When this title entered the operation.
     pub started_at: Option<DateTime<Utc>>,
     /// When this checkpoint was last written.
@@ -785,6 +790,13 @@ pub struct LocationOperationPayload {
     pub counters: LocationOperationCountersPayload,
     /// Concise failure or warning explanation.
     pub detail: Option<String>,
+    /// Machine-readable reason the operation stopped short, for guidance and
+    /// translation: `ownership_conflict`, `storage_error`,
+    /// `verification_mismatch`, `stale_plan`, `merge_unavailable`,
+    /// `catalog_write_failed`, `source_cleanup_failed`, `stranded`, `canceled`,
+    /// `abandoned`, or `root_unavailable`. Null while it is running or when it
+    /// finished.
+    pub reason_code: Option<String>,
     /// The Activity job run this operation reports through, when it has one.
     pub job_run_id: Option<ID>,
     /// The workflow-operation row this operation reports through, when it has one.
@@ -911,13 +923,66 @@ pub struct CancelLocationOperationPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// The start-dialog prefill for planning an operation's unfinished work again:
+/// the same destination, mode and verification depth, and the titles the
+/// operation did not finish. Finished titles are left out; a fresh preview
+/// reclassifies the rest.
+pub struct LocationRetrySelectionPayload {
+    /// Operation the selection was read from.
+    pub operation_id: ID,
+    /// Who moved the files last time.
+    pub mode: LocationExecutionModeValue,
+    /// Verification depth the operation ran at.
+    pub verification_depth: VerificationDepthValue,
+    /// Library the unfinished titles were headed for, when the operation had one.
+    pub destination_library_id: Option<ID>,
+    /// Root the unfinished titles were headed for, when the operation had one.
+    pub destination_root_id: Option<ID>,
+    /// Titles a fresh plan should select, in plan order.
+    pub titles: Vec<LocationRetryTitlePayload>,
+    /// Unfinished titles a fresh plan must not select: their files were verified
+    /// on the destination but the catalog update failed, and only a retry of
+    /// this operation finishes that.
+    pub catalog_blocked_title_ids: Vec<ID>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One title a fresh plan should select, with where it is now.
+pub struct LocationRetryTitlePayload {
+    /// Title identity.
+    pub title_id: ID,
+    /// Title name as the plan recorded it.
+    pub title_name: String,
+    /// Library the title is in.
+    pub source_library_id: ID,
+    /// Root the title is in.
+    pub source_root_id: ID,
+    /// Folder the title owns, when the plan recorded one.
+    pub source_folder_path: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Result of giving up on an operation nobody is running.
+pub struct AbandonLocationOperationPayload {
+    /// Operation the abandon was requested for.
+    pub id: ID,
+    /// Whether the operation was marked failed and its titles and roots
+    /// released. False when it had already stopped on its own.
+    pub abandoned: bool,
+    /// Why it was left alone, when it was.
+    pub detail: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Result of asking an interrupted operation to pick up from its checkpoints.
 pub struct ResumeLocationOperationPayload {
-    /// Operation the resume was requested for.
+    /// Operation the resume or retry was requested for.
     pub id: ID,
-    /// Whether the operation was restarted.
+    /// Whether the operation was picked back up. A failed or canceled
+    /// operation is reopened and retried from its last verified checkpoint; a
+    /// finished one is never restarted.
     pub resumed: bool,
-    /// Why it was not restarted, when it was not.
+    /// Why it was not picked back up, when it was not.
     pub detail: Option<String>,
 }
 

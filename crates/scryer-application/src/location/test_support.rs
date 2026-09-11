@@ -261,6 +261,9 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
             operation.updated_at = chrono::Utc::now();
             if progress.detail.is_some() || progress.clear_detail {
                 operation.detail = progress.detail.clone();
+                operation.reason_code = progress.reason_code;
+            } else if progress.reason_code.is_some() {
+                operation.reason_code = progress.reason_code;
             }
             if operation.started_at.is_none() {
                 operation.started_at = progress.started_at;
@@ -286,6 +289,45 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
         operation.job_run_id = Some(job_run_id.to_string());
         operation.updated_at = chrono::Utc::now();
         Ok(())
+    }
+
+    async fn reopen_location_operation(&self, operation_id: &str) -> AppResult<bool> {
+        let mut state = self.state.lock().expect("lock");
+        let Some(operation) = state.operations.get_mut(operation_id) else {
+            return Ok(false);
+        };
+        if !matches!(
+            operation.state,
+            LocationOperationState::Failed | LocationOperationState::Canceled
+        ) {
+            return Ok(false);
+        }
+        let now = chrono::Utc::now();
+        operation.state = LocationOperationState::Queued;
+        operation.detail = None;
+        operation.reason_code = None;
+        operation.completed_at = None;
+        operation.cancel_requested = false;
+        operation.cancel_requested_at = None;
+        operation.updated_at = now;
+        state.cancel_requested.remove(operation_id);
+        for ((id, _), checkpoint) in state.checkpoints.iter_mut() {
+            if id == operation_id
+                && matches!(
+                    checkpoint.state,
+                    crate::location::model::TitleCheckpointState::Failed
+                        | crate::location::model::TitleCheckpointState::Moving
+                        | crate::location::model::TitleCheckpointState::Verifying
+                )
+            {
+                checkpoint.state = crate::location::model::TitleCheckpointState::Pending;
+                checkpoint.detail = None;
+                checkpoint.reason_code = None;
+                checkpoint.completed_at = None;
+                checkpoint.updated_at = now;
+            }
+        }
+        Ok(true)
     }
 
     async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool> {
@@ -690,6 +732,7 @@ pub(crate) fn queued_operation(
         verification_fallback_count: 0,
         counters: crate::location::model::LocationOperationCounters::default(),
         detail: None,
+        reason_code: None,
         job_run_id: None,
         workflow_operation_id: None,
         cancel_requested: false,

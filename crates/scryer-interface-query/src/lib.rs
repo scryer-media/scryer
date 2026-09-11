@@ -40,12 +40,12 @@ use scryer_interface_media::mappers::{
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
     from_library, from_library_scan_session, from_library_settings, from_linked_account,
-    from_location_operation, from_location_operation_asset_listing, from_media_rename_plan,
-    from_media_request, from_media_request_counts, from_pending_import_connection,
-    from_pending_import_counts, from_pending_release, from_provider_type, from_root_move_preview,
-    from_root_scope_preview, from_runtime_path_style, from_smg_scryer_update_notice,
-    from_smg_version_compatibility_notice, from_storage_root_usage, from_system_health, from_title,
-    from_title_acquisition_diagnostics, from_title_history_page,
+    from_location_operation, from_location_operation_asset_listing, from_location_retry_selection,
+    from_media_rename_plan, from_media_request, from_media_request_counts,
+    from_pending_import_connection, from_pending_import_counts, from_pending_release,
+    from_provider_type, from_root_move_preview, from_root_scope_preview, from_runtime_path_style,
+    from_smg_scryer_update_notice, from_smg_version_compatibility_notice, from_storage_root_usage,
+    from_system_health, from_title, from_title_acquisition_diagnostics, from_title_history_page,
     from_title_release_blocklist_entry, from_user_with_auth_factor_status, from_wanted_item,
     from_wanted_scope_view, location_destination_into_application,
     location_execution_mode_into_application, root_scope_destination,
@@ -1792,6 +1792,39 @@ impl CatalogQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(Some(from_location_operation(&operation, &checkpoints)))
+    }
+
+    /// What planning a location operation's unfinished work again would
+    /// select: the same destination and mode, and the titles it did not finish.
+    ///
+    /// Read on demand for a stopped operation, since it joins the stored plan
+    /// with the checkpoints. Null for an unknown operation, one stored without
+    /// a readable plan, and for the root-scoped operation types, which are
+    /// planned again from the root rather than from titles.
+    async fn location_operation_retry_selection(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationRetrySelectionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(app
+            .location_operation_retry_selection(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+            .as_ref()
+            .map(from_location_retry_selection))
     }
 
     /// Which files one location operation renames and deduplicates, per title.

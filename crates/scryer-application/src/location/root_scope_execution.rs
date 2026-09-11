@@ -65,6 +65,7 @@
 //! destination has already flipped, and an absent directory has already been
 //! pruned.
 
+use futures_util::{StreamExt, stream};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -83,12 +84,12 @@ use crate::location::merge::engine::plan_merge;
 use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::model::{LocationExecutionMode, LocationOperation, LocationOperationType};
 use crate::location::operations::{
-    LOCATION_OPERATION_VERIFICATION_DEPTH, LocationOperationAccepted, LocationOperationAdmission,
-    TitleMoveFacts, confirmation_error,
+    LOCATION_OPERATION_VERIFICATION_DEPTH, LOCATION_PREVIEW_TITLE_CONCURRENCY,
+    LocationOperationAccepted, LocationOperationAdmission, TitleMoveFacts, confirmation_error,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
-    FreeSpaceRequest, PlanConfirmationRequest, SystemVolumeProbe, estimate_free_space,
+    FreeSpaceRequest, PlanConfirmationRequest, SystemVolumeProbe, estimate_free_space_off_runtime,
 };
 use crate::location::root_scope::{
     ConsolidationTail, DefaultRootTransfer, DestinationPathState, FolderResolutionRequest,
@@ -399,61 +400,74 @@ impl AppUseCase {
 
         let mut drafts = Vec::with_capacity(titles.len());
         let mut moved_bytes = 0_u64;
-        for title in &titles {
-            let source_folder_path = folder_path_of(title);
-            let (blocked_reason, blocked_reason_code) = self
-                .root_scope_title_blockers(title, merge_summaries.get(&title.id))
-                .await?;
-
-            let resolved = resolved_by_title
-                .get(title.id.as_str())
-                .map(|f| (*f).clone());
-            // A blocked title never enters the operation, so walking its folder
-            // would be work whose only product is a plan item the planner
-            // discards. It is still counted and named (FR-023).
-            let facts = if blocked_reason.is_some() {
-                TitleMoveFacts::default()
-            } else {
-                let media_files = self
-                    .services
-                    .library
-                    .media_files
-                    .list_media_files_for_title(&title.id)
+        // The folder walks and stats behind each title's facts are the
+        // preview's cost; a bounded fan-out overlaps them, and `buffered` hands
+        // the drafts back in title order.
+        let (merge_summaries, resolved_by_title, identities, recycle) =
+            (&merge_summaries, &resolved_by_title, &identities, &recycle);
+        let pending: Vec<_> = titles
+            .iter()
+            .map(|title| async move {
+                let source_folder_path = folder_path_of(title);
+                let (blocked_reason, blocked_reason_code) = self
+                    .root_scope_title_blockers(title, merge_summaries.get(&title.id))
                     .await?;
-                self.title_move_facts(
-                    source_folder_path.as_deref(),
-                    &media_files,
-                    resolved
-                        .as_ref()
-                        .and_then(|resolved| resolved.destination_folder.as_deref()),
-                    identities
-                        .get(&title.id)
-                        .and_then(DestinationIdentityOutcome::merge_target),
-                )
-                .await?
-            };
+
+                let resolved = resolved_by_title
+                    .get(title.id.as_str())
+                    .map(|f| (*f).clone());
+                // A blocked title never enters the operation, so walking its
+                // folder would be work whose only product is a plan item the
+                // planner discards. It is still counted and named (FR-023).
+                let facts = if blocked_reason.is_some() {
+                    TitleMoveFacts::default()
+                } else {
+                    let media_files = self
+                        .services
+                        .library
+                        .media_files
+                        .list_media_files_for_title(&title.id)
+                        .await?;
+                    self.title_move_facts(
+                        source_folder_path.as_deref(),
+                        &media_files,
+                        resolved
+                            .as_ref()
+                            .and_then(|resolved| resolved.destination_folder.as_deref()),
+                        identities
+                            .get(&title.id)
+                            .and_then(DestinationIdentityOutcome::merge_target),
+                    )
+                    .await?
+                };
+                Ok::<_, AppError>(RootScopeTitleDraft {
+                    source_folder_path,
+                    files: facts.files,
+                    source_directories: facts.source_directories,
+                    hardlinks: facts.hardlinks,
+                    resolved,
+                    destination_entries: facts.destination_entries,
+                    recycle: recycle.clone(),
+                    destination_identity: identities.get(&title.id).cloned(),
+                    merge_summary: merge_summaries.get(&title.id).cloned(),
+                    blocked_reason,
+                    blocked_reason_code,
+                    ..RootScopeTitleDraft::new(title.id.clone(), title.name.clone())
+                })
+            })
+            .collect();
+        let mut gathered = stream::iter(pending).buffered(LOCATION_PREVIEW_TITLE_CONCURRENCY);
+        while let Some(draft) = gathered.next().await {
+            let draft = draft?;
             moved_bytes = moved_bytes.saturating_add(
-                facts
+                draft
                     .files
                     .iter()
                     .fold(0_u64, |total, file| total.saturating_add(file.size_bytes)),
             );
-
-            drafts.push(RootScopeTitleDraft {
-                source_folder_path,
-                files: facts.files,
-                source_directories: facts.source_directories,
-                hardlinks: facts.hardlinks,
-                resolved,
-                destination_entries: facts.destination_entries,
-                recycle: recycle.clone(),
-                destination_identity: identities.get(&title.id).cloned(),
-                merge_summary: merge_summaries.get(&title.id).cloned(),
-                blocked_reason,
-                blocked_reason_code,
-                ..RootScopeTitleDraft::new(title.id.clone(), title.name.clone())
-            });
+            drafts.push(draft);
         }
+        drop(gathered);
 
         // FR-027's inventory: everything under the source root, so the planner
         // can put each entry in exactly one of the three buckets — except
@@ -464,8 +478,8 @@ impl AppUseCase {
         // purge voided the user's confirmation. The bin never moves; the tail
         // names the source directory it keeps standing.
         let entries = scan_root_entries(&source_root_path, Some(&recycle_config.base_path)).await?;
-        let free_space = estimate_free_space(
-            &FreeSpaceRequest {
+        let free_space = estimate_free_space_off_runtime(
+            FreeSpaceRequest {
                 source_path: source_root_path.clone(),
                 destination_path: destination_root_path.clone(),
                 // A same-volume root-scoped operation renames; nothing is
@@ -484,8 +498,9 @@ impl AppUseCase {
                     .enabled
                     .then(|| recycle_config.base_path.clone()),
             },
-            &SystemVolumeProbe,
-        );
+            SystemVolumeProbe,
+        )
+        .await;
 
         let default_transfer = match &destination_root {
             Some(root) => DefaultRootTransfer {

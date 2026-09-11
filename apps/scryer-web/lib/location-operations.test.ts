@@ -17,7 +17,12 @@ import {
   blockingTitleRows,
   blockingTitles,
   canCancelOperation,
+  canAbandonOperation,
+  canPlanAgainOperation,
   canResumeOperation,
+  canRetryOperation,
+  retrySelectionTitleRefs,
+  operationGuidanceKey,
   CLASSIFICATION_ORDER,
   checkpointMergeTarget,
   checkpointNeedsAttention,
@@ -842,6 +847,7 @@ function operation(
     verificationFallbackCount: 0,
     counters: counters(),
     detail: null,
+    reasonCode: null,
     jobRunId: null,
     workflowOperationId: null,
     cancelRequested: false,
@@ -885,6 +891,90 @@ test("cancel is offered once, then the runner drains", () => {
   assert.equal(canCancelOperation(operation()), true);
   assert.equal(canCancelOperation(operation({ cancelRequested: true })), false);
   assert.equal(canCancelOperation(null), false);
+});
+
+test("plan again is offered for a stopped run with titles a fresh plan can select", () => {
+  const selection = {
+    operationId: "op-1",
+    mode: "MOVE_WITH_SCRYER" as const,
+    verificationDepth: "FULL" as const,
+    destinationLibraryId: "lib-a",
+    destinationRootId: "root-b",
+    titles: [
+      {
+        titleId: "t-2",
+        titleName: "Second",
+        sourceLibraryId: "lib-a",
+        sourceRootId: "root-a",
+        sourceFolderPath: "/media/a/Second (2011)",
+      },
+      {
+        titleId: "t-4",
+        titleName: "Fourth",
+        sourceLibraryId: "lib-a",
+        sourceRootId: "root-a",
+        sourceFolderPath: null,
+      },
+    ],
+    catalogBlockedTitleIds: ["t-3"],
+  };
+  assert.equal(canPlanAgainOperation(operation({ state: "FAILED" }), selection), true);
+  assert.equal(canPlanAgainOperation(operation({ state: "CANCELED" }), selection), true);
+  // A run that is still going, or one that finished, is not planned again.
+  assert.equal(canPlanAgainOperation(operation({ state: "MOVING" }), selection), false);
+  assert.equal(canPlanAgainOperation(operation({ state: "COMPLETED" }), selection), false);
+  // Nothing selectable — only catalog-blocked leftovers — means no button.
+  assert.equal(
+    canPlanAgainOperation(operation({ state: "FAILED" }), { ...selection, titles: [] }),
+    false,
+  );
+  assert.equal(canPlanAgainOperation(operation({ state: "FAILED" }), null), false);
+
+  // The dialog gets the titles as refs, whole or scoped to one row.
+  assert.deepEqual(retrySelectionTitleRefs(selection), [
+    { id: "t-2", name: "Second", libraryId: "lib-a", rootFolderId: "root-a" },
+    { id: "t-4", name: "Fourth", libraryId: "lib-a", rootFolderId: "root-a" },
+  ]);
+  assert.deepEqual(
+    retrySelectionTitleRefs(selection, "t-4").map((title) => title.id),
+    ["t-4"],
+  );
+  assert.deepEqual(retrySelectionTitleRefs(selection, "t-3"), []);
+  assert.deepEqual(retrySelectionTitleRefs(null), []);
+});
+
+test("abandon is offered exactly where resume is", () => {
+  const updatedAt = "2026-08-31T00:00:00.000Z";
+  const updatedAtMs = Date.parse(updatedAt);
+  assert.equal(
+    canAbandonOperation(operation({ updatedAt }), updatedAtMs + 5_000),
+    false,
+  );
+  assert.equal(
+    canAbandonOperation(operation({ updatedAt }), updatedAtMs + 120_000),
+    true,
+  );
+  // A stopped run has nothing to release: it is retried, not abandoned.
+  for (const state of ["FAILED", "CANCELED", "COMPLETED"] as const) {
+    assert.equal(
+      canAbandonOperation(operation({ updatedAt, state }), updatedAtMs + 120_000),
+      false,
+      state,
+    );
+  }
+  assert.equal(canAbandonOperation(null, Date.now()), false);
+});
+
+test("retry is offered for a failed or canceled run and never for a finished one", () => {
+  assert.equal(canRetryOperation(operation({ state: "FAILED" })), true);
+  assert.equal(canRetryOperation(operation({ state: "CANCELED" })), true);
+  for (const state of ["COMPLETED", "COMPLETED_WITH_WARNINGS"] as const) {
+    assert.equal(canRetryOperation(operation({ state })), false, state);
+  }
+  // A run that is still going is resumed or canceled, not retried.
+  assert.equal(canRetryOperation(operation({ state: "MOVING" })), false);
+  assert.equal(canRetryOperation(operation()), false);
+  assert.equal(canRetryOperation(null), false);
 });
 
 test("resume is offered only for a run nothing has written to in a while", () => {
@@ -1967,4 +2057,16 @@ test("wizard navigation requires a method and returns both branches to that choi
   assert.equal(previousMoveStep("method"), "destination");
   assert.equal(previousMoveStep("destination"), "kind");
   assert.equal(previousMoveStep("kind"), "kind");
+});
+
+test("operationGuidanceKey maps a known reason code and refuses the rest", () => {
+  assert.equal(
+    operationGuidanceKey("catalog_write_failed"),
+    "move.reason.catalog_write_failed",
+  );
+  assert.equal(operationGuidanceKey("canceled"), "move.reason.canceled");
+  assert.equal(operationGuidanceKey(null), null);
+  assert.equal(operationGuidanceKey(undefined), null);
+  assert.equal(operationGuidanceKey(""), null);
+  assert.equal(operationGuidanceKey("a_code_from_the_future"), null);
 });

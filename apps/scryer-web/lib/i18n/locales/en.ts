@@ -4722,6 +4722,45 @@ const en: LocaleDictionary = {
   "move.resumeRequested": "Resuming from the last verified checkpoint.",
   "move.resumeNotPossible": "This operation cannot be resumed.",
   "move.resumeFailed": "Failed to resume the operation.",
+  "move.retryAction": "Retry",
+  "move.retryRequested": "Retrying from the last verified checkpoint.",
+  "move.retryNotPossible": "This operation cannot be retried.",
+  "move.retryFailed": "Failed to retry the operation.",
+  "move.abandonAction": "Abandon",
+  "move.abandonRequested":
+    "Abandoned. Its titles and roots are released; finished titles are unchanged, and Retry moves the rest once the storage is back.",
+  "move.abandonNotPossible": "This operation has already stopped.",
+  "move.abandonFailed": "Failed to abandon the operation.",
+  "move.stalledNoRunner": "No runner",
+  "move.stalledGuidance":
+    "No runner is working on this operation. If the storage is back, press Resume. If it is not coming back, press Abandon to release its titles and roots; Retry is available after that.",
+  "move.planAgainAction": "Plan again",
+  "move.planAgainTitleAction": "Plan this title again",
+  "move.planAgainFailed": "Could not open the move dialog.",
+  "move.planAgainCatalogBlocked":
+    "{{count}} title(s) are left out of Plan again because their catalog update did not finish after the files were verified; Retry finishes them.",
+  "move.reason.ownership_conflict":
+    "Another operation still owns some of these titles or roots. Wait for it to finish (or cancel it), then retry.",
+  "move.reason.storage_error":
+    "A file could not be read or written. Nothing was removed from the source. Fix the storage problem (free space, permissions, the mount), then retry; files that already verified are not copied again.",
+  "move.reason.verification_mismatch":
+    "A copied file did not match its source. The source is untouched and the copy is not trusted. Retry; if the same file fails again, check the destination disk.",
+  "move.reason.stale_plan":
+    "Something changed under the plan after the preview was taken. Completed titles are consistent. Plan the move again to continue with a fresh preview.",
+  "move.reason.merge_unavailable":
+    "This title can no longer merge into its destination. Fix the destination title (or deselect it), then plan the move again.",
+  "move.reason.catalog_write_failed":
+    "The files were copied and verified, but the catalog update failed. Nothing was removed from the source. Retry to finish the catalog update; do not plan a new move for this title until it succeeds.",
+  "move.reason.source_cleanup_failed":
+    "The move finished but the old copy could not be removed. Retry to remove it, or confirm the title plays from its new location and delete the old folder yourself.",
+  "move.reason.stranded":
+    "This operation was accepted but never ran. Retry it, or plan the move again.",
+  "move.reason.canceled":
+    "Canceled at a title boundary. Completed titles are unchanged; retry to move the rest.",
+  "move.reason.abandoned":
+    "Abandoned. Completed titles are unchanged. Retry once the storage is back.",
+  "move.reason.root_unavailable":
+    "A root this operation needs is not available. Resume once it is mounted again, or abandon the operation to release its titles.",
   "move.class.ROOT_MOVE": "Moving to the destination root",
   "move.class.CROSS_LIBRARY_TRANSFER": "Transferring to another library",
   "move.class.CATALOG_ONLY": "Catalog only (no files on disk)",

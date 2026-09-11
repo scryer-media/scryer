@@ -140,6 +140,7 @@ const OPERATION_QUERY: &str = r#"
         sourceRootId
         destinationRootId
         planFingerprint
+        reasonCode
         verificationDepth
         verificationFallbackCount
         cancelRequested
@@ -336,6 +337,7 @@ async fn seed_queued_operation(ctx: &TestContext, library_id: &str, root_id: &st
             ..LocationOperationCounters::default()
         },
         detail: None,
+        reason_code: None,
         job_run_id: None,
         workflow_operation_id: None,
         cancel_requested: false,
@@ -444,6 +446,7 @@ async fn seed_operation_with_collision_plan(
                 bytes_total: 4_096,
                 bytes_verified: 4_096,
                 detail: None,
+                reason_code: None,
                 started_at: Some(now),
                 updated_at: now,
                 completed_at: None,
@@ -989,17 +992,29 @@ async fn graphql_location_operation_cancel_and_resume_report_what_they_did() {
     assert_no_errors(&row);
     assert_eq!(row["data"]["locationOperation"]["cancelRequested"], true);
     assert_eq!(row["data"]["locationOperation"]["state"], "CANCELED");
+    assert_eq!(
+        row["data"]["locationOperation"]["reasonCode"], "canceled",
+        "a cancel before the runner started names its reason like one during a run"
+    );
 
-    // FR-033: an operation stored without its plan cannot be resumed, and says
-    // so rather than restarting from the beginning.
+    // A canceled operation is retryable through the same mutation, so being
+    // canceled is not what refuses it. FR-033: one stored without its plan
+    // cannot be picked back up, and says so rather than restarting from the
+    // beginning — and the refusal leaves the row exactly as it was.
     let resumed = gql(&ctx, RESUME_MUTATION, json!({ "id": operation_id })).await;
     assert_no_errors(&resumed);
     assert_eq!(resumed["data"]["resumeLocationOperation"]["resumed"], false);
     assert!(
         resumed["data"]["resumeLocationOperation"]["detail"]
             .as_str()
-            .is_some_and(|detail| detail.contains("finished")),
+            .is_some_and(|detail| detail.contains("without its plan")),
         "an unresumable operation should explain itself: {resumed}"
+    );
+    let still_canceled = gql(&ctx, OPERATION_QUERY, json!({ "id": operation_id })).await;
+    assert_no_errors(&still_canceled);
+    assert_eq!(
+        still_canceled["data"]["locationOperation"]["state"],
+        "CANCELED"
     );
 
     // An unknown operation is simply absent, not an error.

@@ -957,6 +957,52 @@ impl FreeSpaceEstimate {
     }
 }
 
+/// Longer than this and the volume is hung, which for a preview is the same as
+/// unprobeable: the estimate reads back unknown and the blocked thread finishes
+/// on its own later. The same bound the executor's storage watch uses.
+pub const FREE_SPACE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// [`estimate_free_space`] off the async runtime.
+///
+/// The system probe stats and `statvfs`es the real filesystem, and a hung
+/// network mount answers neither. That must stall a blocking thread, bounded by
+/// [`FREE_SPACE_PROBE_TIMEOUT`], never the worker rendering the preview.
+pub async fn estimate_free_space_off_runtime<P>(
+    request: FreeSpaceRequest,
+    probe: P,
+) -> FreeSpaceEstimate
+where
+    P: VolumeProbe + 'static,
+{
+    estimate_free_space_within(request, probe, FREE_SPACE_PROBE_TIMEOUT).await
+}
+
+/// [`estimate_free_space_off_runtime`] with the bound injectable for tests.
+async fn estimate_free_space_within<P>(
+    request: FreeSpaceRequest,
+    probe: P,
+    timeout: std::time::Duration,
+) -> FreeSpaceEstimate
+where
+    P: VolumeProbe + 'static,
+{
+    let probe_task = tokio::task::spawn_blocking(move || estimate_free_space(&request, &probe));
+    match tokio::time::timeout(timeout, probe_task).await {
+        Ok(Ok(estimate)) => estimate,
+        Ok(Err(error)) => {
+            tracing::warn!(error = %error, "free-space probe task failed; the preview reports free space as unknown");
+            FreeSpaceEstimate::unknown()
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = timeout.as_millis() as u64,
+                "free-space probe did not answer in time; the preview reports free space as unknown"
+            );
+            FreeSpaceEstimate::unknown()
+        }
+    }
+}
+
 /// Estimates the free space an operation needs, including the recycle-bin cost
 /// when the bin is on another volume (FR-080).
 pub fn estimate_free_space(
@@ -1519,5 +1565,53 @@ mod tests {
         ] {
             assert!(!change.is_stale(), "{change:?} should stay resumable");
         }
+    }
+
+    /// A probe blocked inside a hung mount answers nothing; the preview must
+    /// say "unknown" and move on rather than wait on it.
+    struct HungProbe(std::time::Duration);
+
+    impl VolumeProbe for HungProbe {
+        fn volume_id(&self, _path: &Path) -> Option<VolumeId> {
+            std::thread::sleep(self.0);
+            Some(VolumeId("late".to_string()))
+        }
+
+        fn available_bytes(&self, _path: &Path) -> Option<u64> {
+            Some(1)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hung_volume_probe_reports_free_space_as_unknown_within_the_bound() {
+        let request = FreeSpaceRequest {
+            source_path: PathBuf::from("/src"),
+            destination_path: PathBuf::from("/dst"),
+            moved_bytes: 10,
+            recycled_bytes: 10,
+            recycle_base_path: None,
+        };
+        let started = std::time::Instant::now();
+        let estimate = estimate_free_space_within(
+            request.clone(),
+            HungProbe(std::time::Duration::from_millis(400)),
+            std::time::Duration::from_millis(20),
+        )
+        .await;
+        assert_eq!(estimate, FreeSpaceEstimate::unknown());
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(300),
+            "the preview waited on the hung probe"
+        );
+
+        // A probe that answers in time is the ordinary estimate, unchanged.
+        let quick = FakeProbe {
+            volumes: HashMap::from([(PathBuf::from("/src"), "a"), (PathBuf::from("/dst"), "b")]),
+            available: HashMap::from([(PathBuf::from("/dst"), 100)]),
+        };
+        let expected = estimate_free_space(&request, &quick);
+        let bounded =
+            estimate_free_space_within(request, quick, std::time::Duration::from_secs(5)).await;
+        assert_eq!(bounded, expected);
     }
 }

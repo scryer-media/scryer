@@ -466,6 +466,7 @@ mod tests {
             bytes_total: 0,
             bytes_verified: 0,
             detail: None,
+            reason_code: None,
             started_at: Some(now),
             updated_at: now,
             completed_at: None,

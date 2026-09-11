@@ -363,6 +363,11 @@ impl ConflictResolver {
     }
 }
 
+/// Files this size or smaller may be hashed end to end for a preview; anything
+/// larger is left unproven rather than read, because a preview is an
+/// interactive screen (D4).
+pub(super) const PREVIEW_FULL_HASH_LIMIT_BYTES: u64 = 10_000_000;
+
 /// Never read more than the preview threshold, even if a file grows mid-read.
 pub async fn preview_hash(path: &Path) -> AppResult<Option<String>> {
     let path = path.to_path_buf();
@@ -370,7 +375,7 @@ pub async fn preview_hash(path: &Path) -> AppResult<Option<String>> {
         use std::io::Read;
         let mut file = std::fs::File::open(&path).map_err(|error| file_error(&path, error))?;
         let before = file.metadata().map_err(|error| file_error(&path, error))?;
-        if before.len() > 10_000_000 {
+        if before.len() > PREVIEW_FULL_HASH_LIMIT_BYTES {
             return Ok(None);
         }
         let mut remaining = before.len();

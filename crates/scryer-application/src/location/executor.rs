@@ -85,7 +85,8 @@ use serde::{Deserialize, Serialize};
 use crate::location::classify::TitleLocationClass;
 use crate::location::model::{
     FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
-    TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState, VerificationDepth,
+    LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState,
+    VerificationDepth,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::verify::{CopyProgress, FileVerificationIdentity, VerifiedFile};
@@ -454,6 +455,85 @@ fn move_error_is_transient(error: &AppError) -> bool {
     matches!(error, AppError::Repository(_))
 }
 
+/// The reason code a run-level stop writes on the operation row.
+///
+/// An `Error` stop carries no code of its own: the site that raised it knows
+/// the cause and supplies the code itself.
+fn stop_reason_code(reason: StopReason) -> Option<LocationReasonCode> {
+    match reason {
+        StopReason::UserCanceled => Some(LocationReasonCode::Canceled),
+        StopReason::StalePlan => Some(LocationReasonCode::StalePlan),
+        StopReason::Error => None,
+    }
+}
+
+/// One title that failed inside a run, as the operation row summarises it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleFailure {
+    pub title_id: String,
+    pub reason_code: LocationReasonCode,
+    pub detail: String,
+}
+
+/// Where inside [`LocationOperationRunner::run_title`] a title is, so a failure
+/// is classified by the step it interrupted rather than by its wording. The
+/// step decides the way out: a copy that failed is a storage problem, a proof
+/// that failed wants the copy redone, a catalog write that failed must be
+/// retried rather than planned again, and a cleanup that failed left a
+/// verified duplicate behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TitleRunPhase {
+    Moving,
+    Verifying,
+    Reconciling,
+    CleaningUp,
+}
+
+/// The reason code for a title that failed in `phase` with `error`.
+///
+/// The phase decides. Two causes cut across the phases before cleanup and are
+/// told apart by their message, because [`AppError`] carries none of this
+/// itself: a plan the execution layer found stale (its "stale plan: …
+/// preview again" refusals, FR-089) wants a fresh preview, and a merge whose
+/// destination no longer accepts the title, or that has no engine to run,
+/// wants the destination fixed (FR-066). A "changed before" refusal is not
+/// stale: the file moved under a proof, and every such message says retry.
+/// Cleanup is never reclassified: by then the catalog points at the
+/// destination and only Retry re-runs the removal, so steering it to Plan
+/// again would leave the old copy behind for good. Every message matched here
+/// is raised in `execution.rs`; keep the wording in step with this function
+/// and with `each_execution_refusal_is_classified_by_its_way_out`.
+pub(super) fn classify_title_failure(phase: TitleRunPhase, error: &AppError) -> LocationReasonCode {
+    if phase == TitleRunPhase::CleaningUp {
+        return LocationReasonCode::SourceCleanupFailed;
+    }
+    let message = error.to_string();
+    let validation = matches!(error, AppError::Validation(_));
+    if validation && message.contains("stale plan:") {
+        return LocationReasonCode::StalePlan;
+    }
+    match phase {
+        TitleRunPhase::Moving => LocationReasonCode::StorageError,
+        TitleRunPhase::Verifying => LocationReasonCode::VerificationMismatch,
+        TitleRunPhase::Reconciling => {
+            if validation
+                && (message.contains("can no longer merge")
+                    || message.contains("no merge engine is configured"))
+            {
+                LocationReasonCode::MergeUnavailable
+            } else if validation && message.contains("changed before the catalog update") {
+                // The proof went stale before anything was written: the copy
+                // is not trusted and the catalog is untouched, so this is a
+                // mismatch to retry, not a half-flipped title to fence off.
+                LocationReasonCode::VerificationMismatch
+            } else {
+                LocationReasonCode::CatalogWriteFailed
+            }
+        }
+        TitleRunPhase::CleaningUp => LocationReasonCode::SourceCleanupFailed,
+    }
+}
+
 /// A running operation's progress, as somebody outside the operation store
 /// wants to mirror it.
 #[derive(Debug, Clone, Copy)]
@@ -481,6 +561,8 @@ pub struct OperationRunOutcome {
     pub state: LocationOperationState,
     /// Absent when the operation ran to completion.
     pub stop_reason: Option<StopReason>,
+    /// Why the run stopped short, when it did (see [`LocationReasonCode`]).
+    pub reason_code: Option<LocationReasonCode>,
     pub counters: LocationOperationCounters,
     pub cursor: ResumeCursor,
     /// Warnings gathered across the titles this run processed.
@@ -674,6 +756,7 @@ impl<'a> LocationOperationRunner<'a> {
                 operation_id: operation_id.to_string(),
                 state: operation.state,
                 stop_reason: None,
+                reason_code: operation.reason_code,
                 counters: operation.counters,
                 cursor: progress.cursor(operation_id),
                 warnings: Vec::new(),
@@ -705,6 +788,7 @@ impl<'a> LocationOperationRunner<'a> {
             plan,
             None,
             true,
+            None,
         )
         .await?;
 
@@ -733,6 +817,7 @@ impl<'a> LocationOperationRunner<'a> {
                         LocationOperationState::Failed,
                         Some(StopReason::Error),
                         Some(detail),
+                        Some(LocationReasonCode::OwnershipConflict),
                     )
                     .await;
             }
@@ -747,7 +832,7 @@ impl<'a> LocationOperationRunner<'a> {
         // retry is a fresh preview, which converges because completed titles
         // classify as no-ops and verified copies dedup against their persisted
         // hashes.
-        let mut failures: Vec<String> = Vec::new();
+        let mut failures: Vec<TitleFailure> = Vec::new();
 
         if let Some(hub) = self.transfers {
             let outcome = self
@@ -768,6 +853,7 @@ impl<'a> LocationOperationRunner<'a> {
                         state,
                         Some(reason),
                         Some(detail),
+                        stop_reason_code(reason),
                     )
                     .await;
             }
@@ -796,6 +882,7 @@ impl<'a> LocationOperationRunner<'a> {
                             "canceled at a title checkpoint; completed titles are unchanged"
                                 .to_string(),
                         ),
+                        Some(LocationReasonCode::Canceled),
                     )
                     .await;
             }
@@ -825,6 +912,7 @@ impl<'a> LocationOperationRunner<'a> {
                             LocationOperationState::Failed,
                             Some(StopReason::StalePlan),
                             Some(reason),
+                            Some(LocationReasonCode::StalePlan),
                         )
                         .await;
                 }
@@ -836,6 +924,7 @@ impl<'a> LocationOperationRunner<'a> {
                         Some(reason.clone()),
                         &mut progress,
                         plan,
+                        None,
                     )
                     .await?;
                     progress.warnings.push(reason);
@@ -849,12 +938,14 @@ impl<'a> LocationOperationRunner<'a> {
                         Some(reason),
                         &mut progress,
                         plan,
+                        None,
                     )
                     .await?;
                     continue;
                 }
             }
 
+            let mut phase = TitleRunPhase::Moving;
             match self
                 .run_title(
                     &operation,
@@ -862,6 +953,7 @@ impl<'a> LocationOperationRunner<'a> {
                     &verified_destinations,
                     &mut progress,
                     plan,
+                    &mut phase,
                 )
                 .await
             {
@@ -872,7 +964,7 @@ impl<'a> LocationOperationRunner<'a> {
                         TitleCheckpointState::CompletedWithWarnings
                     };
                     let detail = (!warnings.is_empty()).then(|| warnings.join("; "));
-                    self.settle_title(&operation, title, state, detail, &mut progress, plan)
+                    self.settle_title(&operation, title, state, detail, &mut progress, plan, None)
                         .await?;
                     progress.warnings.extend(warnings);
                 }
@@ -892,15 +984,18 @@ impl<'a> LocationOperationRunner<'a> {
                                 "canceled while title {} was moving; its verified files are recorded and completed titles are unchanged",
                                 title.title_id
                             )),
+                            Some(LocationReasonCode::Canceled),
                         )
                         .await;
                 }
                 Err(error) => {
                     let detail = error.to_string();
+                    let reason_code = classify_title_failure(phase, &error);
                     tracing::warn!(
                         operation_id = %operation.id,
                         title_id = %title.title_id,
                         error = %error,
+                        reason_code = reason_code.as_str(),
                         "a title failed; the operation continues with the remaining titles"
                     );
                     self.settle_title(
@@ -910,9 +1005,14 @@ impl<'a> LocationOperationRunner<'a> {
                         Some(detail.clone()),
                         &mut progress,
                         plan,
+                        Some(reason_code),
                     )
                     .await?;
-                    failures.push(format!("{}: {detail}", title.title_id));
+                    failures.push(TitleFailure {
+                        title_id: title.title_id.clone(),
+                        reason_code,
+                        detail,
+                    });
                 }
             }
         }
@@ -926,6 +1026,9 @@ impl<'a> LocationOperationRunner<'a> {
                     LocationOperationState::Failed,
                     Some(StopReason::Error),
                     Some(describe_title_failures(&failures, plan.titles.len())),
+                    LocationReasonCode::most_consequential(
+                        failures.iter().map(|failure| failure.reason_code),
+                    ),
                 )
                 .await;
         }
@@ -947,6 +1050,9 @@ impl<'a> LocationOperationRunner<'a> {
                             LocationOperationState::CleaningUp,
                             Some(StopReason::Error),
                             Some(error.to_string()),
+                            // The content moved; the library's root
+                            // configuration did not get written.
+                            Some(LocationReasonCode::CatalogWriteFailed),
                         )
                         .await;
                 }
@@ -961,7 +1067,7 @@ impl<'a> LocationOperationRunner<'a> {
             LocationOperationState::CompletedWithWarnings
         };
         let detail = (!progress.warnings.is_empty()).then(|| progress.warnings.join("; "));
-        self.finish(&operation, plan, &progress, final_state, None, detail)
+        self.finish(&operation, plan, &progress, final_state, None, detail, None)
             .await
     }
 
@@ -973,8 +1079,10 @@ impl<'a> LocationOperationRunner<'a> {
         verified_destinations: &BTreeSet<String>,
         progress: &mut RunProgress,
         plan: &OperationWorkPlan,
+        phase: &mut TitleRunPhase,
     ) -> AppResult<TitleRunOutcome> {
         let mut warnings = Vec::new();
+        *phase = TitleRunPhase::Moving;
 
         self.write_title_checkpoint(
             operation,
@@ -986,6 +1094,7 @@ impl<'a> LocationOperationRunner<'a> {
             },
             None,
             progress,
+            None,
         )
         .await?;
         self.write_progress(
@@ -999,6 +1108,7 @@ impl<'a> LocationOperationRunner<'a> {
             plan,
             None,
             false,
+            None,
         )
         .await?;
 
@@ -1050,6 +1160,7 @@ impl<'a> LocationOperationRunner<'a> {
                 .await?;
 
             if !outcome.permits_source_removal() {
+                *phase = TitleRunPhase::Verifying;
                 return Err(AppError::Validation(format!(
                     "verification of {} failed ({}){}",
                     file.destination_path.display(),
@@ -1067,12 +1178,14 @@ impl<'a> LocationOperationRunner<'a> {
                 TitleCheckpointState::Moving,
                 None,
                 progress,
+                None,
             )
             .await?;
         }
 
         // The pipeline reports actual read-back, never a synthetic verification
         // phase for identity-validated hardlinks. Both runners keep this gate.
+        *phase = TitleRunPhase::Verifying;
         if self.transfers.is_none() {
             self.write_title_checkpoint(
                 operation,
@@ -1080,6 +1193,7 @@ impl<'a> LocationOperationRunner<'a> {
                 TitleCheckpointState::Verifying,
                 None,
                 progress,
+                None,
             )
             .await?;
             self.write_progress(
@@ -1089,6 +1203,7 @@ impl<'a> LocationOperationRunner<'a> {
                 plan,
                 None,
                 false,
+                None,
             )
             .await?;
         }
@@ -1135,6 +1250,7 @@ impl<'a> LocationOperationRunner<'a> {
             TitleCheckpointState::Reconciling,
             None,
             progress,
+            None,
         )
         .await?;
         self.write_progress(
@@ -1144,8 +1260,10 @@ impl<'a> LocationOperationRunner<'a> {
             plan,
             None,
             false,
+            None,
         )
         .await?;
+        *phase = TitleRunPhase::Reconciling;
         warnings.extend(
             self.reconciler
                 .reconcile_title(operation, title)
@@ -1153,12 +1271,17 @@ impl<'a> LocationOperationRunner<'a> {
                 .warnings,
         );
 
+        // The catalog write committed: from here a failure, the checkpoint
+        // write included, is a cleanup left undone rather than a half-flipped
+        // title, so it stays open to Plan again.
+        *phase = TitleRunPhase::CleaningUp;
         self.write_title_checkpoint(
             operation,
             title,
             TitleCheckpointState::CleaningUp,
             None,
             progress,
+            None,
         )
         .await?;
         self.write_progress(
@@ -1168,6 +1291,7 @@ impl<'a> LocationOperationRunner<'a> {
             plan,
             None,
             false,
+            None,
         )
         .await?;
         warnings.extend(
@@ -1285,6 +1409,7 @@ impl<'a> LocationOperationRunner<'a> {
                 TitleCheckpointState::Moving,
                 None,
                 progress,
+                None,
             )
             .await
         {
@@ -1303,6 +1428,7 @@ impl<'a> LocationOperationRunner<'a> {
                 plan,
                 None,
                 false,
+                None,
             )
             .await
         {
@@ -1348,6 +1474,9 @@ impl<'a> LocationOperationRunner<'a> {
             .await;
     }
 
+    // The reason code rides next to the detail it explains; a wider row is
+    // the honest shape, not a bundle.
+    #[expect(clippy::too_many_arguments)]
     async fn settle_title(
         &self,
         operation: &LocationOperation,
@@ -1356,6 +1485,7 @@ impl<'a> LocationOperationRunner<'a> {
         detail: Option<String>,
         progress: &mut RunProgress,
         plan: &OperationWorkPlan,
+        reason_code: Option<LocationReasonCode>,
     ) -> AppResult<()> {
         if matches!(
             state,
@@ -1367,11 +1497,19 @@ impl<'a> LocationOperationRunner<'a> {
                 .await?;
         }
         progress.settle(title, state);
-        self.write_title_checkpoint(operation, title, state, detail, progress)
+        self.write_title_checkpoint(operation, title, state, detail, progress, reason_code)
             .await?;
         let operation_state = operation_state_for(state);
-        self.write_progress(operation, operation_state, progress, plan, None, false)
-            .await?;
+        self.write_progress(
+            operation,
+            operation_state,
+            progress,
+            plan,
+            None,
+            false,
+            None,
+        )
+        .await?;
         // A settled title is progress the jobs list should show even when no
         // single file ran long enough to pulse.
         self.observe(operation, operation_state, progress, plan)
@@ -1386,6 +1524,7 @@ impl<'a> LocationOperationRunner<'a> {
         state: TitleCheckpointState,
         detail: Option<String>,
         progress: &RunProgress,
+        reason_code: Option<LocationReasonCode>,
     ) -> AppResult<()> {
         let now = Utc::now();
         let files_verified = progress.files_done(&title.title_id);
@@ -1403,6 +1542,7 @@ impl<'a> LocationOperationRunner<'a> {
                 bytes_total: title.bytes_total(),
                 bytes_verified,
                 detail: detail.clone(),
+                reason_code,
                 started_at: Some(now),
                 updated_at: now,
                 completed_at: state.is_settled().then_some(now),
@@ -1433,6 +1573,9 @@ impl<'a> LocationOperationRunner<'a> {
         Ok(())
     }
 
+    // The reason code rides next to the detail it explains; a wider row is
+    // the honest shape, not a bundle.
+    #[expect(clippy::too_many_arguments)]
     async fn write_progress(
         &self,
         operation: &LocationOperation,
@@ -1441,6 +1584,7 @@ impl<'a> LocationOperationRunner<'a> {
         plan: &OperationWorkPlan,
         detail: Option<String>,
         started: bool,
+        reason_code: Option<LocationReasonCode>,
     ) -> AppResult<()> {
         let clear_detail = detail.is_none();
         self.store
@@ -1451,6 +1595,7 @@ impl<'a> LocationOperationRunner<'a> {
                 verification_fallback_count: progress.verification_fallbacks,
                 detail,
                 clear_detail,
+                reason_code,
                 started_at: started.then(Utc::now),
                 completed_at: state.is_terminal().then(Utc::now),
             })
@@ -1472,6 +1617,9 @@ impl<'a> LocationOperationRunner<'a> {
         Ok(())
     }
 
+    // The reason code rides next to the detail it explains; a wider row is
+    // the honest shape, not a bundle.
+    #[expect(clippy::too_many_arguments)]
     async fn finish(
         &self,
         operation: &LocationOperation,
@@ -1480,9 +1628,18 @@ impl<'a> LocationOperationRunner<'a> {
         state: LocationOperationState,
         stop_reason: Option<StopReason>,
         detail: Option<String>,
+        reason_code: Option<LocationReasonCode>,
     ) -> AppResult<OperationRunOutcome> {
-        self.write_progress(operation, state, progress, plan, detail.clone(), false)
-            .await?;
+        self.write_progress(
+            operation,
+            state,
+            progress,
+            plan,
+            detail.clone(),
+            false,
+            reason_code,
+        )
+        .await?;
         // A terminal operation holds no ownership. An epilogue failure is
         // deliberately non-terminal, so it keeps its claims until a retry can
         // finish the root configuration it still owns (FR-084).
@@ -1499,6 +1656,7 @@ impl<'a> LocationOperationRunner<'a> {
             operation_id: operation.id.clone(),
             state,
             stop_reason,
+            reason_code,
             counters: progress.counters(plan),
             cursor: progress.cursor(&operation.id),
             warnings: progress.warnings.clone(),
@@ -1531,7 +1689,7 @@ enum TitleRunOutcome {
 
 /// How many titles failed, of how many, and why — capped so one bad mount
 /// cannot write a novel into the operation row.
-fn describe_title_failures(failures: &[String], titles_total: usize) -> String {
+fn describe_title_failures(failures: &[TitleFailure], titles_total: usize) -> String {
     const NAMED: usize = 5;
     let mut detail = format!(
         "{} of {titles_total} title(s) failed: {}",
@@ -1539,7 +1697,7 @@ fn describe_title_failures(failures: &[String], titles_total: usize) -> String {
         failures
             .iter()
             .take(NAMED)
-            .cloned()
+            .map(|failure| format!("{}: {}", failure.title_id, failure.detail))
             .collect::<Vec<_>>()
             .join("; ")
     );
@@ -1854,6 +2012,90 @@ mod tests {
     use crate::location::ownership_guard::{GuardedAction, OwnershipConflict};
     use crate::ports::LocationOwnershipClaim;
 
+    /// Each refusal `execution.rs` can raise lands on the code whose way out
+    /// actually converges it. The wording is matched, so this is the test
+    /// that breaks when the wording drifts.
+    #[test]
+    fn each_execution_refusal_is_classified_by_its_way_out() {
+        use LocationReasonCode::*;
+        use TitleRunPhase::*;
+        let validation = |message: &str| AppError::Validation(message.to_string());
+        let repository = || AppError::Repository("database is locked".to_string());
+        let cases = [
+            (Moving, repository(), StorageError),
+            (
+                Moving,
+                validation("source changed during file placement"),
+                StorageError,
+            ),
+            (
+                Moving,
+                validation("stale plan: cannot read /a/b: gone"),
+                StalePlan,
+            ),
+            (
+                Verifying,
+                validation("verification of /d/e failed (mismatch)"),
+                VerificationMismatch,
+            ),
+            (
+                Verifying,
+                validation(
+                    "The source changed during transfer. It was preserved; try again when the file is no longer changing.",
+                ),
+                VerificationMismatch,
+            ),
+            (
+                Reconciling,
+                validation("stale plan: /a no longer matches /d; preview again"),
+                StalePlan,
+            ),
+            (Reconciling, repository(), CatalogWriteFailed),
+            (
+                Reconciling,
+                validation("\"t\" can no longer merge into t-2: gone"),
+                MergeUnavailable,
+            ),
+            (
+                Reconciling,
+                validation("\"t\" merges into t-2, but no merge engine is configured"),
+                MergeUnavailable,
+            ),
+            (
+                Reconciling,
+                validation(
+                    "A file changed before the catalog update. Its source was preserved; retry to compare it again.",
+                ),
+                VerificationMismatch,
+            ),
+            (
+                CleaningUp,
+                validation(
+                    "A file changed before source cleanup. The source was preserved; retry to compare it again.",
+                ),
+                SourceCleanupFailed,
+            ),
+            (
+                CleaningUp,
+                validation("source or destination changed before cleanup: /a"),
+                SourceCleanupFailed,
+            ),
+            (
+                CleaningUp,
+                validation("stale plan: /a no longer matches /d; preview again"),
+                SourceCleanupFailed,
+            ),
+            (CleaningUp, repository(), SourceCleanupFailed),
+        ];
+        for (phase, error, expected) in cases {
+            assert_eq!(
+                classify_title_failure(phase, &error),
+                expected,
+                "{phase:?} + {error}"
+            );
+        }
+    }
+
     /// An in-memory stand-in for the 0206 tables, plus a transition log so the
     /// state machine itself can be asserted rather than only its end state.
     #[derive(Default)]
@@ -2048,6 +2290,9 @@ mod tests {
                 operation.verification_fallback_count = progress.verification_fallback_count;
                 if progress.detail.is_some() || progress.clear_detail {
                     operation.detail = progress.detail.clone();
+                    operation.reason_code = progress.reason_code;
+                } else if progress.reason_code.is_some() {
+                    operation.reason_code = progress.reason_code;
                 }
                 if operation.started_at.is_none() {
                     operation.started_at = progress.started_at;
@@ -2069,6 +2314,43 @@ mod tests {
                 operation.job_run_id = Some(job_run_id.to_string());
             }
             Ok(())
+        }
+
+        async fn reopen_location_operation(&self, operation_id: &str) -> AppResult<bool> {
+            let mut state = self.inner.lock().expect("lock");
+            let Some(operation) = state.operations.get_mut(operation_id) else {
+                return Ok(false);
+            };
+            if !operation.state.is_terminal()
+                || matches!(
+                    operation.state,
+                    LocationOperationState::Completed
+                        | LocationOperationState::CompletedWithWarnings
+                )
+            {
+                return Ok(false);
+            }
+            operation.state = LocationOperationState::Queued;
+            operation.detail = None;
+            operation.reason_code = None;
+            operation.completed_at = None;
+            state.cancel_requested.remove(operation_id);
+            for ((id, _), checkpoint) in state.checkpoints.iter_mut() {
+                if id == operation_id
+                    && matches!(
+                        checkpoint.state,
+                        TitleCheckpointState::Failed
+                            | TitleCheckpointState::Moving
+                            | TitleCheckpointState::Verifying
+                    )
+                {
+                    checkpoint.state = TitleCheckpointState::Pending;
+                    checkpoint.detail = None;
+                    checkpoint.reason_code = None;
+                    checkpoint.completed_at = None;
+                }
+            }
+            Ok(true)
         }
 
         async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool> {
@@ -2401,6 +2683,7 @@ mod tests {
             verification_fallback_count: 0,
             counters: LocationOperationCounters::default(),
             detail: None,
+            reason_code: None,
             job_run_id: None,
             workflow_operation_id: None,
             cancel_requested: false,
@@ -3081,6 +3364,160 @@ mod tests {
         );
     }
 
+    /// Reconciles every title, but the first reconcile of one named title fails
+    /// the way a busy catalog does; every later attempt succeeds.
+    struct FailOnceReconciler {
+        inner: RecordingReconciler,
+        fail_once: String,
+        failed: Mutex<bool>,
+    }
+
+    #[async_trait]
+    impl TitleReconciler for FailOnceReconciler {
+        async fn reconcile_title(
+            &self,
+            operation: &LocationOperation,
+            title: &PlannedTitle,
+        ) -> AppResult<TitleStepOutcome> {
+            let first_failure = {
+                let mut failed = self.failed.lock().expect("lock");
+                let first = title.title_id == self.fail_once && !*failed;
+                if first {
+                    *failed = true;
+                }
+                first
+            };
+            if first_failure {
+                return Err(AppError::Repository("database is locked".to_string()));
+            }
+            self.inner.reconcile_title(operation, title).await
+        }
+
+        async fn clean_up_title(
+            &self,
+            operation: &LocationOperation,
+            title: &PlannedTitle,
+        ) -> AppResult<TitleStepOutcome> {
+            self.inner.clean_up_title(operation, title).await
+        }
+    }
+
+    /// Retry on a terminal operation: a catalog write that fails after the
+    /// files are already on the destination drives the operation to `Failed`
+    /// with a `catalog_write_failed` reason on the row and on the title, and
+    /// releases ownership like every terminal state. Reopening the row and
+    /// running the same plan again repeats only the title that did not settle
+    /// — its files are already verified in place and are not moved again —
+    /// and completes.
+    #[tokio::test]
+    async fn a_failed_operation_reopens_and_retries_only_the_unsettled_title() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = FailOnceReconciler {
+            inner: RecordingReconciler::default(),
+            fail_once: "title-1".to_string(),
+            failed: Mutex::new(false),
+        };
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &two_title_plan())
+            .await
+            .expect("a title failure is reported as an outcome");
+
+        assert_eq!(outcome.state, LocationOperationState::Failed);
+        assert_eq!(
+            outcome.reason_code,
+            Some(LocationReasonCode::CatalogWriteFailed)
+        );
+        assert!(
+            outcome
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("database is locked")),
+            "detail was {:?}",
+            outcome.detail
+        );
+        let failed_title = store
+            .checkpoint("op-1", "title-1")
+            .expect("the failed title has a checkpoint");
+        assert_eq!(failed_title.state, TitleCheckpointState::Failed);
+        assert_eq!(
+            failed_title.reason_code,
+            Some(LocationReasonCode::CatalogWriteFailed)
+        );
+        assert_eq!(
+            store
+                .checkpoint("op-1", "title-2")
+                .expect("the other title has a checkpoint")
+                .state,
+            TitleCheckpointState::Completed,
+            "one title's failure does not stop the others from settling"
+        );
+        assert_eq!(
+            store.open_claims(),
+            0,
+            "a failed operation releases ownership"
+        );
+        assert!(
+            LocationOperationRunner::resumable_operations(&store)
+                .await
+                .expect("list resumable operations")
+                .is_empty(),
+            "a failed operation is not picked up by the boot resume"
+        );
+
+        assert!(
+            store
+                .reopen_location_operation("op-1")
+                .await
+                .expect("reopen should answer"),
+            "a failed operation reopens for a retry"
+        );
+        let reopened = store
+            .checkpoint("op-1", "title-1")
+            .expect("the reopened title keeps its checkpoint");
+        assert_eq!(reopened.state, TitleCheckpointState::Pending);
+        assert_eq!(reopened.reason_code, None);
+
+        let moved_before_retry = mover.moved();
+        let reconciled_before_retry = reconciler.inner.reconciled.lock().expect("lock").clone();
+        let retried = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &two_title_plan())
+            .await
+            .expect("the retry should complete");
+
+        assert_eq!(retried.state, LocationOperationState::Completed);
+        assert_eq!(retried.reason_code, None);
+        assert_eq!(
+            mover.moved(),
+            moved_before_retry,
+            "files verified on the destination are not moved again"
+        );
+        let reconciled_after_retry = reconciler.inner.reconciled.lock().expect("lock").clone();
+        assert_eq!(
+            reconciled_after_retry.len(),
+            reconciled_before_retry.len() + 1,
+            "only the title that failed reconciles again: before {reconciled_before_retry:?}, after {reconciled_after_retry:?}"
+        );
+        assert_eq!(
+            reconciled_after_retry.last().map(String::as_str),
+            Some("title-1")
+        );
+        assert_eq!(
+            store
+                .checkpoint("op-1", "title-1")
+                .expect("the retried title has a checkpoint")
+                .state,
+            TitleCheckpointState::Completed
+        );
+        assert_eq!(
+            store.open_claims(),
+            0,
+            "the completed retry releases ownership"
+        );
+    }
+
     #[tokio::test]
     async fn a_clean_run_walks_every_title_through_the_whole_state_machine() {
         let store = FakeStore::with_operation(operation());
@@ -3245,6 +3682,7 @@ mod tests {
             bytes_total: 200,
             bytes_verified: 200,
             detail: None,
+            reason_code: None,
             started_at: Some(now),
             updated_at: now,
             completed_at: Some(now),
@@ -3461,6 +3899,7 @@ mod tests {
             bytes_total: 200,
             bytes_verified: 200,
             detail: None,
+            reason_code: None,
             started_at: Some(now),
             updated_at: now,
             completed_at: Some(now),

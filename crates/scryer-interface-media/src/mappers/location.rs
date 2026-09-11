@@ -20,7 +20,7 @@ use scryer_application::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationType,
     TitleCheckpoint, VerificationDepth,
 };
-use scryer_application::location::operations::RootMovePreview;
+use scryer_application::location::operations::{LocationRetrySelection, RootMovePreview};
 use scryer_application::location::preview::{
     FreeSpaceEstimate, LocationPlan, PLAN_SECTION_SAMPLE_LIMIT, PlanConfirmation, PlanCounts,
     PlanFingerprint, PlanItem, PlanItemKind, PlanSection, VerificationStatement,
@@ -33,19 +33,20 @@ use scryer_application::location::root_scope_execution::RootScopeCallDestination
 use scryer_application::location::transfer_effects::{FILES_KEEP_THEIR_NAMES, FacetConversion};
 
 use crate::types::{
-    CancelLocationOperationPayload, LocationAmbiguousDestinationCandidatePayload,
-    LocationBlockedTitlePayload, LocationClassificationGroupPayload,
-    LocationClassifiedTitlePayload, LocationConsolidationClassificationPayload,
-    LocationDefaultRootTransferPayload, LocationDestinationInput, LocationExecutionModeInput,
-    LocationFacetConversionPayload, LocationFacetConvertedSettingPayload,
-    LocationFreeSpaceEstimatePayload, LocationMergeBlockedRecordPayload,
-    LocationMergePreviewPayload, LocationMergeRoleChangePayload,
+    AbandonLocationOperationPayload, CancelLocationOperationPayload,
+    LocationAmbiguousDestinationCandidatePayload, LocationBlockedTitlePayload,
+    LocationClassificationGroupPayload, LocationClassifiedTitlePayload,
+    LocationConsolidationClassificationPayload, LocationDefaultRootTransferPayload,
+    LocationDestinationInput, LocationExecutionModeInput, LocationFacetConversionPayload,
+    LocationFacetConvertedSettingPayload, LocationFreeSpaceEstimatePayload,
+    LocationMergeBlockedRecordPayload, LocationMergePreviewPayload, LocationMergeRoleChangePayload,
     LocationOperationAssetListingPayload, LocationOperationCountersPayload,
     LocationOperationDeduplicatedAssetPayload, LocationOperationPayload,
     LocationOperationPreviewPayload, LocationOperationRenamedAssetPayload,
     LocationOperationTitleAssetsPayload, LocationPlanConfirmationPayload,
     LocationPlanCountsPayload, LocationPlanItemPayload, LocationPlanKindCountPayload,
-    LocationPlanSectionPayload, LocationRootContentBucketPayload, LocationRootContentEntryPayload,
+    LocationPlanSectionPayload, LocationRetrySelectionPayload, LocationRetryTitlePayload,
+    LocationRootContentBucketPayload, LocationRootContentEntryPayload,
     LocationRootContentInventoryPayload, LocationRootIdentityRetentionPayload,
     LocationRootRetirementBlockerPayload, LocationRootRetirementContractPayload,
     LocationRootScopePreviewPayload, LocationSampledPathsPayload,
@@ -794,6 +795,7 @@ fn from_title_checkpoint(checkpoint: &TitleCheckpoint) -> LocationTitleCheckpoin
         bytes_total: Long(checkpoint.bytes_total),
         bytes_verified: Long(checkpoint.bytes_verified),
         detail: checkpoint.detail.as_deref().map(transfer_message),
+        reason_code: checkpoint.reason_code.map(|code| code.as_str().to_string()),
         started_at: checkpoint.started_at,
         updated_at: checkpoint.updated_at,
         completed_at: checkpoint.completed_at,
@@ -820,6 +822,7 @@ pub fn from_location_operation(
         verification_fallback_count: Long(operation.verification_fallback_count),
         counters: from_location_operation_counters(&operation.counters),
         detail: operation.detail.as_deref().map(transfer_message),
+        reason_code: operation.reason_code.map(|code| code.as_str().to_string()),
         job_run_id: operation.job_run_id.clone().map(ID::from),
         workflow_operation_id: operation.workflow_operation_id.clone().map(ID::from),
         cancel_requested: operation.cancel_requested,
@@ -910,6 +913,47 @@ pub fn from_canceled_location_operation(
     CancelLocationOperationPayload {
         id: ID::from(operation_id.to_string()),
         cancel_requested,
+    }
+}
+
+pub fn from_location_retry_selection(
+    selection: &LocationRetrySelection,
+) -> LocationRetrySelectionPayload {
+    LocationRetrySelectionPayload {
+        operation_id: ID::from(selection.operation_id.clone()),
+        mode: selection.mode.into(),
+        verification_depth: from_verification_depth(selection.verification_depth),
+        destination_library_id: selection.destination_library_id.clone().map(ID::from),
+        destination_root_id: selection.destination_root_id.clone().map(ID::from),
+        titles: selection
+            .titles
+            .iter()
+            .map(|title| LocationRetryTitlePayload {
+                title_id: ID::from(title.title_id.clone()),
+                title_name: title.title_name.clone(),
+                source_library_id: ID::from(title.source_library_id.clone()),
+                source_root_id: ID::from(title.source_root_id.clone()),
+                source_folder_path: title.source_folder_path.clone(),
+            })
+            .collect(),
+        catalog_blocked_title_ids: selection
+            .catalog_blocked_title_ids
+            .iter()
+            .cloned()
+            .map(ID::from)
+            .collect(),
+    }
+}
+
+pub fn from_abandoned_location_operation(
+    operation_id: &str,
+    abandoned: bool,
+    detail: Option<String>,
+) -> AbandonLocationOperationPayload {
+    AbandonLocationOperationPayload {
+        id: ID::from(operation_id.to_string()),
+        abandoned,
+        detail,
     }
 }
 
