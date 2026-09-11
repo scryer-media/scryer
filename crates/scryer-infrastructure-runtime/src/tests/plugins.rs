@@ -75,6 +75,65 @@ async fn seed_builtin_refreshes_existing_builtin_metadata_without_resetting_enab
 }
 
 #[tokio::test]
+async fn reseeding_an_unchanged_builtin_leaves_updated_at_alone() {
+    let (services, db) = temp_services("scryer_plugin_builtin_no_churn").await;
+    let customization = PluginStore::new(services.datastore());
+
+    let seed = |version: &'static str| {
+        let customization = customization.clone();
+        async move {
+            customization
+                .seed_builtin(
+                    "newznab",
+                    "Newznab Indexer",
+                    "seeded description",
+                    version,
+                    "1.3.0",
+                    ">=1.3.0, <1.4.0",
+                    "usenet_indexer",
+                    "newznab",
+                )
+                .await
+                .expect("builtin seed should succeed");
+        }
+    };
+
+    seed("0.2.2").await;
+    let first = customization
+        .get_plugin_installation("newznab")
+        .await
+        .expect("load seeded builtin")
+        .expect("builtin installation should exist");
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    seed("0.2.2").await;
+    let unchanged = customization
+        .get_plugin_installation("newznab")
+        .await
+        .expect("load re-seeded builtin")
+        .expect("builtin installation should exist");
+    assert_eq!(
+        unchanged.updated_at, first.updated_at,
+        "re-seeding identical metadata should not touch updated_at"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    seed("0.3.0").await;
+    let bumped = customization
+        .get_plugin_installation("newznab")
+        .await
+        .expect("load upgraded builtin")
+        .expect("builtin installation should exist");
+    assert_eq!(bumped.version, "0.3.0");
+    assert!(
+        bumped.updated_at > first.updated_at,
+        "a real metadata change should still advance updated_at"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn reverting_downloaded_builtin_clears_downloaded_artifact_state() {
     let (services, db) = temp_services("scryer_plugin_builtin_revert").await;
     let customization = PluginStore::new(services.datastore());

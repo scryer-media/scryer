@@ -45,6 +45,9 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
 
+        self.ensure_provider_plugin_not_blocked(provider_type)
+            .await?;
+
         let fields = self.indexer_config_fields_for_provider_type(provider_type)?;
         let persisted_config = if let Some(indexer_id) = indexer_id {
             self.services

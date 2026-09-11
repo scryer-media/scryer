@@ -443,6 +443,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// How many installed plugins have a newer catalog release available.
     pub async fn plugin_update_count(&self, actor: &User) -> AppResult<i64> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -452,6 +453,23 @@ impl AppUseCase {
             .await?
             .into_iter()
             .filter(|plugin| plugin.update_available)
+            .count() as i64)
+    }
+
+    /// How many installed plugins are blocked on this version of Scryer.
+    ///
+    /// Kept apart from [`Self::plugin_update_count`]: an update is optional
+    /// housekeeping, a blocked plugin is not running at all, and the navigation
+    /// badges show them with different urgency.
+    pub async fn plugin_blocked_count(&self, actor: &User) -> AppResult<i64> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+
+        Ok(self
+            .build_available_plugins()
+            .await?
+            .into_iter()
+            .filter(|plugin| plugin.blocked_reason.is_some())
             .count() as i64)
     }
 }

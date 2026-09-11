@@ -23,6 +23,48 @@ fn component_replacement_has_same_origin(
         && installation.source_kind == resolved.source_kind
 }
 
+const COMPONENT_BLOCKER_RETAINED: &str =
+    "The original installation and its configuration have been retained.";
+
+/// Whether a catalog entry serves the same provider as an installed plugin.
+///
+/// Deliberately looser than `component_replacement_has_same_origin`: it ignores
+/// the provenance an in-place upgrade needs, so it can find the build an
+/// operator could install by hand.
+fn catalog_entry_serves_same_provider(
+    installation: &PluginInstallation,
+    entry: &CatalogV3PluginEntry,
+) -> bool {
+    normalize_provider_key(&installation.provider_type)
+        == normalize_provider_key(&entry.provider_type)
+        && (installation.plugin_type == entry.plugin_type
+            || (is_indexer_plugin_type(&installation.plugin_type)
+                && is_indexer_plugin_type(&entry.plugin_type)))
+}
+
+/// The catalog entry that replaces a deprecated one, or `None`.
+///
+/// The catalog schema carries no successor field, so the replacement is only
+/// claimed when exactly one live entry publishes the same product name for the
+/// same plugin type — which is how `xbmc` resolves to `kodi`. Anything
+/// ambiguous falls back to the terminal message rather than naming a guess.
+fn catalog_successor_for<'a>(
+    catalog: &'a CatalogV3,
+    deprecated: &CatalogV3PluginEntry,
+) -> Option<&'a CatalogV3PluginEntry> {
+    let mut candidates = catalog.plugins.iter().filter(|entry| {
+        entry.id != deprecated.id
+            && entry.status != PluginLifecycleStatus::Deprecated
+            && entry.plugin_type == deprecated.plugin_type
+            && entry
+                .name
+                .trim()
+                .eq_ignore_ascii_case(deprecated.name.trim())
+    });
+    let successor = candidates.next()?;
+    candidates.next().is_none().then_some(successor)
+}
+
 impl AppUseCase {
     /// Repair one startup compatibility target, independently of routine
     /// auto-update policy. The caller journals the original row and digest.
@@ -80,11 +122,19 @@ impl AppUseCase {
             return Ok(true);
         }
 
-        let resolved = self.resolved_catalog_plugins().await?.into_iter()
+        let resolutions = self.resolved_catalog_plugins().await?;
+        let Some(resolved) = resolutions
+            .iter()
             .find(|resolved| component_replacement_has_same_origin(&installation, resolved))
-            .ok_or_else(|| AppError::Validation(
-                "No compatible component from the installed plugin's original publisher and source; install a compatible build. The original installation and configuration have been retained.".into()
-            ))?;
+            .cloned()
+        else {
+            // One generic sentence covered three different operator actions.
+            // Say which one this is.
+            return Err(AppError::Validation(
+                self.component_blocker_reason(&installation, &resolutions)
+                    .await,
+            ));
+        };
         let reporter = PluginInstallProgressReporter::new(self, "system", &installation.plugin_id);
         let prepared = self
             .prepare_catalog_plugin_install(&resolved, &reporter)
@@ -102,6 +152,53 @@ impl AppUseCase {
             .update_plugin_installation(&updated, Some(&bytes))
             .await?;
         Ok(true)
+    }
+
+    /// Why this installation has no component replacement, phrased as the step
+    /// the operator can actually take.
+    async fn component_blocker_reason(
+        &self,
+        installation: &PluginInstallation,
+        resolutions: &[CatalogPluginResolution],
+    ) -> String {
+        // A build for this provider does resolve, just not from this
+        // installation's origin, so it cannot be swapped in place. This is the
+        // manual-upload case: the operator installs the catalog build instead.
+        if let Some(available) = resolutions.iter().find(|resolved| {
+            catalog_entry_serves_same_provider(installation, &resolved.catalog_entry)
+        }) {
+            return format!(
+                "This build was not installed from the plugin catalog, so it cannot be upgraded in place. A compatible build of {} ({}) is available in the catalog; install it to replace this one. {COMPONENT_BLOCKER_RETAINED}",
+                available.catalog_entry.name, available.release.version,
+            );
+        }
+
+        // A deprecated entry publishes no runnable release, so it never reaches
+        // `resolutions`. The raw catalog is the only place left that can say
+        // what became of the plugin.
+        if let Ok(Some(catalog)) = self.cached_central_catalog().await
+            && let Some(entry) = catalog.plugins.iter().find(|entry| {
+                entry.id == installation.plugin_id
+                    || catalog_entry_serves_same_provider(installation, entry)
+            })
+            && entry.status == PluginLifecycleStatus::Deprecated
+        {
+            return match catalog_successor_for(&catalog, entry) {
+                Some(successor) => format!(
+                    "{} is deprecated and has no build for this version of Scryer. It is replaced by {} ({}); install that plugin and move this configuration to it. {COMPONENT_BLOCKER_RETAINED}",
+                    entry.name, successor.name, successor.id,
+                ),
+                None => format!(
+                    "{} is deprecated, has no build for this version of Scryer, and has no replacement in the catalog, so it cannot run on this version. {COMPONENT_BLOCKER_RETAINED}",
+                    entry.name,
+                ),
+            };
+        }
+
+        format!(
+            "No compatible component is published for {} by its original publisher and source repository. {COMPONENT_BLOCKER_RETAINED}",
+            installation.name,
+        )
     }
 
     async fn validate_component_upgrade_runtime(
@@ -137,6 +234,61 @@ impl AppUseCase {
         )
         .map_err(AppError::Validation)?;
         Ok(())
+    }
+
+    /// The compatibility blocker standing in the way of a provider, if any.
+    ///
+    /// Blockers are keyed by plugin id, but the provider-test and health paths
+    /// only know the provider type the operator configured, so fall back to
+    /// resolving through the installation list.
+    pub async fn plugin_component_blocker_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Option<String> {
+        let blockers = self
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .clone();
+        if blockers.is_empty() {
+            return None;
+        }
+        let key = normalize_provider_key(provider_type);
+        if let Some(reason) = blockers.get(&key) {
+            return Some(reason.clone());
+        }
+        self.services
+            .customization
+            .plugin_installations
+            .list_plugin_installations()
+            .await
+            .ok()?
+            .iter()
+            .find(|installation| normalize_provider_key(&installation.provider_type) == key)
+            .and_then(|installation| blockers.get(&installation.plugin_id).cloned())
+    }
+
+    /// Refuse a provider connection or notification test when the plugin behind
+    /// it is blocked.
+    ///
+    /// Without this the test paths fall through to their generic "provider
+    /// unavailable" or "does not support test notifications" messages, which
+    /// send the operator hunting for a configuration mistake that is not there.
+    pub(crate) async fn ensure_provider_plugin_not_blocked(
+        &self,
+        provider_type: &str,
+    ) -> AppResult<()> {
+        match self
+            .plugin_component_blocker_for_provider(provider_type)
+            .await
+        {
+            Some(reason) => Err(AppError::Validation(format!(
+                "The '{provider_type}' plugin is blocked on this version of Scryer, so it cannot be tested. {reason}"
+            ))),
+            None => Ok(()),
+        }
     }
 
     pub async fn set_plugin_component_blocker(

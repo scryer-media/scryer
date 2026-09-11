@@ -39,6 +39,25 @@ fn restore_warning_label(installation: &PluginInstallation) -> &str {
         installation.name.as_str()
     }
 }
+/// The warning for a plugin that came back at a version other than the one the
+/// backup recorded, or `None` when the versions match.
+///
+/// Recovery deliberately installs whatever the catalog publishes now rather
+/// than pinning the backup's version; this only makes that visible.
+fn restore_version_change_warning(
+    installation: &PluginInstallation,
+    bundle_version: &str,
+) -> Option<String> {
+    (installation.version != bundle_version).then(|| {
+        format!(
+            "Plugin '{}' was restored at version {} rather than version {} from the backup, because that is the version the plugin catalog publishes now.",
+            restore_warning_label(installation),
+            installation.version,
+            bundle_version,
+        )
+    })
+}
+
 impl AppUseCase {
     pub async fn recover_restored_plugins_after_backup_restore(&self) -> AppResult<()> {
         let installations = self
@@ -78,11 +97,28 @@ impl AppUseCase {
             }
         }
 
-        let restore_warnings = skipped_local_uploads
+        // Captured before the recovery tasks consume `recoverable`, so the
+        // version the bundle carried can be compared with what the catalog
+        // actually published back.
+        let bundle_versions = recoverable
+            .iter()
+            .map(|target| {
+                (
+                    target.installation.plugin_id.clone(),
+                    target.installation.version.clone(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        // Every consequence of the skip in one line: the upload is gone, the
+        // configuration that used it is not, and it is still switched on.
+        // Saying only that the restore was skipped left the operator with a
+        // provider that looks configured and enabled but cannot run.
+        let mut restore_warnings = skipped_local_uploads
             .iter()
             .map(|installation| {
                 format!(
-                    "Skipped restoring plugin '{}' because it was uploaded locally and cannot be re-downloaded from a remote catalog source.",
+                    "Skipped restoring plugin '{}' because it was uploaded locally and cannot be re-downloaded from a remote catalog source. Its installation has been removed, but its saved configuration remains and is still enabled, so it will not work until you upload the plugin again.",
                     restore_warning_label(installation)
                 )
             })
@@ -142,6 +178,17 @@ impl AppUseCase {
         }
 
         for prepared in prepared_updates {
+            // Recovery installs whatever the catalog publishes now, which need
+            // not be the version the backup recorded. Restoring a different
+            // version is the intended behaviour, but a silent one is a change
+            // to the operator's fleet that they never agreed to.
+            if let Some(bundle_version) =
+                bundle_versions.get(&prepared.updated_installation.plugin_id)
+                && let Some(warning) =
+                    restore_version_change_warning(&prepared.updated_installation, bundle_version)
+            {
+                restore_warnings.push(warning);
+            }
             self.services
                 .customization
                 .plugin_installations

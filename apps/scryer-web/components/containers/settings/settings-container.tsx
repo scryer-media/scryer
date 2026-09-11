@@ -365,6 +365,7 @@ type SettingsContainerProps = {
   uiLanguage: LocaleCode;
   onSelectLanguage: (code: string) => void;
   pluginUpdateCount: number;
+  pluginBlockedCount: number;
 };
 
 export const SettingsContainer = memo(function SettingsContainer({
@@ -378,6 +379,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   uiLanguage,
   onSelectLanguage,
   pluginUpdateCount,
+  pluginBlockedCount,
 }: SettingsContainerProps) {
   const t = useTranslate();
   const client = useClient();
@@ -778,8 +780,21 @@ export const SettingsContainer = memo(function SettingsContainer({
                     )}
                   />
                   <span className="whitespace-nowrap">{item.label}</span>
+                  {item.section === "plugins" && pluginBlockedCount > 0 ? (
+                    <span
+                      data-ui="settings-nav-plugin-blocked-count"
+                      className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-danger-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-danger-on-solid)]"
+                    >
+                      {pluginBlockedCount}
+                    </span>
+                  ) : null}
                   {item.section === "plugins" && pluginUpdateCount > 0 ? (
-                    <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-warning-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-warning-on-solid)]">
+                    <span
+                      className={cn(
+                        "inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-warning-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-warning-on-solid)]",
+                        pluginBlockedCount > 0 ? "ml-1" : "ml-auto",
+                      )}
+                    >
                       {pluginUpdateCount}
                     </span>
                   ) : null}

@@ -402,8 +402,9 @@ pub use security::backup_bundle::{
     BackupBundleInspectSummary, BackupBundleRestorePayload, BackupBundleStaging,
     BackupExportOutcome, BackupExportSecrets, BackupInstanceSecrets, BackupRestorePreparedBundle,
     BackupTableCatalogEntry, BackupTableClassification, EXPORT_BATCH_SIZE,
-    PreparedBackupBundleDirectory, backup_table_part_filename, inspect_backup_bundle,
-    prepare_backup_restore_payload,
+    PreparedBackupBundleDirectory, RESTORE_VERSION_CONTRACT_HINT, backup_export_table_names,
+    backup_table_part_filename, inspect_backup_bundle, prepare_backup_restore_payload,
+    validate_inspected_bundle_is_restorable, validate_restore_manifest_table_set,
 };
 pub use security::external_accounts::{ExternalAuthRuntimeConnection, ExternalAuthRuntimeSettings};
 pub use settings::settings::{

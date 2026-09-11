@@ -353,6 +353,8 @@ pub struct NavigationBadgeCountsPayload {
     pub activity_import_count: i32,
     /// Count of available plugin updates visible to the caller.
     pub plugin_update_count: i32,
+    /// Count of installed plugins blocked on this version of Scryer and visible to the caller.
+    pub plugin_blocked_count: i32,
 }
 
 #[derive(SimpleObject, Clone)]

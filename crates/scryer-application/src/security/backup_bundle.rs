@@ -1221,6 +1221,90 @@ impl BackupBundleInspectSummary {
     }
 }
 
+/// Tables this build expects to find in a restorable bundle.
+///
+/// The set is a property of the catalog above, not of any live connection, so
+/// inspect-time validation can reach the same answer the apply path reaches
+/// without opening a datastore.
+pub fn backup_export_table_names() -> Vec<String> {
+    BACKUP_TABLE_CATALOG
+        .iter()
+        .filter(|entry| entry.classification == BackupTableClassification::Export)
+        .map(|entry| entry.table.to_string())
+        .collect()
+}
+
+/// Guidance appended to every table-set rejection.
+///
+/// A bundle restores only into the Scryer version that wrote it; cross-version
+/// restore is not a supported operation. Stating the supported rollback path
+/// here keeps the advice with the only error an operator sees.
+pub const RESTORE_VERSION_CONTRACT_HINT: &str = "A backup restores only into the same Scryer version that created it. To roll back, start a fresh container on the previous version and apply this backup on its first boot.";
+
+pub fn validate_restore_manifest_table_set(
+    row_counts: &BTreeMap<String, u64>,
+    export_tables: &[String],
+    source_migration_key: Option<&str>,
+) -> AppResult<()> {
+    let expected_tables = export_tables.iter().cloned().collect::<BTreeSet<_>>();
+    let manifest_tables = row_counts.keys().cloned().collect::<BTreeSet<_>>();
+    if manifest_tables == expected_tables {
+        return Ok(());
+    }
+
+    let missing = expected_tables
+        .difference(&manifest_tables)
+        .cloned()
+        .collect::<Vec<_>>();
+    let unexpected = manifest_tables
+        .difference(&expected_tables)
+        .cloned()
+        .collect::<Vec<_>>();
+    if unexpected.is_empty()
+        && source_migration_key
+            .and_then(migration_number)
+            .is_some_and(|number| {
+                missing.iter().all(|table| match table.as_str() {
+                    "rule_pack_installations" | "rule_pack_members" => number < 225,
+                    "location_transfer_progress" | "location_transfer_titles" => number < 234,
+                    "location_file_resolutions" => number < 235,
+                    _ => false,
+                })
+            })
+    {
+        return Ok(());
+    }
+    Err(AppError::Validation(format!(
+        "backup bundle table set does not match the current restore catalog: missing [{}], unexpected [{}]. {}",
+        missing.join(", "),
+        unexpected.join(", "),
+        RESTORE_VERSION_CONTRACT_HINT
+    )))
+}
+
+/// Apply the restore gate to an inspected bundle before the operator commits to it.
+///
+/// `applyRestoreBundle` runs the same check against a freshly migrated schema.
+/// Running it at inspect time costs nothing and turns a late, destructive-looking
+/// failure into an answer the operator gets while they can still act on it.
+pub fn validate_inspected_bundle_is_restorable(
+    summary: &BackupBundleInspectSummary,
+) -> AppResult<()> {
+    validate_restore_manifest_table_set(
+        &summary.row_counts,
+        &backup_export_table_names(),
+        summary.source_migration_key.as_deref(),
+    )
+}
+
+fn migration_number(migration_key: &str) -> Option<u32> {
+    migration_key
+        .split_once('_')
+        .map_or(migration_key, |(number, _)| number)
+        .parse()
+        .ok()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackupBundleManifest {
     pub format_version: String,
@@ -2753,5 +2837,106 @@ mod tests {
             plaintext.extend_from_slice(&buffer[..read]);
         }
         Ok(plaintext)
+    }
+}
+
+#[cfg(test)]
+mod restore_gate_tests {
+    use super::*;
+
+    fn summary_with(
+        row_counts: BTreeMap<String, u64>,
+        source_migration_key: Option<&str>,
+    ) -> BackupBundleInspectSummary {
+        BackupBundleInspectSummary {
+            format_version: BACKUP_FORMAT_VERSION.to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            source_scryer_version: "0.19.16".to_string(),
+            source_engine: "sqlite".to_string(),
+            source_migration_key: source_migration_key.map(str::to_string),
+            encrypted: true,
+            row_counts,
+        }
+    }
+
+    #[test]
+    fn export_table_names_match_the_catalog_export_entries() {
+        let names = backup_export_table_names();
+        assert!(names.contains(&"plugin_installations".to_string()));
+        assert!(
+            !names.contains(&"_sqlx_migrations".to_string()),
+            "ignored catalog entries must not be treated as expected bundle tables"
+        );
+        assert_eq!(
+            names.len(),
+            BACKUP_TABLE_CATALOG
+                .iter()
+                .filter(|entry| entry.classification == BackupTableClassification::Export)
+                .count()
+        );
+    }
+
+    #[test]
+    fn inspect_accepts_a_bundle_this_build_can_restore() {
+        let row_counts = backup_export_table_names()
+            .into_iter()
+            .map(|table| (table, 0))
+            .collect::<BTreeMap<_, _>>();
+        validate_inspected_bundle_is_restorable(&summary_with(row_counts, Some("0233_fixture")))
+            .expect("a bundle carrying exactly this build's export tables must inspect clean");
+    }
+
+    #[test]
+    fn inspect_rejects_a_bundle_whose_table_set_apply_would_refuse() {
+        // A bundle from an older line: it lacks tables this build exports and
+        // carries one this build renamed away.
+        let mut row_counts = backup_export_table_names()
+            .into_iter()
+            .map(|table| (table, 0))
+            .collect::<BTreeMap<_, _>>();
+        row_counts.remove("application_compatibility_journal");
+        row_counts.insert("indexer_proxy_configs".to_string(), 0);
+
+        let error = validate_inspected_bundle_is_restorable(&summary_with(
+            row_counts,
+            Some("0211_fixture"),
+        ))
+        .expect_err("inspect must refuse what apply would refuse");
+        let message = error.to_string();
+        assert!(
+            message.contains("application_compatibility_journal"),
+            "{message}"
+        );
+        assert!(message.contains("indexer_proxy_configs"), "{message}");
+        assert!(
+            message.contains(RESTORE_VERSION_CONTRACT_HINT),
+            "the refusal must state the supported rollback path: {message}"
+        );
+    }
+
+    #[test]
+    fn late_0_20_tolerance_list_still_applies_at_inspect_time() {
+        let mut row_counts = backup_export_table_names()
+            .into_iter()
+            .map(|table| (table, 0))
+            .collect::<BTreeMap<_, _>>();
+        for table in [
+            "rule_pack_installations",
+            "rule_pack_members",
+            "location_transfer_progress",
+            "location_transfer_titles",
+            "location_file_resolutions",
+        ] {
+            row_counts.remove(table);
+        }
+
+        validate_inspected_bundle_is_restorable(&summary_with(
+            row_counts.clone(),
+            Some("0224_prior_change"),
+        ))
+        .expect("bundles predating those tables must keep restoring");
+
+        validate_inspected_bundle_is_restorable(&summary_with(row_counts, Some("0235_later")))
+            .expect_err("a bundle new enough to carry them must still provide them");
     }
 }

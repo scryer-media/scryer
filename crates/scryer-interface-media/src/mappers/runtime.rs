@@ -334,6 +334,7 @@ pub fn from_notification_channel_with_fields(
         stored_secret_keys,
         media_server_connection_id: ch.media_server_connection_id.map(Into::into),
         is_enabled: ch.is_enabled,
+        blocked_reason: None,
         created_at: ch.created_at,
         updated_at: ch.updated_at,
     }

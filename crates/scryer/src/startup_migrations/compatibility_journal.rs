@@ -42,6 +42,36 @@ pub(crate) async fn completed(
         .is_some_and(|row| row.text("status").ok().as_deref() == Some("validated")))
 }
 
+/// Subjects this migration already recorded as blocked, keyed by
+/// `(subject_id, source_digest)`.
+///
+/// Callers read this before recording their own `pending` rows, because
+/// `record` overwrites the status for the same key.
+pub(crate) async fn blocked_subjects(
+    datastore: &StoreDatastore,
+    migration: &str,
+) -> Result<std::collections::HashSet<(String, String)>, String> {
+    let rows = SqlRuntime::fetch_all(
+        datastore.read_exec(),
+        "SELECT subject_id, source_digest FROM application_compatibility_journal
+         WHERE migration_id = {} AND status = {}",
+        &[
+            SqlArg::Text(migration.into()),
+            SqlArg::Text("blocked".into()),
+        ],
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    rows.iter()
+        .map(|row| {
+            Ok((
+                row.text("subject_id").map_err(|e| e.to_string())?,
+                row.text("source_digest").map_err(|e| e.to_string())?,
+            ))
+        })
+        .collect()
+}
+
 pub(crate) async fn record(
     datastore: &StoreDatastore,
     migration: &str,

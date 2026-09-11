@@ -9,11 +9,38 @@ pub(crate) const ID: &str = "0014_plugin_components_020";
 #[path = "plugin_compatibility_tests.rs"]
 mod tests;
 
+/// What one compatibility pass did, so the completion log and the tests read
+/// the same numbers.
+pub(crate) struct ComponentPassCounts {
+    pub(crate) replaced: usize,
+    pub(crate) blocked: usize,
+    pub(crate) unchanged: usize,
+}
+
 pub(crate) async fn migrate(
     app: &AppUseCase,
     datastore: &StoreDatastore,
     store: &DatastoreCustomizationStore,
 ) -> Result<bool, String> {
+    let counts = run_pass(app, datastore, store).await?;
+    // Emitted whatever the verdict. The runner records a ledger row, and logs
+    // its own completion line, only when this returns true, so with any plugin
+    // blocked an operator otherwise saw no evidence the pass had run at all.
+    tracing::info!(
+        migration_id = ID,
+        replaced = counts.replaced,
+        blocked = counts.blocked,
+        unchanged = counts.unchanged,
+        "plugin component compatibility pass completed"
+    );
+    Ok(counts.blocked == 0)
+}
+
+pub(crate) async fn run_pass(
+    app: &AppUseCase,
+    datastore: &StoreDatastore,
+    store: &DatastoreCustomizationStore,
+) -> Result<ComponentPassCounts, String> {
     journal::ensure(datastore).await?;
     let mut bundled = Vec::new();
     for asset in scryer_plugins::builtins::INDEXER_BUILTINS
@@ -33,6 +60,9 @@ pub(crate) async fn migrate(
         .list_plugin_installations()
         .await
         .map_err(|error| error.to_string())?;
+    // Read before the `pending` writes below: `record` overwrites the status
+    // for a key, so a prior boot's verdict is only visible up here.
+    let previously_blocked = journal::blocked_subjects(datastore, ID).await?;
     let mut outcomes = Vec::new();
     let mut refreshed = false;
     for installation in installations {
@@ -84,7 +114,18 @@ pub(crate) async fn migrate(
             .await;
         // A stale catalog must not strand a recoverable upgrade. This refresh
         // is independent of scheduled auto-updates and attempted once per boot.
+        //
+        // Skip the network call when this exact evidence digest was already
+        // recorded blocked: the catalog was refreshed on the boot that produced
+        // that verdict and still did not resolve the plugin, so repeating it
+        // every boot only costs a request. The digest covers the app version,
+        // the installation metadata and both artifact digests, so a new build
+        // or any change to the installation retries the refresh. Re-inspection
+        // itself still runs every boot; only the fetch is suppressed.
+        let evidence_already_blocked =
+            previously_blocked.contains(&(installation.id.clone(), digest.clone()));
         if outcome.is_err()
+            && !evidence_already_blocked
             && installation.publisher.is_some()
             && installation.source_repo.is_some()
         {
@@ -98,6 +139,7 @@ pub(crate) async fn migrate(
                 .repair_plugin_component_installation(installation.clone(), builtin)
                 .await;
         }
+        let replaced = matches!(outcome, Ok(true));
         let reason = outcome.err().map(|error| error.to_string());
         app.set_plugin_component_blocker(&installation, reason.clone())
             .await
@@ -116,20 +158,28 @@ pub(crate) async fn migrate(
             reason.clone(),
         )
         .await?;
-        outcomes.push((installation, reason));
+        outcomes.push((installation, reason, replaced));
     }
     // Rebuild once after durable repairs, before consumers can start. Reload
     // excludes blockers and suppresses their bundled fallbacks.
     app.reload_plugin_providers()
         .await
         .map_err(|error| error.to_string())?;
-    let mut blocked = 0usize;
-    for (installation, reason) in outcomes {
+    let mut counts = ComponentPassCounts {
+        replaced: 0,
+        blocked: 0,
+        unchanged: 0,
+    };
+    for (installation, reason, replaced) in outcomes {
         if let Some(reason) = &reason {
-            blocked += 1;
+            counts.blocked += 1;
             tracing::warn!(plugin_id = installation.plugin_id, %reason,
                 "plugin component upgrade blocked; original installation retained");
+        } else if replaced {
+            counts.replaced += 1;
+        } else {
+            counts.unchanged += 1;
         }
     }
-    Ok(blocked == 0)
+    Ok(counts)
 }

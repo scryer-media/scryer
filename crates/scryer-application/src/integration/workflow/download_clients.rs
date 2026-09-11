@@ -78,11 +78,36 @@ impl AppUseCase {
             self.normalize_download_client_type(value)?;
         }
 
-        self.services
+        let mut configs = self
+            .services
             .integrations
             .download_client_configs
             .list(client_type)
-            .await
+            .await?;
+        self.apply_component_blockers_to_download_clients(&mut configs)
+            .await;
+        Ok(configs)
+    }
+
+    /// Overlay plugin compatibility blockers onto stored client health.
+    ///
+    /// The stored row keeps the health from the last time the client actually
+    /// ran, which after an upgrade that blocks the plugin is a stale `healthy`
+    /// with no error: the operator is told the client is fine while nothing can
+    /// dial it. The stored row is left alone; only what is reported changes.
+    pub(crate) async fn apply_component_blockers_to_download_clients(
+        &self,
+        configs: &mut [DownloadClientConfig],
+    ) {
+        for config in configs.iter_mut() {
+            if let Some(reason) = self
+                .plugin_component_blocker_for_provider(&config.client_type)
+                .await
+            {
+                config.status = scryer_domain::DownloadClientStatus::Error;
+                config.last_error = Some(reason);
+            }
+        }
     }
 }
 impl AppUseCase {

@@ -24,6 +24,8 @@ pub struct NotificationChannelPayload {
     pub media_server_connection_id: Option<ID>,
     /// Whether notifications are enabled for this channel.
     pub is_enabled: bool,
+    /// Why the channel's plugin is blocked on this version of Scryer, or null when it is running.
+    pub blocked_reason: Option<String>,
     /// Channel creation time in UTC.
     pub created_at: DateTime<Utc>,
     /// Time of the latest channel update in UTC.

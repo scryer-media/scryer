@@ -309,6 +309,7 @@ type RootSidebarProps = {
   pendingMediaRequestCounts: PendingImportCounts | null;
   manualImportRequiredCount: number;
   pluginUpdateCount: number;
+  pluginBlockedCount: number;
   header?: React.ReactNode;
   children?: React.ReactNode;
   onNavigate: (
@@ -640,6 +641,7 @@ function RootSidebarContent({
   pendingMediaRequestCounts,
   manualImportRequiredCount,
   pluginUpdateCount,
+  pluginBlockedCount,
   header,
   children,
   onNavigate,
@@ -1440,7 +1442,18 @@ function RootSidebarContent({
                             {activityImportBadgeCount}
                           </SidebarMenuBadge>
                         ) : null}
-                        {isSettingsTop && pluginUpdateCount > 0 ? (
+                        {isSettingsTop && pluginBlockedCount > 0 ? (
+                          // Only one badge fits the collapsed row; a plugin
+                          // that is not running outranks one with an update.
+                          <SidebarMenuBadge
+                            className={cn(
+                              "!top-1/2 -translate-y-1/2",
+                              navBadgeToneClass("danger"),
+                            )}
+                          >
+                            {pluginBlockedCount}
+                          </SidebarMenuBadge>
+                        ) : isSettingsTop && pluginUpdateCount > 0 ? (
                           <SidebarMenuBadge
                             className={cn(
                               "!top-1/2 -translate-y-1/2",
@@ -1493,6 +1506,13 @@ function RootSidebarContent({
                                         <span className="min-w-0 flex-1 truncate">
                                           {entry.label(t)}
                                         </span>
+                                        {entry.id === "plugins" &&
+                                        pluginBlockedCount > 0 ? (
+                                          <LeafNavBadge
+                                            count={pluginBlockedCount}
+                                            tone="danger"
+                                          />
+                                        ) : null}
                                         {entry.id === "plugins" &&
                                         pluginUpdateCount > 0 ? (
                                           <LeafNavBadge

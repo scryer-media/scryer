@@ -840,6 +840,7 @@ const NOTIFICATION_CHANNEL_FIELDS = `
     }
     storedSecretKeys
     isEnabled
+    blockedReason
     createdAt
     updatedAt`;
 
@@ -4108,6 +4109,7 @@ export const navigationBadgeCountsQuery = `query NavigationBadgeCounts {
     }
     activityImportCount
     pluginUpdateCount
+    pluginBlockedCount
   }
 }`;
 

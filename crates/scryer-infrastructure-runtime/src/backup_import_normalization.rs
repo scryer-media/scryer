@@ -1,5 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult};
@@ -30,53 +28,10 @@ pub fn strip_nonportable_backup_fields(table: &str, object: &mut JsonMap<String,
     }
 }
 
-pub fn validate_restore_manifest_table_set(
-    row_counts: &BTreeMap<String, u64>,
-    export_tables: &[String],
-    source_migration_key: Option<&str>,
-) -> AppResult<()> {
-    let expected_tables = export_tables.iter().cloned().collect::<BTreeSet<_>>();
-    let manifest_tables = row_counts.keys().cloned().collect::<BTreeSet<_>>();
-    if manifest_tables == expected_tables {
-        return Ok(());
-    }
-
-    let missing = expected_tables
-        .difference(&manifest_tables)
-        .cloned()
-        .collect::<Vec<_>>();
-    let unexpected = manifest_tables
-        .difference(&expected_tables)
-        .cloned()
-        .collect::<Vec<_>>();
-    if unexpected.is_empty()
-        && source_migration_key
-            .and_then(migration_number)
-            .is_some_and(|number| {
-                missing.iter().all(|table| match table.as_str() {
-                    "rule_pack_installations" | "rule_pack_members" => number < 225,
-                    "location_transfer_progress" | "location_transfer_titles" => number < 234,
-                    "location_file_resolutions" => number < 235,
-                    _ => false,
-                })
-            })
-    {
-        return Ok(());
-    }
-    Err(AppError::Validation(format!(
-        "backup bundle table set does not match the current restore catalog: missing [{}], unexpected [{}]",
-        missing.join(", "),
-        unexpected.join(", ")
-    )))
-}
-
-fn migration_number(migration_key: &str) -> Option<u32> {
-    migration_key
-        .split_once('_')
-        .map_or(migration_key, |(number, _)| number)
-        .parse()
-        .ok()
-}
+// The restore table-set gate lives beside the catalog it validates against so
+// that inspect-time callers, which cannot reach this crate, run the identical
+// check. Re-exported here to keep every existing caller and test unchanged.
+pub use scryer_application::validate_restore_manifest_table_set;
 
 pub fn normalize_import_object_for_target(
     table: &str,

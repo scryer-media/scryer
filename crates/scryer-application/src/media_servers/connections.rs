@@ -496,6 +496,9 @@ impl AppUseCase {
             .get_by_id(id.trim())
             .await?
             .ok_or_else(|| AppError::NotFound(format!("media server connection {}", id.trim())))?;
+        self.ensure_provider_plugin_not_blocked(connection.provider.as_str())
+            .await?;
+
         if connection.provider == MediaServerProvider::Emby {
             let api_key = connection
                 .api_key

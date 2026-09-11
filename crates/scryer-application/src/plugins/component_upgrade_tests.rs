@@ -332,3 +332,110 @@ async fn component_upgrade_unrelated_mutation_preserves_incompatible_host_and_sd
         );
     }
 }
+
+#[tokio::test]
+async fn blocked_plugins_are_found_by_provider_type_not_only_by_plugin_id() {
+    let h = bootstrap_plugins(None);
+    let mut installation = official_catalog_installation("alpha-legacy", "0.1.0");
+    installation.provider_type = "alpha".into();
+    seed_auto_update_installation(&h, installation.clone()).await;
+    h.app
+        .set_plugin_component_blocker(&installation, Some("no compatible build".into()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        h.app.plugin_component_blocker_for_provider("alpha").await,
+        Some("no compatible build".to_string()),
+        "the configured provider type must reach a blocker keyed by plugin id"
+    );
+    assert_eq!(
+        h.app
+            .plugin_component_blocker_for_provider("  ALPHA  ")
+            .await,
+        Some("no compatible build".to_string()),
+        "provider keys are normalized before lookup"
+    );
+    assert_eq!(
+        h.app.plugin_component_blocker_for_provider("beta").await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn testing_a_blocked_provider_says_it_is_blocked_and_why() {
+    let h = bootstrap_plugins(None);
+    let installation = official_catalog_installation("alpha", "0.1.0");
+    seed_auto_update_installation(&h, installation.clone()).await;
+    h.app
+        .set_plugin_component_blocker(
+            &installation,
+            Some("Alpha is deprecated and has no build for this version of Scryer.".into()),
+        )
+        .await
+        .unwrap();
+
+    let error = h
+        .app
+        .ensure_provider_plugin_not_blocked("alpha")
+        .await
+        .expect_err("a blocked provider cannot be tested");
+    let message = error.to_string();
+    assert!(
+        message.contains("blocked"),
+        "the operator must be told the plugin is blocked: {message}"
+    );
+    assert!(
+        message.contains("deprecated and has no build"),
+        "the blocker's own reason must be carried through: {message}"
+    );
+    h.app
+        .ensure_provider_plugin_not_blocked("beta")
+        .await
+        .expect("an unblocked provider is testable");
+}
+
+#[tokio::test]
+async fn a_blocked_download_client_stops_reporting_stale_healthy() {
+    let h = bootstrap_plugins(None);
+    let mut installation = official_catalog_installation("alpha", "0.1.0");
+    installation.provider_type = "alpha".into();
+    seed_auto_update_installation(&h, installation.clone()).await;
+    h.app
+        .set_plugin_component_blocker(&installation, Some("no compatible build".into()))
+        .await
+        .unwrap();
+
+    let client = |client_type: &str| scryer_domain::DownloadClientConfig {
+        id: format!("client-{client_type}"),
+        name: format!("{client_type} client"),
+        client_type: client_type.to_string(),
+        config_json: "{}".into(),
+        client_priority: 1,
+        is_enabled: true,
+        // What the row still holds from before the upgrade.
+        status: scryer_domain::DownloadClientStatus::Healthy,
+        last_error: None,
+        last_seen_at: None,
+        proxy_config_id: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut configs = vec![client("alpha"), client("beta")];
+    h.app
+        .apply_component_blockers_to_download_clients(&mut configs)
+        .await;
+
+    assert_eq!(configs[0].status, scryer_domain::DownloadClientStatus::Error);
+    assert_eq!(
+        configs[0].last_error.as_deref(),
+        Some("no compatible build"),
+        "the operator must see why the client cannot run"
+    );
+    assert_eq!(
+        configs[1].status,
+        scryer_domain::DownloadClientStatus::Healthy,
+        "an unblocked client keeps its stored health"
+    );
+    assert!(configs[1].last_error.is_none());
+}

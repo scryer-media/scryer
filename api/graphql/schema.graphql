@@ -17799,6 +17799,10 @@ type NavigationBadgeCountsPayload {
 	Count of available plugin updates visible to the caller.
 	"""
 	pluginUpdateCount: Int!
+	"""
+	Count of installed plugins blocked on this version of Scryer and visible to the caller.
+	"""
+	pluginBlockedCount: Int!
 }
 
 """
@@ -17833,6 +17837,10 @@ type NotificationChannelPayload {
 	Whether notifications are enabled for this channel.
 	"""
 	isEnabled: Boolean!
+	"""
+	Why the channel's plugin is blocked on this version of Scryer, or null when it is running.
+	"""
+	blockedReason: String
 	"""
 	Channel creation time in UTC.
 	"""
