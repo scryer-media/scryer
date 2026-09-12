@@ -1011,17 +1011,7 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
-        let library_paths = library
-            .roots
-            .iter()
-            .map(|root| root.path.trim().to_string())
-            .filter(|path| !path.is_empty())
-            .collect::<Vec<_>>();
-        if library_paths.is_empty() {
-            return Err(AppError::Validation(
-                "library roots are not configured".into(),
-            ));
-        }
+        let library_paths = configured_library_scan_paths(&library)?;
 
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
             self.clone(),
@@ -1085,6 +1075,56 @@ impl AppUseCase {
         self.require_library_management_permission(actor, &session_library_id)
             .await?;
         let library_paths = self.read_library_paths_for_scan_facet(&facet).await?;
+        self.scan_library_paths_with_tracking(
+            actor,
+            facet,
+            session_library_id,
+            library_paths,
+            session_id_override,
+            mode,
+        )
+        .await
+    }
+
+    /// Scan one concrete library end to end under a tracked session, the way
+    /// a scheduled per-library scan run does.
+    pub(crate) async fn scan_library_by_id_with_tracking(
+        &self,
+        actor: &User,
+        library_id: &str,
+        session_id_override: Option<String>,
+        mode: LibraryScanMode,
+    ) -> AppResult<LibraryScanSummary> {
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+        self.require_library_management_permission(actor, &library.id)
+            .await?;
+        let library_paths = configured_library_scan_paths(&library)?;
+        self.scan_library_paths_with_tracking(
+            actor,
+            library.facet,
+            library.id,
+            library_paths,
+            session_id_override,
+            mode,
+        )
+        .await
+    }
+
+    async fn scan_library_paths_with_tracking(
+        &self,
+        actor: &User,
+        facet: MediaFacet,
+        session_library_id: String,
+        library_paths: Vec<String>,
+        session_id_override: Option<String>,
+        mode: LibraryScanMode,
+    ) -> AppResult<LibraryScanSummary> {
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
             self.clone(),
             facet.clone(),
@@ -1476,4 +1516,20 @@ impl AppUseCase {
             }
         }
     }
+}
+
+/// The trimmed, non-empty root paths a scan of `library` walks.
+fn configured_library_scan_paths(library: &scryer_domain::Library) -> AppResult<Vec<String>> {
+    let library_paths = library
+        .roots
+        .iter()
+        .map(|root| root.path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    if library_paths.is_empty() {
+        return Err(AppError::Validation(
+            "library roots are not configured".into(),
+        ));
+    }
+    Ok(library_paths)
 }

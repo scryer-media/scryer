@@ -302,6 +302,79 @@ async fn scheduled_background_refresh_creates_one_job_run_per_library() {
 }
 
 #[tokio::test]
+async fn scheduled_library_scan_creates_one_job_run_per_library() {
+    let ctx = TestContext::new().await;
+    seed_media_path_settings(&ctx).await;
+
+    let default_root = tempfile::tempdir().expect("default movie root");
+    set_media_path(
+        &ctx,
+        "movies.path",
+        default_root.path().to_string_lossy().as_ref(),
+    )
+    .await;
+
+    let second_root = tempfile::tempdir().expect("second movie root");
+    let now = Utc::now();
+    LibraryRepository::create(
+        &ctx.libraries,
+        Library {
+            id: "movie_kids_library".to_string(),
+            facet: MediaFacet::Movie,
+            name: "Kids".to_string(),
+            slug: "kids".to_string(),
+            is_default: false,
+            roots: vec![],
+            created_at: now,
+            updated_at: now,
+        },
+        vec![LibraryRootDraft {
+            path: second_root.path().to_string_lossy().to_string(),
+            is_default: true,
+        }],
+    )
+    .await
+    .expect("create second movie library");
+
+    ctx.app
+        .run_scheduled_job_now(JobKey::LibraryScanMovies, JobTriggerSource::ScheduledDaily)
+        .await
+        .expect("scheduled scan should run each library job");
+
+    assert!(
+        ctx.app.active_library_scan_sessions().await.is_empty(),
+        "both library scan sessions should complete",
+    );
+
+    let workflow_store = WorkflowOperationStore::new(ctx.db.datastore());
+    let runs = <WorkflowOperationStore as JobRunRepository>::list_job_runs(
+        &workflow_store,
+        Some(JobKey::LibraryScanMovies),
+        5,
+    )
+    .await
+    .expect("list job runs");
+    let operation_types = runs
+        .iter()
+        .map(|run| run.operation_type.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(operation_types.contains("library_scan_movies:movie_default_library"));
+    assert!(operation_types.contains("library_scan_movies:movie_kids_library"));
+    assert_eq!(
+        runs.iter()
+            .filter(|run| run.job_key == JobKey::LibraryScanMovies)
+            .count(),
+        2
+    );
+    assert!(
+        runs.iter().all(|run| run.status == JobRunStatus::Completed),
+        "{:?}",
+        runs.iter().map(|run| run.status).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
 async fn domain_events_omit_titleless_operational_events_for_library_viewer() {
     let ctx = TestContext::new().await;
     let user_id = Id::new().0;

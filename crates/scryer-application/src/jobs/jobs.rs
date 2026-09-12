@@ -102,6 +102,13 @@ fn is_background_library_refresh_job(job_key: JobKey) -> bool {
     )
 }
 
+fn is_library_scan_job(job_key: JobKey) -> bool {
+    matches!(
+        job_key,
+        JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime
+    )
+}
+
 fn library_job_operation_type(job_key: JobKey, library_id: &str) -> String {
     format!("{}:{library_id}", job_key.as_str())
 }
@@ -1164,9 +1171,11 @@ impl AppUseCase {
         } else {
             None
         };
-        if is_background_library_refresh_job(job_key) {
+        // A facet's scheduled scan and refresh are one run per library, so a
+        // second library of the facet is scanned rather than skipped.
+        if is_background_library_refresh_job(job_key) || is_library_scan_job(job_key) {
             return self
-                .run_scheduled_background_library_refresh_jobs_now(job_key, trigger_source)
+                .run_scheduled_library_jobs_now(job_key, trigger_source)
                 .await;
         }
 
@@ -1240,16 +1249,18 @@ impl AppUseCase {
             })
     }
 
-    async fn run_scheduled_background_library_refresh_jobs_now(
+    /// Run a facet-scoped library job once per library of that facet, each
+    /// as its own run carrying the library id, one after another.
+    async fn run_scheduled_library_jobs_now(
         &self,
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
-        let facet = job_key_library_facet(job_key).expect("background refresh facet");
+        let facet = job_key_library_facet(job_key).expect("library job facet");
         let libraries = self.services.catalog.libraries.list(Some(facet)).await?;
         if libraries.is_empty() {
             return Err(AppError::Validation(format!(
-                "{} has no libraries to refresh",
+                "{} has no libraries",
                 job_key.display_name()
             )));
         }
@@ -1539,15 +1550,24 @@ impl AppUseCase {
         let actor = actor.unwrap_or_else(User::system_execution_actor);
         match job_key {
             JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime => {
-                let facet = job_key_library_facet(job_key).expect("library scan facet");
-                let summary = self
-                    .scan_library_with_tracking(
+                let summary = if let Some(library_id) = job_run_library_id(run) {
+                    self.scan_library_by_id_with_tracking(
+                        &actor,
+                        library_id,
+                        Some(run_id.to_string()),
+                        LibraryScanMode::Full,
+                    )
+                    .await?
+                } else {
+                    let facet = job_key_library_facet(job_key).expect("library scan facet");
+                    self.scan_library_with_tracking(
                         &actor,
                         facet,
                         Some(run_id.to_string()),
                         LibraryScanMode::Full,
                     )
-                    .await?;
+                    .await?
+                };
                 Ok(JobExecutionOutcome::from_library_scan(&summary))
             }
             JobKey::BackgroundLibraryRefreshMovies
