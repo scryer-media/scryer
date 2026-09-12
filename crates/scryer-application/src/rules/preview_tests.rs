@@ -19,7 +19,8 @@ fn draft(source: &str) -> RuleSetTestDraft {
 
 fn request(title_id: String, source: &str) -> RuleSetTestRequest {
     RuleSetTestRequest {
-        draft: draft(source),
+        draft: Some(draft(source)),
+        test_rule_set_id: None,
         edit_rule_set_id: None,
         copy_source_rule_set_id: None,
         copy_disables_source: false,
@@ -119,7 +120,7 @@ async fn preview_explains_disabled_and_facet_mismatched_drafts() {
     let source = "import rego.v1\nscore_entry[\"should_not_run\"] := 99 if { true }";
 
     let mut disabled = request(title.id.clone(), source);
-    disabled.draft.enabled = false;
+    disabled.draft.as_mut().unwrap().enabled = false;
     let disabled = app
         .test_rule_set(&user, disabled)
         .await
@@ -135,7 +136,7 @@ async fn preview_explains_disabled_and_facet_mismatched_drafts() {
     );
 
     let mut mismatched = request(title.id, source);
-    mismatched.draft.applied_facets = vec![MediaFacet::Series];
+    mismatched.draft.as_mut().unwrap().applied_facets = vec![MediaFacet::Series];
     let mismatched = app
         .test_rule_set(&user, mismatched)
         .await
@@ -327,7 +328,7 @@ async fn preview_requires_catalog_permission_and_rejects_episode_from_another_sh
         .await
         .expect("seed other episode");
     let mut mismatch = request(selected.id, "import rego.v1");
-    mismatch.draft.applied_facets = vec![MediaFacet::Series];
+    mismatch.draft.as_mut().unwrap().applied_facets = vec![MediaFacet::Series];
     mismatch.episode_id = Some(other_episode.id);
     let mismatch_error = app
         .test_rule_set(&user, mismatch)
@@ -420,6 +421,7 @@ async fn preview_tracked_copy_excludes_source_without_changing_membership() {
         name: "Test pack".into(),
         version: "1.0.0".into(),
         digest: "test-digest".into(),
+        customizable: true,
         auto_update: true,
         revision: 1,
         last_updated: Utc::now(),
@@ -458,6 +460,162 @@ async fn preview_tracked_copy_excludes_source_without_changing_membership() {
     copied.copy_disables_source = false;
     copied.edit_rule_set_id = Some(saved.id);
     assert!(app.test_rule_set(&user, copied).await.is_err());
+}
+
+#[tokio::test]
+async fn preview_rejects_non_customizable_tracked_rule_copy_without_disabling_source() {
+    let (app, user, repo) = preview_app();
+    let title = movie(&app, &user).await;
+    let saved = app
+        .create_rule_set(
+            &user,
+            "Pack rule".into(),
+            String::new(),
+            "score_entry[\"pack_bonus\"] := 100".into(),
+            vec![MediaFacet::Movie],
+            0,
+            Some(true),
+        )
+        .await
+        .unwrap();
+    let pack = scryer_domain::RulePackInstallation {
+        pack_id: "community:locked".into(),
+        name: "Locked pack".into(),
+        version: "1.0.0".into(),
+        digest: "locked-digest".into(),
+        customizable: false,
+        auto_update: true,
+        revision: 1,
+        last_updated: Utc::now(),
+        last_error: None,
+        members: vec![scryer_domain::RulePackMember {
+            template_id: "template".into(),
+            rule_set_id: saved.id.clone(),
+            removed: false,
+        }],
+    };
+    assert!(
+        repo.apply_rule_pack_installation(&pack, None, &[], &[])
+            .await
+            .unwrap()
+    );
+    let before = repo.rules_snapshot().await;
+    assert!(before.contains(&saved));
+
+    let mut installed_test = request(title.id.clone(), "unused");
+    installed_test.draft = None;
+    installed_test.test_rule_set_id = Some(saved.id.clone());
+    let result = app.test_rule_set(&user, installed_test).await.unwrap();
+    let selected = result
+        .rule_sets
+        .iter()
+        .find(|rule| rule.rule_set_id.as_deref() == Some(&saved.id))
+        .unwrap();
+    assert_eq!(selected.score, 100);
+    assert!(!selected.is_draft);
+
+    let mut copied = request(title.id, "score_entry[\"copy_bonus\"] := 25");
+    copied.copy_source_rule_set_id = Some(saved.id.clone());
+    copied.copy_disables_source = true;
+    assert!(app.test_rule_set(&user, copied).await.is_err());
+    assert_eq!(repo.rules_snapshot().await, before);
+}
+
+#[tokio::test]
+async fn preview_tests_saved_rule_without_appending_a_draft() {
+    let (app, user, _) = preview_app();
+    let title = movie(&app, &user).await;
+    let saved = app
+        .create_rule_set(
+            &user,
+            "Saved rule".into(),
+            String::new(),
+            "score_entry[\"saved_score\"] := 31".into(),
+            vec![MediaFacet::Movie],
+            0,
+            Some(true),
+        )
+        .await
+        .unwrap();
+    let mut saved_request = request(title.id.clone(), "unused");
+    saved_request.draft = None;
+    saved_request.test_rule_set_id = Some(saved.id.clone());
+    let result = app.test_rule_set(&user, saved_request).await.unwrap();
+    let saved_result = result
+        .rule_sets
+        .iter()
+        .find(|rule| rule.rule_set_id.as_deref() == Some(&saved.id))
+        .unwrap();
+    assert_eq!(saved_result.score, 31);
+    assert!(!saved_result.is_draft);
+
+    let mut mixed = request(title.id.clone(), "score_entry[\"draft\"] := 1");
+    mixed.test_rule_set_id = Some(saved.id.clone());
+    assert!(app.test_rule_set(&user, mixed).await.is_err());
+
+    app.toggle_rule_set(&user, &saved.id, false).await.unwrap();
+    let mut disabled = request(title.id.clone(), "unused");
+    disabled.draft = None;
+    disabled.test_rule_set_id = Some(saved.id.clone());
+    let disabled = app.test_rule_set(&user, disabled).await.unwrap();
+    assert!(disabled.rule_sets.iter().any(|rule| {
+        rule.rule_set_id.as_deref() == Some(&saved.id)
+            && !rule.is_draft
+            && rule
+                .messages
+                .iter()
+                .any(|message| message.contains("disabled"))
+    }));
+
+    let facet_mismatch = app
+        .create_rule_set(
+            &user,
+            "Series only".into(),
+            String::new(),
+            "score_entry[\"series\"] := 1".into(),
+            vec![MediaFacet::Series],
+            0,
+            Some(true),
+        )
+        .await
+        .unwrap();
+    let mut facet_request = request(title.id.clone(), "unused");
+    facet_request.draft = None;
+    facet_request.test_rule_set_id = Some(facet_mismatch.id.clone());
+    let facet_result = app.test_rule_set(&user, facet_request).await.unwrap();
+    assert!(facet_result.rule_sets.iter().any(|rule| {
+        rule.rule_set_id.as_deref() == Some(&facet_mismatch.id)
+            && !rule.is_draft
+            && rule
+                .messages
+                .iter()
+                .any(|message| message.contains("does not apply"))
+    }));
+
+    let unmatched = app
+        .create_rule_set(
+            &user,
+            "Never matches".into(),
+            String::new(),
+            "score_entry[\"never\"] := 1 if { input.release.quality == \"2160p\" }".into(),
+            vec![MediaFacet::Movie],
+            0,
+            Some(true),
+        )
+        .await
+        .unwrap();
+    let mut unmatched_request = request(title.id, "unused");
+    unmatched_request.draft = None;
+    unmatched_request.test_rule_set_id = Some(unmatched.id.clone());
+    let unmatched_result = app.test_rule_set(&user, unmatched_request).await.unwrap();
+    assert!(unmatched_result.rule_sets.iter().any(|rule| {
+        rule.rule_set_id.as_deref() == Some(&unmatched.id)
+            && !rule.is_draft
+            && rule
+                .messages
+                .iter()
+                .any(|message| message.contains("did not match"))
+    }));
 }
 
 #[tokio::test]
@@ -555,9 +713,9 @@ async fn preview_surfaces_runtime_errors_and_rejects_invalid_drafts() {
             .all(|item| !item.matched)
     );
     let mut invalid = request(title.id, "score_entry[ :=");
-    invalid.draft.enabled = false;
+    invalid.draft.as_mut().unwrap().enabled = false;
     assert!(app.test_rule_set(&user, invalid.clone()).await.is_err());
-    invalid.draft.rego_source = "x".repeat(16 * 1024 * 1024 + 1);
+    invalid.draft.as_mut().unwrap().rego_source = "x".repeat(16 * 1024 * 1024 + 1);
     assert!(app.test_rule_set(&user, invalid).await.is_err());
     assert!(repo.rules_snapshot().await.is_empty());
     assert!(
@@ -642,7 +800,7 @@ async fn preview_uses_series_and_anime_context_without_rewriting_numbering() {
             input.file == null
         }"#;
         let mut probe = request(title.id.clone(), source);
-        probe.draft.applied_facets = vec![facet];
+        probe.draft.as_mut().unwrap().applied_facets = vec![facet];
         assert!(
             app.test_rule_set(&user, probe.clone()).await.is_err(),
             "show needs an episode"
@@ -722,7 +880,7 @@ async fn preview_seadex_pack_latency_keeps_active_rules_unchanged() {
         .expect("seed anime episode");
     let before = app.list_rule_sets(&user).await.expect("rules before");
     let mut request = request(title.id, source);
-    request.draft.applied_facets = vec![MediaFacet::Anime];
+    request.draft.as_mut().unwrap().applied_facets = vec![MediaFacet::Anime];
     request.episode_id = Some(episode.id);
     let started = Instant::now();
     for _ in 0..3 {

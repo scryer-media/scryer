@@ -166,7 +166,7 @@ impl RuleSetRepository for RuleSetStore {
     async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT pack_id, name, version, digest, auto_update, revision, last_updated, last_error
+            "SELECT pack_id, name, version, digest, customizable, auto_update, revision, last_updated, last_error
                FROM rule_pack_installations ORDER BY name ASC, pack_id ASC",
             &[],
         )
@@ -184,7 +184,7 @@ impl RuleSetRepository for RuleSetStore {
     ) -> AppResult<Option<RulePackInstallation>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT pack_id, name, version, digest, auto_update, revision, last_updated, last_error
+            "SELECT pack_id, name, version, digest, customizable, auto_update, revision, last_updated, last_error
                FROM rule_pack_installations WHERE pack_id = {}",
             &[SqlArg::Text(pack_id.to_string())],
         )
@@ -203,7 +203,7 @@ impl RuleSetRepository for RuleSetStore {
     ) -> AppResult<Option<RulePackInstallation>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT i.pack_id, i.name, i.version, i.digest, i.auto_update, i.revision,
+            "SELECT i.pack_id, i.name, i.version, i.digest, i.customizable, i.auto_update, i.revision,
                     i.last_updated, i.last_error
                FROM rule_pack_installations i
                JOIN rule_pack_members m ON m.pack_id = i.pack_id
@@ -239,20 +239,20 @@ impl RuleSetRepository for RuleSetStore {
                     Some(expected_revision) => SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE rule_pack_installations
-                            SET name = {}, version = {}, digest = {}, auto_update = {},
+                            SET name = {}, version = {}, digest = {}, customizable = {}, auto_update = {},
                                 revision = {}, last_updated = {}, last_error = {}
                           WHERE pack_id = {} AND revision = {}",
                         &[
                             install_args[1].clone(), install_args[2].clone(), install_args[3].clone(),
                             install_args[4].clone(), install_args[5].clone(), install_args[6].clone(),
-                            install_args[7].clone(), install_args[0].clone(), SqlArg::I64(expected_revision),
+                            install_args[7].clone(), install_args[8].clone(), install_args[0].clone(), SqlArg::I64(expected_revision),
                         ],
                     ).await?,
                     None => SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "INSERT INTO rule_pack_installations
-                            (pack_id, name, version, digest, auto_update, revision, last_updated, last_error)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}) ON CONFLICT(pack_id) DO NOTHING",
+                            (pack_id, name, version, digest, customizable, auto_update, revision, last_updated, last_error)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}) ON CONFLICT(pack_id) DO NOTHING",
                         &install_args,
                     ).await?,
                 };
@@ -557,6 +557,7 @@ fn rule_pack_installation_args(installation: &RulePackInstallation) -> Vec<SqlAr
         SqlArg::Text(installation.name.clone()),
         SqlArg::Text(installation.version.clone()),
         SqlArg::Text(installation.digest.clone()),
+        SqlArg::Bool(installation.customizable),
         SqlArg::Bool(installation.auto_update),
         SqlArg::I64(installation.revision),
         SqlArg::Timestamp(installation.last_updated),
@@ -600,6 +601,7 @@ async fn row_to_rule_pack_installation(
         name: row.text("name")?,
         version: row.text("version")?,
         digest: row.text("digest")?,
+        customizable: row.bool("customizable")?,
         auto_update: row.bool("auto_update")?,
         revision: row.i64("revision")?,
         last_updated: timestamp_or_now(row, "last_updated")?,

@@ -29,6 +29,7 @@ fn installation(revision: i64) -> RulePackInstallation {
         name: "Example pack".to_string(),
         version: "1.0.0".to_string(),
         digest: "sha256:example".to_string(),
+        customizable: true,
         auto_update: true,
         revision,
         last_updated: Utc::now(),
@@ -60,6 +61,61 @@ async fn legacy_rule_set_row_defaults_to_additional_evaluation_phase() {
     assert_eq!(rule.evaluation_phase, RuleEvaluationPhase::Additional);
     assert_eq!(rule.exclusive_group, None);
     assert_eq!(rule.disabled_reason, None);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn rule_pack_customizable_persists_across_updates_and_legacy_deserialization_defaults_true() {
+    let (services, db) = temp_services("scryer_rule_pack_customizable").await;
+    let store = crate::RuleSetStore::new(services.datastore());
+    let source = managed_rule("managed-a");
+    let installed = installation(1);
+    assert!(
+        store
+            .apply_rule_pack_installation(&installed, None, std::slice::from_ref(&source), &[])
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .get_rule_pack_installation("pack.example")
+            .await
+            .unwrap()
+            .unwrap()
+            .customizable
+    );
+
+    let mut locked = installed.clone();
+    locked.customizable = false;
+    locked.revision = 2;
+    assert!(
+        store
+            .apply_rule_pack_installation(&locked, Some(1), &[], &[])
+            .await
+            .unwrap()
+    );
+    let mut settings_update = locked.clone();
+    settings_update.auto_update = false;
+    settings_update.revision = 3;
+    assert!(
+        store
+            .apply_rule_pack_installation(&settings_update, Some(2), &[], &[])
+            .await
+            .unwrap()
+    );
+    let persisted = store
+        .get_rule_pack_installation("pack.example")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!persisted.customizable);
+    assert!(!persisted.auto_update);
+
+    let mut legacy = serde_json::to_value(installed).unwrap();
+    legacy.as_object_mut().unwrap().remove("customizable");
+    let decoded: RulePackInstallation = serde_json::from_value(legacy).unwrap();
+    assert!(decoded.customizable);
 
     let _ = std::fs::remove_file(db);
 }

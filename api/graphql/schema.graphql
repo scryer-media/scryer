@@ -23248,6 +23248,10 @@ type RulePackRegistryEntryPayload {
 	Rule-pack version.
 	"""
 	version: String!
+	"""
+	Whether rules from the pack may be copied into user-authored rules.
+	"""
+	customizable: Boolean!
 }
 
 """
@@ -25232,9 +25236,13 @@ Input for an explicit, read-only title-aware rule-set scoring preview.
 """
 input TestRuleSetInput {
 	"""
-	Current unsaved editor draft.
+	Current unsaved editor draft. Omit when testing a saved rule set.
 	"""
-	draft: RuleSetTestDraftInput!
+	draft: RuleSetTestDraftInput
+	"""
+	Saved rule-set identity to test without supplying a draft.
+	"""
+	testRuleSetId: ID
 	"""
 	Existing rule-set identity being edited, or null when creating a rule.
 	"""
@@ -25246,7 +25254,7 @@ input TestRuleSetInput {
 	"""
 	Whether copying disables the source rule in the preview policy set.
 	"""
-	copyDisablesSource: Boolean!
+	copyDisablesSource: Boolean! = false
 	"""
 	Library title used to construct title-aware scoring facts.
 	"""
@@ -27058,6 +27066,10 @@ type TrackedRulePackPayload {
 	Verified source digest for the installed version.
 	"""
 	digest: String!
+	"""
+	Whether this installed pack permits copying its rules into user-authored rules.
+	"""
+	customizable: Boolean!
 	"""
 	Optimistic-concurrency token for pack changes.
 	"""

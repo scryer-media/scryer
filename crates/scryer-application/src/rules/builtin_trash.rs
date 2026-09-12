@@ -24,7 +24,13 @@ struct BuiltinPackManifest {
     author: String,
     version: String,
     min_scryer_version: String,
+    #[serde(default = "default_customizable")]
+    customizable: bool,
     rules: Vec<RulePackTemplate>,
+}
+
+const fn default_customizable() -> bool {
+    true
 }
 
 pub(crate) fn verified_pack() -> AppResult<VerifiedRulePack> {
@@ -51,6 +57,7 @@ pub(crate) fn verified_pack() -> AppResult<VerifiedRulePack> {
             digest: format!("sha256:{BUILTIN_TRASH_SHA256}"),
             source_url: "builtin://trash-guides-scoring-pack".to_string(),
             min_scryer_version: Some(manifest.min_scryer_version),
+            customizable: manifest.customizable,
         },
         templates: manifest.rules,
     })

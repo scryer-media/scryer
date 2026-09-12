@@ -64,6 +64,7 @@ pub struct RulePackRegistryEntry {
     pub version: String,
     pub digest: String,
     pub source_url: String,
+    pub customizable: bool,
     #[serde(default)]
     pub min_scryer_version: Option<String>,
 }
@@ -85,6 +86,7 @@ impl RulePackRegistryEntry {
                 .cloned()
                 .unwrap_or_default(),
             source_url: artifact.url.clone(),
+            customizable: release.customizable,
             min_scryer_version: release.min_scryer_version.clone(),
         }
     }
@@ -98,6 +100,8 @@ struct RulePackManifest {
     description: String,
     author: String,
     version: String,
+    #[serde(default = "default_rule_pack_customizable")]
+    customizable: bool,
     rules: Vec<RulePackRule>,
 }
 /// A signed, decoded, and schema-validated rule pack ready for installation.
@@ -106,6 +110,10 @@ pub struct VerifiedRulePack {
     pub registry: RulePackRegistryEntry,
     pub revision: String,
     pub templates: Vec<RulePackTemplate>,
+}
+
+const fn default_rule_pack_customizable() -> bool {
+    true
 }
 struct FetchedCatalogArtifact {
     persisted_wasm_bytes: Vec<u8>,
@@ -1555,7 +1563,7 @@ impl AppUseCase {
                     ))
                 },
             )?;
-        let pack = RulePackRegistryEntry::from_release(pack_entry, &release, &artifact);
+        let mut pack = RulePackRegistryEntry::from_release(pack_entry, &release, &artifact);
         let signer = RequiredSigner {
             github_repository: CENTRAL_CATALOG_REPO.to_string(),
             github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
@@ -1586,6 +1594,9 @@ impl AppUseCase {
             .map_err(|e| AppError::Repository(format!("invalid rule pack JSON: {e}")))?;
 
         validate_rule_pack_manifest(&manifest, &pack)?;
+        // The verified signed manifest is authoritative. The catalog flag is
+        // only a discovery mirror for clients that have not downloaded it.
+        pack.customizable = manifest.customizable;
         let templates = manifest
             .rules
             .into_iter()

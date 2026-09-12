@@ -76,13 +76,16 @@ pub struct RuleSetTestDraftInput {
 #[derive(InputObject)]
 /// Input for an explicit, read-only title-aware rule-set scoring preview.
 pub struct TestRuleSetInput {
-    /// Current unsaved editor draft.
-    pub draft: RuleSetTestDraftInput,
+    /// Current unsaved editor draft. Omit when testing a saved rule set.
+    pub draft: Option<RuleSetTestDraftInput>,
+    /// Saved rule-set identity to test without supplying a draft.
+    pub test_rule_set_id: Option<ID>,
     /// Existing rule-set identity being edited, or null when creating a rule.
     pub edit_rule_set_id: Option<ID>,
     /// Source identity when the editor was opened by copying a rule, or null.
     pub copy_source_rule_set_id: Option<ID>,
     /// Whether copying disables the source rule in the preview policy set.
+    #[graphql(default = false)]
     pub copy_disables_source: bool,
     /// Library title used to construct title-aware scoring facts.
     pub title_id: ID,
@@ -92,6 +95,31 @@ pub struct TestRuleSetInput {
     pub release_name: String,
     /// Release size in bytes, or null when unknown.
     pub size_bytes: Option<Long>,
+}
+
+#[cfg(test)]
+mod saved_rule_preview_input_tests {
+    use super::TestRuleSetInput;
+    use async_graphql::{InputType, value};
+
+    #[test]
+    fn saved_rule_preview_input_needs_no_draft_or_copy_flag() {
+        let input = TestRuleSetInput::parse(Some(value!({
+            "testRuleSetId": "installed-rule",
+            "titleId": "library-title",
+            "releaseName": "A.Release.1080p"
+        })))
+        .unwrap_or_else(|_| panic!("minimal saved-rule request must parse"));
+        assert_eq!(
+            input.test_rule_set_id.as_ref().map(|id| id.as_str()),
+            Some("installed-rule")
+        );
+        assert!(input.draft.is_none());
+        assert!(input.edit_rule_set_id.is_none());
+        assert!(input.copy_source_rule_set_id.is_none());
+        assert!(!input.copy_disables_source);
+        assert!(input.size_bytes.is_none());
+    }
 }
 
 #[derive(SimpleObject, Clone)]

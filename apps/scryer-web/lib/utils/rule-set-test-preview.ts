@@ -7,13 +7,57 @@ export type RuleSetTestSelection = {
   sizeGib: string;
 };
 
+export type RuleSetTestMutationInput = {
+  titleId: string;
+  episodeId?: string;
+  releaseName: string;
+  sizeBytes?: number;
+  draft?: RuleSetDraft;
+  editRuleSetId?: string;
+  copySourceRuleSetId?: string;
+  copyDisablesSource?: boolean;
+  testRuleSetId?: string;
+};
+
+export function buildRuleSetTestInput({
+  draft,
+  editRuleSetId,
+  copySourceRuleSetId,
+  testRuleSetId,
+  titleId,
+  episodeId,
+  releaseName,
+  sizeBytes,
+}: {
+  draft: RuleSetDraft | null;
+  editRuleSetId: string | null;
+  copySourceRuleSetId: string | null;
+  testRuleSetId: string | null;
+  titleId: string;
+  episodeId?: string;
+  releaseName: string;
+  sizeBytes?: number;
+}): RuleSetTestMutationInput {
+  const selection = { titleId, episodeId, releaseName, sizeBytes };
+  return testRuleSetId
+    ? { ...selection, testRuleSetId }
+    : {
+        ...selection,
+        draft: draft!,
+        editRuleSetId: editRuleSetId || undefined,
+        copySourceRuleSetId: copySourceRuleSetId || undefined,
+        copyDisablesSource: Boolean(copySourceRuleSetId),
+      };
+}
+
 export function ruleSetTestFingerprint(
-  draft: RuleSetDraft,
+  draft: RuleSetDraft | null,
   selection: RuleSetTestSelection,
   editRuleSetId: string | null,
   copySourceRuleSetId: string | null,
+  testRuleSetId: string | null,
 ): string {
-  return JSON.stringify({ draft, selection, editRuleSetId, copySourceRuleSetId });
+  return JSON.stringify({ draft, selection, editRuleSetId, copySourceRuleSetId, testRuleSetId });
 }
 
 export function canTestRuleSet(

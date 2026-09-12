@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
 import { Label } from "@/components/ui/label";
+import { RuleSetTestPanel } from "@/components/containers/settings/rule-set-test-panel";
 import {
   Table,
   TableBody,
@@ -40,6 +41,7 @@ export type TrackedRulePackRecord = {
   autoUpdateAvailable: boolean;
   lastError: string | null;
   lastUpdated: string | null;
+  customizable?: boolean | null;
   members: TrackedRulePackMember[];
 };
 
@@ -63,6 +65,7 @@ type TrackedRulePacksSectionProps = {
   onUninstall: (pack: TrackedRulePackRecord) => Promise<void>;
   onToggleMember: (pack: TrackedRulePackRecord, member: TrackedRulePackMember) => Promise<boolean>;
   onCopyMember: (member: TrackedRulePackMember) => void;
+  defaultExpandedPackIds?: string[];
 };
 
 function FacetBadges({ facets }: { facets: string[] }) {
@@ -107,6 +110,7 @@ export function TrackedRulePacksSection({
   onUninstall,
   onToggleMember,
   onCopyMember,
+  defaultExpandedPackIds,
 }: TrackedRulePacksSectionProps) {
   const dateTimeFormat = useUiDateTimeFormat();
   const [preview, setPreview] = React.useState<{
@@ -114,7 +118,16 @@ export function TrackedRulePacksSection({
     changes: TrackedRulePackPreview;
   } | null>(null);
   const [pendingUninstall, setPendingUninstall] = React.useState<TrackedRulePackRecord | null>(null);
-  const [expandedPackIds, setExpandedPackIds] = React.useState<Set<string>>(() => new Set());
+  const [expandedPackIds, setExpandedPackIds] = React.useState<Set<string>>(() => new Set(defaultExpandedPackIds ?? []));
+  const [testingMember, setTestingMember] = React.useState<{
+    packId: string;
+    templateId: string;
+    ruleSetId: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    setTestingMember(null);
+  }, [packs]);
 
   if (packs.length === 0) return null;
 
@@ -123,7 +136,7 @@ export function TrackedRulePacksSection({
       <div>
         <h3 className="text-base font-semibold">Installed rule packs</h3>
         <p className="text-xs text-muted-foreground">
-          Pack-authored names, descriptions, source, and facets stay managed. Copy an individual rule to customize it.
+          Pack-authored names, descriptions, and facets stay managed. Some packs allow individual rules to be copied for customization.
         </p>
       </div>
       <div className="overflow-x-auto rounded border border-border bg-card">
@@ -139,6 +152,7 @@ export function TrackedRulePacksSection({
           <TableBody>
             {packs.map((pack) => {
               const busy = mutatingPackId === pack.packId;
+              const customizable = pack.customizable !== false;
               const expanded = expandedPackIds.has(pack.packId);
               const detailId = selectorId("settings-tracked-rule-pack-details", pack.packId);
               const autoUpdateId = selectorId("settings-tracked-rule-pack-auto-update", pack.packId);
@@ -159,7 +173,7 @@ export function TrackedRulePacksSection({
                       })}
                     >
                       <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
-                      <span className="min-w-0"><span className="block truncate font-medium">{pack.name}</span><span className="block truncate text-xs text-muted-foreground">{pack.packId}</span></span>
+                      <span className="min-w-0"><span className="block truncate font-medium">{pack.name}</span><span className="block truncate text-xs text-muted-foreground">{pack.packId}</span>{!customizable ? <span className="block truncate text-xs text-muted-foreground">Managed by the pack author.</span> : null}</span>
                     </button>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -186,19 +200,26 @@ export function TrackedRulePacksSection({
                         <TableHead>Description</TableHead>
                         <TableHead className="w-32">Facets</TableHead>
                         <TableHead className="w-20 text-center">Enabled</TableHead>
-                        <TableHead className="w-20 text-right">Actions</TableHead>
+                        <TableHead className="w-32 text-right">Actions</TableHead>
                       </TableRow></TableHeader>
                       <TableBody>
                   {pack.members.map((member) => {
                     const memberBusy = busy || mutatingRuleSetId === member.ruleSetId;
                     const missingRule = member.enabled === null || member.priority === null || member.name === null;
-                    return <TableRow key={member.templateId} data-ui="settings-table-row">
+                    const testing = testingMember?.packId === pack.packId && testingMember.templateId === member.templateId;
+                    return <React.Fragment key={member.templateId}>
+                      <TableRow data-ui="settings-table-row">
                       <TableCell className="font-medium">{member.name ?? member.templateId}{member.removed ? <Badge tone="neutral" className="ml-2">Removed upstream</Badge> : null}</TableCell>
                       <TableCell className="text-muted-foreground">{member.description || "—"}</TableCell>
                       <TableCell><FacetBadges facets={member.appliedFacets} /></TableCell>
                       <TableCell className="text-center"><Checkbox aria-label={`Enabled: ${member.name ?? member.templateId}`} checked={member.enabled ?? false} disabled={!canManage || member.removed || missingRule || memberBusy} onCheckedChange={() => void onToggleMember(pack, member)} /></TableCell>
-                      <TableCell className="text-right">{canManage ? <IconButton id={selectorId("settings-tracked-rule-pack-copy", member.templateId)} label={`Copy ${member.name ?? member.templateId} as custom`} tone="neutral" disabled={missingRule || memberBusy} onClick={() => onCopyMember(member)}><Copy className="h-4 w-4" /></IconButton> : null}</TableCell>
-                    </TableRow>;
+                      <TableCell className="text-right"><div className="flex justify-end gap-1">
+                        <Button id={selectorId("settings-tracked-rule-pack-test", member.templateId)} type="button" variant="secondary" size="sm" disabled={member.removed || missingRule || !member.ruleSetId || memberBusy} onClick={() => setTestingMember(testing ? null : { packId: pack.packId, templateId: member.templateId, ruleSetId: member.ruleSetId })}>Test</Button>
+                        {canManage && customizable ? <IconButton id={selectorId("settings-tracked-rule-pack-copy", member.templateId)} label={`Copy ${member.name ?? member.templateId} as custom`} tone="neutral" disabled={missingRule || memberBusy} onClick={() => onCopyMember(member)}><Copy className="h-4 w-4" /></IconButton> : null}
+                      </div></TableCell>
+                      </TableRow>
+                      {testing ? <TableRow data-ui="settings-table-row"><TableCell colSpan={5} className="bg-muted/20 p-3"><RuleSetTestPanel key={member.ruleSetId} draft={null} editRuleSetId={null} copySourceRuleSetId={null} testRuleSetId={member.ruleSetId} open onOpenChange={(nextOpen) => { if (!nextOpen) setTestingMember(null); }} /></TableCell></TableRow> : null}
+                    </React.Fragment>;
                   })}
                       </TableBody>
                     </Table>

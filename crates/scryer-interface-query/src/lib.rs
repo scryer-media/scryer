@@ -158,6 +158,7 @@ fn from_tracked_rule_pack(
         name: installation.name,
         version: installation.version,
         digest: installation.digest,
+        customizable: installation.customizable,
         revision: installation.revision.into(),
         auto_update: installation.auto_update,
         available_version: available.map(|candidate| candidate.version),
@@ -3930,6 +3931,7 @@ impl AcquisitionQueries {
                 description: p.description,
                 author: p.author,
                 version: p.version,
+                customizable: p.customizable,
             })
             .collect())
     }

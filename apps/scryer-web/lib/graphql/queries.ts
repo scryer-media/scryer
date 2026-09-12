@@ -3971,6 +3971,7 @@ export const rulePackRegistryQuery = `query RulePackRegistry {
     description
     author
     version
+    customizable
   }
 }`;
 
@@ -3996,6 +3997,7 @@ export const trackedRulePacksQuery = `query TrackedRulePacks {
     autoUpdateAvailable
     lastError
     lastUpdated
+    customizable
     members {
       templateId
       ruleSetId

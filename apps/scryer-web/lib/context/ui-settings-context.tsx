@@ -30,7 +30,7 @@ type UiSettingsContextValue = {
   refreshUiSettings: () => Promise<void>;
 };
 
-const UiSettingsContext = React.createContext<UiSettingsContextValue | null>(null);
+export const UiSettingsContext = React.createContext<UiSettingsContextValue | null>(null);
 
 function normalizeUiSettings(settings: Partial<UiSettings> | null | undefined): UiSettings {
   return {

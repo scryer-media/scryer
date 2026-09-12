@@ -88,6 +88,7 @@ fn tracked_fixture(
             version: version.into(),
             digest: format!("sha256:{version}"),
             source_url: "https://example.test/pack".into(),
+            customizable: true,
             min_scryer_version: None,
         },
         revision: version.into(),
@@ -142,6 +143,7 @@ async fn tracked_app() -> (
         name: "Community fixture".into(),
         version: "1.0.0".into(),
         digest: "sha256:1.0.0".into(),
+        customizable: true,
         auto_update: false,
         revision: 1,
         last_updated: now,
@@ -403,6 +405,41 @@ async fn tracked_pack_copy_scores_once_and_survives_uninstall() {
         .unwrap();
     assert!(repo.get_rule_set(&custom.id).await.unwrap().is_some());
     assert_eq!(tracked_score(&app), 300);
+}
+
+#[tokio::test]
+async fn locked_tracked_pack_copy_rejection_preserves_source_and_installation() {
+    let (app, repo, initial) = tracked_app().await;
+    let actor = User::system_execution_actor();
+    let mut locked = initial.clone();
+    locked.customizable = false;
+    locked.revision += 1;
+    assert!(repo
+        .apply_rule_pack_installation(&locked, Some(initial.revision), &[], &[])
+        .await
+        .unwrap());
+    let rules_before = repo.rules_snapshot().await;
+
+    assert!(app
+        .copy_tracked_rule_pack_rule(
+            &actor,
+            "tracked_fixture",
+            "Custom".into(),
+            "Customized".into(),
+            tracked_fixture("1.0.0", &[("a", 300)])
+                .templates
+                .remove(0)
+                .rego_source,
+            vec![MediaFacet::Movie],
+            22,
+        )
+        .await
+        .is_err());
+    assert_eq!(repo.rules_snapshot().await, rules_before);
+    assert_eq!(
+        repo.get_rule_pack_installation(&locked.pack_id).await.unwrap(),
+        Some(locked)
+    );
 }
 
 #[tokio::test]

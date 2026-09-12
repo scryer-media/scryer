@@ -839,6 +839,7 @@ mod bounded_decompression_tests {
     fn rule_pack_release(rule_pack_bytes: Option<u64>) -> CatalogV3RulePackRelease {
         CatalogV3RulePackRelease {
             version: "1.0.0".to_string(),
+            customizable: true,
             min_scryer_version: None,
             rule_pack_digests: Vec::new(),
             rule_pack_bytes,

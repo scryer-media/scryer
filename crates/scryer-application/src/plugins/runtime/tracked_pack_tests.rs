@@ -3,6 +3,7 @@ use super::*;
 fn pack_fixture() -> CatalogV3RulePackEntry {
     let release = |version: &str, minimum: Option<&str>| CatalogV3RulePackRelease {
         version: version.into(),
+        customizable: true,
         min_scryer_version: minimum.map(String::from),
         rule_pack_digests: vec!["sha256:fixture".into()],
         rule_pack_bytes: None,

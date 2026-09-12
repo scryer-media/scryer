@@ -651,6 +651,7 @@ type CommunityPack = {
   description: string;
   author: string;
   version: string;
+  customizable?: boolean | null;
 };
 type CommunityTemplate = {
   id: string;
@@ -843,8 +844,9 @@ function RuleLibrary({
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Choose the rules to enable after installation. Rules stay managed and can be copied individually for customization.
+                    Choose the rules to enable after installation. Rules stay managed{selectedPack.customizable !== false ? " and can be copied individually for customization." : "."}
                   </p>
+                  {selectedPack.customizable === false ? <p className="text-xs text-muted-foreground">Managed by the pack author.</p> : null}
                   <p className="text-xs text-muted-foreground">
                     Existing custom copies are not adopted or disabled when this pack is installed.
                   </p>
@@ -912,6 +914,7 @@ function RuleLibrary({
                     <Badge tone="info" className="text-[10px]">
                       {pack.author}
                     </Badge>
+                    {pack.customizable === false ? <Badge tone="neutral" className="text-[10px]">Managed</Badge> : null}
                     <span className="text-[10px] text-muted-foreground">
                       v{pack.version}
                     </span>

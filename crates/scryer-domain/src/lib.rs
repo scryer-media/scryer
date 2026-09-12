@@ -4460,12 +4460,19 @@ pub struct RulePackInstallation {
     pub name: String,
     pub version: String,
     pub digest: String,
+    /// Whether rules from this installed signed pack may be copied into user-authored rules.
+    #[serde(default = "default_rule_pack_customizable")]
+    pub customizable: bool,
     pub auto_update: bool,
     /// Monotonically increasing optimistic-concurrency token.
     pub revision: i64,
     pub last_updated: DateTime<Utc>,
     pub last_error: Option<String>,
     pub members: Vec<RulePackMember>,
+}
+
+const fn default_rule_pack_customizable() -> bool {
+    true
 }
 
 /// The stable source-template to local-rule-set mapping for one installed pack.

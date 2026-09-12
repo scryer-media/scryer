@@ -77,6 +77,8 @@ pub struct RulePackRegistryEntryPayload {
     pub author: String,
     /// Rule-pack version.
     pub version: String,
+    /// Whether rules from the pack may be copied into user-authored rules.
+    pub customizable: bool,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -107,6 +109,8 @@ pub struct TrackedRulePackPayload {
     pub version: String,
     /// Verified source digest for the installed version.
     pub digest: String,
+    /// Whether this installed pack permits copying its rules into user-authored rules.
+    pub customizable: bool,
     /// Optimistic-concurrency token for pack changes.
     pub revision: Long,
     /// Whether scheduled updates are enabled for this pack.
