@@ -32,7 +32,7 @@ tokio = { workspace = true }
 toml = "1"
 toml_edit = "0.25"
 x509-cert = { version = "0.3", default-features = false, features = ["pem", "std"] }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 xtask-support = { path = "../xtask-support" }
 
 [target.'cfg(unix)'.dependencies]
