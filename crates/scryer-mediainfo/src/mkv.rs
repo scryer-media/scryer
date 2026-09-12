@@ -298,18 +298,41 @@ pub(crate) fn parse_mkv_source(
             )
         })
     {
-        scanner.seek_to(0)?;
         let end = scanner.file_len.min(8 * 1024 * 1024);
         let mut samples_left = 16;
-        scanner.enrich_legacy_video_samples(
-            end,
-            0,
-            &mut tracks,
-            &mut samples_left,
-            &mut sample_report,
-            &mut caption_services,
-        )?;
-        if samples_left == 0 || end < scanner.file_len {
+        let enriched = scanner.seek_to(0).and_then(|()| {
+            scanner.enrich_legacy_video_samples(
+                end,
+                0,
+                &mut tracks,
+                &mut samples_left,
+                &mut sample_report,
+                &mut caption_services,
+            )
+        });
+        // Enrichment runs after the deep probe, so it is the stage most likely to
+        // meet an exhausted budget. Losing sample detail is a gap in the report;
+        // it must never cost the track table parsed before it.
+        let budget_stopped_enrichment =
+            enriched.is_err() && crate::source::MediaSource::exhausted(scanner.reader.get_ref());
+        if let Err(error) = enriched
+            && !budget_stopped_enrichment
+        {
+            return Err(error);
+        }
+        if budget_stopped_enrichment {
+            sample_report.status = scryer_media_types::ProbeStatus::Incomplete;
+            sample_report.budget_exhausted = true;
+            sample_report
+                .warnings
+                .push(scryer_media_types::ProbeWarning {
+                    code: "mkv_video_enrichment_budget".into(),
+                    message:
+                        "Video enrichment stopped when the media byte or I/O-operation budget was exhausted"
+                            .into(),
+                    ..Default::default()
+                });
+        } else if samples_left == 0 || end < scanner.file_len {
             sample_report.status = scryer_media_types::ProbeStatus::Incomplete;
             sample_report.budget_exhausted = true;
             sample_report
@@ -3958,6 +3981,58 @@ mod tests {
             }
             baseline = Some(costs);
         }
+    }
+
+    #[test]
+    fn budget_exhausted_during_enrichment_keeps_the_track_table() {
+        // The op budget runs out inside video enrichment, after the tracks have
+        // been parsed. Every pill on the title page comes from this analysis, so
+        // the gap has to be reported without throwing the analysis away.
+        let analysis = (16_u64..128)
+            .filter_map(|limit| {
+                let mut source = sparse_catalog_mkv(7680, true, true);
+                let analysis = crate::analyze_source_with_limits(
+                    &mut source,
+                    "mkv",
+                    crate::AnalyzeOptions::default(),
+                    64 * 1024 * 1024,
+                    limit,
+                )
+                .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
+                analysis
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "mkv_video_enrichment_budget")
+                    .then_some(analysis)
+            })
+            .next()
+            .expect("some io limit must exhaust the budget inside video enrichment");
+        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert_eq!(analysis.duration_seconds, Some(600));
+        assert!(
+            crate::is_valid_video(&analysis),
+            "an enrichment gap must not make the file unrecognizable as video"
+        );
+        assert!(analysis.details.report.budget_exhausted);
+        assert_eq!(
+            analysis.details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
+        assert!(
+            analysis.details.report.bytes_read > 0,
+            "the report must account for the work that was done"
+        );
+        assert!(
+            analysis
+                .details
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "read_budget_exhausted"),
+            "the aggregate budget warning still belongs on the report"
+        );
     }
 
     #[test]

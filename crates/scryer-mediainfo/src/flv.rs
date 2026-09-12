@@ -47,63 +47,88 @@ pub(crate) fn parse_flv_source(
     let mut max_timestamp_ms = 0_u32;
     let scan_end = data_offset.saturating_add(4).saturating_add(MAX_SCAN_BYTES);
 
-    for _ in 0..MAX_TAGS {
-        let tag_start = file.stream_position()?;
-        if tag_start >= file_len || tag_start >= scan_end {
-            break;
-        }
-        let mut tag_header = [0_u8; 11];
-        match file.read_exact(&mut tag_header) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error.into()),
-        }
-        let tag_type = tag_header[0] & 0x1f;
-        let payload_len = u24_be(&tag_header[1..4]) as usize;
-        let timestamp = u24_be(&tag_header[4..7]) | (u32::from(tag_header[7]) << 24);
-        if payload_len > MAX_TAG_PAYLOAD
-            || file
-                .stream_position()?
-                .checked_add(payload_len as u64 + 4)
-                .is_none_or(|end| end > file_len || end > scan_end)
-        {
-            break;
-        }
-        let mut payload = vec![0_u8; payload_len];
-        file.read_exact(&mut payload)?;
-        let previous_tag_size = read_u32_be(&mut file)?;
-        if previous_tag_size != 11_u32.saturating_add(payload_len as u32) {
-            if resynchronize_tags(&mut file, tag_start.saturating_add(1), file_len, scan_end)? {
-                continue;
+    // Tags carry the tracks themselves, so a budget exhausted mid-scan must end
+    // the scan, not the parse: whatever tags were already read still describe
+    // the file, and an empty result is rejected below on its own merits.
+    let scanned = (|| -> Result<(), MediaInfoError> {
+        for _ in 0..MAX_TAGS {
+            let tag_start = file.stream_position()?;
+            if tag_start >= file_len || tag_start >= scan_end {
+                break;
             }
-            break;
-        }
-        max_timestamp_ms = max_timestamp_ms.max(timestamp);
+            let mut tag_header = [0_u8; 11];
+            match file.read_exact(&mut tag_header) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(error) => return Err(error.into()),
+            }
+            let tag_type = tag_header[0] & 0x1f;
+            let payload_len = u24_be(&tag_header[1..4]) as usize;
+            let timestamp = u24_be(&tag_header[4..7]) | (u32::from(tag_header[7]) << 24);
+            if payload_len > MAX_TAG_PAYLOAD
+                || file
+                    .stream_position()?
+                    .checked_add(payload_len as u64 + 4)
+                    .is_none_or(|end| end > file_len || end > scan_end)
+            {
+                break;
+            }
+            let mut payload = vec![0_u8; payload_len];
+            file.read_exact(&mut payload)?;
+            let previous_tag_size = read_u32_be(&mut file)?;
+            if previous_tag_size != 11_u32.saturating_add(payload_len as u32) {
+                if resynchronize_tags(&mut file, tag_start.saturating_add(1), file_len, scan_end)? {
+                    continue;
+                }
+                break;
+            }
+            max_timestamp_ms = max_timestamp_ms.max(timestamp);
 
-        match tag_type {
-            8 => parse_audio_tag(&payload, &mut audio_track)?,
-            9 => parse_video_tag(&payload, &mut video_track)?,
-            18 => {
-                // Script metadata is advisory. A malformed script tag must not
-                // discard valid media tags already found.
-                let _ = parse_script_metadata(&payload, &mut metadata);
+            match tag_type {
+                8 => parse_audio_tag(&payload, &mut audio_track)?,
+                9 => parse_video_tag(&payload, &mut video_track)?,
+                18 => {
+                    // Script metadata is advisory. A malformed script tag must not
+                    // discard valid media tags already found.
+                    let _ = parse_script_metadata(&payload, &mut metadata);
+                }
+                _ => {}
             }
-            _ => {}
+
+            let have_video_details = video_track.as_ref().is_some_and(|track: &RawTrack| {
+                track.width.is_some() || track.codec_private.is_some()
+            });
+            let have_audio_details = audio_track.as_ref().is_some_and(|track: &RawTrack| {
+                if track.codec_name.as_deref() == Some("aac") {
+                    track.codec_private.is_some()
+                } else {
+                    track.channels.is_some() && track.metadata.sample_rate.is_some()
+                }
+            });
+            if have_video_details && have_audio_details && metadata.duration_seconds.is_some() {
+                break;
+            }
         }
 
-        let have_video_details = video_track
-            .as_ref()
-            .is_some_and(|track: &RawTrack| track.width.is_some() || track.codec_private.is_some());
-        let have_audio_details = audio_track.as_ref().is_some_and(|track: &RawTrack| {
-            if track.codec_name.as_deref() == Some("aac") {
-                track.codec_private.is_some()
-            } else {
-                track.channels.is_some() && track.metadata.sample_rate.is_some()
-            }
+        Ok(())
+    })();
+    let mut details = scryer_media_types::AnalysisDetails::default();
+    if let Err(error) = scanned {
+        if !file.exhausted() {
+            return Err(error);
+        }
+        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.budget_exhausted = true;
+        details
+            .report
+            .warnings
+            .push(scryer_media_types::ProbeWarning {
+            code: "flv_tag_scan_budget".into(),
+            message:
+                "FLV tag scanning stopped when the media byte or I/O-operation budget was exhausted"
+                    .into(),
+            ..Default::default()
         });
-        if have_video_details && have_audio_details && metadata.duration_seconds.is_some() {
-            break;
-        }
     }
 
     let mut tracks = Vec::new();
@@ -131,7 +156,7 @@ pub(crate) fn parse_flv_source(
         .or_else(|| (max_timestamp_ms != 0).then_some(f64::from(max_timestamp_ms) / 1_000.0));
 
     Ok(RawContainer {
-        details: Default::default(),
+        details,
         format_name: "flv".into(),
         duration_seconds,
         num_chapters: Some(0),
@@ -690,6 +715,41 @@ fn parse_error(message: impl Into<String>) -> MediaInfoError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budget_exhausted_mid_tag_scan_keeps_the_tags_already_read() {
+        // FLV discovers tracks from the tag stream itself, so a budget that dies
+        // mid-scan has to end the scan, not the parse.
+        let fixture = include_bytes!("../tests/media/flv_h264_aac.flv").as_slice();
+        let analysis = (8_u64..64)
+            .filter_map(|limit| {
+                let mut source = std::io::Cursor::new(fixture);
+                let analysis = crate::analyze_source_with_limits(
+                    &mut source,
+                    "flv",
+                    crate::AnalyzeOptions::default(),
+                    64 * 1024 * 1024,
+                    limit,
+                )
+                .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
+                analysis
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "flv_tag_scan_budget")
+                    .then_some(analysis)
+            })
+            .next()
+            .expect("some io limit must exhaust the budget inside the tag scan");
+        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert!(crate::is_valid_video(&analysis));
+        assert!(analysis.details.report.budget_exhausted);
+        assert_eq!(
+            analysis.details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
+    }
 
     #[test]
     fn parses_all_fixed_flv1_dimensions() {

@@ -8,11 +8,20 @@ pub trait MediaSource: Read + Seek {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Whether a read or seek already failed because a wrapping budget ran out.
+    /// Parsers check this so that exhaustion stops enrichment instead of
+    /// discarding the tracks they have already parsed.
+    fn exhausted(&self) -> bool {
+        false
+    }
 }
 
 impl<T: MediaSource + ?Sized> MediaSource for &mut T {
     fn len(&self) -> u64 {
         (**self).len()
+    }
+    fn exhausted(&self) -> bool {
+        (**self).exhausted()
     }
 }
 
@@ -226,6 +235,9 @@ impl<R: Seek> Seek for BoundedSource<R> {
 impl<R: MediaSource> MediaSource for BoundedSource<R> {
     fn len(&self) -> u64 {
         self.inner.len()
+    }
+    fn exhausted(&self) -> bool {
+        self.exhausted
     }
 }
 

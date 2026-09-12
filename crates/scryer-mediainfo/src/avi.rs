@@ -112,7 +112,20 @@ pub(crate) fn parse_avi_source(
         // Complete accounting is optional. Never read a movie-sized index or
         // divide a partial byte total by the full duration.
         if idx1.len() <= 4 * 1024 * 1024 {
-            apply_idx1_stream_sizes(&idx1, &mut file, &mut tracks)?;
+            // Index accounting only refines bitrates. An exhausted budget leaves
+            // them partial; it must not discard the tracks read from hdrl.
+            if let Err(error) = apply_idx1_stream_sizes(&idx1, &mut file, &mut tracks) {
+                if !file.exhausted() {
+                    return Err(error);
+                }
+                details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                details.report.budget_exhausted = true;
+                details.report.warnings.push(scryer_media_types::ProbeWarning {
+                    code: "avi_index_read_budget".into(),
+                    message: "AVI index accounting stopped when the media byte or I/O-operation budget was exhausted; index-derived bitrate remains partial".into(),
+                    ..Default::default()
+                });
+            }
         } else {
             details.report.status = scryer_media_types::ProbeStatus::Incomplete;
             details.report.budget_exhausted = true;
@@ -130,7 +143,14 @@ pub(crate) fn parse_avi_source(
     }
     if !profile.skips_deep_probes() {
         if let Some((start, end)) = movi_payload_offset.zip(movi_end) {
-            enrich_movi(&mut file, start, end, &mut tracks, &mut details)?;
+            // One seek and read per chunk header can outrun an I/O-operation
+            // budget long before the byte budget. Stop sampling, keep the tracks.
+            if let Err(error) = enrich_movi(&mut file, start, end, &mut tracks, &mut details) {
+                if !file.exhausted() {
+                    return Err(error);
+                }
+                avi_sampling_warning(&mut details.report, true);
+            }
         } else {
             avi_sampling_warning(&mut details.report, false);
         }
@@ -1049,6 +1069,48 @@ mod tests {
                 .unwrap();
         assert_eq!(config.sample_rate, 48_000);
         assert_eq!(config.layout, Some((6, "5.1")));
+    }
+
+    #[test]
+    fn budget_exhausted_after_hdrl_keeps_the_avi_tracks() {
+        // hdrl is parsed long before the index is accounted for. The window where
+        // the budget dies in between moves with any change in I/O accounting, so
+        // look for it instead of pinning a limit.
+        let fixture = include_bytes!("../tests/media/matrix_avi_038.avi").as_slice();
+        let analysis = (24_u64..256)
+            .filter_map(|limit| {
+                let mut source = std::io::Cursor::new(fixture);
+                let analysis = crate::analyze_source_with_limits(
+                    &mut source,
+                    "avi",
+                    crate::AnalyzeOptions::default(),
+                    64 * 1024 * 1024,
+                    limit,
+                )
+                .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
+                analysis
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| {
+                        warning.code == "avi_index_read_budget"
+                            || warning.code == "avi_sample_budget"
+                    })
+                    .then_some(analysis)
+            })
+            .next()
+            .expect("some io limit must exhaust the budget after the streams are parsed");
+        assert!(
+            analysis.video_codec.is_some(),
+            "tracks survive the index gap"
+        );
+        assert!(crate::is_valid_video(&analysis));
+        assert!(analysis.details.report.budget_exhausted);
+        assert_eq!(
+            analysis.details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
     }
 
     fn sample_track(number: usize) -> super::AviTrack {
