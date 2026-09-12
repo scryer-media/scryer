@@ -426,8 +426,9 @@ export type LocationOperationAssetListing = {
 
 /**
  * Classes in the order the preview renders them: what will happen first, what
- * will not happen next, what stops the run last. Every class is rendered even
- * when it is empty, so no title ever appears to have been dropped (FR-015).
+ * will not happen next, what stops the run last. The preview renders only the
+ * classes that hold a title; the counts still add up to the selection, so no
+ * title ever appears to have been dropped (FR-015).
  */
 export const CLASSIFICATION_ORDER: TitleLocationClass[] = [
   "ROOT_MOVE",
@@ -492,8 +493,8 @@ export function classMovesFiles(value: TitleLocationClass): boolean {
 
 /**
  * All six classification groups in render order, including empty ones. The
- * backend already returns all six; filling the gaps here means a partial
- * payload degrades into a visible empty group rather than a missing one.
+ * backend already returns all six; filling the gaps here keeps the order and
+ * the blocking-class walk independent of what the payload happened to mention.
  */
 export function orderedClassificationGroups(
   classification: LocationSelectionClassification | null | undefined,
@@ -507,7 +508,23 @@ export function orderedClassificationGroups(
   );
 }
 
-/** Plan sections in render order; unknown kinds keep their payload order last. */
+/**
+ * The classification groups the preview shows: the ordered groups that hold at
+ * least one title. An empty class is omitted rather than rendered as an empty
+ * box, so the preview says only what this selection would do.
+ */
+export function populatedClassificationGroups(
+  classification: LocationSelectionClassification | null | undefined,
+): LocationClassificationGroup[] {
+  return orderedClassificationGroups(classification).filter(
+    (group) => toCount(group.count) > 0 || group.titles.length > 0,
+  );
+}
+
+/**
+ * Plan sections in render order, omitting any the plan left empty; unknown
+ * kinds keep their payload order last.
+ */
 export function orderedPlanSections(
   sections: LocationPlanSection[],
 ): LocationPlanSection[] {
@@ -515,7 +532,9 @@ export function orderedPlanSections(
     const index = PLAN_KIND_ORDER.indexOf(kind);
     return index === -1 ? PLAN_KIND_ORDER.length : index;
   };
-  return [...sections].sort((left, right) => rank(left.kind) - rank(right.kind));
+  return sections
+    .filter((section) => toCount(section.itemsTotal) > 0 || section.items.length > 0)
+    .sort((left, right) => rank(left.kind) - rank(right.kind));
 }
 
 /** Per-kind counts in render order, dropping kinds the plan never produced. */

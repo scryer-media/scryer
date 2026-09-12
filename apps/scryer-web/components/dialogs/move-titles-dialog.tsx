@@ -65,10 +65,10 @@ import {
   moveWizardCanAdvance,
   nextMoveStep,
   offersModeSelection,
-  orderedClassificationGroups,
   orderedPlanKindCounts,
   orderedPlanSections,
   planKindLabelKey,
+  populatedClassificationGroups,
   previewCanStart,
   previousMoveStep,
   remainingSelection,
@@ -344,8 +344,10 @@ export function MoveTitlesDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, libraryId, mode, open, previewNonce, rootId, selectionKey, step, t]);
 
+  // Only the classes this selection actually falls into; an empty class is
+  // omitted, not shown as an empty box.
   const groups = React.useMemo(
-    () => orderedClassificationGroups(preview?.classification),
+    () => populatedClassificationGroups(preview?.classification),
     [preview],
   );
   // Both ways a title can stop the plan: the classification refusing it, and an
@@ -562,6 +564,18 @@ export function MoveTitlesDialog({
   const totalFiles = toCount(preview?.counts.filesTotal);
   const totalBytes = toCount(preview?.counts.bytesTotal);
   const freeSpace = preview?.freeSpace ?? null;
+  // The free-space block appears only when it has a figure or a caveat to
+  // state: a same-volume rename that probed fine has nothing to say, and a
+  // plan that moves no files has no space to need.
+  const freeSpaceNote =
+    freeSpace &&
+    totalFiles > 0 &&
+    (!freeSpace.sameVolumeMove ||
+      freeSpace.sufficient === false ||
+      !freeSpace.probed ||
+      freeSpace.recycleOnOtherVolume)
+      ? freeSpace
+      : null;
   const verification = preview?.verification ?? null;
 
   return (
@@ -869,14 +883,18 @@ export function MoveTitlesDialog({
                   label={t("move.summaryTitles")}
                   value={String(toCount(preview.counts.titlesTotal))}
                 />
-                <SummaryCell
-                  label={t("move.summaryFiles")}
-                  value={String(totalFiles)}
-                />
-                <SummaryCell
-                  label={t("move.summarySize")}
-                  value={formatByteCount(totalBytes)}
-                />
+                {totalFiles > 0 ? (
+                  <>
+                    <SummaryCell
+                      label={t("move.summaryFiles")}
+                      value={String(totalFiles)}
+                    />
+                    <SummaryCell
+                      label={t("move.summarySize")}
+                      value={formatByteCount(totalBytes)}
+                    />
+                  </>
+                ) : null}
               </dl>
 
               {planKindCounts.length > 0 ? (
@@ -970,43 +988,46 @@ export function MoveTitlesDialog({
                 </p>
               ) : null}
 
-              {/* All six classes, always — an empty class is visible, not absent. */}
-              <div className="space-y-2">
-                {groups.map((group) => (
-                  <ClassificationGroup
-                    key={group.class}
-                    groupClass={group.class}
-                    count={toCount(group.count)}
-                    entries={group.titles}
-                    titleName={(titleId) =>
-                      titleById.get(titleId)?.name ?? titleId
-                    }
-                    currentLibraryName={(entry) =>
-                      libraryById.get(entry.sourceLibraryId)?.name ??
-                      titleById.get(entry.titleId)?.libraryName ??
-                      null
-                    }
-                    placement={(entry) =>
-                      classifiedTitlePlacement(entry, {
-                        planFolders: foldersByTitle,
-                        rootPathById,
-                      })
-                    }
-                    files={filesByTitle}
-                    destinationLibraryName={libraryName}
-                    mergeSummary={(entry) =>
-                      mergeSummaryPresentation(
-                        entry,
-                        mergesByTitle.get(entry.titleId) ?? null,
-                        { resolveTitleName: titleName },
-                      )
-                    }
-                    onDeselect={deselect}
-                    deselectDisabled={starting}
-                    t={t}
-                  />
-                ))}
-              </div>
+              {/* Only the classes with titles in them; the group counts still
+                  sum to the selection, so nothing reads as dropped. */}
+              {groups.length > 0 ? (
+                <div className="space-y-2">
+                  {groups.map((group) => (
+                    <ClassificationGroup
+                      key={group.class}
+                      groupClass={group.class}
+                      count={toCount(group.count)}
+                      entries={group.titles}
+                      titleName={(titleId) =>
+                        titleById.get(titleId)?.name ?? titleId
+                      }
+                      currentLibraryName={(entry) =>
+                        libraryById.get(entry.sourceLibraryId)?.name ??
+                        titleById.get(entry.titleId)?.libraryName ??
+                        null
+                      }
+                      placement={(entry) =>
+                        classifiedTitlePlacement(entry, {
+                          planFolders: foldersByTitle,
+                          rootPathById,
+                        })
+                      }
+                      files={filesByTitle}
+                      destinationLibraryName={libraryName}
+                      mergeSummary={(entry) =>
+                        mergeSummaryPresentation(
+                          entry,
+                          mergesByTitle.get(entry.titleId) ?? null,
+                          { resolveTitleName: titleName },
+                        )
+                      }
+                      onDeselect={deselect}
+                      deselectDisabled={starting}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              ) : null}
 
               {sections.length > 0 ? (
                 <div className="space-y-2">
@@ -1034,40 +1055,40 @@ export function MoveTitlesDialog({
                 </div>
               ) : null}
 
-              {freeSpace ? (
+              {freeSpaceNote ? (
                 <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm">
                   <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 space-y-0.5">
-                    <p className="text-foreground">
-                      {freeSpace.sameVolumeMove
-                        ? t("move.freeSpaceSameVolume")
-                        : t("move.freeSpaceRequired", {
-                            required: formatByteCount(
-                              toCount(freeSpace.destinationTotalRequiredBytes),
-                            ),
-                            available:
-                              freeSpace.destinationAvailableBytes === null
-                                ? t("move.freeSpaceUnknown")
-                                : formatByteCount(
-                                    toCount(freeSpace.destinationAvailableBytes),
-                                  ),
-                          })}
-                    </p>
-                    {freeSpace.sufficient === false ? (
+                    {freeSpaceNote.sameVolumeMove ? null : (
+                      <p className="text-foreground">
+                        {t("move.freeSpaceRequired", {
+                          required: formatByteCount(
+                            toCount(freeSpaceNote.destinationTotalRequiredBytes),
+                          ),
+                          available:
+                            freeSpaceNote.destinationAvailableBytes === null
+                              ? t("move.freeSpaceUnknown")
+                              : formatByteCount(
+                                  toCount(freeSpaceNote.destinationAvailableBytes),
+                                ),
+                        })}
+                      </p>
+                    )}
+                    {freeSpaceNote.sufficient === false ? (
                       <p className="text-xs text-[var(--scry-danger-text)]">
                         {t("move.freeSpaceInsufficient")}
                       </p>
                     ) : null}
-                    {!freeSpace.probed ? (
+                    {!freeSpaceNote.probed ? (
                       <p className="text-xs text-muted-foreground">
                         {t("move.freeSpaceNotProbed")}
                       </p>
                     ) : null}
-                    {freeSpace.recycleOnOtherVolume ? (
+                    {freeSpaceNote.recycleOnOtherVolume ? (
                       <p className="text-xs text-muted-foreground">
                         {t("move.freeSpaceRecycleOtherVolume", {
                           required: formatByteCount(
-                            toCount(freeSpace.recycleRequiredBytes),
+                            toCount(freeSpaceNote.recycleRequiredBytes),
                           ),
                         })}
                       </p>
@@ -1272,78 +1293,72 @@ function ClassificationGroup({
     >
       <p className="flex items-center justify-between gap-2 text-sm font-medium text-foreground">
         <span>{t(classificationLabelKey(groupClass))}</span>
-        <Badge tone={count === 0 ? "neutral" : blocking ? "negative" : "info"}>
-          {count}
-        </Badge>
+        <Badge tone={blocking ? "negative" : "info"}>{count}</Badge>
       </p>
-      {count === 0 ? (
-        <p className="text-xs text-muted-foreground">{t("move.groupEmpty")}</p>
-      ) : (
-        <ul className="mt-1 space-y-1">
-          {entries.map((entry) => {
-            const stats = files.get(entry.titleId);
-            const where = placement(entry);
-            return (
-              <li key={entry.titleId} className="min-w-0 text-xs">
-                <span className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-foreground">
-                    {titleName(entry.titleId)}
-                  </span>
-                  {blocking ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onDeselect(entry.titleId)}
-                      disabled={deselectDisabled}
-                    >
-                      {t("move.deselect")}
-                    </Button>
-                  ) : null}
+      <ul className="mt-1 space-y-1">
+        {entries.map((entry) => {
+          const stats = files.get(entry.titleId);
+          const where = placement(entry);
+          return (
+            <li key={entry.titleId} className="min-w-0 text-xs">
+              <span className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-foreground">
+                  {titleName(entry.titleId)}
                 </span>
+                {blocking ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onDeselect(entry.titleId)}
+                    disabled={deselectDisabled}
+                  >
+                    {t("move.deselect")}
+                  </Button>
+                ) : null}
+              </span>
+              <span className="block text-muted-foreground">
+                {currentLibraryName(entry) ?? "—"}
+                {" · "}
+                <span className="font-[var(--font-code)] break-all">
+                  {where.source ?? "—"}
+                </span>
+                <ArrowRight
+                  aria-hidden="true"
+                  className="mx-1 inline h-3 w-3 align-[-1px]"
+                />
+                <span className="font-[var(--font-code)] break-all text-foreground">
+                  {where.destination ?? "—"}
+                </span>
+              </span>
+              {stats ? (
                 <span className="block text-muted-foreground">
-                  {currentLibraryName(entry) ?? "—"}
-                  {" · "}
-                  <span className="font-[var(--font-code)] break-all">
-                    {where.source ?? "—"}
-                  </span>
-                  <ArrowRight
-                    aria-hidden="true"
-                    className="mx-1 inline h-3 w-3 align-[-1px]"
-                  />
-                  <span className="font-[var(--font-code)] break-all text-foreground">
-                    {where.destination ?? "—"}
-                  </span>
+                  {t("move.titleFileSummary", {
+                    files: stats.files,
+                    size: formatByteCount(stats.bytes),
+                  })}
                 </span>
-                {stats ? (
-                  <span className="block text-muted-foreground">
-                    {t("move.titleFileSummary", {
-                      files: stats.files,
-                      size: formatByteCount(stats.bytes),
-                    })}
-                  </span>
-                ) : null}
-                <TransferNote
-                  entry={entry}
-                  destinationLibraryName={destinationLibraryName}
-                  t={t}
-                />
-                <MergeNote summary={mergeSummary(entry)} t={t} />
-                <SameNameWarning
-                  entry={entry}
-                  destinationLibraryName={destinationLibraryName}
-                  t={t}
-                />
-                {entry.reason ? (
-                  <span className="block text-muted-foreground">
-                    {entry.reason}
-                  </span>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+              ) : null}
+              <TransferNote
+                entry={entry}
+                destinationLibraryName={destinationLibraryName}
+                t={t}
+              />
+              <MergeNote summary={mergeSummary(entry)} t={t} />
+              <SameNameWarning
+                entry={entry}
+                destinationLibraryName={destinationLibraryName}
+                t={t}
+              />
+              {entry.reason ? (
+                <span className="block text-muted-foreground">
+                  {entry.reason}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -1652,61 +1667,58 @@ function AdoptionAccountingPanel({
         {t("move.adoptionHeading")}
       </p>
 
+      {/* FR-051's four-way accounting, stating only the ways that hold files. */}
       <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-        <div id="move-titles-adoption-accounted">
-          <dt className="text-xs text-muted-foreground">
-            {t("move.adoptionAccountedFor")}
-          </dt>
-          <dd className="text-foreground">
-            {accounting.accountedForFiles}
-            {accounting.accountedForBytes > 0 ? (
-              <span className="ml-1 text-xs text-muted-foreground">
-                {formatByteCount(accounting.accountedForBytes)}
-              </span>
-            ) : null}
-          </dd>
-        </div>
-        <div id="move-titles-adoption-missing">
-          <dt className="text-xs text-muted-foreground">
-            {t("move.adoptionMissing")}
-          </dt>
-          <dd
-            className={cn(
-              "text-foreground",
-              accounting.missing.length > 0 &&
-                "text-[var(--scry-danger-text)]",
-            )}
-          >
-            {accounting.missing.length}
-          </dd>
-        </div>
-        <div id="move-titles-adoption-ambiguous">
-          <dt className="text-xs text-muted-foreground">
-            {t("move.adoptionAmbiguous")}
-          </dt>
-          <dd
-            className={cn(
-              "text-foreground",
-              accounting.ambiguous.length > 0 &&
-                "text-[var(--scry-danger-text)]",
-            )}
-          >
-            {accounting.ambiguous.length}
-          </dd>
-        </div>
-        <div id="move-titles-adoption-additional">
-          <dt className="text-xs text-muted-foreground">
-            {t("move.adoptionAdditional")}
-          </dt>
-          <dd className="text-foreground">
-            {accounting.additionalFiles}
-            {accounting.additionalBytes > 0 ? (
-              <span className="ml-1 text-xs text-muted-foreground">
-                {formatByteCount(accounting.additionalBytes)}
-              </span>
-            ) : null}
-          </dd>
-        </div>
+        {accounting.accountedForFiles > 0 ? (
+          <div id="move-titles-adoption-accounted">
+            <dt className="text-xs text-muted-foreground">
+              {t("move.adoptionAccountedFor")}
+            </dt>
+            <dd className="text-foreground">
+              {accounting.accountedForFiles}
+              {accounting.accountedForBytes > 0 ? (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {formatByteCount(accounting.accountedForBytes)}
+                </span>
+              ) : null}
+            </dd>
+          </div>
+        ) : null}
+        {accounting.missing.length > 0 ? (
+          <div id="move-titles-adoption-missing">
+            <dt className="text-xs text-muted-foreground">
+              {t("move.adoptionMissing")}
+            </dt>
+            <dd className="text-[var(--scry-danger-text)]">
+              {accounting.missing.length}
+            </dd>
+          </div>
+        ) : null}
+        {accounting.ambiguous.length > 0 ? (
+          <div id="move-titles-adoption-ambiguous">
+            <dt className="text-xs text-muted-foreground">
+              {t("move.adoptionAmbiguous")}
+            </dt>
+            <dd className="text-[var(--scry-danger-text)]">
+              {accounting.ambiguous.length}
+            </dd>
+          </div>
+        ) : null}
+        {accounting.additionalFiles > 0 ? (
+          <div id="move-titles-adoption-additional">
+            <dt className="text-xs text-muted-foreground">
+              {t("move.adoptionAdditional")}
+            </dt>
+            <dd className="text-foreground">
+              {accounting.additionalFiles}
+              {accounting.additionalBytes > 0 ? (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {formatByteCount(accounting.additionalBytes)}
+                </span>
+              ) : null}
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       {accounting.blocks ? (

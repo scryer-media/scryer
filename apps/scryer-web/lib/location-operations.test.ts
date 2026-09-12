@@ -59,6 +59,7 @@ import {
   orderedClassificationGroups,
   orderedPlanKindCounts,
   orderedPlanSections,
+  populatedClassificationGroups,
   previewCanStart,
   recognizeStartRefusal,
   refusalMessageKey,
@@ -162,6 +163,37 @@ test("all six classification groups render, empty ones included", () => {
 test("a null classification still renders six groups", () => {
   assert.equal(orderedClassificationGroups(null).length, 6);
   assert.equal(orderedClassificationGroups(undefined).length, 6);
+});
+
+test("the preview shows only the classification groups that hold a title", () => {
+  const groups = populatedClassificationGroups(
+    classification([
+      {
+        class: "NO_OP",
+        titles: [
+          {
+            titleId: "b",
+            class: "NO_OP",
+            sourceLibraryId: "lib",
+            sourceRootId: "root-b",
+            sourceFolderPath: "/data/b/Settled",
+            destinationLibraryId: "lib",
+            destinationRootId: "root-b",
+            reasonCode: "already_at_destination",
+            reason: null,
+          },
+        ],
+      },
+      { class: "ROOT_MOVE", titles: [] },
+    ]),
+  );
+  // The empty ROOT_MOVE group and the four classes the payload never
+  // mentioned are omitted; what remains keeps render order.
+  assert.deepEqual(
+    groups.map((group) => group.class),
+    ["NO_OP"],
+  );
+  assert.deepEqual(populatedClassificationGroups(null), []);
 });
 
 test("only incompatible and needs-resolution classes block the start", () => {
@@ -784,7 +816,10 @@ test("plan sections sort into render order", () => {
     { kind: "WARNING", itemsTotal: 1, bytesTotal: 0, complete: true, items: [] },
     { kind: "MOVE", itemsTotal: 2, bytesTotal: 20, complete: true, items: [] },
     { kind: "NO_OP", itemsTotal: 1, bytesTotal: 0, complete: true, items: [] },
+    { kind: "RENAME", itemsTotal: 0, bytesTotal: 0, complete: true, items: [] },
   ]);
+  // The empty RENAME section is omitted: the preview shows only sections
+  // with something in them.
   assert.deepEqual(
     sections.map((section) => section.kind),
     ["MOVE", "NO_OP", "WARNING"],
