@@ -64,6 +64,7 @@ import {
   transferOperationProgress,
   transferTitleProgress,
   type TransferTitle,
+  detailLines,
 } from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
@@ -547,7 +548,10 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                   {t("move.stalledGuidance")}
                 </p>
               )}
-              {operation.detail && <p>{operation.detail}</p>}
+              {operation.detail &&
+                detailLines(operation.detail).map((line, index) => (
+                  <p key={index}>{line}</p>
+                ))}
               {guidanceKey && (
                 <p
                   id="location-operation-guidance"
@@ -824,8 +828,12 @@ function TitleRow({
   const [expanded, setExpanded] = React.useState(false);
   const [detail, setDetail] = React.useState<string | null>(null);
   const [failed, setFailed] = React.useState(false);
+  // A completed title may still have something to say — the merge the plan
+  // promised, a companion kept under a new name — so its detail is fetched
+  // too, and shown as a statement rather than as a warning.
+  const showsDetail = row.hasException || row.state === "COMPLETED";
   React.useEffect(() => {
-    if (!expanded || !row.hasException) return;
+    if (!expanded || !showsDetail) return;
     let active = true;
     client
       .query(
@@ -845,7 +853,7 @@ function TitleRow({
     return () => {
       active = false;
     };
-  }, [client, expanded, operationId, row.titleId, row.state, row.hasException]);
+  }, [client, expanded, operationId, row.titleId, row.state, showsDetail]);
   const path = row.currentFile ? splitTransferPath(row.currentFile) : null;
   return (
     <React.Fragment>
@@ -958,14 +966,28 @@ function TitleRow({
             className="break-words bg-muted/20 p-3 text-xs"
           >
             {row.hasException && (
-              <p className="mb-3 text-[var(--scry-warning-text)]">
-                {detail ??
-                  t(
-                    failed
-                      ? "move.operationLoadFailed"
-                      : "move.transferDetailPending",
-                  )}
-              </p>
+              <div className="mb-3 space-y-1 text-[var(--scry-warning-text)]">
+                {detail ? (
+                  detailLines(detail).map((line, index) => (
+                    <p key={index}>{line}</p>
+                  ))
+                ) : (
+                  <p>
+                    {t(
+                      failed
+                        ? "move.operationLoadFailed"
+                        : "move.transferDetailPending",
+                    )}
+                  </p>
+                )}
+              </div>
+            )}
+            {!row.hasException && detail && (
+              <div className="mb-3 space-y-1 text-muted-foreground">
+                {detailLines(detail).map((line, index) => (
+                  <p key={index}>{line}</p>
+                ))}
+              </div>
             )}
             {guidanceKey && (
               <p

@@ -23,7 +23,7 @@ use super::*;
 
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
-    VerificationDepth,
+    TitleCheckpointState, VerificationDepth,
 };
 use crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH;
 use crate::location::preview::{
@@ -618,21 +618,28 @@ async fn an_unrelated_title_with_the_same_folder_name_is_uniqued_rather_than_mer
     );
 
     let operation = fixture.start_and_settle().await;
-    // FR-055's same-name statement is a warning by design: two same-named
-    // titles are about to sit side by side and the user is told so.
+    // FR-055's same-name statement was made in the preview and confirmed: two
+    // same-named titles now sit side by side exactly as planned. The outcome
+    // repeats the statement with the title, but a plan that ran as confirmed
+    // is a success, not a warning.
     assert_eq!(
         operation.state,
-        LocationOperationState::CompletedWithWarnings,
+        LocationOperationState::Completed,
         "detail: {:?}",
         operation.detail
     );
+    let checkpoint = fixture
+        .operations
+        .checkpoint(&operation.id, &incoming.id)
+        .expect("the uniqued title has a checkpoint");
+    assert_eq!(checkpoint.state, TitleCheckpointState::Completed);
     assert!(
-        operation
+        checkpoint
             .detail
             .as_deref()
             .is_some_and(|detail| detail.contains("shares no metadata identity")),
-        "detail was {:?}",
-        operation.detail
+        "the title's outcome repeats the preview's statement: {:?}",
+        checkpoint.detail
     );
 
     // SC-004: the executed outcome is the previewed one, to the character.

@@ -2201,23 +2201,23 @@ const it: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Questa unione non può essere eseguita: questi record non possono essere riportati.",
   "move.mergeCarried":
-    "Il titolo superstite assume {{files}} record di file multimediali e {{history}} riga/righe di cronologia.",
+    "{{files}} file multimediali e {{history}} voci di cronologia vengono con esso.",
   "move.mergeDropped":
     "{{count}} altro/i record del titolo unito non vengono mantenuti e si ritirano con esso.",
   "move.mergeRoleChangesHeading":
-    "Ruoli dei file ({{demotions}} file perdono il ruolo principale)",
+    "{{demotions}} file diventano copie aggiuntive",
   "move.mergeRoleChangesHeadingPlain": "Ruoli dei file",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "principale",
-  "move.mergeRole.ADDITIONAL": "aggiuntivo",
-  "move.mergeRoleDemotion":
-    "Questo file non è più il principale del suo episodio; viene mantenuto accanto a quello che lo è.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "La destinazione aveva già un file principale per questo episodio e uno spostamento non ne retrocede mai uno.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Un altro file in spostamento ha già preso il ruolo principale per quell'episodio di destinazione.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Due episodi di origine sono confluiti in un unico episodio di destinazione.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}” ha già un file principale per questi episodi. I file in arrivo vengono mantenuti come copie aggiuntive e nulla di esistente viene sostituito.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}” ha già un file principale. Il file in arrivo viene mantenuto come copia aggiuntiva e nulla di esistente viene sostituito.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Un altro file di questo spostamento è già il principale per questi episodi, quindi questi vengono mantenuti come copie aggiuntive.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Un altro file di questo spostamento è già il principale, quindi questo viene mantenuto come copia aggiuntiva.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Questi file sono elencati qui sotto due episodi che nella destinazione sono uno solo. Lì ciascuno compare una volta sola.",
+  "move.mergeRoleUnnamedFile": "file {{id}}",
   "move.operationTransferNote": "Questi titoli si stanno spostando in un'altra libreria.",
   "move.modeHeading": "Come devono arrivare i file?",
   "move.mode.MOVE_WITH_SCRYER": "Sposta con Scryer",

@@ -758,8 +758,22 @@ async fn a_same_named_destination_title_is_warned_about_and_never_merged_into() 
     let operation = fixture.start_and_settle(&[&title.id]).await;
     assert_eq!(
         operation.state,
-        LocationOperationState::CompletedWithWarnings,
-        "the transfer succeeds, and the warning the preview showed is repeated in the outcome"
+        LocationOperationState::Completed,
+        "the transfer ran exactly as previewed and confirmed, so it is a success: {:?}",
+        operation.detail
+    );
+    let checkpoint = fixture
+        .operations
+        .checkpoint(&operation.id, &title.id)
+        .expect("the transferred title has a checkpoint");
+    assert_eq!(checkpoint.state, TitleCheckpointState::Completed);
+    assert!(
+        checkpoint
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains(&impostor.id)),
+        "the statement the preview showed is repeated with the title's outcome: {:?}",
+        checkpoint.detail
     );
 
     let transferred = fixture.title(&title.id).await;
@@ -798,6 +812,7 @@ fn contested_slot_snapshot(
         is_filler: false,
     };
     MergeCatalogSnapshot {
+        current_operation_id: None,
         source_title_id: source_title_id.to_string(),
         destination_title_id: destination_title_id.to_string(),
         source_episodes: vec![merge_episode("s-e1", "1", "1")],
@@ -814,6 +829,7 @@ fn contested_slot_snapshot(
 fn unmappable_snapshot(source_title_id: &str, destination_title_id: &str) -> MergeCatalogSnapshot {
     let episode = merge_episode;
     MergeCatalogSnapshot {
+        current_operation_id: None,
         source_title_id: source_title_id.to_string(),
         destination_title_id: destination_title_id.to_string(),
         source_episodes: vec![episode("s-e1", "1", "1"), episode("s-e2", "1", "2")],
@@ -1096,7 +1112,7 @@ async fn an_incoming_primary_is_demoted_and_the_preview_says_so_first() {
         .filter_map(|item| item.detail.as_deref())
         .collect::<Vec<_>>();
     assert_eq!(stated.len(), 1, "FR-070: the demotion has its own line");
-    assert!(stated[0].contains("additional"), "{}", stated[0]);
+    assert!(stated[0].contains("extra copy"), "{}", stated[0]);
 }
 
 /// FR-066 / US7.4: episode identities that cannot be mapped block the operation

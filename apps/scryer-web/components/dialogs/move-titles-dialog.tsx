@@ -59,8 +59,7 @@ import {
   isCrossLibraryDestination,
   isSameNameWarning,
   mergePreviewsBySourceTitle,
-  mergeRoleChangeReasonKey,
-  mergeRoleLabelKey,
+  mergeRoleGroupKey,
   mergeSummaryPresentation,
   movesThroughWizard,
   moveWizardCanAdvance,
@@ -1487,9 +1486,14 @@ function MergeNote({
               })}
             </p>
 
-            {/* FR-070: every role change is named, and a demotion says so. */}
-            {summary.roleChanges.length > 0 ? (
-              <div id={`move-titles-merge-role-changes-${titleId}`}>
+            {/* FR-070: every role change is named, and a demotion says so.
+                The reason is said once per group; the files are listed under
+                it by episode and name, the way a person would read them. */}
+            {summary.roleChangeGroups.length > 0 ? (
+              <div
+                id={`move-titles-merge-role-changes-${titleId}`}
+                className="space-y-1"
+              >
                 <p className="text-foreground">
                   {summary.demotionCount > 0
                     ? t("move.mergeRoleChangesHeading", {
@@ -1497,37 +1501,36 @@ function MergeNote({
                       })
                     : t("move.mergeRoleChangesHeadingPlain")}
                 </p>
-                <ul className="ml-4 list-disc">
-                  {summary.roleChanges.map((change) => (
-                    <li
-                      key={change.fileId}
-                      id={`move-titles-merge-role-change-${titleId}-${change.fileId}`}
-                      className={
-                        change.demotion
-                          ? "text-[var(--scry-warning-text)]"
-                          : undefined
-                      }
-                    >
-                      {t("move.mergeRoleChangeLine", {
-                        previous: t(mergeRoleLabelKey(change.previousRole)),
-                        next: t(mergeRoleLabelKey(change.newRole)),
-                      })}
-                      {change.demotion ? (
-                        <span className="block">
-                          {t("move.mergeRoleDemotion")}
-                        </span>
-                      ) : null}
-                      <span className="block text-muted-foreground">
-                        {t(mergeRoleChangeReasonKey(change.reason))}
-                      </span>
-                      {change.detail ? (
-                        <span className="block text-muted-foreground">
-                          {change.detail}
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+                {summary.roleChangeGroups.map((group) => (
+                  <div
+                    key={`${group.reason}-${group.titleSlot ? "title" : "episode"}`}
+                    className={
+                      group.demotion
+                        ? "text-[var(--scry-warning-text)]"
+                        : undefined
+                    }
+                  >
+                    <p>{t(mergeRoleGroupKey(group), { title: destination })}</p>
+                    <ul className="ml-4 list-disc text-muted-foreground">
+                      {group.lines.map((change) => (
+                        <li
+                          key={change.fileId}
+                          id={`move-titles-merge-role-change-${titleId}-${change.fileId}`}
+                        >
+                          {change.episodeLabel ? (
+                            <span className="text-foreground">
+                              {change.episodeLabel}{" · "}
+                            </span>
+                          ) : null}
+                          {change.fileName ??
+                            t("move.mergeRoleUnnamedFile", {
+                              id: change.fileId,
+                            })}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
               </div>
             ) : null}
 

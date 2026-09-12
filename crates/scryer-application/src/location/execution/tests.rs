@@ -1487,11 +1487,11 @@ async fn cleanup_leaves_a_non_empty_source_directory_alone() {
     assert!(source_root.join("Movie").exists());
     assert!(source_root.join("Movie").join("notes.txt").exists());
     assert!(
-        outcome
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("still holds content")),
-        "the user is told why the directory survived: {:?}",
+        outcome.warnings.iter().any(|warning| {
+            warning.contains("was kept because it still has files in it")
+                && warning.contains("Movie")
+        }),
+        "the user is told, in plain words, which folder survived and why: {:?}",
         outcome.warnings
     );
 }

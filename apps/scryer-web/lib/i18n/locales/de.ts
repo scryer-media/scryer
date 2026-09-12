@@ -2194,23 +2194,23 @@ const de: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Diese Zusammenführung kann nicht laufen: Diese Datensätze lassen sich nicht übertragen.",
   "move.mergeCarried":
-    "Der verbleibende Titel übernimmt {{files}} Mediendatei-Eintrag/-Einträge und {{history}} Verlaufszeile(n).",
+    "{{files}} Mediendatei(en) und {{history}} Verlaufseinträge kommen mit.",
   "move.mergeDropped":
     "{{count}} weitere(r) Eintrag/Einträge des zusammengeführten Titels werden nicht übernommen und verfallen mit ihm.",
   "move.mergeRoleChangesHeading":
-    "Rollen der Mediendateien ({{demotions}} Datei(en) verlieren die Hauptrolle)",
-  "move.mergeRoleChangesHeadingPlain": "Rollen der Mediendateien",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "Hauptdatei",
-  "move.mergeRole.ADDITIONAL": "zusätzlich",
-  "move.mergeRoleDemotion":
-    "Diese Datei ist nicht mehr die Hauptdatei ihrer Episode; sie wird neben der Hauptdatei behalten.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "Das Ziel hatte bereits eine Hauptdatei für diese Episode, und ein Verschieben stuft nie eine herab.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Eine andere verschobene Datei hat die Hauptrolle für diese Zielepisode bereits belegt.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Zwei Quellepisoden wurden auf eine Zielepisode zusammengelegt.",
+    "{{demotions}} Datei(en) werden zu zusätzlichen Kopien",
+  "move.mergeRoleChangesHeadingPlain": "Dateirollen",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "„{{title}}“ hat für diese Episoden bereits eine Hauptdatei. Die ankommenden Dateien werden als zusätzliche Kopien behalten; nichts Vorhandenes wird ersetzt.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "„{{title}}“ hat bereits eine Hauptdatei. Die ankommende Datei wird als zusätzliche Kopie behalten; nichts Vorhandenes wird ersetzt.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Eine andere Datei dieser Verschiebung ist für diese Episoden bereits die Hauptdatei, daher werden diese als zusätzliche Kopien behalten.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Eine andere Datei dieser Verschiebung ist bereits die Hauptdatei, daher wird diese als zusätzliche Kopie behalten.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Diese Dateien sind hier unter zwei Episoden eingetragen, die am Ziel eine Episode sind. Dort wird jede nur einmal geführt.",
+  "move.mergeRoleUnnamedFile": "Datei {{id}}",
   "move.operationTransferNote": "Diese Titel werden in eine andere Bibliothek verschoben.",
   "move.modeHeading": "Wie sollen die Dateien dorthin gelangen?",
   "move.mode.MOVE_WITH_SCRYER": "Mit Scryer verschieben",

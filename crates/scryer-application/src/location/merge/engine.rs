@@ -96,6 +96,15 @@ pub struct MergeCatalogSnapshot {
     pub source_title_slot_files: Vec<TitleSlotFileRow>,
     /// Whether the destination title already has a primary file for that slot.
     pub destination_title_slot_has_primary: bool,
+    /// Source media file id → the file's name on disk, so a role change can be
+    /// stated about a file a person can recognise rather than about an id.
+    #[serde(default)]
+    pub source_media_file_names: std::collections::BTreeMap<String, String>,
+    /// The operation performing this merge, when one is. Its own rows against
+    /// the source title — the verification proofs its cleanup step still has
+    /// to read — are not source records that retire with the title.
+    #[serde(default)]
+    pub current_operation_id: Option<String>,
 
     /// Source series-movie links a source media file is attached to.
     pub source_file_link_ids: std::collections::BTreeSet<String>,
@@ -164,6 +173,10 @@ pub struct MergePlan {
     /// what it is about to re-insert without re-deriving it.
     pub source_file_episode_rows: Vec<FileEpisodeRoleRow>,
     pub summary: MergePreviewSummary,
+    /// The operation performing this merge; see
+    /// [`MergeCatalogSnapshot::current_operation_id`].
+    #[serde(default)]
+    pub current_operation_id: Option<String>,
 }
 
 impl MergePlan {
@@ -237,7 +250,7 @@ pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
         MergeIdentityOutcome::Blocked(records) => (None, records),
     };
 
-    let role_plan = identity_map
+    let mut role_plan = identity_map
         .as_ref()
         .map(|map| {
             resolve_media_roles(
@@ -249,6 +262,25 @@ pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
             )
         })
         .unwrap_or_default();
+    // FR-070 wants every role change readable. The resolver works in ids; the
+    // snapshot knows the names, so the preview states each change about a file
+    // and an episode a person can recognise.
+    for change in &mut role_plan.role_changes {
+        change.file_name = snapshot
+            .source_media_file_names
+            .get(&change.file_id)
+            .cloned();
+        change.episode_label = change
+            .destination_episode_id
+            .as_deref()
+            .and_then(|id| {
+                snapshot
+                    .destination_episodes
+                    .iter()
+                    .find(|episode| episode.id == id)
+            })
+            .and_then(EpisodeIdentityFacts::label);
+    }
 
     let summary = MergePreviewSummary {
         source_title_id: snapshot.source_title_id.clone(),
@@ -273,6 +305,7 @@ pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
         role_plan,
         source_file_episode_rows: snapshot.source_file_episode_rows.clone(),
         summary,
+        current_operation_id: snapshot.current_operation_id.clone(),
     }
 }
 
@@ -322,6 +355,7 @@ mod tests {
             destination_title_name: Some("The Surviving Title".to_string()),
             source_library_id: Some("library-a".to_string()),
             destination_library_id: Some("library-b".to_string()),
+            current_operation_id: None,
             source_episodes: vec![episode("s-e1", "1", "1")],
             destination_episodes: vec![episode("d-e1", "1", "1")],
             source_file_episode_rows: vec![FileEpisodeRoleRow {
@@ -336,6 +370,10 @@ mod tests {
                 role: MergedMediaRole::Primary,
                 is_filler: false,
             }],
+            source_media_file_names: std::collections::BTreeMap::from([(
+                "file-in".to_string(),
+                "Sample.Show.S01E01.mkv".to_string(),
+            )]),
             media_file_count: 3,
             history_row_count: 12,
             dropped_record_count: 7,
@@ -359,6 +397,23 @@ mod tests {
         assert_eq!(plan.role_plan.demotion_count(), 1);
         assert_eq!(plan.summary.role_changes.len(), 1);
         assert_eq!(plan.summary.role_demotions, 1);
+        // FR-070 wants the change readable: the file by name, the episode by
+        // number, and the sentence built from both rather than from ids.
+        let change = &plan.summary.role_changes[0];
+        assert_eq!(change.file_name.as_deref(), Some("Sample.Show.S01E01.mkv"));
+        assert_eq!(change.episode_label.as_deref(), Some("S01E01"));
+        assert_eq!(
+            change.describe(),
+            "The destination already has a primary file for S01E01, so \"Sample.Show.S01E01.mkv\" is kept as an extra copy. Nothing already there is replaced."
+        );
+        // A file the catalog could not name still gets a sentence, about its id.
+        let mut unnamed = change.clone();
+        unnamed.file_name = None;
+        unnamed.episode_label = None;
+        assert_eq!(
+            unnamed.describe(),
+            "The destination already has a primary file for episode d-e1, so file file-in is kept as an extra copy. Nothing already there is replaced."
+        );
         // FR-064: the three counts the preview reports.
         assert_eq!(plan.summary.media_files_repointed, 3);
         assert_eq!(plan.summary.history_rows_carried, 12);

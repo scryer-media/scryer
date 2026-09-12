@@ -98,6 +98,8 @@ const PREVIEW_QUERY: &str = r#"
             newRole
             reason
             detail
+            episodeLabel
+            fileName
           }
           roleDemotions
           historyRowsCarried

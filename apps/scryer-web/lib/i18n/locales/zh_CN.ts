@@ -2041,24 +2041,22 @@ const zh_CN: LocaleDictionary = {
   "move.mergeSummaryHeading": "这次合并会做什么",
   "move.mergeNoDetails": "这次合并不会带走其他内容。",
   "move.mergeBlockedHeading": "此合并无法执行：以下记录无法迁移。",
-  "move.mergeCarried":
-    "保留的标题将接管 {{files}} 条媒体文件记录和 {{history}} 条历史记录。",
+  "move.mergeCarried": "{{files}} 个媒体文件和 {{history}} 条历史记录会一并带过去。",
   "move.mergeDropped":
     "被合并标题的其他 {{count}} 条记录不会被接管，将随其一并退役。",
-  "move.mergeRoleChangesHeading":
-    "媒体文件角色（{{demotions}} 个文件不再是主文件）",
-  "move.mergeRoleChangesHeadingPlain": "媒体文件角色",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "主文件",
-  "move.mergeRole.ADDITIONAL": "附加",
-  "move.mergeRoleDemotion":
-    "此文件不再是该剧集的主文件，将与主文件一并保留。",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "目标已有该剧集的主文件，移动操作绝不会降级主文件。",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "另一个移动中的文件已占用该目标剧集的主文件角色。",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "两个源剧集合并到了同一个目标剧集。",
+  "move.mergeRoleChangesHeading": "{{demotions}} 个文件将成为附加副本",
+  "move.mergeRoleChangesHeadingPlain": "文件角色",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}”已有这些剧集的主文件。传入的文件将作为附加副本保留，已有的文件不会被替换。",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}”已有主文件。传入的文件将作为附加副本保留，已有的文件不会被替换。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "本次移动中的另一个文件已是这些剧集的主文件，因此这些文件将作为附加副本保留。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "本次移动中的另一个文件已是主文件，因此该文件将作为附加副本保留。",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "这些文件在此处登记在两个剧集下，而在目标处它们是同一剧集。在那里每个文件只登记一次。",
+  "move.mergeRoleUnnamedFile": "文件 {{id}}",
   "move.operationTransferNote": "这些标题正在移动到其他库。",
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",

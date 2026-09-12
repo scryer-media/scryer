@@ -2160,24 +2160,22 @@ const ja: LocaleDictionary = {
   "move.mergeNoDetails": "この統合で引き継がれるものは他にありません。",
   "move.mergeBlockedHeading":
     "この統合は実行できません: 次のレコードを引き継げません。",
-  "move.mergeCarried":
-    "残るタイトルが {{files}} 件のメディアファイル レコードと {{history}} 件の履歴行を引き継ぎます。",
+  "move.mergeCarried": "{{files}} 件のメディアファイルと {{history}} 件の履歴が一緒に移ります。",
   "move.mergeDropped":
     "統合されるタイトルの他の {{count}} 件のレコードは引き継がれず、タイトルとともに失われます。",
-  "move.mergeRoleChangesHeading":
-    "メディアファイルの役割（{{demotions}} 個のファイルがプライマリでなくなります）",
-  "move.mergeRoleChangesHeadingPlain": "メディアファイルの役割",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "プライマリ",
-  "move.mergeRole.ADDITIONAL": "追加",
-  "move.mergeRoleDemotion":
-    "このファイルはエピソードのプライマリではなくなり、プライマリと並べて保持されます。",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "移動先にはこのエピソードのプライマリが既にあり、移動がプライマリを降格させることはありません。",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "移動中の別のファイルが、その移動先エピソードのプライマリを既に取得しています。",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "2 つの移動元エピソードが 1 つの移動先エピソードにまとまりました。",
+  "move.mergeRoleChangesHeading": "{{demotions}} 個のファイルは追加コピーになります",
+  "move.mergeRoleChangesHeadingPlain": "ファイルの役割",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "「{{title}}」にはこれらのエピソードのプライマリファイルが既にあります。移動してくるファイルは追加コピーとして保持され、既存のものは置き換えられません。",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "「{{title}}」にはプライマリファイルが既にあります。移動してくるファイルは追加コピーとして保持され、既存のものは置き換えられません。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "この移動に含まれる別のファイルが既にこれらのエピソードのプライマリなので、これらは追加コピーとして保持されます。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "この移動に含まれる別のファイルが既にプライマリなので、このファイルは追加コピーとして保持されます。",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "これらのファイルはここでは 2 つのエピソードに登録されていますが、移動先では 1 つのエピソードです。移動先では各ファイルが 1 回だけ登録されます。",
+  "move.mergeRoleUnnamedFile": "ファイル {{id}}",
   "move.operationTransferNote": "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
